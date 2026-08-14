@@ -52,6 +52,17 @@ public class TerminalFragment extends Fragment {
         Button sendBtn = view.findViewById(R.id.term_send);
 
         sendBtn.setOnClickListener(v -> sendCommand());
+        Button ctrlcBtn = view.findViewById(R.id.term_ctrlc);
+        ctrlcBtn.setOnClickListener(v -> {
+            Process p = shell;
+            if (p != null && p.isAlive()) {
+                try {
+                    p.getOutputStream().write(3); // Ctrl+C
+                    p.getOutputStream().flush();
+                } catch (IOException ignored) {
+                }
+            }
+        });
         inputEdit.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_SEND
                     || actionId == EditorInfo.IME_ACTION_GO
@@ -64,7 +75,7 @@ public class TerminalFragment extends Fragment {
         });
 
         appendLine("DSHA 内置终端 · Ubuntu 24.04 (rootfs)");
-        appendLine("输入命令回车执行；Ctrl+C 中止；exit 退出会话");
+        appendLine("输入命令回车执行；⏹ 中止 = Ctrl+C；exit 退出会话");
         if (!c.isHarnessInstalled()) {
             appendLine("⚠️ 环境未安装，请先到「安装」页完成安装");
             return;
