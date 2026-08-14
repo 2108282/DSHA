@@ -29,6 +29,7 @@ public class HarnessService extends Service {
 
     private HarnessController c;
     private HttpShellService shellHttp;
+    private TaskNotifier taskNotifier;
     private final HarnessController.StateListener stateListener = this::refreshNotification;
 
     @Override
@@ -42,6 +43,9 @@ public class HarnessService extends Service {
         shellHttp = new HttpShellService();
         shellHttp.start();
         ShizukuShell.ensureBound(this);
+        // 任务完成通知：agent 干活结束后提醒
+        taskNotifier = new TaskNotifier(this, c);
+        taskNotifier.start();
     }
 
     @Override
@@ -111,6 +115,7 @@ public class HarnessService extends Service {
     public void onDestroy() {
         c.removeStateListener(stateListener);
         if (shellHttp != null) shellHttp.stop();
+        if (taskNotifier != null) taskNotifier.stop();
         c.stopWeb();
         super.onDestroy();
     }

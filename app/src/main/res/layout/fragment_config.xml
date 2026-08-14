@@ -78,8 +78,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
             android:gravity="center"
-            android:text="🌟 开源项目：github.com/qiannianhuanxiang/DSHA"
-            android:textColor="#1E88E5"
-            android:textSize="14sp" />
+            android:text="DSHA v0.2.1"
+            android:textColor="#999999"
+            android:textSize="12sp" />
     </LinearLayout>
 </ScrollView>

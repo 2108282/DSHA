@@ -41,6 +41,7 @@ public class MainActivity extends AppCompatActivity {
         hideSystemUI();
 
         requestPermissions();
+        requestBatteryOptimization();
 
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
 
@@ -79,13 +80,26 @@ public class MainActivity extends AppCompatActivity {
 
     /** 自动申请所需权限：通知（前台服务需要）+ 电池优化白名单（保活） */
     private void requestPermissions() {
-        // 通知权限（Android 13+，前台服务常驻通知需要）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 100);
-            }
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 100);
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        TaskNotifier.appInForeground = true;
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        TaskNotifier.appInForeground = false;
+    }
+
+    private void requestBatteryOptimization() {
         // 电池优化白名单（保活更稳，跳转系统设置让用户一键允许）
         try {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
