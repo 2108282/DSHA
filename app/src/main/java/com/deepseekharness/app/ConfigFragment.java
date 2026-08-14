@@ -1,5 +1,7 @@
 package com.deepseekharness.app;
 
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -8,6 +10,7 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.Spinner;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -36,6 +39,7 @@ public class ConfigFragment extends Fragment {
         modelEdit = view.findViewById(R.id.config_model);
         modeSpinner = view.findViewById(R.id.config_mode);
         Button saveBtn = view.findViewById(R.id.config_save);
+        TextView repoLink = view.findViewById(R.id.config_repo_link);
 
         String[] modes = {"danger-full-access", "workspace-write", "read-only"};
         ArrayAdapter<String> adapter = new ArrayAdapter<>(requireContext(),
@@ -50,6 +54,17 @@ public class ConfigFragment extends Fragment {
             c.setModel(modelEdit.getText().toString().trim());
             c.setPermissionMode((String) modeSpinner.getSelectedItem());
             Toast.makeText(requireContext(), "配置已保存", Toast.LENGTH_SHORT).show();
+        });
+
+        // 开源仓库链接：点开浏览器访问 GitHub
+        repoLink.setOnClickListener(v -> {
+            try {
+                Intent i = new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://github.com/qiannianhuanxiang/DSHA"));
+                startActivity(i);
+            } catch (Exception e) {
+                Toast.makeText(requireContext(), "打不开链接，试试手动访问 GitHub", Toast.LENGTH_SHORT).show();
+            }
         });
     }
 

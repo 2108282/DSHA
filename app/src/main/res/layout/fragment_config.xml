@@ -71,5 +71,15 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
             android:text="保存配置" />
+
+        <TextView
+            android:id="@+id/config_repo_link"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:gravity="center"
+            android:text="🌟 开源项目：github.com/qiannianhuanxiang/DSHA"
+            android:textColor="#1E88E5"
+            android:textSize="14sp" />
     </LinearLayout>
 </ScrollView>
