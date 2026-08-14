@@ -1,0 +1,107 @@
+package com.deepseekharness.app;
+
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Bundle;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.fragment.app.Fragment;
+
+/** 工作区管理模块：工作目录配置、环境信息、无 ROOT 文件共享（MT 注入文件提供器） */
+public class WorkspaceFragment extends Fragment {
+
+    private HarnessController c;
+    private EditText workdirEdit;
+    private TextView infoText, shareStatusText, shizukuStatusText;
+    private SharedPreferences prefs;
+
+    @Nullable
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
+                             @Nullable Bundle savedInstanceState) {
+        return inflater.inflate(R.layout.fragment_workspace, container, false);
+    }
+
+    @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        c = HarnessController.get(requireContext());
+        prefs = requireContext().getSharedPreferences("deepseekharness", 0);
+        workdirEdit = view.findViewById(R.id.workspace_path);
+        infoText = view.findViewById(R.id.workspace_info);
+        shareStatusText = view.findViewById(R.id.workspace_share_status);
+        shizukuStatusText = view.findViewById(R.id.workspace_shizuku_status);
+        Button applyBtn = view.findViewById(R.id.workspace_apply);
+        Button shizukuAuthBtn = view.findViewById(R.id.workspace_shizuku_auth);
+        Button clearBtn = view.findViewById(R.id.workspace_clear);
+
+        workdirEdit.setText(c.getWorkdir());
+        refreshInfo();
+
+        applyBtn.setOnClickListener(v -> {
+            String wd = workdirEdit.getText().toString().trim();
+            if (!wd.isEmpty()) {
+                c.setWorkdir(wd);
+                refreshInfo();
+                Toast.makeText(requireContext(), "工作区已更新", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        shizukuAuthBtn.setOnClickListener(v -> {
+            if (!ShizukuShell.isAvailable()) {
+                Toast.makeText(requireContext(), "请先安装并启动 Shizuku", Toast.LENGTH_LONG).show();
+                return;
+            }
+            ShizukuShell.requestPermission((code, grantResult) -> refreshShizukuStatus());
+            refreshShizukuStatus();
+        });
+
+        clearBtn.setOnClickListener(v -> {
+            c.getProot().uninstall();
+            refreshInfo();
+            Toast.makeText(requireContext(), "已清除环境", Toast.LENGTH_SHORT).show();
+        });
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        if (c != null) refreshInfo();
+    }
+
+    private void refreshInfo() {
+        String envState = c.isHarnessInstalled() ? "✅ 已安装"
+                : c.getProot().isInstalled() ? "🔄 环境已就绪" : "📦 未安装";
+        infoText.setText("环境状态：" + envState
+                + "\n\n工作区（rootfs 内）：/root/" + c.getWorkdir()
+                + "\n\n安装完成后该目录即为 deepseek-harness 源码。");
+        refreshShareStatus();
+    }
+
+    private void refreshShareStatus() {
+        shareStatusText.setText("文件提供器已就绪（MT 官方注入，无需 ROOT）\n\n"
+                + "用法：MT 管理器 → 侧拉栏 → 添加本地存储 → 选择「DSHA」\n\n"
+                + "工作区在：data → files → linux → ubuntu → root → " + c.getWorkdir() + "\n"
+                + "配置在：data → files → linux → ubuntu → root → .dsh\n\n"
+                + "（若 MT 里看不到内容，先打开本 App 保持进程运行）");
+        refreshShizukuStatus();
+    }
+
+    private void refreshShizukuStatus() {
+        if (shizukuStatusText == null) return;
+        if (!ShizukuShell.isAvailable()) {
+            shizukuStatusText.setText("Shizuku 未安装或未启动\n（装好 Shizuku 后，在这里授权）");
+        } else if (ShizukuShell.hasPermission()) {
+            shizukuStatusText.setText("✅ Shizuku 已授权，助手可执行设备 shell 命令");
+        } else {
+            shizukuStatusText.setText("Shizuku 已就绪，点击「授权 Shizuku」");
+        }
+    }
+}
