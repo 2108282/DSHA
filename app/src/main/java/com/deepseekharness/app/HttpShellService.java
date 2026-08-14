@@ -152,7 +152,7 @@ public final class HttpShellService {
             // 前台：App 内弹窗
             final String prompt = "模型试图在设备上执行：\n" + cmd + "\n\n是否允许？";
             act.runOnUiThread(() -> new androidx.appcompat.app.AlertDialog.Builder(act)
-                    .setTitle("DSHA 安全确认")
+                    .setTitle("⚠️ DSHA 安全确认")
                     .setMessage(prompt)
                     .setPositiveButton("允许", (d, w) -> {
                         pendingAllow = true;
@@ -210,7 +210,7 @@ public final class HttpShellService {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification n = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                 .setSmallIcon(R.drawable.ic_launch)
-                .setContentTitle("DSHA 安全确认")
+                .setContentTitle("⚠️ DSHA 安全确认")
                 .setContentText("模型试图执行：" + shortCmd)
                 .setStyle(new NotificationCompat.BigTextStyle()
                         .bigText("模型试图在设备上执行：\n" + cmd + "\n\n是否允许？"))

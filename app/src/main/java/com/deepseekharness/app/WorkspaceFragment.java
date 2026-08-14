@@ -187,8 +187,8 @@ public class WorkspaceFragment extends Fragment {
     }
 
     private void refreshInfo() {
-        String envState = c.isHarnessInstalled() ? "已安装"
-                : c.getProot().isInstalled() ? "环境已就绪" : "未安装";
+        String envState = c.isHarnessInstalled() ? "✅ 已安装"
+                : c.getProot().isInstalled() ? "🔄 环境已就绪" : "📦 未安装";
         infoText.setText("环境状态：" + envState
                 + "\n\n工作区（rootfs 内）：/root/" + c.getWorkdir()
                 + "\n\n安装完成后该目录即为 deepseek-harness 源码。");
@@ -209,7 +209,7 @@ public class WorkspaceFragment extends Fragment {
         if (!ShizukuShell.isAvailable()) {
             shizukuStatusText.setText("Shizuku 未安装或未启动\n（装好 Shizuku 后，在这里授权）");
         } else if (ShizukuShell.hasPermission()) {
-            shizukuStatusText.setText("Shizuku 已授权，助手可执行设备 shell 命令");
+            shizukuStatusText.setText("✅ Shizuku 已授权，助手可执行设备 shell 命令");
         } else {
             shizukuStatusText.setText("Shizuku 已就绪，点击「授权 Shizuku」");
         }

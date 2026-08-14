@@ -20,8 +20,8 @@ public final class AboutDialog {
         new AlertDialog.Builder(ctx)
                 .setTitle("DSHA v1.0.0")
                 .setMessage("DeepSeek Harness 安卓启动器\n\n"
-                        + "GitHub：" + GITHUB_URL + "\n"
-                        + "QQ 交流群：" + QQ_GROUP)
+                        + "🌟 GitHub：" + GITHUB_URL + "\n"
+                        + "🐧 QQ 交流群：" + QQ_GROUP)
                 .setPositiveButton("GitHub", (d, w) -> openBrowser(ctx, GITHUB_URL))
                 .setNeutralButton("QQ 群", (d, w) -> openQQGroup(ctx))
                 .setNegativeButton("关闭", null)

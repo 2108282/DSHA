@@ -452,8 +452,10 @@ public class HarnessController {
 
         setProgress("启用 pnpm", 92);
         // 不依赖 corepack（新版 Node 常缺失）：直接用 npm 安装 pnpm@11.7.0（与项目 packageManager 匹配）
+        // 已安装则跳过（否则 npm 报 EEXIST 导致重装失败）
         runStep("启用 pnpm", 92,
-                "npm install -g pnpm@11.7.0 --registry=https://registry.npmmirror.com && pnpm -v");
+                "(pnpm -v >/dev/null 2>&1 && echo 'pnpm 已就绪，跳过安装') || "
+                        + "npm install -g pnpm@11.7.0 --registry=https://registry.npmmirror.com");
 
         setProgress("获取 deepseek-harness 源码", 93);
         runStep("获取 deepseek-harness 源码", 93,
@@ -485,7 +487,8 @@ public class HarnessController {
         }
 
         // 安装危险命令确认包装器（rootfs 内 rm/dd 等先弹确认，防止 agent/终端误删）
-        try {
+        // 失败必须中断：安全功能没装好，安装不算完成
+        {
             String inst = readAsset("rootfs-confirm-install.sh");
             if (!inst.isEmpty()) {
                 java.io.File instFile = new java.io.File(proot.getRootfsDir(), "root/install-confirm.sh");
@@ -495,7 +498,6 @@ public class HarnessController {
                 runStep("安装危险命令确认包装器", 93,
                         "bash /root/install-confirm.sh && rm -f /root/install-confirm.sh");
             }
-        } catch (Exception ignored) {
         }
 
         // 准备 Node headers（已缓存则跳过；node-gyp 现场下载会连 nodejs.org，国内被墙）
@@ -647,7 +649,7 @@ public class HarnessController {
         for (int i = 0; i < pendingUrls.length; i++) {
             String u = pendingUrls[i];
             if (u.startsWith("git://")) {
-                labels[i] = "直连 GitHub 源码构建（clone + 本地构建，无需预构建包）";
+                labels[i] = "⚡ 直连 GitHub 源码构建（clone + 本地构建，无需预构建包）";
                 continue;
             }
             long l = pendingLat[i];

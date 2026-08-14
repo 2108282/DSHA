@@ -15,9 +15,11 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 任务完成通知器：监控 rootfs 内会话文件的写入活动。
- * 检测到会话有写入 = agent 正在干活（活跃）；
- * 连续静默 30 秒 = 任务完成 → 发系统通知提醒。
+ * 任务完成通知器：监控 rootfs 内「会话文件」（session.jsonl.zstd）的写入活动。
+ * 判定规则（降低误报）：
+ *  - 只统计会话文件变化（排除 settings.yaml 等非对话写入）
+ *  - 连续 3 次轮询（约 12 秒）都有写入才判定"agent 干活中"
+ *  - 干活中连续静默 90 秒 = 任务完成 → 发通知
  * App 在前台（用户正在看预览）时不打扰。
  */
 public class TaskNotifier {
@@ -25,7 +27,8 @@ public class TaskNotifier {
     public static final String CHANNEL_ID = "dsh_task_channel";
     private static final int NOTIF_ID = 2002;
     private static final long POLL_MS = 4000;
-    private static final long IDLE_MS = 30000;
+    private static final long IDLE_MS = 90000;      // 静默 90 秒判定完成（容忍 agent 长思考）
+    private static final int ARM_STREAK = 3;        // 连续 3 次活跃（约 12 秒）才武装
 
     /** App 是否在前台（MainActivity 维护）；前台时不发通知 */
     public static volatile boolean appInForeground = false;
@@ -34,6 +37,7 @@ public class TaskNotifier {
     private final HarnessController c;
     private ScheduledExecutorService executor;
     private long lastActive = 0;
+    private int activeStreak = 0;
     private boolean armed = false;
 
     public TaskNotifier(Context ctx, HarnessController c) {
@@ -54,27 +58,32 @@ public class TaskNotifier {
             executor = null;
         }
         armed = false;
+        activeStreak = 0;
         lastActive = 0;
     }
 
     private void tick() {
         try {
             if (!c.isWebRunning() || appInForeground) return;
-            // 检测最近几秒内 /root/.dsh 下是否有文件被写入（会话活动）
+            // 只检测会话文件（agent 回复/思考记录），排除配置等非对话写入
             String out = c.getProot().execAndRead(
-                    "find /root/.dsh -type f -newermt '-" + (POLL_MS / 1000 + 1)
-                            + " seconds' 2>/dev/null | head -3");
+                    "find /root/.dsh -type f -name 'session*' -newermt '-"
+                            + (POLL_MS / 1000 + 1) + " seconds' 2>/dev/null | head -3");
             boolean active = out != null && !out.trim().isEmpty();
             long now = System.currentTimeMillis();
             if (active) {
                 lastActive = now;
-                armed = true;
-            } else if (armed && now - lastActive >= IDLE_MS) {
-                armed = false;
-                notifyDone();
+                if (activeStreak < ARM_STREAK) activeStreak++;
+                if (activeStreak >= ARM_STREAK) armed = true;
+            } else {
+                activeStreak = 0;
+                if (armed && now - lastActive >= IDLE_MS) {
+                    armed = false;
+                    notifyDone();
+                }
             }
         } catch (Exception ignored) {
-            // 网络抖动/进程重启期间静默跳过
+            // 进程重启/网络抖动期间静默跳过
         }
     }
 
