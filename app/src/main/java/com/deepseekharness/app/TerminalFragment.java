@@ -49,10 +49,8 @@ public class TerminalFragment extends Fragment {
         inputEdit = view.findViewById(R.id.term_input);
         outputText = view.findViewById(R.id.term_output);
         scrollView = view.findViewById(R.id.term_scroll);
-        Button sendBtn = view.findViewById(R.id.term_send);
 
-        sendBtn.setOnClickListener(v -> sendCommand());
-        Button ctrlcBtn = view.findViewById(R.id.term_ctrlc);
+        TextView ctrlcBtn = view.findViewById(R.id.term_ctrlc);
         ctrlcBtn.setOnClickListener(v -> {
             Process p = shell;
             if (p != null && p.isAlive()) {
@@ -74,10 +72,9 @@ public class TerminalFragment extends Fragment {
             return false;
         });
 
-        appendLine("DSHA 内置终端 · Ubuntu 24.04 (rootfs)");
-        appendLine("输入命令回车执行；⏹ 中止 = Ctrl+C；exit 退出会话");
+        appendLine("Ubuntu 24.04 · 回车执行 · 中止 · exit 退出");
         if (!c.isHarnessInstalled()) {
-            appendLine("⚠️ 环境未安装，请先到「安装」页完成安装");
+            appendLine("环境未安装，请先到「安装」页完成安装");
             return;
         }
         startShell();

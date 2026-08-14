@@ -633,7 +633,7 @@ public class HarnessController {
         for (int i = 0; i < pendingUrls.length; i++) {
             String u = pendingUrls[i];
             if (u.startsWith("git://")) {
-                labels[i] = "⚡ 直连 GitHub 源码构建（clone + 本地构建，无需预构建包）";
+                labels[i] = "直连 GitHub 源码构建（clone + 本地构建，无需预构建包）";
                 continue;
             }
             long l = pendingLat[i];

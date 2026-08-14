@@ -180,7 +180,7 @@ public class InstallFragment extends Fragment {
 
     private String mark(int step) {
         if (c.isBusy() && c.getCurrentStep() == step) return "⏳ 进行中";
-        return c.isStepDone(step) ? "✅ 已就绪" : "⬜ 未安装";
+        return c.isStepDone(step) ? "[已就绪]" : "[未安装]";
     }
 
     private String stepLabel(int step) {
@@ -194,13 +194,13 @@ public class InstallFragment extends Fragment {
             if (c.isStepDone(s)) done++;
         }
         if (done == 4) {
-            statusText.setText("✅ 全部安装完成\n\n可到「启动」页启动 Web UI。");
+            statusText.setText("全部安装完成\n\n可到「启动」页启动 Web UI。");
             installBtn.setText("重新安装（补装缺失步骤）");
         } else if (done > 0) {
-            statusText.setText("🔄 已完成 " + done + "/4 步，可一键补装剩余步骤。");
+            statusText.setText("已完成 " + done + "/4 步，可一键补装剩余步骤。");
             installBtn.setText("一键安装剩余步骤");
         } else {
-            statusText.setText("📦 尚未安装\n\n点击下方按钮：\n一键安装 = 按顺序补装 4 个步骤\n也可单独安装某一步\n（约需 5~15 分钟，请保持网络畅通）");
+            statusText.setText("尚未安装\n\n点击下方按钮：\n一键安装 = 按顺序补装 4 个步骤\n也可单独安装某一步\n（约需 5~15 分钟，请保持网络畅通）");
             installBtn.setText("一键安装");
         }
     }
