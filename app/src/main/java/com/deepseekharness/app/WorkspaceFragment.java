@@ -5,6 +5,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -14,15 +15,26 @@ import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
 import androidx.fragment.app.Fragment;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+
 /** 工作区管理模块：工作目录配置、环境信息、无 ROOT 文件共享（MT 注入文件提供器） */
 public class WorkspaceFragment extends Fragment {
 
     private HarnessController c;
+    private final ActivityResultLauncher<String[]> pickBackup =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(),
+                    uri -> {
+                        if (uri != null) restoreBackup(uri);
+                    });
     private EditText workdirEdit;
     private TextView infoText, shareStatusText, shizukuStatusText;
     private SharedPreferences prefs;
@@ -46,6 +58,7 @@ public class WorkspaceFragment extends Fragment {
         Button shizukuAuthBtn = view.findViewById(R.id.workspace_shizuku_auth);
         Button clearBtn = view.findViewById(R.id.workspace_clear);
         Button backupBtn = view.findViewById(R.id.workspace_backup);
+        Button restoreBtn = view.findViewById(R.id.workspace_restore);
         Button resetBtn = view.findViewById(R.id.workspace_reset);
 
         workdirEdit.setText(c.getWorkdir());
@@ -111,6 +124,60 @@ public class WorkspaceFragment extends Fragment {
                 })
                 .setNegativeButton("取消", null)
                 .show());
+
+        restoreBtn.setOnClickListener(v ->
+                pickBackup.launch(new String[]{"*/*"}));
+    }
+
+    private void restoreBackup(Uri uri) {
+        new AlertDialog.Builder(requireContext())
+                .setTitle("恢复备份？")
+                .setMessage("将用备份文件覆盖当前的配置和对话记录。\n建议先停止 Web UI 再恢复。")
+                .setPositiveButton("恢复", (d, w) -> doRestore(uri))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void doRestore(Uri uri) {
+        Toast.makeText(requireContext(), "正在恢复，请稍候…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-restore.tar.gz");
+                if (tmp.getParentFile() != null) tmp.getParentFile().mkdirs();
+                try (InputStream in = requireContext().getContentResolver().openInputStream(uri);
+                     FileOutputStream out = new FileOutputStream(tmp)) {
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                }
+                // 解压到 /root（备份包内含 .dsh、<wd>/.env、dsh-web.log）
+                c.getProot().execChecked("cd /root && tar -xzf .dsha-restore.tar.gz 2>/dev/null; "
+                        + "test -d .dsh && echo OK || echo EMPTY");
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+                // 同步 API key：恢复的 .env 写回 App 配置，避免下次启动被覆盖
+                String env = c.getProot().execAndRead(
+                        "cat /root/" + c.getWorkdir() + "/.env 2>/dev/null");
+                if (env != null) {
+                    for (String line : env.split("\n")) {
+                        if (line.startsWith("DEEPSEEK_API_KEY=")) {
+                            String key = line.substring("DEEPSEEK_API_KEY=".length()).trim();
+                            if (!key.isEmpty()) c.setApiKey(key);
+                            break;
+                        }
+                    }
+                }
+                if (getActivity() == null) return;
+                getActivity().runOnUiThread(() ->
+                        Toast.makeText(requireContext(), "恢复完成（API key 已同步）",
+                                Toast.LENGTH_LONG).show());
+            } catch (Exception e) {
+                if (getActivity() != null) {
+                    getActivity().runOnUiThread(() -> Toast.makeText(requireContext(),
+                            "恢复失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
+                }
+            }
+        }).start();
     }
 
     @Override
