@@ -439,6 +439,24 @@ public class HarnessController {
                 "git clone --depth 1 https://gitclone.com/github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
                 "git clone --depth 1 https://ghfast.top/https://github.com/deepseek-ai/deepseek-harness.git " + wd + " ); fi");
 
+        // 应用 WebUI 移动端补丁（移除“打开/收起侧边栏”按钮）；失败不阻塞安装
+        try {
+            String patchStr = readAsset("webui-sidebar.patch");
+            if (!patchStr.isEmpty()) {
+                java.io.File patchFile = new java.io.File(proot.getRootfsDir(), "root/dsha-webui.patch");
+                patchFile.getParentFile().mkdirs();
+                try (java.io.FileOutputStream fo = new java.io.FileOutputStream(patchFile)) {
+                    fo.write(patchStr.getBytes(StandardCharsets.UTF_8));
+                }
+                runStep("应用 WebUI 移动端补丁", 93,
+                        "cd /root/" + wd + " && " +
+                        "(git apply --check /root/dsha-webui.patch 2>/dev/null && " +
+                        "git apply /root/dsha-webui.patch && echo '补丁已应用（已移除侧边栏开关按钮）') || " +
+                        "echo '补丁跳过（可能已应用或源码已更新）'");
+            }
+        } catch (Exception ignored) {
+        }
+
         // 准备 Node headers（已缓存则跳过；node-gyp 现场下载会连 nodejs.org，国内被墙）
         runStep("准备 Node headers", 94,
                 "if [ ! -f /root/.cache/node-gyp/24.19.0/include/node/node.h ]; then " +
@@ -774,5 +792,97 @@ public class HarnessController {
                 setState("", 0, "", "检查失败：" + describe(e), false);
             }
         });
+    }
+
+    // ================= 配置备份 / 重置（防死机无法恢复） =================
+
+    private File rootfsFile(String rel) {
+        return new File(proot.getRootfsDir(), rel);
+    }
+
+    /**
+     * 备份关键配置到 App 私有目录（可通过 MT 管理器 data/files/backup 拷出）。
+     * 备份内容：.env + 整个 .dsh（含 settings.yaml、对话记录等）。
+     * 返回备份目录绝对路径；失败返回 null。
+     */
+    public String backupConfig() {
+        try {
+            File backupRoot = new File(appContext.getFilesDir(), "backup");
+            File dir = new File(backupRoot, "config-" +
+                    new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                            .format(new java.util.Date()));
+            dir.mkdirs();
+            int n = 0;
+            File env = rootfsFile("root/" + getWorkdir() + "/.env");
+            if (env.isFile()) {
+                copyFile(env, new File(dir, "env-" + getWorkdir() + ".txt"));
+                n++;
+            }
+            File dsh = rootfsFile("root/.dsh");
+            if (dsh.isDirectory()) {
+                copyDir(dsh, new File(dir, "dsh"));
+                n++;
+            }
+            return n > 0 ? dir.getAbsolutePath() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 重置配置：删除 settings.yaml + .env（保留对话记录），并重写 .env。 */
+    public String resetConfig() {
+        try {
+            boolean any = false;
+            File settings = rootfsFile("root/.dsh/settings.yaml");
+            if (settings.isFile()) {
+                //noinspection ResultOfMethodCallIgnored
+                settings.delete();
+                any = true;
+            }
+            File env = rootfsFile("root/" + getWorkdir() + "/.env");
+            if (env.isFile()) {
+                //noinspection ResultOfMethodCallIgnored
+                env.delete();
+                any = true;
+            }
+            writeEnvFile();
+            return any
+                    ? "配置已重置，对话记录已保留\n（.env 已按当前配置重写）"
+                    : "没有可重置的配置（.env 已重写）";
+        } catch (Exception e) {
+            return "重置失败：" + describe(e);
+        }
+    }
+
+    /** 用当前 App 配置重写 rootfs 内的 .env */
+    private void writeEnvFile() throws Exception {
+        File env = rootfsFile("root/" + getWorkdir() + "/.env");
+        if (env.getParentFile() != null) env.getParentFile().mkdirs();
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(env)) {
+            out.write(("DEEPSEEK_API_KEY=" + effectiveApiKey() + "\n")
+                    .getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private void copyFile(File src, File dst) throws Exception {
+        if (dst.getParentFile() != null) dst.getParentFile().mkdirs();
+        try (java.io.FileInputStream in = new java.io.FileInputStream(src);
+             java.io.FileOutputStream out = new java.io.FileOutputStream(dst)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+        }
+    }
+
+    private void copyDir(File srcDir, File dstDir) throws Exception {
+        File[] children = srcDir.listFiles();
+        if (children == null) return;
+        for (File c : children) {
+            if (c.isDirectory()) {
+                copyDir(c, new File(dstDir, c.getName()));
+            } else {
+                copyFile(c, new File(dstDir, c.getName()));
+            }
+        }
     }
 }

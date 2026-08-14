@@ -1,56 +1,46 @@
-# DSH启动器
+# DSHA
 
-DeepSeek Harness 的一键式安卓启动器：**一体式**内置 Linux 环境，无需 Termux，
-自动安装、启动 Web UI、配置、工作区管理。
+**DeepSeek Harness 安卓启动器** —— 在手机上跑 deepseek-harness 的一体化方案，无需 Termux、无需 ROOT。
 
-## 功能模块
+内置 proot + Ubuntu rootfs，一键（或分步）安装 deepseek-harness，内嵌 WebView 直接使用 Web UI。
 
-| 模块 | 说明 |
+## ✨ 功能
+
+| 功能 | 说明 |
 |---|---|
-| **安装** | 一键：内置 proot → 下载 Ubuntu rootfs → 安装 Node + deepseek-harness，带进度显示 |
-| **启动** | 启动/停止 Web UI，内嵌 WebView 预览 `127.0.0.1:3080` |
-| **配置** | API key / 端口 / 模型 / 沙箱权限模式（SharedPreferences 持久化） |
-| **工作区** | 工作目录配置、环境状态、清除环境 |
-| **引导** | 首次启动 3 页引导，说明三步上手流程 |
+| **分步安装** | 4 个步骤（rootfs / 基础工具 / Node.js / deepseek-harness），每步可单独重装、更新，不重复下载 |
+| **多源测速** | 每个下载源都有多个镜像（清华/阿里云/华为云/腾讯云/南大/哈工大/npmmirror…），并行测速后弹窗自选 |
+| **直连源码构建** | 不依赖预构建包，直接从 GitHub 克隆源码 + pnpm 本地构建，自动修复 node-pty 等原生模块编译问题 |
+| **Web UI 预览** | 启动后自动检测就绪并弹出全屏预览，支持重启/停止 |
+| **免 ROOT 文件共享** | 集成 MT 管理器官方文件提供器，直接浏览/编辑 App 私有数据（工作区、配置、日志） |
+| **配置备份/重置** | 一键备份配置（防死机），重置配置时保留对话记录 |
+| **设备 Shell 桥接** | 通过 Shizuku 让智能体直接在设备上执行 shell 命令 |
+| **WebUI 移动端适配** | 自动移除侧边栏开关等移动端无效功能 |
 
-## 技术架构（一体式）
+## 🚀 快速上手
 
-- **UI**：原生 Android（Java）+ Material3 + BottomNavigationView + ViewPager2 引导
-- **执行层**：内置 Termux 官方 `proot` 二进制 + `libtalloc.so.2` + `libandroid-shmem.so`
-  - 运行时解压 proot 到 `codeCacheDir`（filesDir 为 noexec），`chmod 0555`
-  - 通过 `/system/bin/linker64 <proot>` 启动，绕过 Android 10+ 的 W^X EACCES
-  - `LD_LIBRARY_PATH` 指向依赖库目录
-- **rootfs**：下载 Ubuntu base 24.04 arm64（约 30MB），解压到 App 私有空间
-- **安装脚本**：`assets/install.sh`（rootfs 内装 Node 24 + pnpm + deepseek-harness）
+1. 安装 APK（仅 arm64）
+2. 「配置」页填入 DeepSeek API key
+3. 「安装」页点一键安装（约 5~15 分钟，多源测速自选）
+4. 「启动」页启动 Web UI，自动打开预览
 
-## 构建
+## 🔧 构建
 
 ```sh
-./build.sh          # 输出 deepseekharness-arm64-v0.1.0.apk
+./build.sh   # 需要 Gradle 8.5 + Android SDK/NDK 26 + JDK 17
 ```
 
-依赖（本工作区已就绪）：Gradle 8.5、Android SDK + NDK 26、JDK 17。
+## 🧱 技术架构
 
-> ARM64 环境注意：Maven 分发的 aapt2 仅含 x86_64，需在 `gradle.properties`
-> 设置 `android.aapt2FromMavenOverride` 指向 SDK 内 arm64 aapt2。
+- **UI**：原生 Android（Java）+ Material3 + BottomNavigationView
+- **执行层**：Termux 官方 `proot` 二进制（`/system/bin/linker64` 启动，绕过 Android 10+ W^X）
+- **rootfs**：Ubuntu base 24.04 arm64（约 30MB，多镜像下载）
+- **运行时**：Node.js 24 + pnpm + deepseek-harness（预构建包或源码构建）
+- **文件共享**：MT 管理器 `MTDataFilesProvider` 编程注入
+- **设备命令**：Shizuku + 内置 HTTP 桥（127.0.0.1:3090）
 
-## 使用流程
+## ⚠️ 注意
 
-1. 「配置」填 DeepSeek API key
-2. 「安装」一键安装（首次约 5~15 分钟）
-3. 「启动」启动 Web UI →「打开预览」
-
-## 说明
-
-- 沙箱权限模式默认 `danger-full-access`（部分安卓环境无 bwrap/Landlock，需无沙箱才能用 bash 工具）
-- 环境存储在 App 私有空间，卸载 App 即清除；也可在「工作区」手动清除
-- 仅面向 arm64-v8a 设备
-
-## 目录
-
-```
-app/src/main/assets/proot/        proot 二进制 + 依赖库（打包进 APK）
-app/src/main/assets/install.sh    rootfs 内安装脚本（模板）
-app/src/main/java/.../ProotBootstrap.java   proot + rootfs 管理
-app/src/main/java/.../HarnessController.java  核心控制
-```
+- 仅支持 arm64-v8a 设备，Android 8.0+
+- 环境存储在 App 私有空间，卸载即清除（可先用「备份配置」）
+- 设备 Shell 能力需要安装并授权 [Shizuku](https://shizuku.rikka.app/)

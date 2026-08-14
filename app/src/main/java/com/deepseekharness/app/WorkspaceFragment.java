@@ -13,6 +13,7 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.fragment.app.Fragment;
 
 /** 工作区管理模块：工作目录配置、环境信息、无 ROOT 文件共享（MT 注入文件提供器） */
@@ -41,6 +42,8 @@ public class WorkspaceFragment extends Fragment {
         Button applyBtn = view.findViewById(R.id.workspace_apply);
         Button shizukuAuthBtn = view.findViewById(R.id.workspace_shizuku_auth);
         Button clearBtn = view.findViewById(R.id.workspace_clear);
+        Button backupBtn = view.findViewById(R.id.workspace_backup);
+        Button resetBtn = view.findViewById(R.id.workspace_reset);
 
         workdirEdit.setText(c.getWorkdir());
         refreshInfo();
@@ -68,6 +71,28 @@ public class WorkspaceFragment extends Fragment {
             refreshInfo();
             Toast.makeText(requireContext(), "已清除环境", Toast.LENGTH_SHORT).show();
         });
+
+        backupBtn.setOnClickListener(v -> {
+            String path = c.backupConfig();
+            if (path != null) {
+                Toast.makeText(requireContext(),
+                        "已备份配置到：\n" + path
+                                + "\n\n（MT 管理器 → data/files/backup 可拷出）",
+                        Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(requireContext(), "备份失败：环境可能尚未安装", Toast.LENGTH_LONG).show();
+            }
+        });
+
+        resetBtn.setOnClickListener(v -> new AlertDialog.Builder(requireContext())
+                .setTitle("重置配置？")
+                .setMessage("将删除 settings.yaml 和 .env（对话记录保留），并重新写入 .env。")
+                .setPositiveButton("重置", (d, w) -> {
+                    String r = c.resetConfig();
+                    Toast.makeText(requireContext(), r, Toast.LENGTH_LONG).show();
+                })
+                .setNegativeButton("取消", null)
+                .show());
     }
 
     @Override
