@@ -12,6 +12,7 @@ public final class DangerShellGuard {
     private static final String[] PATTERNS = {
             // 删除
             "rm -rf", "rm -r", "rm -f", "rm -",
+            "rmdir", "unlink", "truncate", "-delete",
             "wipe", "erase",
             // 格式化/分区/底层写入
             "dd if=", "mkfs", "mkfs.", "fdisk", "format",
@@ -27,6 +28,18 @@ public final class DangerShellGuard {
     public static boolean isDangerous(String cmd) {
         if (cmd == null) return false;
         String c = cmd.toLowerCase();
+        // adb shell 通道：agent 用 adb shell "rm ..." 在设备上删除——检查 shell 后的命令串
+        int ai = c.indexOf("adb");
+        if (ai >= 0) {
+            int si = c.indexOf("shell", ai);
+            if (si >= 0 && si - ai < 40) {
+                if (matchesDanger(c.substring(si + 6))) return true;
+            }
+        }
+        return matchesDanger(c);
+    }
+
+    private static boolean matchesDanger(String c) {
         for (String p : PATTERNS) {
             if (c.contains(p)) return true;
         }
