@@ -1,6 +1,8 @@
 package com.deepseekharness.app;
 
 import android.Manifest;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -9,10 +11,14 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.CheckBox;
+import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.fragment.app.Fragment;
 
@@ -42,6 +48,7 @@ public class MainActivity extends AppCompatActivity {
 
         requestPermissions();
         requestBatteryOptimization();
+        maybeShowBackupReminder();
 
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
 
@@ -121,6 +128,79 @@ public class MainActivity extends AppCompatActivity {
                         | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                         | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+    }
+
+    // ================= 备份提醒 =================
+    // 提醒频率分级：默认每 6 次 → 勾选"少提醒我"依次升级为 15 / 30 / 100 次
+    private static final int[] REMIND_INTERVALS = {6, 15, 30, 100};
+
+    private void maybeShowBackupReminder() {
+        SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
+        int count = prefs.getInt("launch_count", 0) + 1;
+        int level = prefs.getInt("reminder_level", 0);
+        int last = prefs.getInt("last_reminded", 0);
+        prefs.edit().putInt("launch_count", count).apply();
+        int interval = REMIND_INTERVALS[Math.min(level, REMIND_INTERVALS.length - 1)];
+        if (count - last < interval) return;
+
+        View box = LayoutInflater.from(this).inflate(R.layout.dialog_remind_backup, null);
+        CheckBox lessCb = box.findViewById(R.id.remind_less);
+        String[] labels = {
+                "少提醒我（改为每 15 次提醒）",
+                "少提醒我（改为每 30 次提醒）",
+                "少提醒我（改为每 100 次提醒）"
+        };
+        if (level < labels.length) {
+            lessCb.setText(labels[level]);
+        } else {
+            lessCb.setVisibility(View.GONE);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("建议备份数据")
+                .setMessage("已启动 " + count + " 次，建议把配置和对话记录导出到\n"
+                        + "Download/DSHA 备份，防止意外丢失。")
+                .setView(box)
+                .setPositiveButton("立即备份", (d, w) -> {
+                    confirmReminder(prefs, level, lessCb, count);
+                    startBackup();
+                })
+                .setNegativeButton("取消", (d, w) ->
+                        confirmReminder(prefs, level, lessCb, count))
+                .show();
+    }
+
+    private void confirmReminder(SharedPreferences prefs, int level,
+                                 CheckBox lessCb, int count) {
+        if (lessCb != null && lessCb.isChecked()) {
+            prefs.edit().putInt("reminder_level", level + 1).apply();
+        }
+        prefs.edit().putInt("last_reminded", count).apply();
+    }
+
+    /** 后台执行全量备份，完成后弹窗告知目录并可复制路径 */
+    private void startBackup() {
+        Toast.makeText(this, "正在备份，请稍候…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            String path = BackupManager.backupToExternal(this, HarnessController.get(this));
+            runOnUiThread(() -> {
+                if (path == null) {
+                    Toast.makeText(this, "备份失败：环境可能未安装或空间不足", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                new AlertDialog.Builder(this)
+                        .setTitle("备份完成")
+                        .setMessage("已导出到：\n" + path)
+                        .setPositiveButton("复制路径", (d, w) -> {
+                            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                            if (cm != null) {
+                                cm.setPrimaryClip(ClipData.newPlainText("backup", path));
+                                Toast.makeText(this, "路径已复制", Toast.LENGTH_SHORT).show();
+                            }
+                        })
+                        .setNegativeButton("好", null)
+                        .show();
+            });
+        }).start();
     }
 
     @Override

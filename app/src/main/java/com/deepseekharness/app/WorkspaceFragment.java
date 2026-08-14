@@ -1,5 +1,8 @@
 package com.deepseekharness.app;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
@@ -73,15 +76,30 @@ public class WorkspaceFragment extends Fragment {
         });
 
         backupBtn.setOnClickListener(v -> {
-            String path = c.backupConfig();
-            if (path != null) {
-                Toast.makeText(requireContext(),
-                        "已备份配置到：\n" + path
-                                + "\n\n（MT 管理器 → data/files/backup 可拷出）",
-                        Toast.LENGTH_LONG).show();
-            } else {
-                Toast.makeText(requireContext(), "备份失败：环境可能尚未安装", Toast.LENGTH_LONG).show();
-            }
+            Toast.makeText(requireContext(), "正在备份，请稍候…", Toast.LENGTH_SHORT).show();
+            new Thread(() -> {
+                String path = BackupManager.backupToExternal(requireContext(), c);
+                if (getActivity() == null) return;
+                getActivity().runOnUiThread(() -> {
+                    if (path == null) {
+                        Toast.makeText(requireContext(), "备份失败：环境可能未安装", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    new AlertDialog.Builder(requireContext())
+                            .setTitle("备份完成")
+                            .setMessage("已导出到：\n" + path)
+                            .setPositiveButton("复制路径", (d, w) -> {
+                                ClipboardManager cm = (ClipboardManager) requireContext()
+                                        .getSystemService(Context.CLIPBOARD_SERVICE);
+                                if (cm != null) {
+                                    cm.setPrimaryClip(ClipData.newPlainText("backup", path));
+                                    Toast.makeText(requireContext(), "路径已复制", Toast.LENGTH_SHORT).show();
+                                }
+                            })
+                            .setNegativeButton("好", null)
+                            .show();
+                });
+            }).start();
         });
 
         resetBtn.setOnClickListener(v -> new AlertDialog.Builder(requireContext())

@@ -96,7 +96,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="备份配置（防死机）" />
+            android:text="备份全部数据（导出到外部存储）" />
 
         <Button
             android:id="@+id/workspace_reset"
