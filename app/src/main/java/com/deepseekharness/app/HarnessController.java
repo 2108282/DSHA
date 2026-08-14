@@ -813,13 +813,18 @@ public class HarnessController {
     }
 
     // ================= 启动 / 停止 =================
-    /** 确保 rootfs 内危险命令确认包装器已部署（缺失则自动安装，幂等） */
+    private static final String GUARD_VERSION = "8";
+
+    /** 确保 rootfs 内危险命令确认包装器已部署（版本不匹配则强制重装，幂等） */
     public void ensureDangerGuard() {
         try {
-            String check = proot.execAndRead("test -x /root/dsh-bin/rm && echo OK || echo MISSING");
-            if (check != null && check.contains("OK")) return;
+            // 版本标记：旧版包装器/守卫不升级是之前漏拦截的根因，必须强制刷新
+            String ver = proot.execAndRead("cat /root/dsh-bin/.version 2>/dev/null || echo 0");
+            if (ver != null && ver.trim().equals(GUARD_VERSION)) return;
             String inst = readAsset("rootfs-confirm-install.sh");
             if (inst.isEmpty()) return;
+            // 清掉旧版（含旧 dsh-bin/守卫脚本），避免残留旧包装器
+            proot.execChecked("rm -rf /root/dsh-bin /root/dsh-guard.sh /root/dsh-confirm.sh && echo CLEARED");
             java.io.File f = new java.io.File(proot.getRootfsDir(), "root/install-confirm.sh");
             if (f.getParentFile() != null) f.getParentFile().mkdirs();
             try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f)) {

@@ -29,7 +29,7 @@ chmod +x /root/dsh-confirm.sh
 # 函数优先于 PATH 查找，PATH 被覆盖/哈希缓存都无法绕过命令名拦截
 cat > /root/dsh-guard.sh <<'EOF'
 # DSHA 危险命令守卫（由 BASH_ENV 注入，勿手动删除）
-if [ "${DSH_CONFIRM:-0}" = "1" ]; then
+if [ "${DSH_CONFIRM:-0}" = "1" ] || [ "${DSH_SHELL:-0}" = "1" ]; then
   rm()      { /root/dsh-confirm.sh "rm $*"      && /usr/bin/rm "$@"; }
   rmdir()   { /root/dsh-confirm.sh "rmdir $*"    && /usr/bin/rmdir "$@"; }
   unlink()  { /root/dsh-confirm.sh "unlink $*"   && /usr/bin/unlink "$@"; }
@@ -63,7 +63,7 @@ for p in /root/.dsh-real /usr/local/bin /usr/bin /bin /system/bin /data/data/com
 done
 [ -z "$REAL" ] && REAL=$(ls /root/.dsh-real/adb /usr/local/bin/adb /usr/bin/adb /system/bin/adb 2>/dev/null | head -1)
 if [ -z "$REAL" ]; then echo "找不到真实 adb" >&2; exit 127; fi
-if [ "${DSH_CONFIRM:-0}" = "1" ]; then
+if [ "${DSH_CONFIRM:-0}" = "1" ] || [ "${DSH_SHELL:-0}" = "1" ]; then
   FOUND=0; CMDSTR=""
   for a in "$@"; do
     if [ "$FOUND" = "1" ]; then CMDSTR="$CMDSTR $a"; fi
@@ -94,7 +94,7 @@ for p in /usr/local/bin /usr/bin /bin /usr/sbin /sbin; do
 done
 [ -z "\$REAL" ] && REAL=\$(ls /usr/local/bin/\$SELF /usr/bin/\$SELF /bin/\$SELF 2>/dev/null | head -1)
 if [ -z "\$REAL" ]; then echo "找不到真实命令: \$SELF" >&2; exit 127; fi
-if [ "\${DSH_CONFIRM:-0}" != "1" ]; then
+if [ "\${DSH_CONFIRM:-0}" != "1" ] && [ "\${DSH_SHELL:-0}" != "1" ]; then
   exec "\$REAL" "\$@"   # 未启用确认（安装流程等）直接放行
 fi
 if /root/dsh-confirm.sh "\$SELF \$*"; then
@@ -107,3 +107,4 @@ chmod +x "$DSH_BIN/$C"
 done
 
 echo "OK dsh-bin: $(ls "$DSH_BIN" | tr '\n' ' ')"
+echo 8 > "$DSH_BIN/.version"
