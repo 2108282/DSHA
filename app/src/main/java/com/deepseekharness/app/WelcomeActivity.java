@@ -67,6 +67,13 @@ public class WelcomeActivity extends AppCompatActivity {
         @Override
         public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
             View v = LayoutInflater.from(parent.getContext()).inflate(layouts[viewType], parent, false);
+            // 最后一页：关于入口（GitHub / QQ 群）
+            if (viewType == layouts.length - 1) {
+                Button aboutBtn = v.findViewById(R.id.welcome_about);
+                if (aboutBtn != null) {
+                    aboutBtn.setOnClickListener(btn -> AboutDialog.show(WelcomeActivity.this));
+                }
+            }
             return new RecyclerView.ViewHolder(v) {};
         }
 

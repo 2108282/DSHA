@@ -1,7 +1,5 @@
 package com.deepseekharness.app;
 
-import android.content.Intent;
-import android.net.Uri;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -15,7 +13,6 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.appcompat.app.AlertDialog;
 import androidx.fragment.app.Fragment;
 
 /** 配置模块：API key / 端口 / 模型 / 沙箱模式 */
@@ -24,8 +21,6 @@ public class ConfigFragment extends Fragment {
     private HarnessController c;
     private EditText apiKeyEdit, portEdit, modelEdit;
     private Spinner modeSpinner;
-    private int tapCount = 0;
-    private long lastTap = 0;
 
     @Nullable
     @Override
@@ -59,49 +54,8 @@ public class ConfigFragment extends Fragment {
             Toast.makeText(requireContext(), "配置已保存", Toast.LENGTH_SHORT).show();
         });
 
-        // 隐藏入口：连点版本号 5 次，弹出 GitHub 仓库 / QQ 群
-        repoLink.setOnClickListener(v -> {
-            long now = System.currentTimeMillis();
-            if (now - lastTap > 3000) tapCount = 0;
-            lastTap = now;
-            if (++tapCount >= 5) {
-                tapCount = 0;
-                showLinksDialog();
-            }
-        });
-    }
-
-    private void showLinksDialog() {
-        String[] items = {"GitHub 开源仓库", "QQ 交流群", "取消"};
-        new AlertDialog.Builder(requireContext())
-                .setTitle("DSHA")
-                .setItems(items, (d, w) -> {
-                    if (w == 0) {
-                        openBrowser("https://github.com/qiannianhuanxiang/DSHA");
-                    } else if (w == 1) {
-                        openQQGroup();
-                    }
-                })
-                .show();
-    }
-
-    private void openBrowser(String url) {
-        try {
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-        } catch (Exception e) {
-            Toast.makeText(requireContext(), "打不开，请手动访问：" + url, Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private void openQQGroup() {
-        try {
-            // mqqapi scheme 直接拉起 QQ 加群界面（无需群链接 key）
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(
-                    "mqqapi://card/show_pslcard?src_type=internal&version=1"
-                            + "&uin=960636357&card_type=group")));
-        } catch (Exception e) {
-            Toast.makeText(requireContext(), "打不开 QQ，请手动搜索群号：960636357", Toast.LENGTH_SHORT).show();
-        }
+        // 关于入口：点版本号弹「关于」对话框（GitHub / QQ 群）
+        repoLink.setOnClickListener(v -> AboutDialog.show(requireContext()));
     }
 
     private void loadConfig() {
