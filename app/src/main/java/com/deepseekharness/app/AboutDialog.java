@@ -17,8 +17,13 @@ public final class AboutDialog {
     }
 
     public static void show(Context ctx) {
+        String version = "1.0.6";
+        try {
+            version = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
+        } catch (Exception ignored) {
+        }
         new AlertDialog.Builder(ctx)
-                .setTitle("DSHA v1.0.2")
+                .setTitle("DSHA v" + version)
                 .setMessage("DeepSeek Harness 安卓启动器\n\n"
                         + "🌟 GitHub：" + GITHUB_URL + "\n"
                         + "🐧 QQ 交流群：" + QQ_GROUP)

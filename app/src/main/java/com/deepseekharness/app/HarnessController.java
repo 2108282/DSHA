@@ -486,6 +486,23 @@ public class HarnessController {
         } catch (Exception ignored) {
         }
 
+        // 应用 bash 安全守卫补丁（bash 工具每次执行前 source dsh-guard.sh，防环境白名单绕过）；失败不阻塞
+        try {
+            String bgPatch = readAsset("bash-guard.patch");
+            if (!bgPatch.isEmpty()) {
+                java.io.File bgFile = new java.io.File(proot.getRootfsDir(), "root/dsha-bash-guard.patch");
+                try (java.io.FileOutputStream fo = new java.io.FileOutputStream(bgFile)) {
+                    fo.write(bgPatch.getBytes(StandardCharsets.UTF_8));
+                }
+                runStep("应用 bash 守卫补丁", 93,
+                        "cd /root/" + wd + " && " +
+                        "(git apply --check /root/dsha-bash-guard.patch 2>/dev/null && " +
+                        "git apply /root/dsha-bash-guard.patch && echo 'bash 守卫补丁已应用') || " +
+                        "echo 'bash 守卫补丁跳过（可能已应用或源码已更新）'");
+            }
+        } catch (Exception ignored) {
+        }
+
         // 安装危险命令确认包装器（rootfs 内 rm/dd 等先弹确认，防止 agent/终端误删）
         // 失败必须中断：安全功能没装好，安装不算完成
         {

@@ -62,6 +62,13 @@ public class ConfigFragment extends Fragment {
         });
 
         // 关于入口：点版本号弹「关于」对话框（GitHub / QQ 群）
+        // 版本号动态显示（与应用信息一致）
+        try {
+            String v = requireContext().getPackageManager()
+                    .getPackageInfo(requireContext().getPackageName(), 0).versionName;
+            repoLink.setText("DSHA v" + v);
+        } catch (Exception ignored) {
+        }
         repoLink.setOnClickListener(v -> AboutDialog.show(requireContext()));
     }
 
