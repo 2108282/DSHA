@@ -831,6 +831,20 @@ public class HarnessController {
         }
     }
 
+    /** 给已构建的 bash 工具 lib 直接打补丁（强制每次执行前加载守卫，不依赖重新 build） */
+    public void ensureBashGuardPatch() {
+        try {
+            String out = proot.execAndRead(
+                    "cd /root/" + getWorkdir() + " && "
+                    + "F=$(ls packages/shell/bash-local/lib/index.js 2>/dev/null | head -1); "
+                    + "if [ -z \"$F\" ]; then echo LIB_MISSING; "
+                    + "elif grep -q 'dsh-guard' \"$F\"; then echo LIB_ALREADY; "
+                    + "else sed -i 's|command: request\\.command|command: `source /root/dsh-guard.sh 2>/dev/null; ${request.command}`|' \"$F\" "
+                    + "&& grep -q 'dsh-guard' \"$F\" && echo LIB_PATCHED || echo LIB_PATCH_FAIL; fi");
+        } catch (Exception ignored) {
+        }
+    }
+
     public void startWeb() {
         if (webProcess != null && webProcess.isAlive()) {
             return; // 已在运行，避免重复启动
@@ -840,6 +854,7 @@ public class HarnessController {
                 setProgress("正在启动 Web UI", 0);
                 proot.ensureRuntimeFiles();
                 ensureDangerGuard(); // 安全包装器缺失则自动补装
+                ensureBashGuardPatch(); // bash 工具 lib 强制加载守卫（不依赖重装）
                 Process p = proot.execRootfs(startWebCommand());
                 webProcess = p;
                 // 阻塞读取输出，保持 proot+node 进程存活（后台 nohup 会被 --kill-on-exit 杀掉）
