@@ -107,6 +107,11 @@ public final class HttpShellService {
             String result;
             if (cmd.isEmpty()) {
                 result = "[NO_CMD]";
+            } else if (path.startsWith("/confirm")) {
+                // rootfs 内包装器请求的确认：只弹窗，不执行
+                result = (confirmEnabled() && DangerShellGuard.isDangerous(cmd))
+                        ? (requestUserConfirm(cmd) ? "YES" : "NO")
+                        : "YES";
             } else if (DangerShellGuard.isDangerous(cmd) && confirmEnabled()) {
                 result = awaitConfirm(cmd);
             } else {
@@ -133,6 +138,11 @@ public final class HttpShellService {
 
     /** 危险命令：挂起等待用户确认（前台弹窗 / 后台通知），超时默认拒绝 */
     private String awaitConfirm(String cmd) {
+        return requestUserConfirm(cmd) ? ShizukuShell.exec(cmd) : "[USER_REJECTED]";
+    }
+
+    /** 只请求用户确认（不执行命令），返回是否允许；/confirm 端点用 */
+    private boolean requestUserConfirm(String cmd) {
         CountDownLatch latch = new CountDownLatch(1);
         pendingLatch = latch;
         pendingAllow = false;
@@ -172,12 +182,12 @@ public final class HttpShellService {
             pendingLatch = null;
             if (!finished) {
                 cancelConfirmNotification();
-                return "[CONFIRM_TIMEOUT_REJECTED]";
+                return false;
             }
-            return pendingAllow ? ShizukuShell.exec(cmd) : "[USER_REJECTED]";
+            return pendingAllow;
         } catch (InterruptedException e) {
             pendingLatch = null;
-            return "[CONFIRM_INTERRUPTED]";
+            return false;
         }
     }
 

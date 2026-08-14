@@ -484,6 +484,20 @@ public class HarnessController {
         } catch (Exception ignored) {
         }
 
+        // 安装危险命令确认包装器（rootfs 内 rm/dd 等先弹确认，防止 agent/终端误删）
+        try {
+            String inst = readAsset("rootfs-confirm-install.sh");
+            if (!inst.isEmpty()) {
+                java.io.File instFile = new java.io.File(proot.getRootfsDir(), "root/install-confirm.sh");
+                try (java.io.FileOutputStream fo = new java.io.FileOutputStream(instFile)) {
+                    fo.write(inst.getBytes(StandardCharsets.UTF_8));
+                }
+                runStep("安装危险命令确认包装器", 93,
+                        "bash /root/install-confirm.sh && rm -f /root/install-confirm.sh");
+            }
+        } catch (Exception ignored) {
+        }
+
         // 准备 Node headers（已缓存则跳过；node-gyp 现场下载会连 nodejs.org，国内被墙）
         runStep("准备 Node headers", 94,
                 "if [ ! -f /root/.cache/node-gyp/24.19.0/include/node/node.h ]; then " +
@@ -712,7 +726,10 @@ public class HarnessController {
           .append("export DSH_HOME=/root/.dsh && ")
           .append("export DEEPSEEK_API_KEY=\"").append(effectiveApiKey()).append("\" && ")
           .append("export DSH_PERMISSION_MODE=\"").append(getPermissionMode()).append("\" && ")
-          .append("node apps/cli/lib/bin.js web");
+          // 危险命令确认：agent 在 rootfs 内的 rm/dd 等操作需用户确认（dsh-bin 包装器）
+          .append("export DSH_CONFIRM=1 && ")
+          // 日志重定向到 ~/dsh-web.log（与 Termux 模式统一，方便终端 tail 查看）
+          .append("node apps/cli/lib/bin.js web > ~/dsh-web.log 2>&1");
         return sb.toString();
     }
 
@@ -787,6 +804,10 @@ public class HarnessController {
                 webProcess = p;
                 // 阻塞读取输出，保持 proot+node 进程存活（后台 nohup 会被 --kill-on-exit 杀掉）
                 String out = proot.drainOutput(p);
+                // 输出已重定向到 ~/dsh-web.log，stdout 为空时从文件取尾部
+                if (out == null || out.trim().isEmpty()) {
+                    out = proot.execAndRead("tail -c 4000 ~/dsh-web.log 2>/dev/null");
+                }
                 String tail = out.length() > 500 ? out.substring(out.length() - 500) : out;
                 setState("", 0, "", "Web UI 意外退出：\n" + tail, false);
             } catch (Throwable e) {
