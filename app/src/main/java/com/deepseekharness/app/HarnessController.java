@@ -425,8 +425,9 @@ public class HarnessController {
         }
 
         setProgress("启用 pnpm", 92);
+        // 不依赖 corepack（新版 Node 常缺失）：直接用 npm 安装 pnpm@11.7.0（与项目 packageManager 匹配）
         runStep("启用 pnpm", 92,
-                "corepack enable pnpm && corepack prepare pnpm@latest --activate && pnpm -v");
+                "npm install -g pnpm@11.7.0 --registry=https://registry.npmmirror.com && pnpm -v");
 
         setProgress("获取 deepseek-harness 源码", 93);
         runStep("获取 deepseek-harness 源码", 93,

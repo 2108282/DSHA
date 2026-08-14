@@ -29,8 +29,7 @@ tar -xJf node.tar.xz -C /usr/local --strip-components=1
 node -v
 
 echo "==> [4/6] 启用 pnpm"
-corepack enable pnpm
-corepack prepare pnpm@latest --activate
+npm install -g pnpm@11.7.0 --registry=https://registry.npmmirror.com
 pnpm -v
 
 echo "==> [5/6] 拉取并构建 deepseek-harness"
