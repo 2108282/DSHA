@@ -84,6 +84,15 @@ public final class TarGzipExtractor {
 
                 File out = new File(dest, name);
 
+                // 防御：条目名非法 = 预构建包损坏（下载被墙/截断的假包），直接报错
+                // 而不是用乱码路径创建文件（否则会抛 FileNotFoundException: <乱码路径>）
+                if (name == null || name.isEmpty() || name.startsWith("/")
+                        || name.contains("\"") || name.contains(",")
+                        || name.contains("..") || name.contains("\u0000")) {
+                    throw new IOException("预构建包损坏（非法文件条目: " + safeName(name)
+                            + "），请重新下载或改用「直连源码构建」");
+                }
+
                 switch (type) {
                     case '0':
                     case 0:
@@ -154,6 +163,12 @@ public final class TarGzipExtractor {
                 remaining -= skipped;
             }
         }
+    }
+
+    private static String safeName(String name) {
+        if (name == null) return "(null)";
+        String s = name.replace("\n", "\\n").replace("\r", "\\r");
+        return s.length() > 60 ? s.substring(0, 60) + "…" : s;
     }
 
     private static boolean readFull(InputStream in, byte[] b, int len) throws IOException {

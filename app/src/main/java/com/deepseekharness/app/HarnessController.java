@@ -242,6 +242,15 @@ public class HarnessController {
         return false;
     }
 
+    /** 检查文件是否为有效的 gzip 包（校验魔数 0x1f 0x8b） */
+    private boolean validGzip(File f) {
+        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+            return in.read() == 0x1f && in.read() == 0x8b;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** rootfs 内基础工具是否齐备 */
     private boolean toolsInstalled() {
         try {
@@ -380,7 +389,9 @@ public class HarnessController {
         // 预构建好的 deepseek-harness（含 node_modules + 构建产物），直接下载解压，避免设备内存不足 OOM
         File pkg = new File(proot.getRootfsDir().getParentFile(), "dsh.tar.gz");
         File pkgDone = new File(pkg.getAbsolutePath() + ".done");
-        boolean havePkg = pkgDone.exists() && pkg.exists() && pkg.length() > 1024L * 1024;
+        // 复用前校验：必须是有效的 gzip 包（防止之前下载被墙/截断留下的假包）
+        boolean havePkg = pkgDone.exists() && pkg.exists() && pkg.length() > 1024L * 1024
+                && validGzip(pkg);
         if (havePkg) {
             setProgress("预构建包已存在，跳过下载", 92);
         } else {
@@ -392,6 +403,11 @@ public class HarnessController {
                     proot.downloadRootfs(url, pkg, p ->
                             setProgress("下载 deepseek-harness 预构建包 " + p + "%（源：" + hostOf(url) + "）",
                                     Math.min(99, 92 + p / 12)));
+                    if (!validGzip(pkg)) {
+                        //noinspection ResultOfMethodCallIgnored
+                        pkg.delete();
+                        throw new Exception("下载内容不是有效的压缩包（可能被墙/劫持），已删除");
+                    }
                     ok = true;
                     break;
                 } catch (Exception e) {
@@ -406,7 +422,17 @@ public class HarnessController {
 
         setProgress("解压 deepseek-harness（约 1~2 分钟）", 99);
         String wd = getWorkdir();
-        proot.extractHarness(pkg, new File(proot.getRootfsDir(), "root/" + wd));
+        try {
+            proot.extractHarness(pkg, new File(proot.getRootfsDir(), "root/" + wd));
+        } catch (Exception e) {
+            // 解压失败 = 包损坏：删除坏包（避免下次复用），给出明确指引
+            //noinspection ResultOfMethodCallIgnored
+            pkg.delete();
+            //noinspection ResultOfMethodCallIgnored
+            pkgDone.delete();
+            throw new Exception("预构建包损坏或解压失败：" + e.getMessage()
+                    + "\n\n已删除损坏的包，可重试下载，或改选「直连 GitHub 源码构建」（更稳）");
+        }
 
         runStep("写入 API key", 99,
                 "cd /root/" + wd + " && printf 'DEEPSEEK_API_KEY=%s\\n' '" + apiKey + "' > .env");
