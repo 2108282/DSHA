@@ -287,7 +287,7 @@ public class ProotBootstrap {
             conn.setConnectTimeout(timeoutMs);
             conn.setReadTimeout(timeoutMs);
             conn.setRequestMethod("HEAD");
-            conn.setRequestProperty("User-Agent", "DSHA/0.2.0");
+            conn.setRequestProperty("User-Agent", "DSHA/1.0.0");
             int code = conn.getResponseCode();
             conn.disconnect();
             return (code == 200 || code == 206)
@@ -343,7 +343,7 @@ public class ProotBootstrap {
         conn.setConnectTimeout(45000);
         conn.setReadTimeout(300000);
         conn.setInstanceFollowRedirects(true);
-        conn.setRequestProperty("User-Agent", "DSHA/0.2.0");
+        conn.setRequestProperty("User-Agent", "DSHA/1.0.0");
         if (existing > 0) {
             conn.setRequestProperty("Range", "bytes=" + existing + "-");
         }
