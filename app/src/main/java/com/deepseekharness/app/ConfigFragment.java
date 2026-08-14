@@ -22,7 +22,7 @@ public class ConfigFragment extends Fragment {
     private HarnessController c;
     private EditText apiKeyEdit, portEdit, modelEdit;
     private Spinner modeSpinner;
-    private CheckBox confirmShellCb;
+    private CheckBox confirmShellCb, checkUpdateCb;
 
     @Nullable
     @Override
@@ -39,6 +39,7 @@ public class ConfigFragment extends Fragment {
         modelEdit = view.findViewById(R.id.config_model);
         modeSpinner = view.findViewById(R.id.config_mode);
         confirmShellCb = view.findViewById(R.id.config_confirm_shell);
+        checkUpdateCb = view.findViewById(R.id.config_check_update);
         Button saveBtn = view.findViewById(R.id.config_save);
         TextView repoLink = view.findViewById(R.id.config_repo_link);
 
@@ -55,7 +56,8 @@ public class ConfigFragment extends Fragment {
             c.setModel(modelEdit.getText().toString().trim());
             c.setPermissionMode((String) modeSpinner.getSelectedItem());
             requireContext().getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
-                    .edit().putBoolean("confirm_shell", confirmShellCb.isChecked()).apply();
+                    .edit().putBoolean("confirm_shell", confirmShellCb.isChecked())
+                    .putBoolean("check_update", checkUpdateCb.isChecked()).apply();
             Toast.makeText(requireContext(), "配置已保存", Toast.LENGTH_SHORT).show();
         });
 
@@ -75,5 +77,8 @@ public class ConfigFragment extends Fragment {
         confirmShellCb.setChecked(requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("confirm_shell", true));
+        checkUpdateCb.setChecked(requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("check_update", true));
     }
 }

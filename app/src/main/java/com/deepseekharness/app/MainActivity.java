@@ -52,6 +52,7 @@ public class MainActivity extends AppCompatActivity {
         requestPermissions();
         requestBatteryOptimization();
         maybeShowBackupReminder();
+        maybeCheckUpdate();
 
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
 
@@ -124,6 +125,33 @@ public class MainActivity extends AppCompatActivity {
             }
         } catch (Exception ignored) {
         }
+    }
+
+    // ================= 检查更新 =================
+    /** 后台静默检查 GitHub Releases；发现新版弹窗（取消 = 本次忽略该版本） */
+    private void maybeCheckUpdate() {
+        final SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
+        if (!prefs.getBoolean("check_update", true)) return;
+        final String ignored = prefs.getString("ignored_version", "");
+        final String current;
+        try {
+            current = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return;
+        }
+        new Thread(() -> {
+            String tag = UpdateChecker.checkLatestVersion();
+            if (tag == null || tag.equals(ignored)) return;
+            if (!UpdateChecker.isNewer(tag, current)) return;
+            runOnUiThread(() -> new AlertDialog.Builder(this)
+                    .setTitle("发现新版本 " + tag)
+                    .setMessage("当前版本 v" + current + "\n是否前往下载？")
+                    .setPositiveButton("更新", (d, w) -> AboutDialog.openBrowser(
+                            this, "https://github.com/qiannianhuanxiang/DSHA/releases/latest"))
+                    .setNegativeButton("取消", (d, w) -> prefs.edit()
+                            .putString("ignored_version", tag).apply())
+                    .show());
+        }).start();
     }
 
     private void hideSystemUI() {

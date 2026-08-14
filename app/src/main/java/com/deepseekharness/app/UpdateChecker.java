@@ -1,0 +1,85 @@
+package com.deepseekharness.app;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * 静默检查更新：查询 GitHub Releases 最新版本号。
+ * 直连失败（被墙）时 fallback ghfast.top 代理；全部失败静默返回 null。
+ */
+public final class UpdateChecker {
+
+    private static final String[] URLS = {
+            "https://api.github.com/repos/qiannianhuanxiang/DSHA/releases/latest",
+            "https://ghfast.top/https://api.github.com/repos/qiannianhuanxiang/DSHA/releases/latest"
+    };
+
+    private UpdateChecker() {
+    }
+
+    /** 查询最新版本号（vX.Y.Z），失败返回 null */
+    public static String checkLatestVersion() {
+        for (String url : URLS) {
+            try {
+                HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                conn.setRequestProperty("User-Agent", "DSHA/1.0.0");
+                conn.setRequestProperty("Accept", "application/vnd.github+json");
+                int code = conn.getResponseCode();
+                if (code != 200) {
+                    conn.disconnect();
+                    continue;
+                }
+                StringBuilder sb = new StringBuilder();
+                try (BufferedReader r = new BufferedReader(
+                        new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = r.readLine()) != null) {
+                        sb.append(line);
+                        if (sb.length() > 262144) break;
+                    }
+                }
+                conn.disconnect();
+                String tag = extractTag(sb.toString());
+                if (tag != null && tag.matches("v?\\d+(\\.\\d+)*")) return tag;
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private static String extractTag(String json) {
+        int i = json.indexOf("\"tag_name\"");
+        if (i < 0) return null;
+        int s = json.indexOf('"', i + 10);
+        if (s < 0) return null;
+        int e = json.indexOf('"', s + 1);
+        if (e < 0) return null;
+        return json.substring(s + 1, e);
+    }
+
+    /** 比较最新版（v1.2.3）是否比当前（1.0.0）新 */
+    public static boolean isNewer(String latestTag, String current) {
+        String[] a = latestTag.replaceFirst("^v", "").split("\\.");
+        String[] b = current.replaceFirst("^v", "").split("\\.");
+        int n = Math.max(a.length, b.length);
+        for (int i = 0; i < n; i++) {
+            int x = i < a.length ? parseInt(a[i]) : 0;
+            int y = i < b.length ? parseInt(b[i]) : 0;
+            if (x != y) return x > y;
+        }
+        return false;
+    }
+
+    private static int parseInt(String s) {
+        try {
+            return Integer.parseInt(s.replaceAll("[^0-9]", ""));
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+}
