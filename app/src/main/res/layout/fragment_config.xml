@@ -91,7 +91,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
             android:gravity="center"
-            android:text="DSHA v1.0.1"
+            android:text="DSHA v1.0.2"
             android:textColor="#999999"
             android:textSize="12sp" />
     </LinearLayout>

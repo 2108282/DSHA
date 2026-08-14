@@ -794,6 +794,24 @@ public class HarnessController {
     }
 
     // ================= 启动 / 停止 =================
+    /** 确保 rootfs 内危险命令确认包装器已部署（缺失则自动安装，幂等） */
+    public void ensureDangerGuard() {
+        try {
+            String check = proot.execAndRead("test -x /root/dsh-bin/rm && echo OK || echo MISSING");
+            if (check != null && check.contains("OK")) return;
+            String inst = readAsset("rootfs-confirm-install.sh");
+            if (inst.isEmpty()) return;
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/install-confirm.sh");
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f)) {
+                fo.write(inst.getBytes(StandardCharsets.UTF_8));
+            }
+            proot.execChecked("bash /root/install-confirm.sh && rm -f /root/install-confirm.sh");
+        } catch (Exception ignored) {
+            // 环境未安装等场景静默
+        }
+    }
+
     public void startWeb() {
         if (webProcess != null && webProcess.isAlive()) {
             return; // 已在运行，避免重复启动
@@ -802,6 +820,7 @@ public class HarnessController {
             try {
                 setProgress("正在启动 Web UI", 0);
                 proot.ensureRuntimeFiles();
+                ensureDangerGuard(); // 安全包装器缺失则自动补装
                 Process p = proot.execRootfs(startWebCommand());
                 webProcess = p;
                 // 阻塞读取输出，保持 proot+node 进程存活（后台 nohup 会被 --kill-on-exit 杀掉）

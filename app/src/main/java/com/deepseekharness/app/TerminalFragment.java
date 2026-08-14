@@ -81,6 +81,7 @@ public class TerminalFragment extends Fragment {
     }
 
     private void startShell() {
+        c.ensureDangerGuard(); // 危险确认包装器缺失则自动补装（装新 APK 后无需重装第 4 步）
         new Thread(() -> {
             try {
                 shell = c.getProot().execRootfsInteractive();
