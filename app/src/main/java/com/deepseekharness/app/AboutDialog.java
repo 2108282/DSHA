@@ -18,7 +18,7 @@ public final class AboutDialog {
 
     public static void show(Context ctx) {
         new AlertDialog.Builder(ctx)
-                .setTitle("DSHA v1.0.0")
+                .setTitle("DSHA v1.0.1")
                 .setMessage("DeepSeek Harness 安卓启动器\n\n"
                         + "🌟 GitHub：" + GITHUB_URL + "\n"
                         + "🐧 QQ 交流群：" + QQ_GROUP)
