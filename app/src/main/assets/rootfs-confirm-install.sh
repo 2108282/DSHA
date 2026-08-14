@@ -46,36 +46,43 @@ if [ "${DSH_CONFIRM:-0}" = "1" ]; then
   halt()    { /root/dsh-confirm.sh "halt $*"    && /usr/sbin/halt "$@"; }
   poweroff(){ /root/dsh-confirm.sh "poweroff $*" && /usr/sbin/poweroff "$@"; }
   wipe()    { /root/dsh-confirm.sh "wipe $*"    && /usr/sbin/wipe "$@"; }
-  # adb shell 通道：设备侧命令含危险操作时确认（command adb 跳过函数查找）
-  adb()     { local FOUND=0 CMDSTR=""; for a in "$@"; do if [ "$FOUND" = "1" ]; then CMDSTR="$CMDSTR $a"; fi; [ "$a" = "shell" ] && FOUND=1; done; case "$CMDSTR" in *"rm "*|*"rm -"*|*"dd if="*|*"mkfs"*|*"fdisk"*|*"format"*|*"wipe"*|*"reboot"*|*"shutdown"*|*"uninstall"*|*"pm clear"*) /root/dsh-confirm.sh "adb shell:$CMDSTR" || return 1;; esac; command adb "$@"; }
+  # adb shell/exec-out/exec-in 通道：设备侧执行命令一律确认（防内容检测绕过）
+  adb()     { local FOUND=0 CMDSTR=""; for a in "$@"; do if [ "$FOUND" = "1" ]; then CMDSTR="$CMDSTR $a"; fi; [ "$a" = "shell" ] || [ "$a" = "exec-out" ] || [ "$a" = "exec-in" ] && FOUND=1; done; if [ -n "$CMDSTR" ]; then /root/dsh-confirm.sh "adb shell:$CMDSTR" || return 1; fi; /root/.dsh-real/adb "$@" 2>/dev/null || command adb "$@"; }
 fi
 EOF
 chmod +x /root/dsh-guard.sh
 
-# adb 特殊包装：agent 用 adb shell "rm ..." 在设备上删除——检测 shell 后的命令串
+# adb 特殊包装：adb shell/exec-out/exec-in 会在设备上执行任意命令——一律确认（不做内容检测，防编码绕过）
+# 真实 adb 被移到 /root/.dsh-real/，绝对路径调用也命中包装器
 cat > "$DSH_BIN/adb" <<'EOF2'
 #!/bin/bash
 SELF=$(basename "$0")
 REAL=""
-for p in /usr/local/bin /usr/bin /bin /usr/sbin /sbin /system/bin /data/data/com.termux/files/usr/bin; do
-  if [ -x "$p/$SELF" ] && [ "$p/$SELF" != "$0" ]; then REAL="$p/$SELF"; break; fi
+for p in /root/.dsh-real /usr/local/bin /usr/bin /bin /system/bin /data/data/com.termux/files/usr/bin; do
+  if [ -x "$p/$SELF" ] && [ "$p/$SELF" != "$0" ] && [ "$p/$SELF" != "/root/.dsh-real/adb" ]; then REAL="$p/$SELF"; break; fi
 done
-[ -z "$REAL" ] && REAL=$(ls /usr/local/bin/adb /usr/bin/adb /system/bin/adb 2>/dev/null | head -1)
+[ -z "$REAL" ] && REAL=$(ls /root/.dsh-real/adb /usr/local/bin/adb /usr/bin/adb /system/bin/adb 2>/dev/null | head -1)
 if [ -z "$REAL" ]; then echo "找不到真实 adb" >&2; exit 127; fi
 if [ "${DSH_CONFIRM:-0}" = "1" ]; then
   FOUND=0; CMDSTR=""
   for a in "$@"; do
     if [ "$FOUND" = "1" ]; then CMDSTR="$CMDSTR $a"; fi
-    if [ "$a" = "shell" ]; then FOUND=1; fi
+    if [ "$a" = "shell" ] || [ "$a" = "exec-out" ] || [ "$a" = "exec-in" ]; then FOUND=1; fi
   done
-  case "$CMDSTR" in
-    *"rm "*|*"rm -"*|*"dd if="*|*"mkfs"*|*"fdisk"*|*"format"*|*"wipe"*|*"reboot"*|*"shutdown"*|*"uninstall"*|*"pm clear"*)
-      /root/dsh-confirm.sh "adb shell:$CMDSTR" || exit 1 ;;
-  esac
+  if [ -n "$CMDSTR" ]; then
+    /root/dsh-confirm.sh "adb shell:$CMDSTR" || exit 1
+  fi
 fi
 exec "$REAL" "$@"
 EOF2
 chmod +x "$DSH_BIN/adb"
+
+# 把真实 adb 藏到 /root/.dsh-real/（幂等：已藏过则跳过）
+REAL_ADB=$(command -v adb 2>/dev/null | grep -v dsh-bin | head -1)
+if [ -n "$REAL_ADB" ] && [ ! -e /root/.dsh-real/adb ]; then
+  mkdir -p /root/.dsh-real
+  mv "$REAL_ADB" /root/.dsh-real/adb 2>/dev/null || true
+fi
 
 for C in rm rmdir unlink truncate dd mkfs mkfs.ext4 mkfs.vfat fdisk reboot shutdown halt poweroff wipe find; do
 cat > "$DSH_BIN/$C" <<EOF2

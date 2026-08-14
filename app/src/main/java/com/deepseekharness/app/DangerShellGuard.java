@@ -28,12 +28,15 @@ public final class DangerShellGuard {
     public static boolean isDangerous(String cmd) {
         if (cmd == null) return false;
         String c = cmd.toLowerCase();
-        // adb shell 通道：agent 用 adb shell "rm ..." 在设备上删除——检查 shell 后的命令串
+        // adb shell 通道：agent 用 adb shell/exec-out/exec-in 在设备上执行任意命令——
+        // 只要后面跟了内容就一律确认（不做内容检测，防 base64 等编码绕过）
         int ai = c.indexOf("adb");
         if (ai >= 0) {
             int si = c.indexOf("shell", ai);
+            if (si < 0) si = c.indexOf("exec-out", ai);
+            if (si < 0) si = c.indexOf("exec-in", ai);
             if (si >= 0 && si - ai < 40) {
-                if (matchesDanger(c.substring(si + 6))) return true;
+                if (!c.substring(si + 6).trim().isEmpty()) return true;
             }
         }
         return matchesDanger(c);
