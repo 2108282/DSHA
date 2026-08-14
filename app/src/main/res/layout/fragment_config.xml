@@ -65,6 +65,13 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content" />
 
+        <CheckBox
+            android:id="@+id/config_confirm_shell"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="危险 Shell 操作需确认（删除/格式化/卸载/重启等）" />
+
         <Button
             android:id="@+id/config_save"
             android:layout_width="match_parent"

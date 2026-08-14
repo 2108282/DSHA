@@ -54,6 +54,26 @@ Response is JSON:
 
 If it returns a service-not-ready marker such as `[SHIZUKU_SERVICE_NOT_READY]`, the Shizuku UserService has not been bound yet. Restart the host app/service after granting Shizuku permission, then try again.
 
+## Channel 3: Termux environment (DSHA)
+
+When the agent runs inside **Termux** (not proot), destructive commands are
+**wrapped and require user confirmation**:
+
+- `rm`, `dd`, `mkfs*`, `fdisk`, `reboot`, `shutdown`, `halt`, `poweroff`,
+  `wipe`, `pm`, `sm`, `settings` are replaced by wrappers in `~/dsh-bin/`
+  (prepended to PATH by the DSHA launcher).
+- Running one triggers a `termux-dialog` confirmation popup on the device
+  ("DSHA 安全确认：模型试图执行 [...]"). The command **blocks** until the
+  user checks "允许" (allow) or cancels.
+- If rejected, or Termux:API (`termux-api` package) is not installed, the
+  wrapper exits non-zero. **Treat a non-zero exit as "user denied"** — do not
+  retry the same destructive command; ask the user or choose a safer path.
+
+Notes:
+
+- ADB shell usually runs as `uid=2000(shell)`, not root.
+- Use `am`, `pm`, `input`, `dumpsys`, `getprop`, `cmd` for Android-specific operations.
+
 ## Decision guide
 
 - Prefer ADB when it is available; it is the most reliable channel.

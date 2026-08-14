@@ -6,6 +6,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -21,6 +22,7 @@ public class ConfigFragment extends Fragment {
     private HarnessController c;
     private EditText apiKeyEdit, portEdit, modelEdit;
     private Spinner modeSpinner;
+    private CheckBox confirmShellCb;
 
     @Nullable
     @Override
@@ -36,6 +38,7 @@ public class ConfigFragment extends Fragment {
         portEdit = view.findViewById(R.id.config_port);
         modelEdit = view.findViewById(R.id.config_model);
         modeSpinner = view.findViewById(R.id.config_mode);
+        confirmShellCb = view.findViewById(R.id.config_confirm_shell);
         Button saveBtn = view.findViewById(R.id.config_save);
         TextView repoLink = view.findViewById(R.id.config_repo_link);
 
@@ -51,6 +54,8 @@ public class ConfigFragment extends Fragment {
             c.setPort(portEdit.getText().toString().trim());
             c.setModel(modelEdit.getText().toString().trim());
             c.setPermissionMode((String) modeSpinner.getSelectedItem());
+            requireContext().getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .edit().putBoolean("confirm_shell", confirmShellCb.isChecked()).apply();
             Toast.makeText(requireContext(), "配置已保存", Toast.LENGTH_SHORT).show();
         });
 
@@ -67,5 +72,8 @@ public class ConfigFragment extends Fragment {
         if ("workspace-write".equals(mode)) idx = 1;
         else if ("read-only".equals(mode)) idx = 2;
         modeSpinner.setSelection(idx);
+        confirmShellCb.setChecked(requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("confirm_shell", true));
     }
 }

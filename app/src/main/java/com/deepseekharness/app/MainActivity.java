@@ -26,6 +26,9 @@ import com.google.android.material.bottomnavigation.BottomNavigationView;
 
 public class MainActivity extends AppCompatActivity {
 
+    /** 当前前台 Activity（HttpShellService 用它弹确认框）；null = 不在前台 */
+    public static volatile MainActivity current = null;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -97,12 +100,14 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        current = this;
         TaskNotifier.appInForeground = true;
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        current = null;
         TaskNotifier.appInForeground = false;
     }
 

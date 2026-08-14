@@ -747,7 +747,8 @@ public class HarnessController {
 
     private String startWebTermuxCommand() {
         StringBuilder sb = new StringBuilder();
-        sb.append("cd ~/").append(getWorkdir()).append(" && ")
+        sb.append("export PATH=$HOME/dsh-bin:$PATH && ")
+          .append("cd ~/").append(getWorkdir()).append(" && ")
           .append("export DEEPSEEK_API_KEY=\"").append(effectiveApiKey()).append("\" && ")
           .append("export DSH_PERMISSION_MODE=\"").append(getPermissionMode()).append("\" && ")
           .append("nohup node apps/cli/lib/bin.js web > ~/dsh-web.log 2>&1 & echo started");

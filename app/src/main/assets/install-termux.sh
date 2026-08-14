@@ -43,7 +43,47 @@ pnpm run build
 echo "==> [5/5] 写入 API key"
 printf 'DEEPSEEK_API_KEY=%s\n' "$API_KEY" > .env
 
+echo "==> [6/6] 安装危险命令确认包装器"
+DSH_BIN="$HOME_DIR/dsh-bin"
+mkdir -p "$DSH_BIN"
+
+# 确认核心脚本（termux-dialog 弹窗，勾选「允许」才放行）
+cat > "$HOME_DIR/dsh-confirm.sh" <<'DSH_CONFIRM'
+#!/data/data/com.termux/files/usr/bin/bash
+CMD="$*"
+if ! command -v termux-dialog >/dev/null 2>&1; then
+  echo "!! 未安装 Termux:API（pkg install termux-api），已拒绝危险操作：$CMD" >&2
+  exit 1
+fi
+RES=$(termux-dialog checkbox -v "允许" -t "DSHA 安全确认：模型试图执行 [$CMD]，是否允许？" 2>/dev/null)
+case "$RES" in
+  *"允许"*) exit 0 ;;
+  *) echo "!! 用户拒绝：$CMD" >&2; exit 1 ;;
+esac
+DSH_CONFIRM
+chmod +x "$HOME_DIR/dsh-confirm.sh"
+
+# 危险命令包装：命中后先确认，再执行真实命令
+for C in rm dd mkfs mkfs.ext4 mkfs.vfat fdisk reboot shutdown halt poweroff wipe pm sm settings; do
+cat > "$DSH_BIN/$C" <<DSH_WRAP
+#!/data/data/com.termux/files/usr/bin/bash
+SELF=\$(basename "\$0")
+REAL=""
+for p in /system/bin /system/xbin \$PREFIX/bin /data/data/com.termux/files/usr/bin; do
+  if [ -x "\$p/\$SELF" ] && [ "\$p/\$SELF" != "\$0" ]; then REAL="\$p/\$SELF"; break; fi
+done
+[ -z "\$REAL" ] && REAL=\$(command -v -- "\$SELF" 2>/dev/null)
+if [ -n "\$REAL" ] && "\$HOME/dsh-confirm.sh" "\$SELF \$*"; then
+  exec "\$REAL" "\$@"
+fi
+exit 1
+DSH_WRAP
+chmod +x "$DSH_BIN/$C"
+done
+echo "    已包装: rm dd mkfs fdisk reboot shutdown pm 等（PATH 前置 \$HOME/dsh-bin）"
+
 echo ""
 echo "==> 安装完成！"
 echo "    工作区: $HOME_DIR/deepseek-harness"
 echo "    启动:   node apps/cli/lib/bin.js web"
+echo "    安全:   危险命令会自动弹确认框（需 pkg install termux-api）"

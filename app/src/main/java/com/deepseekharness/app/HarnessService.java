@@ -40,7 +40,7 @@ public class HarnessService extends Service {
         c.addStateListener(stateListener);
         startForeground(NOTIF_ID, buildNotification("DSHA运行中", "Web UI 正在后台保持运行"));
         // 桥接 Shizuku shell 能力（rootfs 里的助手可通过 127.0.0.1:3090 执行设备命令）
-        shellHttp = new HttpShellService();
+        shellHttp = new HttpShellService(this);
         shellHttp.start();
         ShizukuShell.ensureBound(this);
         // 任务完成通知：agent 干活结束后提醒
