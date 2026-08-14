@@ -26,6 +26,22 @@
 3. 「安装」页点一键安装（约 5~15 分钟，多源测速自选）
 4. 「启动」页启动 Web UI，自动打开预览
 
+## 🧰 Agent Skills（智能体技能包）
+
+配套的智能体技能，位于 [`agent-skills/`](agent-skills/)：
+
+| 技能 | 说明 |
+|---|---|
+| `device-shell` | 通过 ADB 或本地 Shizuku HTTP 桥（127.0.0.1:3090）在安卓设备上执行 shell 命令 |
+| `screen-ocr-operator` | 指挥官模式：OCR/视觉模型 + ADB 批量操作屏幕，最少往返 |
+
+复制到 agent 技能目录即可使用：
+
+```bash
+cp -r agent-skills/device-shell ~/.agents/skills/
+cp -r agent-skills/screen-ocr-operator ~/.agents/skills/
+```
+
 ## 🔧 构建
 
 ```sh
