@@ -25,6 +25,26 @@ exit 1
 EOF
 chmod +x /root/dsh-confirm.sh
 
+# BASH_ENV 函数级守卫：agent 每次 bash -c 执行前自动加载（非交互 bash 必读 BASH_ENV）
+# 函数优先于 PATH 查找，PATH 被覆盖/哈希缓存都无法绕过命令名拦截
+cat > /root/dsh-guard.sh <<'EOF'
+# DSHA 危险命令守卫（由 BASH_ENV 注入，勿手动删除）
+if [ "${DSH_CONFIRM:-0}" = "1" ]; then
+  rm()      { /root/dsh-confirm.sh "rm $*"      && /usr/bin/rm "$@"; }
+  dd()      { /root/dsh-confirm.sh "dd $*"      && /usr/bin/dd "$@"; }
+  mkfs()    { /root/dsh-confirm.sh "mkfs $*"    && /usr/sbin/mkfs "$@"; }
+  mkfs.ext4(){ /root/dsh-confirm.sh "mkfs.ext4 $*" && /usr/sbin/mkfs.ext4 "$@"; }
+  mkfs.vfat(){ /root/dsh-confirm.sh "mkfs.vfat $*" && /usr/sbin/mkfs.vfat "$@"; }
+  fdisk()   { /root/dsh-confirm.sh "fdisk $*"   && /usr/sbin/fdisk "$@"; }
+  reboot()  { /root/dsh-confirm.sh "reboot $*"  && /usr/sbin/reboot "$@"; }
+  shutdown(){ /root/dsh-confirm.sh "shutdown $*" && /usr/sbin/shutdown "$@"; }
+  halt()    { /root/dsh-confirm.sh "halt $*"    && /usr/sbin/halt "$@"; }
+  poweroff(){ /root/dsh-confirm.sh "poweroff $*" && /usr/sbin/poweroff "$@"; }
+  wipe()    { /root/dsh-confirm.sh "wipe $*"    && /usr/sbin/wipe "$@"; }
+fi
+EOF
+chmod +x /root/dsh-guard.sh
+
 for C in rm dd mkfs mkfs.ext4 mkfs.vfat fdisk reboot shutdown halt poweroff wipe; do
 cat > "$DSH_BIN/$C" <<EOF2
 #!/bin/bash

@@ -728,8 +728,10 @@ public class HarnessController {
           .append("export DSH_HOME=/root/.dsh && ")
           .append("export DEEPSEEK_API_KEY=\"").append(effectiveApiKey()).append("\" && ")
           .append("export DSH_PERMISSION_MODE=\"").append(getPermissionMode()).append("\" && ")
-          // 危险命令确认：agent 在 rootfs 内的 rm/dd 等操作需用户确认（dsh-bin 包装器）
+          // 危险命令确认：agent 在 rootfs 内的 rm/dd 等操作需用户确认
+          // PATH 包装器 + BASH_ENV 函数级守卫（双保险）
           .append("export DSH_CONFIRM=1 && ")
+          .append("export BASH_ENV=/root/dsh-guard.sh && ")
           // 日志重定向到 ~/dsh-web.log（与 Termux 模式统一，方便终端 tail 查看）
           .append("node apps/cli/lib/bin.js web > ~/dsh-web.log 2>&1");
         return sb.toString();
