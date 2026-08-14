@@ -43,6 +43,8 @@ public final class HttpShellService {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private volatile CountDownLatch pendingLatch;
     private volatile boolean pendingAllow;
+    /** 确认进行中标志：并发确认请求直接拒绝（避免 latch 覆盖导致"点了允许却拒绝"） */
+    private volatile boolean confirmBusy = false;
 
     private ServerSocket server;
     private volatile boolean running;
@@ -143,51 +145,59 @@ public final class HttpShellService {
 
     /** 只请求用户确认（不执行命令），返回是否允许；/confirm 端点用 */
     private boolean requestUserConfirm(String cmd) {
-        CountDownLatch latch = new CountDownLatch(1);
-        pendingLatch = latch;
-        pendingAllow = false;
-
-        MainActivity act = MainActivity.current;
-        if (act != null) {
-            // 前台：App 内弹窗
-            final String prompt = "模型试图在设备上执行：\n" + cmd + "\n\n是否允许？";
-            act.runOnUiThread(() -> new androidx.appcompat.app.AlertDialog.Builder(act)
-                    .setTitle("⚠️ DSHA 安全确认")
-                    .setMessage(prompt)
-                    .setPositiveButton("允许", (d, w) -> {
-                        pendingAllow = true;
-                        CountDownLatch l = pendingLatch;
-                        if (l != null) l.countDown();
-                    })
-                    .setNegativeButton("拒绝", (d, w) -> {
-                        CountDownLatch l = pendingLatch;
-                        if (l != null) l.countDown();
-                    })
-                    .setOnCancelListener(d -> {
-                        CountDownLatch l = pendingLatch;
-                        if (l != null) l.countDown();
-                    })
-                    .setOnDismissListener(d -> {
-                        CountDownLatch l = pendingLatch;
-                        if (l != null) l.countDown();
-                    })
-                    .show());
-        } else {
-            // 后台：高优先级通知 + 允许/拒绝按钮
-            showConfirmNotification(cmd);
-        }
-
+        if (confirmBusy) return false; // 已有确认在进行：拒绝新的（避免状态覆盖）
+        confirmBusy = true;
         try {
-            boolean finished = latch.await(CONFIRM_TIMEOUT_S, TimeUnit.SECONDS);
-            pendingLatch = null;
-            if (!finished) {
-                cancelConfirmNotification();
+            CountDownLatch latch = new CountDownLatch(1);
+            pendingLatch = latch;
+            pendingAllow = false;
+
+            MainActivity act = MainActivity.current;
+            if (act != null) {
+                // 前台：App 内弹窗
+                final String prompt = "模型试图在设备上执行：\n" + cmd + "\n\n是否允许？";
+                act.runOnUiThread(() -> new androidx.appcompat.app.AlertDialog.Builder(act)
+                        .setTitle("DSHA 安全确认")
+                        .setMessage(prompt)
+                        .setPositiveButton("允许", (d, w) -> {
+                            pendingAllow = true;
+                            CountDownLatch l = pendingLatch;
+                            if (l != null) l.countDown();
+                        })
+                        .setNegativeButton("拒绝", (d, w) -> {
+                            CountDownLatch l = pendingLatch;
+                            if (l != null) l.countDown();
+                        })
+                        .setOnCancelListener(d -> {
+                            CountDownLatch l = pendingLatch;
+                            if (l != null) l.countDown();
+                        })
+                        .setOnDismissListener(d -> {
+                            CountDownLatch l = pendingLatch;
+                            if (l != null) l.countDown();
+                        })
+                        .show());
+            } else {
+                // 后台：高优先级通知 + 允许/拒绝按钮
+                showConfirmNotification(cmd);
+            }
+
+            try {
+                boolean finished = latch.await(CONFIRM_TIMEOUT_S, TimeUnit.SECONDS);
+                pendingLatch = null;
+                if (!finished) {
+                    cancelConfirmNotification();
+                    return false;
+                }
+                return pendingAllow;
+            } catch (InterruptedException e) {
+                pendingLatch = null;
                 return false;
             }
-            return pendingAllow;
-        } catch (InterruptedException e) {
+        } finally {
+            confirmBusy = false;
             pendingLatch = null;
-            return false;
+            cancelConfirmNotification();
         }
     }
 

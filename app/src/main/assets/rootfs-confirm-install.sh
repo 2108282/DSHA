@@ -8,7 +8,7 @@ mkdir -p "$DSH_BIN"
 cat > /root/dsh-confirm.sh <<'EOF'
 #!/bin/bash
 CMD="$*"
-RES=$(curl -s -m 6 -G "http://127.0.0.1:3090/confirm" --data-urlencode "cmd=$CMD" 2>/dev/null)
+RES=$(curl -s -m 65 -G "http://127.0.0.1:3090/confirm" --data-urlencode "cmd=$CMD" 2>/dev/null)
 if [ $? -eq 0 ] && [ -n "$RES" ]; then
   echo "$RES" | grep -q YES && exit 0 || exit 1
 fi
@@ -46,8 +46,11 @@ if [ "${DSH_CONFIRM:-0}" = "1" ] || [ "${DSH_SHELL:-0}" = "1" ]; then
   halt()    { /root/dsh-confirm.sh "halt $*"    && /usr/sbin/halt "$@"; }
   poweroff(){ /root/dsh-confirm.sh "poweroff $*" && /usr/sbin/poweroff "$@"; }
   wipe()    { /root/dsh-confirm.sh "wipe $*"    && /usr/sbin/wipe "$@"; }
-  # adb shell/exec-out/exec-in 通道：设备侧执行命令一律确认（防内容检测绕过）
-  adb()     { local FOUND=0 CMDSTR=""; for a in "$@"; do if [ "$FOUND" = "1" ]; then CMDSTR="$CMDSTR $a"; fi; [ "$a" = "shell" ] || [ "$a" = "exec-out" ] || [ "$a" = "exec-in" ] && FOUND=1; done; if [ -n "$CMDSTR" ]; then /root/dsh-confirm.sh "adb shell:$CMDSTR" || return 1; fi; /root/.dsh-real/adb "$@" 2>/dev/null || command adb "$@"; }
+  # adb shell/exec-out/exec-in 通道：设备侧命令含危险操作时确认
+  is_danger_cmd() {
+    echo "$1" | grep -qE '(^|[^a-z])(rm|rmdir|unlink|truncate|wipe)([^a-z]|$)|(dd|mkfs|fdisk|format|reboot|shutdown|poweroff|halt)([^a-z]|$)|-delete|base64|\| ?(sh|bash)|eval|sh -c|toybox|pm clear|uninstall'
+  }
+  adb()     { local FOUND=0 CMDSTR=""; for a in "$@"; do if [ "$FOUND" = "1" ]; then CMDSTR="$CMDSTR $a"; fi; [ "$a" = "shell" ] || [ "$a" = "exec-out" ] || [ "$a" = "exec-in" ] && FOUND=1; done; if [ -n "$CMDSTR" ] && is_danger_cmd "$CMDSTR"; then /root/dsh-confirm.sh "adb shell:$CMDSTR" || return 1; fi; /root/.dsh-real/adb "$@" 2>/dev/null || command adb "$@"; }
 fi
 EOF
 chmod +x /root/dsh-guard.sh
@@ -63,13 +66,16 @@ for p in /root/.dsh-real /usr/local/bin /usr/bin /bin /system/bin /data/data/com
 done
 [ -z "$REAL" ] && REAL=$(ls /root/.dsh-real/adb /usr/local/bin/adb /usr/bin/adb /system/bin/adb 2>/dev/null | head -1)
 if [ -z "$REAL" ]; then echo "找不到真实 adb" >&2; exit 127; fi
+is_danger_cmd() {
+  echo "$1" | grep -qE '(^|[^a-z])(rm|rmdir|unlink|truncate|wipe)([^a-z]|$)|(dd|mkfs|fdisk|format|reboot|shutdown|poweroff|halt)([^a-z]|$)|-delete|base64|\| ?(sh|bash)|eval|sh -c|toybox|pm clear|uninstall'
+}
 if [ "${DSH_CONFIRM:-0}" = "1" ] || [ "${DSH_SHELL:-0}" = "1" ]; then
   FOUND=0; CMDSTR=""
   for a in "$@"; do
     if [ "$FOUND" = "1" ]; then CMDSTR="$CMDSTR $a"; fi
     if [ "$a" = "shell" ] || [ "$a" = "exec-out" ] || [ "$a" = "exec-in" ]; then FOUND=1; fi
   done
-  if [ -n "$CMDSTR" ]; then
+  if [ -n "$CMDSTR" ] && is_danger_cmd "$CMDSTR"; then
     /root/dsh-confirm.sh "adb shell:$CMDSTR" || exit 1
   fi
 fi
@@ -107,4 +113,4 @@ chmod +x "$DSH_BIN/$C"
 done
 
 echo "OK dsh-bin: $(ls "$DSH_BIN" | tr '\n' ' ')"
-echo 8 > "$DSH_BIN/.version"
+echo 9 > "$DSH_BIN/.version"

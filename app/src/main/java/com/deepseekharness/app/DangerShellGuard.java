@@ -22,21 +22,22 @@ public final class DangerShellGuard {
             // 应用管理（破坏性）
             "pm uninstall", "pm clear", "pm reset",
             "sm format", "settings reset",
+            // 混淆/绕过模式
+            "base64", "| sh", "| bash", "sh -c", "toybox", "eval",
     };
 
     /** 判断命令是否属于危险操作 */
     public static boolean isDangerous(String cmd) {
         if (cmd == null) return false;
         String c = cmd.toLowerCase();
-        // adb shell 通道：agent 用 adb shell/exec-out/exec-in 在设备上执行任意命令——
-        // 只要后面跟了内容就一律确认（不做内容检测，防 base64 等编码绕过）
+        // adb shell 通道：检查 shell 后的命令串是否含危险操作/混淆绕过（普通操作不拦）
         int ai = c.indexOf("adb");
         if (ai >= 0) {
             int si = c.indexOf("shell", ai);
             if (si < 0) si = c.indexOf("exec-out", ai);
             if (si < 0) si = c.indexOf("exec-in", ai);
             if (si >= 0 && si - ai < 40) {
-                if (!c.substring(si + 6).trim().isEmpty()) return true;
+                if (matchesDanger(c.substring(si + 6))) return true;
             }
         }
         return matchesDanger(c);
