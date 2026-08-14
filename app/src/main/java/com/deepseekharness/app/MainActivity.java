@@ -68,6 +68,8 @@ public class MainActivity extends AppCompatActivity {
                 f = new LaunchFragment();
             } else if (id == R.id.nav_config) {
                 f = new ConfigFragment();
+            } else if (id == R.id.nav_terminal) {
+                f = new TerminalFragment();
             } else {
                 f = new WorkspaceFragment();
             }

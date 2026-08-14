@@ -192,6 +192,33 @@ public class ProotBootstrap {
         return pb.start();
     }
 
+    /** 启动交互式 bash 会话（持久进程，可读写 stdin/stdout；cd/export 状态保持，供内置终端使用） */
+    public Process execRootfsInteractive() throws IOException {
+        String[] argv = {
+                prootPath(),
+                "--link2symlink", "-L", "--kill-on-exit",
+                "-0",
+                "--rootfs=" + rootfsDir.getAbsolutePath(),
+                "--cwd=/root",
+                "-b", "/dev",
+                "-b", "/dev/urandom:/dev/random",
+                "-b", "/proc",
+                "-b", "/sys",
+                "-b", "/proc/self/fd:/dev/fd",
+                "/bin/bash"
+        };
+        ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
+        pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
+        pb.environment().put("PROOT_LOADER", findNativeLib("libprootloader.so").getAbsolutePath());
+        pb.environment().put("PROOT_LOADER_32", findNativeLib("libprootloader32.so").getAbsolutePath());
+        pb.environment().put("LD_LIBRARY_PATH", libDir.getAbsolutePath() + ":" + findNativeLib("libproot.so").getParent());
+        pb.environment().put("HOME", "/root");
+        pb.environment().put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+        pb.environment().put("TMPDIR", "/tmp");
+        pb.environment().put("DEBIAN_FRONTEND", "noninteractive");
+        return pb.start();
+    }
+
     /** 同步执行 rootfs 命令并返回输出 */
     public String execAndRead(String bashCommand) {
         try {
