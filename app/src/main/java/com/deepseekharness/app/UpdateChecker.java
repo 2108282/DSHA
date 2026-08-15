@@ -13,7 +13,11 @@ import java.nio.charset.StandardCharsets;
 public final class UpdateChecker {
 
     private static final String[] URLS = {
+            // 直连 GitHub API（魔法环境可用）
             "https://api.github.com/repos/qiannianhuanxiang/DSHA/releases/latest",
+            // jsdelivr CDN 读仓库 VERSION 文件（国内直连稳定）
+            "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/VERSION",
+            // 代理 fallback（API 可能被代理拒，放最后兜底）
             "https://ghfast.top/https://api.github.com/repos/qiannianhuanxiang/DSHA/releases/latest"
     };
 
@@ -46,6 +50,9 @@ public final class UpdateChecker {
                 conn.disconnect();
                 String tag = extractTag(sb.toString());
                 if (tag != null && tag.matches("v?\\d+(\\.\\d+)*")) return tag;
+                // 兼容纯文本（VERSION 文件：单行 "v1.0.11"）
+                String plain = sb.toString().trim();
+                if (plain.matches("v?\\d+(\\.\\d+)*")) return plain;
             } catch (Exception ignored) {
             }
         }
