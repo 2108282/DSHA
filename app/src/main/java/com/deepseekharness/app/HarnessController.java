@@ -483,8 +483,10 @@ public class HarnessController {
         String wd = getWorkdir();
         String apiKey = effectiveApiKey();
 
-        // 源码构建需要完整工具链（gcc/g++ 编译 node-pty 等原生模块），缺失自动补装
+        // 已装环境不会重跑 setupResolvConf：这里强制重写 DNS（223.5.5.5 等国内源），
+        // 否则 git clone / curl 全域名解析失败
         requireRootfs();
+        proot.setupResolvConf();
         if (!toolsInstalled()) {
             setProgress("自动补装基础工具（gcc/g++ 等）", 91);
             installTools();
@@ -514,11 +516,13 @@ public class HarnessController {
                 "git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
                 "git clone --depth 1 https://gitclone.com/github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
                 "git clone --depth 1 https://ghfast.top/https://github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
-                "git clone --depth 1 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git " + wd + " ) || " +
+                "git clone --depth 1 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
+                "git clone --depth 1 https://ghproxy.net/https://github.com/deepseek-ai/deepseek-harness.git " + wd + " ) || " +
                 "(echo 'git 克隆失败，改用源码包下载…'; rm -rf " + wd + " && " +
                 "(curl -kfsSL --retry 3 -m 300 https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
                 "curl -kfsSL --retry 3 -m 300 https://ghfast.top/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
-                "curl -kfsSL --retry 3 -m 300 https://gh-proxy.com/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz) && " +
+                "curl -kfsSL --retry 3 -m 300 https://gh-proxy.com/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
+                "curl -kfsSL --retry 3 -m 300 https://ghproxy.net/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz) && " +
                 "tar -xzf dsh-src.tar.gz && mv deepseek-harness-main " + wd + " && rm -f dsh-src.tar.gz); fi");
 
         // 应用 WebUI 移动端补丁（移除“打开/收起侧边栏”按钮）；失败不阻塞安装
