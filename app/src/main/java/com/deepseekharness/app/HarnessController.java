@@ -216,7 +216,9 @@ public class HarnessController {
             case STEP_TOOLS:
                 return toolsInstalled();
             case STEP_NODE:
-                return new File(proot.getRootfsDir(), "usr/local/bin/node").exists();
+                // node 与 npm 都就绪才算完成（npm 缺失会导致 pnpm 安装失败）
+                return new File(proot.getRootfsDir(), "usr/local/bin/node").exists()
+                        && new File(proot.getRootfsDir(), "usr/local/bin/npm").exists();
             case STEP_HARNESS:
                 // 不仅要求 bin.js 存在，还要求 node-pty 编译产物就绪（否则启动 Web UI 必炸）
                 return proot.isHarnessInstalled(getWorkdir()) && hasPtyNode();
@@ -455,7 +457,14 @@ public class HarnessController {
         // 已安装则跳过（否则 npm 报 EEXIST 导致重装失败）
         runStep("启用 pnpm", 92,
                 "(pnpm -v >/dev/null 2>&1 && echo 'pnpm 已就绪，跳过安装') || "
-                        + "npm install -g pnpm@11.7.0 --registry=https://registry.npmmirror.com");
+                        + "if command -v npm >/dev/null 2>&1; then "
+                        + "npm install -g pnpm@11.7.0 --registry=https://registry.npmmirror.com; "
+                        + "else "
+                        + "echo 'npm 缺失，自动补装 Node.js'; "
+                        + "[ -s /tmp/node.tar.xz ] || curl -kfsSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o /tmp/node.tar.xz; "
+                        + "cd /tmp && tar -xJf node.tar.xz -C /usr/local --strip-components=1 && "
+                        + "npm install -g pnpm@11.7.0 --registry=https://registry.npmmirror.com; "
+                        + "fi");
 
         setProgress("获取 deepseek-harness 源码", 93);
         runStep("获取 deepseek-harness 源码", 93,
