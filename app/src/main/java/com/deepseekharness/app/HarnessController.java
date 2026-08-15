@@ -561,6 +561,19 @@ public class HarnessController {
         } catch (Exception ignored) {
         }
 
+        // WebUI 老浏览器兼容补丁：AbortSignal.any/timeout polyfill（Chrome 118 以下会报 "is not a function"）
+        try {
+            String poly = readAsset("webui-polyfill.sh");
+            if (!poly.isEmpty()) {
+                java.io.File polyFile = new java.io.File(proot.getRootfsDir(), "root/dsha-webui-polyfill.sh");
+                try (java.io.FileOutputStream fo = new java.io.FileOutputStream(polyFile)) {
+                    fo.write(poly.getBytes(StandardCharsets.UTF_8));
+                }
+                runStep("WebUI 浏览器兼容补丁", 93, "bash /root/dsha-webui-polyfill.sh; rm -f /root/dsha-webui-polyfill.sh");
+            }
+        } catch (Exception ignored) {
+        }
+
         // 安装危险命令确认包装器（rootfs 内 rm/dd 等先弹确认，防止 agent/终端误删）
         // 失败必须中断：安全功能没装好，安装不算完成
         {
