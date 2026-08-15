@@ -503,7 +503,13 @@ public class HarnessController {
                 "else rm -rf " + wd + " && ( " +
                 "git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
                 "git clone --depth 1 https://gitclone.com/github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
-                "git clone --depth 1 https://ghfast.top/https://github.com/deepseek-ai/deepseek-harness.git " + wd + " ); fi");
+                "git clone --depth 1 https://ghfast.top/https://github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
+                "git clone --depth 1 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git " + wd + " ) || " +
+                "(echo 'git 克隆失败，改用源码包下载…'; rm -rf " + wd + " && " +
+                "(curl -kfsSL --retry 3 -m 300 https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
+                "curl -kfsSL --retry 3 -m 300 https://ghfast.top/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
+                "curl -kfsSL --retry 3 -m 300 https://gh-proxy.com/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz) && " +
+                "tar -xzf dsh-src.tar.gz && mv deepseek-harness-main " + wd + " && rm -f dsh-src.tar.gz); fi");
 
         // 应用 WebUI 移动端补丁（移除“打开/收起侧边栏”按钮）；失败不阻塞安装
         try {

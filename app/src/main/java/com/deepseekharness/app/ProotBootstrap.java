@@ -455,7 +455,8 @@ public class ProotBootstrap {
         rc.getParentFile().mkdirs();
         if (rc.exists()) rc.delete();
         try (FileOutputStream o = new FileOutputStream(rc)) {
-            o.write("nameserver 8.8.8.8\nnameserver 1.1.1.1\n".getBytes());
+            // 国内 DNS 优先保证基础解析（墙内 8.8.8.8/1.1.1.1 常被污染/不可达）
+            o.write("nameserver 223.5.5.5\nnameserver 119.29.29.29\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n".getBytes());
         } catch (IOException ignored) {
         }
     }
