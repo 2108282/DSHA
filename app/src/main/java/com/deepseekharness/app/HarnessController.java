@@ -129,7 +129,7 @@ public class HarnessController {
     private String errMsg(String prefix, Throwable e) {
         String v = "?";
         try {
-            v = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
+            v = appContext.getPackageManager().getPackageInfo(appContext.getPackageName(), 0).versionName;
         } catch (Exception ignored) {
         }
         return prefix + "（DSHA v" + v + "）" + describe(e);
