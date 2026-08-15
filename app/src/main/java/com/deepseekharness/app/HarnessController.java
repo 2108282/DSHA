@@ -573,8 +573,10 @@ public class HarnessController {
         // 必须把 node-pty 加入 onlyBuiltDependencies 白名单才会执行
         runStep("允许原生模块构建（node-pty）", 94,
                 "cd /root/" + wd + " && " +
-                "grep -q 'onlyBuiltDependencies' pnpm-workspace.yaml 2>/dev/null || " +
-                "printf '\\nonlyBuiltDependencies:\\n  - node-pty\\n' >> pnpm-workspace.yaml");
+                "(grep -q 'onlyBuiltDependencies' pnpm-workspace.yaml 2>/dev/null || " +
+                "printf '\\nonlyBuiltDependencies:\\n  - node-pty\\n' >> pnpm-workspace.yaml) && " +
+                // Ubuntu 24.04 无 /usr/bin/python（只有 python3），部分构建工具死认 python 命令
+                "(command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python || true)");
 
         setProgress("安装依赖 pnpm install（npmmirror 源）", 95);
         try {
@@ -591,18 +593,22 @@ public class HarnessController {
                     + "3. 若仍失败，可能是设备内存不足，可改选「预构建包」方式");
         }
 
-        // 直接调用 node-gyp 编译 node-pty（绕开 npm/pnpm 的构建脚本管理：
-        // npm 11 会因 disturl/unsafe-perm 等未知配置报错/警告）
-        // node-gyp 使用预缓存的 headers（.install-stamp）+ gcc 编译，产出 build/Release/pty.node
+        // 直接调用 node-gyp 编译 node-pty（绕开 npm/pnpm 的构建脚本管理）：
+        // 有预编译产物（prebuilds/linux-arm64/pty.node）则直接跳过编译；
+        // 编译失败时输出完整诊断日志（便于定位根因）
         runStep("编译 node-pty（node-gyp）", 96,
                 "cd /root/" + wd + " && " +
                 "NP=$(ls -d node_modules/.pnpm/node-pty@*/node_modules/node-pty 2>/dev/null | head -1) && " +
-                "cd \"$NP\" && " +
+                "if [ -f \"$NP/prebuilds/linux-arm64/pty.node\" ]; then " +
+                "echo '检测到 node-pty 预编译产物，跳过 node-gyp 编译'; " +
+                "else cd \"$NP\" && " +
                 "GYP=/usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js && " +
                 "if [ ! -f \"$GYP\" ]; then GYP=$(find /usr/local/lib -maxdepth 8 -path '*/node-gyp/bin/node-gyp.js' 2>/dev/null | head -1); fi && " +
                 "echo \"node-gyp 路径: $GYP\" && " +
                 "export npm_config_disturl=https://npmmirror.com/mirrors/node && " +
-                "node \"$GYP\" rebuild");
+                "(node \"$GYP\" rebuild > /tmp/node-gyp.log 2>&1 || " +
+                "{ echo '--- node-gyp 编译失败，诊断信息 ---'; " +
+                "grep -E 'gyp ERR!|Error|error:|fatal' /tmp/node-gyp.log | head -25; exit 1; }); fi");
 
         // 验证 node-pty 编译产物确实生成了（否则启动 Web UI 时必炸）
         runStep("验证 pty.node 产物", 97,
