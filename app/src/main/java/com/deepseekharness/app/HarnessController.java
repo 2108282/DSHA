@@ -244,6 +244,16 @@ public class HarnessController {
         return false;
     }
 
+    /** 检查文件是否为有效的 xz 压缩包（魔数 FD 37 7A 58 5A） */
+    public boolean validXz(File f) {
+        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+            return in.read() == 0xfd && in.read() == 0x37 && in.read() == 0x7a
+                    && in.read() == 0x58 && in.read() == 0x5a;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** 检查文件是否为有效的 gzip 包（校验魔数 0x1f 0x8b） */
     private boolean validGzip(File f) {
         try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
@@ -363,12 +373,24 @@ public class HarnessController {
         requireRootfs();
         requireTools();
         File nodePkg = new File(proot.getRootfsDir(), "tmp/node.tar.xz");
-        if (!nodePkg.exists() || nodePkg.length() < 10L * 1024 * 1024) {
-            downloadWithPick(TASK_NODE, ProotBootstrap.NODE_URLS, "下载 Node.js", nodePkg, 71, 6);
-        } else {
+        // 完整性检查：大小 ≥40MB 且 xz 魔数正确（防下载中断的截断文件混过检查导致解压 EOF）
+        boolean haveGood = nodePkg.exists() && nodePkg.length() >= 40L * 1024 * 1024
+                && proot.validXz(nodePkg);
+        if (haveGood) {
             setProgress("Node.js 安装包已存在，跳过下载", 71);
+        } else {
+            if (nodePkg.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                nodePkg.delete(); // 清掉截断/损坏的旧包
+            }
+            downloadWithPick(TASK_NODE, ProotBootstrap.NODE_URLS, "下载 Node.js", nodePkg, 71, 6);
         }
-        runStep("安装 Node.js", 88, "cd /tmp && tar -xJf node.tar.xz -C /usr/local --strip-components=1");
+        // 解压失败自动重下一次（npmmirror）再试一次；仍失败则抛错中断
+        runStep("安装 Node.js", 88,
+                "cd /tmp && (tar -xJf node.tar.xz -C /usr/local --strip-components=1 || "
+                        + "(echo '安装包损坏，自动重新下载…'; rm -f node.tar.xz; "
+                        + "curl -kfsSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o node.tar.xz && "
+                        + "tar -xJf node.tar.xz -C /usr/local --strip-components=1))");
         setProgress("Node.js 就绪", 89);
     }
 

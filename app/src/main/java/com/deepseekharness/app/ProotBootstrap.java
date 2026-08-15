@@ -410,9 +410,14 @@ public class ProotBootstrap {
             }
             try (FileInputStream fis = new FileInputStream(dest)) {
                 int b0 = fis.read(), b1 = fis.read();
-                if (b0 != 0x1f || b1 != 0x8b) {
+                // 按格式校验魔数：.xz 校验 xz 魔数（FD 37），其余按 gzip（1F 8B）
+                boolean xz = url.toLowerCase().contains(".xz") || dest.getName().endsWith(".xz");
+                boolean okMagic = xz
+                        ? (b0 == 0xfd && b1 == 0x37)
+                        : (b0 == 0x1f && b1 == 0x8b);
+                if (!okMagic) {
                     dest.delete();
-                    throw new IOException("下载内容不是 gzip（可能是错误页面），已清除");
+                    throw new IOException("下载内容不是有效的压缩包（可能是错误页面），已清除");
                 }
             }
             try (FileOutputStream fo = new FileOutputStream(dest.getAbsolutePath() + ".done")) {
