@@ -125,6 +125,16 @@ public class HarnessController {
         return sb.toString();
     }
 
+    /** 报错文案统一附加 App 版本号（方便确认用户是否用新版 APK） */
+    private String errMsg(String prefix, Throwable e) {
+        String v = "?";
+        try {
+            v = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
+        } catch (Exception ignored) {
+        }
+        return prefix + "（DSHA v" + v + "）" + describe(e);
+    }
+
     /** 步骤显示名 */
     public static String stepName(int step) {
         switch (step) {
@@ -190,7 +200,7 @@ public class HarnessController {
                 }
                 setState("", 100, "全部安装完成，可到「启动」页启动 Web UI", "", false);
             } catch (Throwable e) {
-                setState("", 0, "", "安装出错：" + describe(e), false);
+                setState("", 0, "", errMsg("安装出错：", e), false);
             }
         });
     }
@@ -203,7 +213,7 @@ public class HarnessController {
                 runInstallStep(step);
                 setState("", 100, "「" + stepName(step) + "」完成", "", false);
             } catch (Throwable e) {
-                setState("", 0, "", "安装出错：" + describe(e), false);
+                setState("", 0, "", errMsg("安装出错：", e), false);
             }
         });
     }
@@ -828,7 +838,7 @@ public class HarnessController {
             TermuxBridge.runScript(appContext, buildTermuxInstallScript(), null);
             setState("", 30, "已提交到 Termux 执行，请切到 Termux 查看进度", "", false);
         } catch (Throwable e) {
-            setState("", 0, "", "提交失败：" + describe(e), false);
+            setState("", 0, "", errMsg("提交失败：", e), false);
         }
     }
 
@@ -849,7 +859,7 @@ public class HarnessController {
             TermuxBridge.runScript(appContext, startWebTermuxCommand(), null);
             setState("", 100, "已提交启动，稍候在「启动」页打开预览", "", false);
         } catch (Throwable e) {
-            setState("", 0, "", "启动失败：" + describe(e), false);
+            setState("", 0, "", errMsg("启动失败：", e), false);
         }
     }
 
@@ -920,7 +930,7 @@ public class HarnessController {
                 String tail = out.length() > 500 ? out.substring(out.length() - 500) : out;
                 setState("", 0, "", "Web UI 意外退出：\n" + tail, false);
             } catch (Throwable e) {
-                setState("", 0, "", "启动出错：" + describe(e), false);
+                setState("", 0, "", errMsg("启动出错：", e), false);
             }
         });
     }
@@ -947,7 +957,7 @@ public class HarnessController {
                 String out = proot.execAndRead(statusCommand());
                 setState("", 0, "状态码：" + out.trim(), "", false);
             } catch (Throwable e) {
-                setState("", 0, "", "检查失败：" + describe(e), false);
+                setState("", 0, "", errMsg("检查失败：", e), false);
             }
         });
     }
@@ -1008,7 +1018,7 @@ public class HarnessController {
                     ? "配置已重置，对话记录已保留\n（.env 已按当前配置重写）"
                     : "没有可重置的配置（.env 已重写）";
         } catch (Exception e) {
-            return "重置失败：" + describe(e);
+            return errMsg("重置失败：", e);
         }
     }
 
