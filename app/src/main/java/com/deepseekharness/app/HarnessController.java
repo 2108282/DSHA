@@ -375,7 +375,7 @@ public class HarnessController {
         File nodePkg = new File(proot.getRootfsDir(), "tmp/node.tar.xz");
         // 完整性检查：大小 ≥40MB 且 xz 魔数正确（防下载中断的截断文件混过检查导致解压 EOF）
         boolean haveGood = nodePkg.exists() && nodePkg.length() >= 40L * 1024 * 1024
-                && proot.validXz(nodePkg);
+                && validXz(nodePkg);
         if (haveGood) {
             setProgress("Node.js 安装包已存在，跳过下载", 71);
         } else {
