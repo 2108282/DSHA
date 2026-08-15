@@ -309,7 +309,7 @@ public class HarnessController {
                     "下载 Ubuntu rootfs（~30MB）", tarball, 4, 2);
         }
 
-        setProgress("解压 rootfs", 57);
+        setProgress("rootfs 下载完成，正在解压（约 5~15 分钟，进度会暂时停住，请勿关闭 App）", 57);
         proot.extractRootfs(tarball);
         proot.setupResolvConf();
 
@@ -402,9 +402,15 @@ public class HarnessController {
             for (String url : ordered) {
                 if (url.startsWith("git://")) continue;
                 try {
-                    proot.downloadRootfs(url, pkg, p ->
+                    proot.downloadRootfs(url, pkg, p -> {
+                        if (p < 0) {
+                            setProgress("下载 deepseek-harness 预构建包…（源未提供大小，请耐心等待）",
+                                    Math.min(98, 92));
+                        } else {
                             setProgress("下载 deepseek-harness 预构建包 " + p + "%（源：" + hostOf(url) + "）",
-                                    Math.min(99, 92 + p / 12)));
+                                    Math.min(99, 92 + p / 12));
+                        }
+                    });
                     if (!validGzip(pkg)) {
                         //noinspection ResultOfMethodCallIgnored
                         pkg.delete();
@@ -422,7 +428,7 @@ public class HarnessController {
             }
         }
 
-        setProgress("解压 deepseek-harness（约 1~2 分钟）", 99);
+        setProgress("下载完成，正在解压 deepseek-harness（大包约 5~15 分钟，进度会暂时停住，请勿关闭 App）", 99);
         String wd = getWorkdir();
         try {
             proot.extractHarness(pkg, new File(proot.getRootfsDir(), "root/" + wd));

@@ -390,11 +390,22 @@ public class ProotBootstrap {
             byte[] buf = new byte[65536];
             long downloaded = resume ? existing : 0L;
             int n;
+            int lastPct = -1;
             while ((n = in.read(buf)) != -1) {
                 raf.write(buf, 0, n);
                 downloaded += n;
-                if (totalBytes > 0 && progress != null) {
-                    progress.accept((int) (downloaded * 100 / totalBytes));
+                // 节流：仅百分比变化时回调（每 64KB 回调会把 UI 线程塞爆导致卡顿）
+                if (progress != null) {
+                    if (totalBytes > 0) {
+                        int pct = (int) (downloaded * 100 / totalBytes);
+                        if (pct != lastPct) {
+                            lastPct = pct;
+                            progress.accept(pct);
+                        }
+                    } else if (lastPct != -2) {
+                        lastPct = -2; // 源未提供大小：只通知一次"下载中"
+                        progress.accept(-1);
+                    }
                 }
             }
             try (FileInputStream fis = new FileInputStream(dest)) {
