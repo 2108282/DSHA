@@ -26,6 +26,8 @@ PLY
 )
 
 for F in \
+  $(find /usr/local/lib/node_modules -path '*/@deepseek-ai/dsh-client-connection/lib/client.js' 2>/dev/null | head -1) \
+  $(find /usr/local/lib/node_modules -path '*/@deepseek-ai/dsh-api-gateway/lib/client.js' 2>/dev/null | head -1) \
   /root/deepseek-harness/packages/client/connection/lib/client.js \
   /root/deepseek-harness/packages/api/gateway/lib/client.js; do
   if [ -f "$F" ] && ! grep -q 'AbortSignal.any = function' "$F"; then

@@ -61,6 +61,14 @@
             android:visibility="gone" />
 
         <Button
+            android:id="@+id/install_crash"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="查看崩溃日志"
+            android:visibility="gone" />
+
+        <Button
             android:id="@+id/install_btn"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -101,7 +109,21 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="④ deepseek-harness" />
+            android:text="④ Node 附加工具（pnpm/node-gyp）" />
+
+        <Button
+            android:id="@+id/install_step5"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="⑤ deepseek-harness" />
+
+        <Button
+            android:id="@+id/install_step6"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="⑥ 安全与补丁" />
 
         <Button
             android:id="@+id/install_uninstall"

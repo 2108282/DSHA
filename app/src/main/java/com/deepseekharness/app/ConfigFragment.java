@@ -22,7 +22,7 @@ public class ConfigFragment extends Fragment {
     private HarnessController c;
     private EditText apiKeyEdit, portEdit, modelEdit;
     private Spinner modeSpinner;
-    private CheckBox confirmShellCb, checkUpdateCb;
+    private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, geckoCoreCb, lanModeCb, rc6Cb;
 
     @Nullable
     @Override
@@ -40,8 +40,18 @@ public class ConfigFragment extends Fragment {
         modeSpinner = view.findViewById(R.id.config_mode);
         confirmShellCb = view.findViewById(R.id.config_confirm_shell);
         checkUpdateCb = view.findViewById(R.id.config_check_update);
+        desktopModeCb = view.findViewById(R.id.config_desktop_mode);
+        geckoCoreCb = view.findViewById(R.id.config_gecko_core);
+        lanModeCb = view.findViewById(R.id.config_lan_mode);
+        rc6Cb = view.findViewById(R.id.config_rc6);
         Button saveBtn = view.findViewById(R.id.config_save);
         TextView repoLink = view.findViewById(R.id.config_repo_link);
+        TextView pluginsEntry = view.findViewById(R.id.config_plugins_entry);
+        pluginsEntry.setOnClickListener(v ->
+                requireActivity().getSupportFragmentManager().beginTransaction()
+                        .replace(R.id.fragment_container, new PluginFragment())
+                        .addToBackStack("plugins")
+                        .commit());
 
         String[] modes = {"danger-full-access", "workspace-write", "read-only"};
         ArrayAdapter<String> adapter = new ArrayAdapter<>(requireContext(),
@@ -57,7 +67,11 @@ public class ConfigFragment extends Fragment {
             c.setPermissionMode((String) modeSpinner.getSelectedItem());
             requireContext().getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                     .edit().putBoolean("confirm_shell", confirmShellCb.isChecked())
-                    .putBoolean("check_update", checkUpdateCb.isChecked()).apply();
+                    .putBoolean("check_update", checkUpdateCb.isChecked())
+                    .putBoolean("desktop_mode", desktopModeCb.isChecked())
+                    .putBoolean("gecko_core", geckoCoreCb.isChecked())
+                    .putBoolean("lan_mode", lanModeCb.isChecked())
+                    .putBoolean("use_rc6", rc6Cb.isChecked()).apply();
             Toast.makeText(requireContext(), "配置已保存", Toast.LENGTH_SHORT).show();
         });
 
@@ -87,5 +101,17 @@ public class ConfigFragment extends Fragment {
         checkUpdateCb.setChecked(requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("check_update", true));
+        desktopModeCb.setChecked(requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("desktop_mode", false));
+        geckoCoreCb.setChecked(requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("gecko_core", false));
+        lanModeCb.setChecked(requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("lan_mode", false));
+        rc6Cb.setChecked(requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("use_rc6", true));
     }
 }

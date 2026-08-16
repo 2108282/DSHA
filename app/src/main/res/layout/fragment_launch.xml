@@ -42,14 +42,25 @@
         android:layout_marginTop="8dp"
         android:textSize="14sp" />
 
+    <TextView
+        android:id="@+id/lan_addr"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:padding="8dp"
+        android:background="#161B22"
+        android:textSize="13sp"
+        android:textColor="#58A6FF"
+        android:visibility="gone" />
+
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:layout_marginTop="8dp">
 
-        <WebView
-            android:id="@+id/webview"
+        <FrameLayout
+            android:id="@+id/previewContainer"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
     </FrameLayout>

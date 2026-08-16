@@ -10,8 +10,8 @@ android {
         applicationId "com.dsh.client"
         minSdk 26
         targetSdk 34
-        versionCode 15
-        versionName "1.0.12"
+        versionCode 16
+        versionName "1.1.0"
         // 面向 ARM64 设备（deepseek-harness 的 node-pty 等原生模块需 arm64）
         ndk {
             abiFilters 'arm64-v8a'
@@ -60,6 +60,8 @@ dependencies {
     implementation 'androidx.viewpager2:viewpager2:1.0.0'
     implementation 'dev.rikka.shizuku:api:13.1.5'
     implementation 'dev.rikka.shizuku:provider:13.1.5'
+    // 内置浏览器内核（GeckoView）：系统 WebView 版本过低时的替代内核
+    implementation 'org.mozilla.geckoview:geckoview:126.0.20240526221752'
     // MT 管理器官方「注入文件提供器」编程版：免 ROOT 访问本 App 私有 data 目录（工作区）
     debugImplementation 'com.github.L-JINBIN:MTDataFilesProvider:v1.0.0'
 }

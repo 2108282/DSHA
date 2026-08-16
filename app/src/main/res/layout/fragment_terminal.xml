@@ -57,5 +57,16 @@
             android:text="中止"
             android:textColor="#8B949E"
             android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/term_clear"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_vertical"
+            android:layout_marginStart="12dp"
+            android:padding="6dp"
+            android:text="清理"
+            android:textColor="#8B949E"
+            android:textSize="12sp" />
     </LinearLayout>
 </LinearLayout>

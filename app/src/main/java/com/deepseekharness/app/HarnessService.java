@@ -72,6 +72,14 @@ public class HarnessService extends Service {
         }
     }
 
+    public void onDestroy() {
+        c.removeStateListener(stateListener);
+        if (shellHttp != null) shellHttp.stop();
+        if (taskNotifier != null) taskNotifier.stop();
+        c.stopWeb();
+        super.onDestroy();
+    }
+
     @Nullable
     @Override
     public IBinder onBind(Intent intent) { return null; }
@@ -111,12 +119,4 @@ public class HarnessService extends Service {
         if (nm != null) nm.notify(NOTIF_ID, buildNotification(title, text));
     }
 
-    @Override
-    public void onDestroy() {
-        c.removeStateListener(stateListener);
-        if (shellHttp != null) shellHttp.stop();
-        if (taskNotifier != null) taskNotifier.stop();
-        c.stopWeb();
-        super.onDestroy();
-    }
 }

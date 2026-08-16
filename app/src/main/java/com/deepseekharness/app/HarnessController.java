@@ -27,7 +27,9 @@ public class HarnessController {
     public static final int STEP_ROOTFS = 1;
     public static final int STEP_TOOLS = 2;
     public static final int STEP_NODE = 3;
-    public static final int STEP_HARNESS = 4;
+    public static final int STEP_PNPM = 4;
+    public static final int STEP_HARNESS = 5;
+    public static final int STEP_GUARD = 6;
 
     // ================= 下载任务（用于源选择记忆） =================
     public static final int TASK_ROOTFS = 1;
@@ -56,6 +58,20 @@ public class HarnessController {
     private volatile boolean busy = false;
     private volatile int currentStep = 0;
     private volatile Process webProcess;
+    /** 局域网 0.0.0.0 放行补丁是否已就绪（防重复打补丁） */
+    private volatile boolean lanBindReady = false;
+    /** 进度持久化节流用时间戳 */
+    private volatile long lastStageWriteTs = 0;
+
+    // ===== 步骤状态缓存（UI 频繁查询，其内部会起 proot 检查，慢） =====
+    /** 步骤缓存时间戳，-1 表示无效需重算 */
+    private volatile long stepCacheTs = -1;
+    private final boolean[] stepCache = new boolean[7];
+
+    /** 使步骤缓存失效：安装结束/空闲时调用，让 UI 拿到最新状态 */
+    private void invalidateStepCache() {
+        stepCacheTs = -1;
+    }
 
     // ===== 下载源自选（测速 → 弹窗等待用户选择） =====
     private final Object sourceLock = new Object();
@@ -94,9 +110,13 @@ public class HarnessController {
         this.message = msg;
         this.error = err;
         this.busy = b;
-        // 持久化进度，闪退后下次启动可定位中断步骤
+        // 持久化进度，闪退后下次启动可定位中断步骤（节流：最多 2 秒写一次，避免磁盘 IO 卡顿）
         if (!stage.isEmpty()) {
-            prefs.edit().putString("last_stage", stage + " " + percent + "%").apply();
+            long now = System.currentTimeMillis();
+            if (now - lastStageWriteTs > 2000) {
+                lastStageWriteTs = now;
+                prefs.edit().putString("last_stage", stage + " " + percent + "%").apply();
+            }
         }
         if (err != null && !err.isEmpty()) {
             prefs.edit().putString("last_error", err).apply();
@@ -105,6 +125,11 @@ public class HarnessController {
         mainHandler.post(() -> {
             for (StateListener l : stateListeners) l.onStateChanged();
         });
+        // 空闲时（busy=false）步骤状态可能已变化，失效缓存让 UI 下次查到最新值；
+        // busy 期间步骤不变，保留缓存避免每次进度广播都重查 proot（否则极卡）
+        if (!b) {
+            invalidateStepCache();
+        }
     }
 
     public String getLastStage() { return prefs.getString("last_stage", ""); }
@@ -141,7 +166,9 @@ public class HarnessController {
             case STEP_ROOTFS: return "① Linux 环境（rootfs）";
             case STEP_TOOLS: return "② 基础工具（apt）";
             case STEP_NODE: return "③ Node.js";
-            case STEP_HARNESS: return "④ deepseek-harness";
+            case STEP_PNPM: return "④ Node 附加工具（pnpm/node-gyp）";
+            case STEP_HARNESS: return "⑤ deepseek-harness";
+            case STEP_GUARD: return "⑥ 安全与补丁（守卫/dsh命令/polyfill）";
         }
         return "步骤 " + step;
     }
@@ -160,7 +187,28 @@ public class HarnessController {
     public String getApiKey() { return prefs.getString("api_key", ""); }
     public void setApiKey(String v) { prefs.edit().putString("api_key", v).apply(); }
 
-    public String getPort() { return prefs.getString("port", "3080"); }
+    public String getPort() {
+        // 兜底校验：空/非数字/越界全部回退默认 3080（否则 --port 后是空串导致启动失败）
+        String p = prefs.getString("port", "3080");
+        if (p == null) return "3080";
+        String t = p.trim();
+        if (t.isEmpty()) return "3080";
+        try {
+            int n = Integer.parseInt(t);
+            if (n < 1 || n > 65535) return "3080";
+            return String.valueOf(n);
+        } catch (Exception e) {
+            return "3080";
+        }
+    }
+
+    private int parsePort() {
+        try {
+            return Integer.parseInt(getPort());
+        } catch (Exception e) {
+            return 3080;
+        }
+    }
     public void setPort(String v) { prefs.edit().putString("port", v).apply(); }
 
     public String getModel() { return prefs.getString("model", "deepseek-v4-flash"); }
@@ -178,8 +226,17 @@ public class HarnessController {
 
     public ProotBootstrap getProot() { return proot; }
 
-    /** 是否已安装 deepseek-harness（跟随自定义工作区路径） */
+    /** 是否已安装 deepseek-harness（跟随自定义工作区路径；RC6 模式检查 dsh 命令） */
     public boolean isHarnessInstalled() {
+        if (useRc6()) {
+            try {
+                String r = proot.execAndRead("command -v dsh 2>/dev/null || echo MISSING");
+                // execAndRead 出错会返回 "ERROR: ..." 前缀，须排除，避免误判已安装
+                return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
+            } catch (Exception e) {
+                return false;
+            }
+        }
         return proot.isHarnessInstalled(getWorkdir());
     }
 
@@ -193,9 +250,10 @@ public class HarnessController {
     /** 一键安装：按顺序补装尚未完成的步骤 */
     public void install() {
         if (busy) return;
+        invalidateStepCache(); // 重新判定安装状态
         IO.execute(() -> {
             try {
-                for (int s = STEP_ROOTFS; s <= STEP_HARNESS; s++) {
+                for (int s = STEP_ROOTFS; s <= STEP_GUARD; s++) {
                     if (!isStepDone(s)) runInstallStep(s);
                 }
                 setState("", 100, "全部安装完成，可到「启动」页启动 Web UI", "", false);
@@ -208,6 +266,7 @@ public class HarnessController {
     /** 单独执行一个步骤（已完成则视为重装/更新） */
     public void installStep(int step) {
         if (busy) return;
+        invalidateStepCache(); // 重新判定安装状态
         IO.execute(() -> {
             try {
                 runInstallStep(step);
@@ -218,27 +277,96 @@ public class HarnessController {
         });
     }
 
-    /** 步骤是否已完成（UI 打勾用） */
+    /** 步骤是否已完成（UI 打勾用）。内部全部走缓存：步骤一旦装完在缓存有效期内不变 */
     public boolean isStepDone(int step) {
-        switch (step) {
-            case STEP_ROOTFS:
-                return proot.isInstalled();
-            case STEP_TOOLS:
-                return toolsInstalled();
-            case STEP_NODE:
-                // node 与 npm 都就绪才算完成（npm 缺失会导致 pnpm 安装失败）
-                return new File(proot.getRootfsDir(), "usr/local/bin/node").exists()
-                        && new File(proot.getRootfsDir(), "usr/local/bin/npm").exists();
-            case STEP_HARNESS:
-                // 不仅要求 bin.js 存在，还要求 node-pty 编译产物就绪（否则启动 Web UI 必炸）
-                return proot.isHarnessInstalled(getWorkdir()) && hasPtyNode();
-        }
-        return false;
+        return stepDoneSnapshot()[step];
     }
 
-    /** 检查 node-pty 编译产物（pty.node）是否就绪 */
+    /**
+     * 批量查询 4 个步骤是否完成（下标 1~4 对应 STEP_*；0 恒 false）。
+     * 结果带缓存：busy 期间避免重复起 proot 检查（起一次 rootfs 子进程很慢）；
+     * 缓存 5 秒自然过期，或安装结束（busy=false）被 setState 主动失效。
+     */
+    public boolean[] stepDoneSnapshot() {
+        return stepDoneSnapshot(true);
+    }
+
+    /** 只读当前步骤缓存（不触发重算，主线程安全零耗时）；未初始化时返回全 false */
+    public boolean[] peekStepCache() {
+        synchronized (stepCache) {
+            return stepCache.clone();
+        }
+    }
+
+    /**
+     * 批量查询 4 个步骤是否完成（下标 1~4 对应 STEP_*；0 恒 false）。
+     * 结果带缓存：busy 期间避免重复起 proot 检查（起一次 rootfs 子进程很慢）；
+     * 缓存 5 秒自然过期，或安装结束（busy=false）被 setState 主动失效。
+     * @param allowCompute 是否允许缓存过期时重算（false 时只返回缓存，不重算）
+     */
+    private boolean[] stepDoneSnapshot(boolean allowCompute) {
+        long ts = stepCacheTs;
+        if (ts >= 0 && System.currentTimeMillis() - ts < 5000) {
+            return stepCache.clone(); // 缓存内，直接返回副本
+        }
+        if (!allowCompute) {
+            synchronized (stepCache) { // 只读：短锁，零耗时
+                return stepCache.clone();
+            }
+        }
+        synchronized (stepCache) {
+            // 双重检查（短锁）
+            long ts2 = stepCacheTs;
+            if (ts2 >= 0 && System.currentTimeMillis() - ts2 < 5000) {
+                return stepCache.clone();
+            }
+        }
+        // 重算：不持锁！proot 子进程很慢（1~3 秒），持锁会把主线程 peek 一起卡死
+        boolean r1 = proot.isInstalled();
+        boolean r2 = toolsInstalled();
+        boolean r3 = new File(proot.getRootfsDir(), "usr/local/bin/node").exists()
+                && new File(proot.getRootfsDir(), "usr/local/bin/npm").exists();
+        boolean r4 = pnpmExtrasReady();
+        boolean r5 = isHarnessReady();
+        boolean r6 = guardReady();
+        synchronized (stepCache) {
+            stepCache[STEP_ROOTFS] = r1;
+            stepCache[STEP_TOOLS] = r2;
+            stepCache[STEP_NODE] = r3;
+            stepCache[STEP_PNPM] = r4;
+            stepCache[STEP_HARNESS] = r5;
+            stepCache[STEP_GUARD] = r6;
+            stepCache[0] = false;
+            stepCacheTs = System.currentTimeMillis();
+            return stepCache.clone();
+        }
+    }
+
+    /** 第 4 步完成判定：已装 + node-pty 就绪。RC6 用一次 proot 进程查完（省一次子进程，降低卡顿） */
+    private boolean isHarnessReady() {
+        if (useRc6()) {
+            try {
+                String r = proot.execAndRead(
+                        "command -v dsh >/dev/null 2>&1 && " +
+                        "(find /usr/local/lib/node_modules -maxdepth 8 \\( -path '*/node-pty/build/Release/pty.node' -o -path '*/node-pty/prebuilds/linux-arm64/pty.node' \\) 2>/dev/null | head -1) || echo MISSING");
+                return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        return proot.isHarnessInstalled(getWorkdir()) && hasPtyNode();
+    }
+
+    /** 检查 node-pty 编译产物（pty.node）是否就绪（RC6 模式查 npm 包，源码模式查项目目录） */
     private boolean hasPtyNode() {
         try {
+            if (useRc6()) {
+                String r = proot.execAndRead(
+                        "find /usr/local/lib/node_modules -maxdepth 8 -path '*/node-pty/build/Release/pty.node' 2>/dev/null | head -1; " +
+                        "find /usr/local/lib/node_modules -maxdepth 8 -path '*/node-pty/prebuilds/linux-arm64/pty.node' 2>/dev/null | head -1");
+                // execAndRead 出错返回 "ERROR: ..." 前缀，须排除（不能把执行失败当成有 pty.node）
+                return r != null && !r.startsWith("ERROR") && !r.trim().isEmpty();
+            }
             File wdDir = new File(proot.getRootfsDir(), "root/" + getWorkdir());
             File pnpmDir = new File(wdDir, "node_modules/.pnpm");
             if (!pnpmDir.isDirectory()) return false;
@@ -293,7 +421,9 @@ public class HarnessController {
                 case STEP_ROOTFS: installRootfs(); break;
                 case STEP_TOOLS: installTools(); break;
                 case STEP_NODE: installNode(); break;
+                case STEP_PNPM: installPnpmExtras(); break;
                 case STEP_HARNESS: installHarness(); break;
+                case STEP_GUARD: installGuard(); break;
                 default: throw new Exception("未知步骤：" + step);
             }
         } finally {
@@ -314,6 +444,64 @@ public class HarnessController {
     }
 
     /** ① rootfs：测速下载 → 解压 → 冒烟测试（全局进度 0~59） */
+    /** ④ Node 附加工具（pnpm + node-gyp）安装：独立可重跑步骤 */
+    private void installPnpmExtras() throws Exception {
+        requireRootfs();
+        requireTools();
+        setProgress("安装 Node 附加工具（pnpm / node-gyp）", 90);
+        runStep("安装 pnpm", 91,
+                "(pnpm -v >/dev/null 2>&1 && echo 'pnpm 已就绪，跳过安装') || " +
+                "npm install -g pnpm@11.7.0 --registry=https://registry.npmmirror.com 2>&1 | tail -3");
+        runStep("安装 node-gyp（node-pty 编译必需）", 95,
+                "(node-gyp --version >/dev/null 2>&1 && echo 'node-gyp 已就绪') || " +
+                "npm install -g node-gyp --registry=https://registry.npmmirror.com 2>&1 | tail -3");
+        setProgress("Node 附加工具就绪", 100);
+    }
+
+    /** ④ pnpm / node-gyp 是否就绪 */
+    private boolean pnpmExtrasReady() {
+        try {
+            String r = proot.execAndRead(
+                    "command -v pnpm >/dev/null 2>&1 && command -v node-gyp >/dev/null 2>&1 && echo OK || echo NO");
+            return r != null && !r.startsWith("ERROR") && r.contains("OK");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** ⑥ 安全与补丁：守卫包装器 + bash 守卫补丁 + 运行环境补丁 + 看门狗文件（全幂等） */
+    private void installGuard() throws Exception {
+        requireRootfs();
+        setProgress("安装安全守卫与补丁", 91);
+        ensureDangerGuard();   // PATH 包装器（rm/adb 等 15 命令）
+        ensureBashGuardPatch(); // bash 工具 lib 强制加载 dsh-guard
+        try {
+            proot.ensureRuntimeFiles(); // polyfill / 运行环境文件
+        } catch (Throwable ignored) {
+        }
+        ensureWatchdogFiles();  // 看门狗 + 重启命令（最新端口）
+        // 内置插件快照：只录实体目录（排除符号链接=用户安装插件），安装完成时最干净基线
+        // 快照缺失时才生成（后续沿用；想重扫可删 /root/dsha-builtin.txt）
+        runStep("生成内置插件快照", 98,
+                "if [ ! -f /root/dsha-builtin.txt ]; then " +
+                "find /root/.dsh/profiles/web/node_modules/ -maxdepth 1 \\( -type d -o -type f \\) ! -type l 2>/dev/null " +
+                "| sed 's|.*/||' | grep -v '^\\.' | grep -v '\\.disabled$' > /root/dsha-builtin.txt; " +
+                "echo '内置快照：'$(wc -l < /root/dsha-builtin.txt 2>/dev/null)' 项'; " +
+                "else echo '内置插件快照已存在，沿用'; fi");
+        setProgress("安全守卫与补丁就绪", 100);
+    }
+
+    /** ⑥ 守卫是否就绪（包装器 + dsh-guard.sh） */
+    private boolean guardReady() {
+        try {
+            String r = proot.execAndRead(
+                    "test -f /root/dsh-guard.sh && test -d /root/dsh-bin && test -f /root/dsh-bin/.version && echo OK || echo NO");
+            return r != null && !r.startsWith("ERROR") && r.contains("OK");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private void installRootfs() throws Exception {
         setProgress("准备 proot 运行时", 2);
         proot.ensureRuntimeFiles();
@@ -407,79 +595,76 @@ public class HarnessController {
     /** ④ deepseek-harness：预构建包 或 直连源码构建（全局进度 90~100） */
     private void installHarness() throws Exception {
         requireRootfs();
+        // 预构建包源已暂停（catbox 匿名站包体被污染/损坏，含 WSL 脚本非官方产物）。
+        // 当前唯一可靠路径 = 直连 GitHub 源码构建（多镜像 fallback + 工具链齐全，已验证稳定）。
+        installHarnessFromSource();
+        // ===== 预构建包线路（暂停，代码保留供恢复源后使用） =====
+        /*
         String apiKey = effectiveApiKey();
         String[] urls = ProotBootstrap.HARNESS_URLS;
         setProgress("测速中…（含直连选项）", 91);
         long[] lat = proot.probeAll(urls, 6000);
         setProgress("请选择安装方式（预构建包 / 直连源码）", 91);
         String[] ordered = waitUserPick(TASK_HARNESS, urls, lat);
-
-        // 选了「直连 GitHub 源码构建」：不走预构建包
         if (ordered[0].startsWith("git://")) {
             installHarnessFromSource();
             return;
         }
+        // ... 预构建包解压逻辑见历史版本 ...
+        */
+    }
 
-        // 预构建好的 deepseek-harness（含 node_modules + 构建产物），直接下载解压，避免设备内存不足 OOM
-        File pkg = new File(proot.getRootfsDir().getParentFile(), "dsh.tar.gz");
-        File pkgDone = new File(pkg.getAbsolutePath() + ".done");
-        // 复用前校验：必须是有效的 gzip 包（防止之前下载被墙/截断留下的假包）
-        boolean havePkg = pkgDone.exists() && pkg.exists() && pkg.length() > 1024L * 1024
-                && validGzip(pkg);
-        if (havePkg) {
-            setProgress("预构建包已存在，跳过下载", 92);
-        } else {
-            boolean ok = false;
-            String lastErr = "";
-            for (String url : ordered) {
-                if (url.startsWith("git://")) continue;
-                try {
-                    proot.downloadRootfs(url, pkg, p -> {
-                        if (p < 0) {
-                            setProgress("下载 deepseek-harness 预构建包…（源未提供大小，请耐心等待）",
-                                    Math.min(98, 92));
-                        } else {
-                            setProgress("下载 deepseek-harness 预构建包 " + p + "%（源：" + hostOf(url) + "）",
-                                    Math.min(99, 92 + p / 12));
-                        }
-                    });
-                    if (!validGzip(pkg)) {
-                        //noinspection ResultOfMethodCallIgnored
-                        pkg.delete();
-                        throw new Exception("下载内容不是有效的压缩包（可能被墙/劫持），已删除");
-                    }
-                    ok = true;
-                    break;
-                } catch (Exception e) {
-                    lastErr = e.getMessage();
-                }
-            }
-            if (!ok) {
-                throw new Exception("预构建包下载失败（网络被重置？）: " + lastErr
-                        + "\n\n可尝试：切换网络 / 开启代理 / 重新选择「直连 GitHub 源码构建」");
-            }
-        }
+    /** 是否使用 RC6 版本（npm 安装 @deepseek-ai/dsh@0.1.0-rc.6，插件兼容性更好） */
+    public boolean useRc6() {
+        return appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("use_rc6", true);
+    }
 
-        setProgress("下载完成，正在解压 deepseek-harness（大包约 5~15 分钟，进度会暂时停住，请勿关闭 App）", 99);
-        String wd = getWorkdir();
-        try {
-            proot.extractHarness(pkg, new File(proot.getRootfsDir(), "root/" + wd));
-        } catch (Exception e) {
-            // 解压失败 = 包损坏：删除坏包（避免下次复用），给出明确指引
-            //noinspection ResultOfMethodCallIgnored
-            pkg.delete();
-            //noinspection ResultOfMethodCallIgnored
-            pkgDone.delete();
-            throw new Exception("预构建包损坏或解压失败：" + e.getMessage()
-                    + "\n\n已删除损坏的包，可重试下载，或改选「直连 GitHub 源码构建」（更稳）");
-        }
+    /** 字节格式化：134833152 -> "134.8MB"，1.33GB -> "1.33GB" */
+    public static String fmtBytes(long bytes) {
+        if (bytes <= 0) return "0B";
+        if (bytes >= 1024L * 1024 * 1024)
+            return String.format(java.util.Locale.US, "%.2fGB", bytes / 1073741824.0);
+        if (bytes >= 1024 * 1024)
+            return String.format(java.util.Locale.US, "%.1fMB", bytes / 1048576.0);
+        if (bytes >= 1024)
+            return String.format(java.util.Locale.US, "%.1fKB", bytes / 1024.0);
+        return bytes + "B";
+    }
 
-        runStep("写入 API key", 99,
-                "cd /root/" + wd + " && printf 'DEEPSEEK_API_KEY=%s\\n' '" + apiKey + "' > .env");
+    private void installHarnessRc6() throws Exception {
+        requireRootfs();
+        requireTools();
+        setProgress("安装 RC6（npm 全局安装 @deepseek-ai/dsh）", 91);
+        runStep("RC6 安装环境准备", 92,
+                "npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user 2>/dev/null; " +
+                "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc");
+        runStep("安装 @deepseek-ai/dsh@0.1.0-rc.6", 95,
+                "npm install -g @deepseek-ai/dsh@0.1.0-rc.6 --force --registry=https://registry.npmmirror.com 2>&1 | tail -25; " +
+                "echo \">> npm 退出码: ${PIPESTATUS[0]}\"; " +
+                "if [ \"${PIPESTATUS[0]}\" != 0 ]; then echo 'npm 安装失败，请重试或检查网络'; fi");
+        runStep("编译 node-pty 原生模块", 98,
+                "node-gyp --version >/dev/null 2>&1 || npm install -g node-gyp --registry=https://registry.npmmirror.com 2>&1 | tail -2; " +
+                "npty_dir=$(find /usr/local/lib/node_modules -maxdepth 6 -path '*/node-pty' -type d 2>/dev/null | head -1); " +
+                "if [ -z \"$npty_dir\" ]; then " +
+                "echo '未找到 node-pty（说明 dsh 包没装上）'; " +
+                "echo '--- /usr/local/lib/node_modules ---'; ls /usr/local/lib/node_modules 2>&1; " +
+                "echo '--- @deepseek-ai 目录 ---'; ls /usr/local/lib/node_modules/@deepseek-ai/ 2>&1; " +
+                "echo '--- dsh 命令 ---'; command -v dsh || echo 'dsh 不存在'; " +
+                "exit 1; fi; " +
+                "if [ ! -f \"$npty_dir/build/Release/pty.node\" ]; then " +
+                "(cd \"$npty_dir\" && node-gyp rebuild > /tmp/rc6-gyp.log 2>&1) || " +
+                "{ echo 'node-pty 编译失败：'; tail -10 /tmp/rc6-gyp.log 2>&1; exit 1; }; fi; " +
+                "ls \"$npty_dir/build/Release/pty.node\" >/dev/null 2>&1 && echo 'pty.node 已就绪' && command -v dsh && echo 'RC6 安装完成'");
+        setProgress("RC6 安装完成", 100);
     }
 
     /** 直连 GitHub 源码构建（clone 多通道 fallback + npmmirror 依赖/headers 源） */
     private void installHarnessFromSource() throws Exception {
+        if (useRc6()) {
+            installHarnessRc6();
+            return;
+        }
         String wd = getWorkdir();
         String apiKey = effectiveApiKey();
 
@@ -639,6 +824,14 @@ public class HarnessController {
                 "grep -E 'gyp ERR!|Error|error:|fatal' /tmp/node-gyp.log | head -25; exit 1; }); fi");
 
         // 验证 node-pty 编译产物确实生成了（否则启动 Web UI 时必炸）
+        // 全局 dsh 命令：符号链接到 /usr/local/bin（终端可直接敲 dsh）
+        try {
+            runStep("安装 dsh 命令", 99,
+                    "ln -sf /root/" + wd + "/apps/cli/lib/bin.js /usr/local/bin/dsh && " +
+                    "chmod +x /usr/local/bin/dsh 2>/dev/null; echo 'dsh 命令已安装'");
+        } catch (Exception ignored) {
+        }
+
         runStep("验证 pty.node 产物", 97,
                 "cd /root/" + wd + " && " +
                 "P=$(ls node_modules/.pnpm/node-pty@*/node_modules/node-pty/build/Release/pty.node 2>/dev/null | head -1); " +
@@ -672,9 +865,15 @@ public class HarnessController {
         String lastErr = "";
         for (String url : ordered) {
             try {
-                proot.downloadRootfs(url, dest, p ->
-                        setProgress(what + " " + p + "%（源：" + hostOf(url) + "）",
-                                Math.min(99, pBase + 1 + p / pDiv)));
+                proot.downloadRootfs(url, dest, (down, total) -> {
+                    if (total <= 0) {
+                        setProgress(what + "…（源未提供大小，请耐心等待）", Math.min(99, pBase + 1));
+                    } else {
+                        int pct = (int) (down * 100 / total);
+                        setProgress(what + " " + fmtBytes(down) + "/" + fmtBytes(total) + "（" + pct + "%）（源：" + hostOf(url) + "）",
+                                Math.min(99, pBase + 1 + pct / pDiv));
+                    }
+                });
                 ok = true;
                 break;
             } catch (Exception e) {
@@ -817,22 +1016,172 @@ public class HarnessController {
     }
 
     public String startWebCommand() {
+        // 局域网访问：deepseek-harness 官方 CLI 默认拒绝 --host 0.0.0.0，
+        // 需先打 lan-bind-patch.sh 放行（失败则回落到 127.0.0.1，服务保证能起）。
+        boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("lan_mode", false);
+        boolean lanReady = lan && tryEnableLanBind();
+        boolean rc6 = useRc6();
         StringBuilder sb = new StringBuilder();
         sb.append("cd /root/").append(getWorkdir()).append(" && ")
+          .append(depsSelfHeal()) // 依赖自愈：workspace 关键包缺失时自动重跑 pnpm install
           .append("export DSH_HOME=/root/.dsh && ")
-          .append("export DEEPSEEK_API_KEY=\"").append(effectiveApiKey()).append("\" && ")
-          .append("export DSH_PERMISSION_MODE=\"").append(getPermissionMode()).append("\" && ")
+          .append("export DEEPSEEK_API_KEY='").append(effectiveApiKey()).append("' && ")
+          .append("export DSH_PERMISSION_MODE=").append(getPermissionMode()).append(" && ")
           // 危险命令确认：agent 在 rootfs 内的 rm/dd 等操作需用户确认
-          // PATH 包装器 + BASH_ENV 函数级守卫（双保险）
+          // PATH 包装器 + bash 工具 lib 补丁加载守卫（双保险；不设 BASH_ENV——它会污染
+          // RC6 插件初始化时子 shell 的环境，导致 dsh web 加载插件失败(index 24 崩溃)）
           .append("export DSH_CONFIRM=1 && ")
-          .append("export BASH_ENV=/root/dsh-guard.sh && ")
+          // 预创建常见插件数据目录（防止插件扫描空目录崩溃拖垮 WebUI）
+          .append("mkdir -p /root/.codex/pets /root/.dsh/plugins 2>/dev/null; ")
+          // 局域网模式：补丁成功后绑定 0.0.0.0 并打印访问地址；失败只提示，不影响启动
+          .append(lanReady ? "echo '[DSHA] 局域网访问: http://$(hostname -I 2>/dev/null | cut -d' ' -f1):" + getPort() + "' && "
+                  : lan ? "echo '[DSHA] 局域网未开启(官方 0.0.0.0 未放行)，仅本机可访问' && " : "")
+          // 先拉起看门狗（后台），再 exec WebUI（前台阻塞）——顺序不能反，否则看门狗永不启动
+          .append("nohup bash /root/dsh-watchdog.sh >> /root/dsh-watchdog.log 2>&1 & ")
           // 日志重定向到 ~/dsh-web.log（与 Termux 模式统一，方便终端 tail 查看）
-          .append("node apps/cli/lib/bin.js web > ~/dsh-web.log 2>&1");
+          // exec：替换当前 shell，保持 proot+node 进程存活便于 App 跟踪存活态
+          .append("exec ").append(runCoreCommand(rc6, lanReady))
+          .append("> ~/dsh-web.log 2>&1");
+        // 写入看门狗（重启脚本 = 启动核心命令），并拉起看门狗守护
+        writeWatchdogFiles(runCoreCommand(rc6, lanReady) + "> ~/dsh-web.log 2>&1", parsePort());
         return sb.toString();
     }
 
+    /** 依赖自愈命令片段：源码构建模式下，workspace 关键包缺失时自动重跑 pnpm install。
+     *  k 先探 require.resolve（毫秒级），只有缺失才修复（--offline 用本机 store，失败回落 npmmirror）。 */
+    private String depsSelfHeal() {
+        if (useRc6()) return ""; // 预构建包（全局 node_modules）不走源码仓库结构
+        String wd = getWorkdir();
+        return "node -e \"try{require.resolve('@deepseek-ai/dsh-app-boot')}catch(e){process.exit(1)}\" 2>/dev/null || "
+                + "{ echo '[DSHA] 检测到 harness 依赖缺失，正在自动修复…'; "
+                + "pnpm install --offline 2>/dev/null || pnpm install; }; ";
+    }
+
+    /** WebUI 实际启动命令核心（看门狗重启与正常启动共用），仅 cd+env+进程 */
+    private String runCoreCommand(boolean rc6, boolean lanReady) {
+        int port = parsePort();
+        // 默认端口(3080)不显式传 --port —— 彻底避免 commander 报 'argument missing'；
+        // 只有用户自定义端口才追加 --port
+        String cmd = rc6 ? "dsh web" : "node apps/cli/lib/bin.js web";
+        if (port != 3080) cmd += " --port " + port;
+        if (lanReady) cmd += " --host 0.0.0.0";
+        return cmd;
+    }
+
+    /** 用当前配置刷新看门狗文件（启动页可见时调用，确保旧坏命令被覆盖） */
+    public void ensureWatchdogFiles() {
+        boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("lan_mode", false);
+        writeWatchdogFiles(runCoreCommand(useRc6(), lan) + "> ~/dsh-web.log 2>&1", parsePort());
+    }
+
+    /**
+     * 看门狗：WebUI 崩溃/卡死（失联 3 次，约 90 秒）自动重启。
+     * 写入 /root/dsh-web-restart.sh + /root/dsh-cmd.txt（重启命令，含 cd+env）。
+     * 看门狗重启时读 dsh-cmd.txt（永远拿到最新命令，避免旧坏命令反复触发）。
+     * 幂等：watchdog 自身已在运行则直接退出。
+     */
+    private void writeWatchdogFiles(String restartCmd, int port) {
+        try {
+            java.io.File wdDir = new java.io.File(proot.getRootfsDir(), "root");
+            String restart =
+                    "#!/bin/bash\n" +
+                    "export DSH_HOME=/root/.dsh\n" +
+                    "export DEEPSEEK_API_KEY='" + effectiveApiKey() + "'\n" +
+                    "export DSH_PERMISSION_MODE=" + getPermissionMode() + "\n" +
+                    "export DSH_CONFIRM=1\n" +
+                    "cd /root/" + getWorkdir() + " || exit 1\n" +
+                    "mkdir -p /root/.codex/pets /root/.dsh/plugins 2>/dev/null\n" +
+                    restartCmd + "\n";
+            String watchdog =
+                    "#!/bin/bash\n" +
+                    "# DSHA 看门狗：WebUI 失联 3 次（约 90 秒）自动重启\n" +
+                    "# 幂等：已有看门狗实例则退出（[d] 技巧避免匹配到 pgrep 自身）\n" +
+                    "if pgrep -f '[d]sh-watchdog.sh' >/dev/null 2>&1; then exit 0; fi\n" +
+                    "PORT=" + port + "\n" +
+                    "FAIL=0\n" +
+                    "while true; do\n" +
+                    "  if curl -s -m 5 -o /dev/null \"http://127.0.0.1:$PORT/\"; then\n" +
+                    "    FAIL=0\n" +
+                    "  else\n" +
+                    "    FAIL=$((FAIL+1))\n" +
+                    "    echo \"$(date '+%F %T') WebUI 失联 $FAIL 次\" >> /root/dsh-watchdog.log\n" +
+                    "    if [ \"$FAIL\" -ge 3 ]; then\n" +
+                    "      echo \"$(date '+%F %T') WebUI 已失联，自动重启\" >> /root/dsh-watchdog.log\n" +
+                    "      pkill -f 'bin.js web' 2>/dev/null; pkill -f 'dsh web' 2>/dev/null\n" +
+                    "      sleep 2\n" +
+                    "      nohup bash /root/dsh-cmd.txt >> /root/dsh-watchdog-restart.log 2>&1 &\n" +
+                    "      FAIL=0\n" +
+                    "    fi\n" +
+                    "  fi\n" +
+                    "  sleep 30\n" +
+                    "done\n";
+            java.io.File wdScript = new java.io.File(wdDir, "dsh-watchdog.sh");
+            java.io.File rstScript = new java.io.File(wdDir, "dsh-web-restart.sh");
+            java.io.File cmdFile = new java.io.File(wdDir, "dsh-cmd.txt");
+            try (java.io.FileOutputStream a = new java.io.FileOutputStream(wdScript);
+                 java.io.FileOutputStream b = new java.io.FileOutputStream(rstScript);
+                 java.io.FileOutputStream cc = new java.io.FileOutputStream(cmdFile)) {
+                a.write(watchdog.getBytes(StandardCharsets.UTF_8));
+                b.write(restart.getBytes(StandardCharsets.UTF_8));
+                cc.write(restart.getBytes(StandardCharsets.UTF_8)); // 与 restart.sh 同内容，watchdog 读它
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * 局域网放行：把 assets 里的 lan-bind-patch.sh 写入 rootfs 执行，
+     * 移除 deepseek-harness CLI 对 --host 0.0.0.0 的拒绝（底层 webServer 本就支持）。
+     * 幂等；返回 true 表示本次可用 0.0.0.0。
+     */
+    private boolean tryEnableLanBind() {
+        if (lanBindReady) return true;
+        try {
+            String script = readAsset("lan-bind-patch.sh");
+            if (script.isEmpty()) return false;
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-lan-patch.sh");
+            f.getParentFile().mkdirs();
+            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f)) {
+                fo.write(script.getBytes(StandardCharsets.UTF_8));
+            }
+            String r = proot.execAndRead("bash /root/dsha-lan-patch.sh; rm -f /root/dsha-lan-patch.sh");
+            lanBindReady = r != null && (r.contains("LAN_PATCHED") || r.contains("LAN_ALREADY"));
+            return lanBindReady;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /** 检测本机局域网 IPv4 地址（免权限，NetworkInterface 枚举） */
+    public static String getLanAddress() {
+        try {
+            java.util.Enumeration<java.net.NetworkInterface> nis = java.net.NetworkInterface.getNetworkInterfaces();
+            while (nis != null && nis.hasMoreElements()) {
+                java.net.NetworkInterface ni = nis.nextElement();
+                if (!ni.isUp() || ni.isLoopback()) continue;
+                java.util.Enumeration<java.net.InetAddress> as = ni.getInetAddresses();
+                while (as.hasMoreElements()) {
+                    java.net.InetAddress a = as.nextElement();
+                    if (a instanceof java.net.Inet4Address && !a.isLoopbackAddress()) {
+                        String ip = a.getHostAddress();
+                        if (ip != null && (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172."))) {
+                            return ip;
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
     private String stopWebCommand() {
-        return "pkill -f 'bin.js web' 2>/dev/null; echo stopped";
+        // 兼容源码模式（bin.js web）与 RC6 模式（dsh web）
+        // 先杀看门狗，否则 watchdog 会把 WebUI 又拉起来
+        return "pkill -f dsh-watchdog.sh 2>/dev/null; "
+             + "pkill -f 'bin.js web' 2>/dev/null; pkill -f 'dsh web' 2>/dev/null; echo stopped";
     }
 
     private String statusCommand() {
@@ -913,16 +1262,20 @@ public class HarnessController {
         }
     }
 
-    /** 给已构建的 bash 工具 lib 直接打补丁（强制每次执行前加载守卫，不依赖重新 build） */
+    /** 给已构建的 bash 工具 lib 直接打补丁（强制每次执行前加载守卫，不依赖重新 build）
+     *  失败时写 /root/dsh-guard-patch.log（不影响启动，日志可查） */
     public void ensureBashGuardPatch() {
         try {
-            String out = proot.execAndRead(
-                    "cd /root/" + getWorkdir() + " && "
-                    + "F=$(ls packages/shell/bash-local/lib/index.js 2>/dev/null | head -1); "
-                    + "if [ -z \"$F\" ]; then echo LIB_MISSING; "
-                    + "elif grep -q 'dsh-guard' \"$F\"; then echo LIB_ALREADY; "
-                    + "else sed -i 's|command: request\\.command|command: `source /root/dsh-guard.sh 2>/dev/null; ${request.command}`|' \"$F\" "
-                    + "&& grep -q 'dsh-guard' \"$F\" && echo LIB_PATCHED || echo LIB_PATCH_FAIL; fi");
+            // RC6（npm 全局安装，依赖可能是嵌套或扁平布局，用 find 通配兼容两种）；
+            // 源码版：packages/shell/bash-local
+            String wd = getWorkdir();
+            proot.execAndRead(
+                    "F=$(find /usr/local/lib/node_modules -path '*/@deepseek-ai/dsh-bash-local/lib/index.js' 2>/dev/null | head -1); " +
+                    "if [ -z \"$F\" ]; then F=/root/" + wd + "/packages/shell/bash-local/lib/index.js; fi; " +
+                    "if [ ! -f \"$F\" ]; then echo \"守卫补丁: 未找到 bash 工具 lib\" > /root/dsh-guard-patch.log; " +
+                    "elif grep -q 'dsh-guard' \"$F\"; then echo LIB_ALREADY; " +
+                    "else sed -i 's|command: request\\.command|command: `source /root/dsh-guard.sh 2>/dev/null; ${request.command}`|' \"$F\" " +
+                    "&& grep -q 'dsh-guard' \"$F\" && echo LIB_PATCHED || echo \"守卫补丁: patch 失败\" > /root/dsh-guard-patch.log; fi");
         } catch (Exception ignored) {
         }
     }
@@ -941,11 +1294,17 @@ public class HarnessController {
                 webProcess = p;
                 // 阻塞读取输出，保持 proot+node 进程存活（后台 nohup 会被 --kill-on-exit 杀掉）
                 String out = proot.drainOutput(p);
-                // 输出已重定向到 ~/dsh-web.log，stdout 为空时从文件取尾部
+                // 输出已重定向到 ~/dsh-web.log，stdout 为空时抓「Error 块 + 尾部」
                 if (out == null || out.trim().isEmpty()) {
-                    out = proot.execAndRead("tail -c 4000 ~/dsh-web.log 2>/dev/null");
+                    out = proot.execAndRead(
+                            "awk 'NR>=1 && /Error: dsh:/{f=1} f{print; n++} f && n>45{exit}' ~/dsh-web.log | head -45; " +
+                            "echo '[--- 日志头部---]'; head -3 ~/dsh-web.log 2>/dev/null; " +
+                            "echo '[--- 日志尾部 ---]'; " +
+                            "L=$(grep -nm1 'Error: dsh:' ~/dsh-web.log | cut -d: -f1); " +
+                            "if [ -n \"$L\" ] && [ \"$L\" -gt 50 ]; then sed -n \"$((L-8)),$((L))p\" ~/dsh-web.log 2>/dev/null; fi; " +
+                            "tail -c 500 ~/dsh-web.log 2>/dev/null");
                 }
-                String tail = out.length() > 500 ? out.substring(out.length() - 500) : out;
+                String tail = out.length() > 600 ? out.substring(out.length() - 600) : out;
                 setState("", 0, "", "Web UI 意外退出：\n" + tail, false);
             } catch (Throwable e) {
                 setState("", 0, "", errMsg("启动出错：", e), false);
@@ -1071,4 +1430,564 @@ public class HarnessController {
             }
         }
     }
+    // ================= 插件控制器 =================
+    /** 已装插件目录候选（out-of-tree 插件经符号链接加载）；均为 rootfs 内绝对路径。
+     *  只扫 web profile（dsh plugin --profile web add 的真正安装目录）。
+     *  其余（.dsh/node_modules 等）是框架依赖目录，不能当"已装插件"显示。 */
+    public static final String[] PLUGIN_DIRS = {
+            "/root/.dsh/profiles/web/node_modules",
+    };
+    private final java.util.Map<String, String[]> repoCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private String getVersionName() {
+        try {
+            return appContext.getPackageManager().getPackageInfo(appContext.getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "1.1.0";
+        }
+    }
+
+
+    /** 列出已装插件：返回 [名称, 状态(启用/禁用)] 数组（合并所有候选目录，先去重） */
+    public String[][] listPlugins() {
+        return listPlugins(false);
+    }
+
+    /**
+     * 修正版：已装插件 = profile manifest 声明的插件（dsh.profile.bundles + 插件特征 dependencies）
+     * 合并 node_modules 顶层与 .pnpm/ 虚拟目录中实际存在的包，与 dsh/WebUI 看到的数量对齐。
+     * @param hideBuiltin true 时隐藏 dsh 自带插件（快照文件 /root/dsha-builtin.txt）
+     */
+    public String[][] listPlugins(boolean hideBuiltin) {
+        java.util.Set<String> builtin = hideBuiltin ? readBuiltinSnapshot() : null;
+        try {
+            java.util.Set<String> names = new java.util.LinkedHashSet<>();
+            // 1. 权威清单：profile manifest（dsh 本体 / WebUI 同源）
+            names.addAll(readDeclaredPlugins());
+            // 2. 兜底：node_modules 顶层 + .pnpm/ 实际实体
+            names.addAll(scanNodeModulesTop());
+            names.addAll(scanPnpmStore());
+            if (builtin != null) names.removeAll(builtin); // 隐藏自带（开关开启时）
+
+            if (names.isEmpty()) return new String[0][];
+            java.util.List<String[]> list = new java.util.ArrayList<>();
+            for (String n : names) {
+                if (n.startsWith(".")) continue;
+                String plain = n.endsWith(".disabled") ? n.substring(0, n.length() - 9) : n;
+                if (plain.startsWith(".")) continue;
+                list.add(new String[]{plain, isPluginDisabled(plain) ? "禁用" : "启用"});
+            }
+            return list.toArray(new String[0][]);
+        } catch (Exception ignored) {
+        }
+        return new String[0][];
+    }
+
+    /** 读 profile package.json 声明：dsh.profile.bundles + dependencies 中插件特征包 */
+    private java.util.Set<String> readDeclaredPlugins() {
+        java.util.Set<String> set = new java.util.LinkedHashSet<>();
+        try {
+            java.io.File pf = new java.io.File(proot.getRootfsDir(), ".dsh/profiles/web/package.json");
+            if (!pf.isFile()) return set;
+            String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            org.json.JSONObject root = new org.json.JSONObject(txt);
+            // dsh.profile.bundles（官方插件层列表，最权威）
+            try {
+                org.json.JSONArray bundles = root.optJSONObject("dsh")
+                        .optJSONObject("profile").optJSONArray("bundles");
+                if (bundles != null) for (int i = 0; i < bundles.length(); i++) {
+                    String v = bundles.optString(i, "").trim();
+                    if (!v.isEmpty()) set.add(v);
+                }
+            } catch (Exception ignored) {
+            }
+            // dependencies 中明显是插件的包（dsh / plugin / @deepseek-ai 特征）
+            org.json.JSONObject deps = root.optJSONObject("dependencies");
+            if (deps != null) {
+                java.util.Iterator<String> it = deps.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    String lk = k.toLowerCase();
+                    if (lk.contains("dsh") || lk.contains("plugin") || lk.startsWith("@deepseek-ai"))
+                        set.add(k);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return set;
+    }
+
+    /** 扫描 node_modules 顶层实体（目录/文件，排除隐藏项） */
+    private java.util.Set<String> scanNodeModulesTop() {
+        java.util.Set<String> set = new java.util.LinkedHashSet<>();
+        for (String d : PLUGIN_DIRS) {
+            java.io.File dir = new java.io.File(proot.getRootfsDir(), d.substring(1));
+            java.io.File[] files = dir.isDirectory() ? dir.listFiles() : null;
+            if (files == null) continue;
+            for (java.io.File f : files) {
+                String n = f.getName();
+                if (!n.startsWith(".")) set.add(n);
+            }
+        }
+        return set;
+    }
+
+    /** 扫描 .pnpm/ 虚拟目录里的插件包实体（pnpm 把所有包塞这里，App 之前漏掉了） */
+    private java.util.Set<String> scanPnpmStore() {
+        java.util.Set<String> set = new java.util.LinkedHashSet<>();
+        for (String d : PLUGIN_DIRS) {
+            java.io.File pnpm = new java.io.File(proot.getRootfsDir(), d.substring(1) + "/.pnpm");
+            if (!pnpm.isDirectory()) continue;
+            java.io.File[] entries = pnpm.listFiles();
+            if (entries == null) continue;
+            for (java.io.File e : entries) {
+                if (!e.isDirectory()) continue;
+                // 形如 <name>@<ver> 或 @scope+name@<ver>
+                java.io.File nm = new java.io.File(e, "node_modules");
+                if (!nm.isDirectory()) continue;
+                java.io.File[] pkgs = nm.listFiles();
+                if (pkgs == null) continue;
+                for (java.io.File p : pkgs) {
+                    String n = p.getName();
+                    if (!n.startsWith(".")) set.add(n);
+                }
+            }
+        }
+        return set;
+    }
+
+    /** 判断插件当前启用/禁用：存在 <name>.disabled 则禁用 */
+    private boolean isPluginDisabled(String name) {
+        for (String d : PLUGIN_DIRS) {
+            java.io.File base = new java.io.File(proot.getRootfsDir(), d.substring(1));
+            if (new java.io.File(base, name + ".disabled").exists()) return true;
+            // 顶层可能是 symlink；.pnpm 里找 disabled 标记
+            java.io.File pnpm = new java.io.File(base, ".pnpm");
+            if (pnpm.isDirectory()) {
+                java.io.File[] es = pnpm.listFiles(f -> f.isDirectory() && (f.getName().startsWith(name + "@")));
+                if (es != null) for (java.io.File e : es) {
+                    if (new java.io.File(e, "node_modules/" + name + ".disabled").exists()) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 读取内置插件快照（rootfs /root/dsha-builtin.txt，安装时生成）；缺失时用内置兜底名单 */
+    private java.util.Set<String> readBuiltinSnapshot() {
+        java.util.Set<String> set = null;
+        try {
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-builtin.txt");
+            if (f.isFile()) {
+                set = new java.util.HashSet<>();
+                try (java.io.BufferedReader br = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(new java.io.FileInputStream(f), java.nio.charset.StandardCharsets.UTF_8))) {
+                    String l;
+                    while ((l = br.readLine()) != null) {
+                        String t = l.trim();
+                        if (!t.isEmpty()) set.add(t);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        // 快照缺失/为空时兜底：profile 已知自带项（确保"隐藏自带"随时可用）
+        if (set == null || set.isEmpty()) {
+            set = new java.util.HashSet<>(java.util.Arrays.asList(
+                    "@deepseek-ai", "@standard-schema", "persona-settings", "ui-scale"));
+        }
+        return set;
+    }
+
+    /** 启用/禁用插件：禁用=从 dependencies+bundles 移除声明并改名；启用=还原（避开引号嵌套：用 heredoc 临时脚本） */
+    public boolean togglePlugin(String name, boolean enable) {
+        try {
+            final String PKG = "/root/.dsh/profiles/web/package.json";
+            for (String d : PLUGIN_DIRS) {
+                java.io.File dir = new java.io.File(proot.getRootfsDir(), d.substring(1));
+                if (!dir.isDirectory()) continue;
+                java.io.File on = new java.io.File(dir, name);
+                java.io.File off = new java.io.File(dir, name + ".disabled");
+                if (enable && off.exists()) {
+                    String src = readPluginSrc(name);
+                    if (src == null || src.isEmpty() || "null".equals(src)) return false;
+                    String safe = src.replace("'", "\\'");
+                    String r = proot.execAndRead(
+                            toggleScript() +
+                            "node /root/dsha-toggle.js '" + PKG + "' '" + name + "' on '" + safe + "' && " +
+                            "rm -f /root/dsha-toggle.js && " +
+                            "mv '" + d + "/" + name + ".disabled' '" + d + "/" + name + "' && echo OK");
+                    return r != null && r.contains("OK");
+                } else if (!enable && on.exists()) {
+                    String r = proot.execAndRead(
+                            toggleScript() +
+                            "node /root/dsha-toggle.js '" + PKG + "' '" + name + "' off && " +
+                            "rm -f /root/dsha-toggle.js && " +
+                            "mv '" + d + "/" + name + "' '" + d + "/" + name + ".disabled' && echo OK");
+                    return r != null && r.contains("OK");
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    /** 生成修改 package.json 的临时脚本（heredoc，避免嵌套引号） */
+    private String toggleScript() {
+        return "cat > /root/dsha-toggle.js <<'EOF'\n" +
+                "const fs=require('fs');\n" +
+                "const pkg=process.argv[2]||'';const pn=process.argv[3]||'';const mode=process.argv[4]||'off';const src=process.argv[5]||'';\n" +
+                "if(!pkg||!pn)process.exit(1);\n" +
+                "const p=JSON.parse(fs.readFileSync(pkg,'utf-8'));\n" +
+                "if(!p.dependencies)p.dependencies={};\n" +
+                "if(mode==='on'){\n" +
+                "  p.dependencies[pn]=src;\n" +
+                "  if(p.dsh&&p.dsh.profile&&Array.isArray(p.dsh.profile.bundles)&&p.dsh.profile.bundles.indexOf(pn)<0)p.dsh.profile.bundles.push(pn);\n" +
+                "}else{\n" +
+                "  if(p.dependencies[pn])fs.writeFileSync('/root/.dsh/profiles/web/.dsha-src-'+pn,String(p.dependencies[pn]));\n" +
+                "  delete p.dependencies[pn];\n" +
+                "  if(p.dsh&&p.dsh.profile&&Array.isArray(p.dsh.profile.bundles))p.dsh.profile.bundles=p.dsh.profile.bundles.filter(function(x){return x!==pn;});\n" +
+                "}\n" +
+                "fs.writeFileSync(pkg,JSON.stringify(p,null,2));\n" +
+                "EOF\n";
+    }
+
+    /** 读取曾禁用的插件原安装源（启用时还原到 package.json） */
+    private String readPluginSrc(String name) {
+        try {
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/.dsha-src-" + name);
+            if (!f.isFile()) return "";
+            try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(new java.io.FileInputStream(f), java.nio.charset.StandardCharsets.UTF_8))) {
+                return br.readLine() == null ? "" : br.readLine(); // 补：读一行
+            }
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** 导出已启用插件为 tar.gz（Android Download/DSHA 目录，MediaStore）
+     *  返回：文件路径=成功 / "NO_PLUGINS"=没有可导出插件 / null=失败 */
+    public String exportPlugins() {
+        try {
+            // rootfs 内中转文件（先打包到 rootfs，再从宿主路径读出来拷贝到 Download）
+            java.io.File outHost = new java.io.File(proot.getRootfsDir(), "root/plugins-export.tar.gz");
+            final String OUT_GUEST = "/root/plugins-export.tar.gz";
+            for (String d : PLUGIN_DIRS) {
+                java.io.File dir = new java.io.File(proot.getRootfsDir(), d.substring(1));
+                if (!dir.isDirectory()) continue;
+                // 有可导出条目才打包（空目录/无启用插件直接跳过）
+                String has = proot.execAndRead("cd '" + d + "' && ls 2>/dev/null | grep -v disabled | grep -v '^$' | head -1");
+                if (has == null || has.trim().isEmpty()) continue;
+                String r = proot.execAndRead(
+                        "cd '" + d + "' && " +
+                        "tar -czhf '" + OUT_GUEST + "' $(ls | grep -v disabled) 2>&1; echo TAR_EXIT=$?");
+                if (r == null || !r.contains("TAR_EXIT=0") || !outHost.isFile()) continue;
+                String name = "DSHA-plugins-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(new java.util.Date()) + ".tar.gz";
+                String path = copyToDownloads(outHost, name);
+                if (path != null) return path;
+            }
+            return "NO_PLUGINS";
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    /** 导入插件包：解压到插件目录（rootfs 内中转） */
+    public boolean importPlugins(java.io.File tarGz) {
+        try {
+            java.io.File tmpHost = new java.io.File(proot.getRootfsDir(), "root/plugins-import.tar.gz");
+            copyFile(tarGz, tmpHost);
+            final String TMP_GUEST = "/root/plugins-import.tar.gz";
+            for (String d : PLUGIN_DIRS) {
+                java.io.File dir = new java.io.File(proot.getRootfsDir(), d.substring(1));
+                if (!dir.isDirectory()) dir.mkdirs();
+                String r = proot.execAndRead(
+                        "cd '" + d + "' && tar -xzf '" + TMP_GUEST + "' 2>/dev/null && echo OK");
+                if (r != null && r.contains("OK")) {
+                    //noinspection ResultOfMethodCallIgnored
+                    tmpHost.delete();
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    /** 拉取插件市场快照 JSON（GitHub API 列最新快照 → jsdelivr/raw 下载），返回 JSON 文本 */
+    /** 拉取插件市场索引：PLUGINS-ALL.md（全量列表式，jsdelivr 优先）；旧版 README 表格兜底 */
+    public String fetchMarketIndex() {
+        String[] urls = {
+                "https://cdn.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@main/PLUGINS-ALL.md",
+                "https://cdn.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@master/PLUGINS-ALL.md",
+                "https://raw.githubusercontent.com/AdamPlatin123/awesome-dsh-plugins/main/PLUGINS-ALL.md",
+                "https://cdn.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@main/README.md",
+                "https://ghfast.top/https://raw.githubusercontent.com/AdamPlatin123/awesome-dsh-plugins/main/PLUGINS-ALL.md"
+        };
+        for (String u : urls) {
+            try {
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(25000);
+                conn.setRequestProperty("User-Agent", "DSHA/" + getVersionName());
+                if (conn.getResponseCode() != 200) {
+                    conn.disconnect();
+                    continue;
+                }
+                java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = r.readLine()) != null) {
+                    sb.append(line).append('\n');
+                    if (sb.length() > 1200000) break;
+                }
+                conn.disconnect();
+                String j = sb.toString();
+                // 全量列表包含分类折叠；README 兜底含旧表格。两种都够格解析
+                boolean ok = j.indexOf("<summary>") >= 0 && j.indexOf("<b>") >= 0
+                        && (j.indexOf("[") >= 0) && j.length() > 8000;
+                if (ok) return j;
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    /** 解析市场索引（PLUGINS-ALL.md 列表式 / README 旧表格式）为 [name, star, owner, 兼容, 分类, 说明, url] */
+    public static java.util.List<String[]> parseMarketTable(String md) {
+        java.util.List<String[]> out = new java.util.ArrayList<>();
+        if (md == null) return out;
+        String category = "";
+        for (String raw : md.split("\n")) {
+            String t = raw.trim();
+            // ===== 分类：<summary><b>🎓 技能包（2）</b></summary> =====
+            int b1 = t.indexOf("<b>");
+            if (b1 >= 0) {
+                int b2 = t.indexOf("</b>", b1);
+                if (b2 > b1) {
+                    String c = t.substring(b1 + 3, b2).trim();
+                    c = c.replaceAll("（\\s*\\d+\\s*）$", "").replaceAll("\\(\\s*\\d+\\s*\\)$", "").trim();
+                    int k = 0;
+                    while (k < c.length()) {
+                        int cp = c.codePointAt(k);
+                        if (cp > 0x2E80) k += Character.charCount(cp); else break;
+                    }
+                    category = c.substring(k).trim();
+                }
+                continue;
+            }
+            // ===== 条目：列表式  - `[可用]` [name](url) ★12 — desc =====
+            if (t.startsWith("- `[")) {
+                int c1 = t.indexOf('`'), c2 = t.indexOf('`', c1 + 1);
+                if (c1 < 0 || c2 < 0) continue;
+                String compat = t.substring(c1 + 1, c2).trim();
+                int lb = t.indexOf('[', c2), rb = t.indexOf(']', lb + 1);
+                if (lb < 0 || rb < 0) continue;
+                String name = t.substring(lb + 1, rb).trim();
+                int u1 = t.indexOf('(', rb), u2 = t.indexOf(')', u1 + 1);
+                if (u1 < 0 || u2 < 0) continue;
+                String url = t.substring(u1 + 1, u2).trim();
+                if (!url.startsWith("http")) continue;
+                String rest = t.substring(u2 + 1);
+                // ★star
+                String star = "0";
+                int st = rest.indexOf("★");
+                if (st >= 0) {
+                    String sx = rest.substring(st + 1).trim();
+                    int d = 0;
+                    while (d < sx.length() && Character.isDigit(sx.charAt(d))) d++;
+                    if (d > 0) star = sx.substring(0, d);
+                }
+                String desc = "";
+                int dash = rest.indexOf("—");
+                if (dash >= 0) desc = rest.substring(dash + 1).trim();
+                String owner = "";
+                String uu = url.replace("https://github.com/", "").replace("http://github.com/", "");
+                int slash = uu.indexOf('/');
+                if (slash > 0) owner = uu.substring(0, slash);
+                compat = compat.replace("可用", "✅可用").replace("不兼容", "❌不兼容")
+                        .replace("待定", "⏳待定").replace("未测", "⏳未测");
+                if (compat.length() > 8) compat = compat.substring(0, 8);
+                out.add(new String[]{name, star, owner, compat, category, desc, url});
+                continue;
+            }
+            // ===== 条目：表格式  | [name](url) | 类型 | 兼容 | 说明 |  =====
+            if (t.startsWith("| [") && t.contains("](")) {
+                String[] cells = t.split("\\|");
+                if (cells.length < 5) continue;
+                String first = cells[1].trim();
+                int lb = first.indexOf('['), rb = first.indexOf("](");
+                if (lb < 0 || rb < 0) continue;
+                String name = first.substring(lb + 1, rb).trim();
+                int u1 = first.indexOf('('), u2 = first.lastIndexOf(')');
+                if (u1 < 0 || u2 < 0) continue;
+                String url = first.substring(u1 + 1, u2).trim();
+                if (!url.startsWith("http")) continue;
+                String compat = cells.length > 3 ? cells[3].trim() : "";
+                String desc = cells.length > 4 ? cells[4].trim() : "";
+                String owner = "";
+                String uu = url.replace("https://github.com/", "").replace("http://github.com/", "");
+                int slash = uu.indexOf('/');
+                if (slash > 0) owner = uu.substring(0, slash);
+                compat = compat.replace("✅ 运行级可用", "✅可用").replace("⏳ 未测", "⏳未测")
+                        .replace("❌ 运行级不兼容", "❌不兼容").replace("✅", "✅可用");
+                if (compat.isEmpty() || compat.equals("插件") || compat.equals("合集")) compat = "⏳未测";
+                if (compat.length() > 8) compat = compat.substring(0, 8);
+                out.add(new String[]{name, "0", owner, compat, category, desc, url});
+            }
+        }
+        return out;
+    }
+
+    /** 拉取单个仓库详情（最近更新/star/作者），GitHub API 单查 + 内存缓存 */
+    public String[] fetchRepoInfo(String owner, String repo) {
+        if (owner == null || owner.isEmpty() || repo == null || repo.isEmpty()) return null;
+        String cacheKey = owner + "/" + repo;
+        String[] cached = repoCache.get(cacheKey);
+        if (cached != null) return cached;
+        String[] urls = {
+                "https://api.github.com/repos/" + cacheKey,
+                "https://ghfast.top/https://api.github.com/repos/" + cacheKey
+        };
+        for (String u : urls) {
+            try {
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(10000);
+                conn.setRequestProperty("User-Agent", "DSHA/" + getVersionName());
+                if (conn.getResponseCode() != 200) {
+                    conn.disconnect();
+                    continue;
+                }
+                java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+                String all = "";
+                String line;
+                while ((line = r.readLine()) != null) {
+                    all += line;
+                    if (all.length() > 100000) break;
+                }
+                conn.disconnect();
+                org.json.JSONObject j = new org.json.JSONObject(all);
+                String pushed = j.optString("pushed_at", "");
+                if (pushed.length() > 10) pushed = pushed.substring(0, 10);
+                String[] info = new String[]{
+                        pushed,
+                        String.valueOf(j.optInt("stargazers_count", 0)),
+                        j.optJSONObject("owner") == null ? "" : j.optJSONObject("owner").optString("login", ""),
+                        j.optString("description", "")
+                };
+                repoCache.put(cacheKey, info);
+                return info;
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    /** 从 GitHub 仓库拉取 npm 包名（package.json 的 name 字段），用于安装 */
+    public String fetchNpmName(String owner, String repo) {
+        if (owner == null || owner.isEmpty() || repo == null || repo.isEmpty()) return null;
+        String[] urls = {
+                "https://raw.githubusercontent.com/" + owner + "/" + repo + "/main/package.json",
+                "https://raw.githubusercontent.com/" + owner + "/" + repo + "/master/package.json",
+                "https://ghfast.top/https://raw.githubusercontent.com/" + owner + "/" + repo + "/main/package.json"
+        };
+        for (String u : urls) {
+            try {
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(10000);
+                conn.setRequestProperty("User-Agent", "DSHA/" + getVersionName());
+                if (conn.getResponseCode() != 200) {
+                    conn.disconnect();
+                    continue;
+                }
+                java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+                String all = "";
+                String line;
+                while ((line = r.readLine()) != null) {
+                    all += line;
+                    if (all.length() > 50000) break;
+                }
+                conn.disconnect();
+                org.json.JSONObject j = new org.json.JSONObject(all);
+                String name = j.optString("name", "");
+                if (!name.isEmpty() && !name.contains("${")) return name;
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    /** 卸载插件：dsh plugin remove（profile 内移除依赖） */
+    public String removePlugin(String pkg) {
+        try {
+            String r = proot.execAndRead(
+                    "cd /root/" + getWorkdir() + " && set -o pipefail && " + depsSelfHeal() +
+                    "(dsh plugin --profile web remove " + pkg + " 2>&1 || " +
+                    "node apps/cli/lib/bin.js plugin --profile web remove " + pkg + " 2>&1) | tail -10; echo REMOVE_EXIT=$?");
+            return r;
+        } catch (Exception e) {
+            return "卸载失败: " + e.getMessage();
+        }
+    }
+
+    /** 安装插件：dsh plugin 官方机制（profile 内 pnpm add + 自动启用 bundle 插件） */
+    public String installPlugin(String pkg) {
+        try {
+            String r = proot.execAndRead(
+                    "cd /root/" + getWorkdir() + " && set -o pipefail && " + depsSelfHeal() +
+                    "printf 'registry=https://registry.npmmirror.com\\\\n' > /root/.npmrc && " +
+                    "(dsh plugin --profile web add " + pkg + " 2>&1 || " +
+                    "node apps/cli/lib/bin.js plugin --profile web add " + pkg + " 2>&1) | tail -15; echo INSTALL_EXIT=$?");
+            if (r != null && r.contains("INSTALL_EXIT=0")) {
+                return r + "\n\n[已安装到 profile，重启 WebUI 生效]";
+            }
+            return r == null ? "无输出" : r;
+        } catch (Exception e) {
+            return "安装失败: " + e.getMessage();
+        }
+    }
+
+
+    private String copyToDownloads(java.io.File src, String name) {
+        // 方案1：MediaStore（Android 10+ 免权限）
+        try {
+            android.content.ContentValues cv = new android.content.ContentValues();
+            cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name);
+            cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/gzip");
+            cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/DSHA");
+            android.net.Uri uri = appContext.getContentResolver().insert(
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+            if (uri != null) {
+                try (java.io.OutputStream os = appContext.getContentResolver().openOutputStream(uri)) {
+                    try (java.io.FileInputStream fis = new java.io.FileInputStream(src)) {
+                        byte[] buf = new byte[65536];
+                        int n;
+                        while ((n = fis.read(buf)) != -1) os.write(buf, 0, n);
+                    }
+                }
+                return android.os.Environment.getExternalStoragePublicDirectory(
+                        android.os.Environment.DIRECTORY_DOWNLOADS) + "/DSHA/" + name;
+            }
+        } catch (Exception ignored) {
+        }
+        // 方案2：All files access 直写（Android 11+ 授权后）
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 30 && android.os.Environment.isExternalStorageManager()) {
+                java.io.File dir = new java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
+                        android.os.Environment.DIRECTORY_DOWNLOADS), "DSHA");
+                if (dir.isDirectory() || dir.mkdirs()) {
+                    java.io.File dst = new java.io.File(dir, name);
+                    copyFile(src, dst);
+                    return dst.getAbsolutePath();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+    // ================= 插件控制器结束 =================
+
 }

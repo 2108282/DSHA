@@ -8,7 +8,6 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
-import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -23,7 +22,7 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * 内置终端：直接挂到 proot 的持久 bash 会话上。
- * cd / export 等状态保持（真终端体验），无需 Termux。
+ * 历史输出与 bash 会话跨页面保留（静态持有，切页/返回不清空），仅「清理」按钮手动清空。
  */
 public class TerminalFragment extends Fragment {
 
@@ -31,9 +30,14 @@ public class TerminalFragment extends Fragment {
     private EditText inputEdit;
     private TextView outputText;
     private ScrollView scrollView;
-    private Process shell;
-    private volatile boolean running = false;
-    private final StringBuilder buffer = new StringBuilder();
+
+    // ===== 静态：跨 Fragment 重建保留 =====
+    private static volatile Process shell;
+    private static volatile boolean running = false;
+    private static volatile Thread readerThread;
+    private static final StringBuilder buffer = new StringBuilder();
+    private static volatile TextView boundOutput; // 当前绑定的输出视图；null=无界面（会话继续后台跑）
+
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Nullable
@@ -49,6 +53,8 @@ public class TerminalFragment extends Fragment {
         inputEdit = view.findViewById(R.id.term_input);
         outputText = view.findViewById(R.id.term_output);
         scrollView = view.findViewById(R.id.term_scroll);
+        // 绑定当前 UI（历史/后续输出写到这里）
+        boundOutput = outputText;
 
         TextView ctrlcBtn = view.findViewById(R.id.term_ctrlc);
         ctrlcBtn.setOnClickListener(v -> {
@@ -61,6 +67,11 @@ public class TerminalFragment extends Fragment {
                 }
             }
         });
+        TextView clearBtn = view.findViewById(R.id.term_clear);
+        clearBtn.setOnClickListener(v -> {
+            buffer.setLength(0);
+            outputText.setText("Ubuntu 24.04 · 回车执行 · 中止 · exit 退出\n");
+        });
         inputEdit.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_SEND
                     || actionId == EditorInfo.IME_ACTION_GO
@@ -72,7 +83,11 @@ public class TerminalFragment extends Fragment {
             return false;
         });
 
-        appendLine("Ubuntu 24.04 · 回车执行 · 中止 · exit 退出");
+        // 重绘历史（静态 buffer 切页后仍在）
+        String show = buffer.length() == 0 ? "" : buffer.toString();
+        outputText.setText(show.isEmpty() ? "Ubuntu 24.04 · 回车执行 · 中止 · exit 退出" : show);
+        scrollView.post(() -> scrollView.fullScroll(View.FOCUS_DOWN));
+
         if (!c.isHarnessInstalled()) {
             appendLine("环境未安装，请先到「安装」页完成安装");
             return;
@@ -82,6 +97,10 @@ public class TerminalFragment extends Fragment {
 
     private void startShell() {
         c.ensureDangerGuard(); // 危险确认包装器缺失则自动补装（装新 APK 后无需重装第 4 步）
+        Process p = shell;
+        if (p != null && p.isAlive() && readerThread != null && readerThread.isAlive()) {
+            return; // 会话已在后台跑，本页只是重新绑定输出视图
+        }
         new Thread(() -> {
             try {
                 shell = c.getProot().execRootfsInteractive();
@@ -124,16 +143,20 @@ public class TerminalFragment extends Fragment {
         appendRaw(s + "\n");
     }
 
+    /** 始终写静态 buffer（切页后继续累积，否则历史丢）；有绑定视图才刷 UI */
     private void appendRaw(String s) {
-        if (outputText == null) return;
-        if (buffer.length() > 300000) buffer.setLength(0);
+        if (s == null || s.isEmpty()) return;
         buffer.append(s);
+        if (buffer.length() > 300000) buffer.setLength(0); // 过长截断，仍可手动清理
+        TextView out = boundOutput;
+        if (out == null) return;
         String show = buffer.length() > 100000
                 ? "…（输出过长已截断）\n" + buffer.substring(buffer.length() - 100000)
                 : buffer.toString();
-        outputText.setText(show);
-        if (scrollView != null) {
-            scrollView.post(() -> scrollView.fullScroll(View.FOCUS_DOWN));
+        out.setText(show);
+        ScrollView sv = scrollView;
+        if (sv != null) {
+            sv.post(() -> sv.fullScroll(View.FOCUS_DOWN));
         }
     }
 
@@ -147,14 +170,7 @@ public class TerminalFragment extends Fragment {
     @Override
     public void onDestroyView() {
         super.onDestroyView();
-        running = false;
-        Process p = shell;
-        if (p != null) {
-            try {
-                p.destroy();
-            } catch (Exception ignored) {
-            }
-            shell = null;
-        }
+        // 只解绑视图，不杀会话、不清 buffer —— 换页/返回历史保留
+        boundOutput = null;
     }
 }

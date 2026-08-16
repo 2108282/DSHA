@@ -13,6 +13,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -30,11 +31,17 @@ public class LaunchFragment extends Fragment {
 
     private HarnessController c;
     private WebView webView;
+    private FrameLayout previewContainer;
+    private org.mozilla.geckoview.GeckoView geckoView;
+    private org.mozilla.geckoview.GeckoSession geckoSession;
+    private org.mozilla.geckoview.GeckoRuntime geckoRuntime;
     private TextView statusText;
+    private TextView lanAddrText;
     private Button startBtn, restartBtn, stopBtn;
     private LinearLayout controls;
     private boolean fullscreen = false;
     private boolean polling = false;
+    private boolean previewBusy = false;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -44,6 +51,90 @@ public class LaunchFragment extends Fragment {
             exitFullscreen();
         }
     };
+
+    /** 根据设置初始化预览内核：系统 WebView 或内置 GeckoView；电脑模式设置桌面 UA */
+    @SuppressLint("SetJavaScriptEnabled")
+    private void initPreview() {
+        android.content.SharedPreferences prefs = requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
+        boolean useGecko = prefs.getBoolean("gecko_core", false);
+        boolean desktopMode = prefs.getBoolean("desktop_mode", false);
+        previewContainer.removeAllViews();
+        if (useGecko) {
+            try {
+                webView = null;
+                geckoView = new org.mozilla.geckoview.GeckoView(requireContext());
+                previewContainer.addView(geckoView,
+                        new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                if (geckoRuntime == null) {
+                    geckoRuntime = org.mozilla.geckoview.GeckoRuntime.create(requireContext());
+                }
+                geckoSession = new org.mozilla.geckoview.GeckoSession();
+                geckoSession.open(geckoRuntime);
+                geckoView.setSession(geckoSession);
+            } catch (Throwable e) {
+                // GeckoView 初始化失败（如 so 加载异常）回退系统 WebView
+                geckoView = null;
+                geckoSession = null;
+                webView = new WebView(requireContext());
+                setupWebView(webView, desktopMode);
+                previewContainer.addView(webView,
+                        new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+        } else {
+            geckoView = null;
+            geckoSession = null;
+            webView = new WebView(requireContext());
+            setupWebView(webView, desktopMode);
+            previewContainer.addView(webView,
+                    new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+    }
+
+    private void setupWebView(WebView wv, boolean desktopMode) {
+        WebSettings ws = wv.getSettings();
+        ws.setJavaScriptEnabled(true);
+        ws.setDomStorageEnabled(true);
+        if (desktopMode) {
+            wv.getSettings().setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+        }
+        wv.setWebViewClient(new WebViewClient());
+    }
+
+    /** 加载预览 URL（按当前内核分发） */
+    private void loadPreview(String url) {
+        if (webView != null) {
+            webView.loadUrl(url);
+        } else if (geckoSession != null) {
+            geckoSession.load(new org.mozilla.geckoview.GeckoSession.Loader().uri(url));
+        }
+    }
+
+    /** 局域网访问地址显示（lan_mode 开启且检测到 IP 时显示，点击复制） */
+    private void updateLanAddr() {
+        boolean lan = requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("lan_mode", false);
+        if (!lan) {
+            lanAddrText.setVisibility(View.GONE);
+            return;
+        }
+        String ip = HarnessController.getLanAddress();
+        if (ip == null) {
+            lanAddrText.setVisibility(View.GONE);
+            return;
+        }
+        String addr = "http://" + ip + ":" + c.getPort() + "   （局域网设备可访问）";
+        lanAddrText.setText(addr);
+        lanAddrText.setVisibility(View.VISIBLE);
+        lanAddrText.setOnClickListener(v -> {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                    requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("lan", "http://" + ip + ":" + c.getPort()));
+            Toast.makeText(requireContext(), "局域网地址已复制", Toast.LENGTH_SHORT).show();
+        });
+    }
 
     private final HarnessController.StateListener stateListener = this::refreshFromState;
 
@@ -58,17 +149,21 @@ public class LaunchFragment extends Fragment {
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         c = HarnessController.get(requireContext());
-        webView = view.findViewById(R.id.webview);
+        previewContainer = view.findViewById(R.id.previewContainer);
         statusText = view.findViewById(R.id.launch_status);
+        lanAddrText = view.findViewById(R.id.lan_addr);
         startBtn = view.findViewById(R.id.launch_start);
         restartBtn = view.findViewById(R.id.launch_open);
         stopBtn = view.findViewById(R.id.launch_stop);
         controls = view.findViewById(R.id.launch_controls);
 
-        WebSettings ws = webView.getSettings();
-        ws.setJavaScriptEnabled(true);
-        ws.setDomStorageEnabled(true);
-        webView.setWebViewClient(new WebViewClient());
+        initPreview();
+        updateLanAddr();
+        // 刷新看门狗命令文件（覆盖历史坏命令，避免旧 watchdog 用空端口 restart 反复失败）
+        try {
+            c.ensureWatchdogFiles();
+        } catch (Throwable ignored) {
+        }
 
         c.addStateListener(stateListener);
         requireActivity().getOnBackPressedDispatcher().addCallback(getViewLifecycleOwner(), backCallback);
@@ -135,10 +230,10 @@ public class LaunchFragment extends Fragment {
         final String url = "http://127.0.0.1:" + c.getPort() + "/";
         new Thread(() -> {
             boolean ok = false;
-            for (int i = 0; i < 60; i++) { // 最多约 2 分钟
+            for (int i = 0; i < 180; i++) { // 最多约 6 分钟（首次 RC6 启动较慢）
                 if (!c.isWebRunning() && !ok) {
-                    // 服务进程都没了就别等了（除非刚重启还在拉起中，给它几轮机会）
-                    if (i > 20) break;
+                    // 服务进程都没了就别等了（除非刚启动拉起中），放宽到 80 秒后才判死
+                    if (i > 40) break;
                 }
                 if (httpOk(url)) {
                     ok = true;
@@ -174,9 +269,22 @@ public class LaunchFragment extends Fragment {
     }
 
     private void openPreview() {
-        String url = "http://127.0.0.1:" + c.getPort() + "/";
-        webView.loadUrl(url);
-        enterFullscreen();
+        // 防重入：openPreview → loadPreview → loadUrl 反复触发（多入口 post 叠加）会递归爆栈
+        if (previewBusy) return;
+        previewBusy = true;
+        try {
+            String url = "http://127.0.0.1:" + c.getPort() + "/";
+            loadPreview(url);
+            enterFullscreen();
+        } catch (Throwable t) {
+            // 预览闪避：内核异常不拖垮 App
+            try {
+                statusText.setText("预览加载异常，可点「重启」再试");
+            } catch (Throwable ignored) {
+            }
+        } finally {
+            previewBusy = false;
+        }
     }
 
     private void enterFullscreen() {

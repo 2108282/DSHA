@@ -78,6 +78,30 @@
             android:layout_height="wrap_content"
             android:text="启动时检查更新" />
 
+        <CheckBox
+            android:id="@+id/config_desktop_mode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="电脑模式（WebUI 预览用桌面浏览器标识）" />
+
+        <CheckBox
+            android:id="@+id/config_gecko_core"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="内置浏览器内核（系统 WebView 过旧时使用，加载稍慢）" />
+
+        <CheckBox
+            android:id="@+id/config_lan_mode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="局域网访问（同网段设备可打开 WebUI，注意安全）" />
+
+        <CheckBox
+            android:id="@+id/config_rc6"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="使用 RC6 版本（npm 安装，插件兼容性更好；需重装第 4 步）" />
+
         <Button
             android:id="@+id/config_save"
             android:layout_width="match_parent"
@@ -86,10 +110,21 @@
             android:text="保存配置" />
 
         <TextView
+            android:id="@+id/config_plugins_entry"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="12dp"
+            android:gravity="center"
+            android:text="🧩 插件市场与控制器"
+            android:textColor="#E6EDF3"
+            android:textSize="14sp"
+            android:background="@drawable/bg_btn" />
+
+        <TextView
             android:id="@+id/config_repo_link"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="16dp"
             android:gravity="center"
             android:text="DSHA"
             android:textColor="#999999"

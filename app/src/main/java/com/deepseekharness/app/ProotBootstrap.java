@@ -51,8 +51,8 @@ public class ProotBootstrap {
 
     /** deepseek-harness 安装源：预构建包 + 直连 GitHub 源码构建（特殊项 git://） */
     public static final String[] HARNESS_URLS = {
-            "https://litter.catbox.moe/epfi6g.gz",
-            // 特殊项：不下载预构建包，直接从 GitHub 克隆源码本地构建
+            // 预构建包源已暂停：catbox 匿名站包体被污染(损坏/含 WSL 脚本)，不再信任
+            // 一律走「直连 GitHub 源码构建」保证可靠
             "git://github.com/deepseek-ai/deepseek-harness",
     };
 
@@ -367,8 +367,13 @@ public class ProotBootstrap {
         return out;
     }
 
+    /** 下载进度回调：已下载字节 / 总字节（total<=0 表示源未提供大小） */
+    public interface DownloadProgress {
+        void onProgress(long downloaded, long total);
+    }
+
     /** 下载 rootfs（带进度回调，支持断点续传；完成后写 .done 标记） */
-    public void downloadRootfs(String url, File dest, IntConsumer progress) throws IOException {
+    public void downloadRootfs(String url, File dest, DownloadProgress progress) throws IOException {
         long existing = dest.exists() ? dest.length() : 0L;
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         conn.setConnectTimeout(45000);
@@ -400,11 +405,11 @@ public class ProotBootstrap {
                         int pct = (int) (downloaded * 100 / totalBytes);
                         if (pct != lastPct) {
                             lastPct = pct;
-                            progress.accept(pct);
+                            progress.onProgress(downloaded, totalBytes);
                         }
                     } else if (lastPct != -2) {
                         lastPct = -2; // 源未提供大小：只通知一次"下载中"
-                        progress.accept(-1);
+                        progress.onProgress(downloaded, -1);
                     }
                 }
             }

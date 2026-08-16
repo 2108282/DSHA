@@ -32,6 +32,24 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // 崩溃捕获：写日志到 files/crash.log，并继续交给系统默认 handler（保留 DropBox 崩溃报告）
+        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((thread, t) -> {
+            try {
+                java.io.File f = new java.io.File(getFilesDir(), "crash.log");
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f, true)) {
+                    fos.write(("\n===== " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(new java.util.Date()) + " =====\n"
+                            + android.util.Log.getStackTraceString(t) + "\n").getBytes());
+                }
+            } catch (Exception ignored) {
+            }
+            // 转交系统默认 handler（否则系统 CrashReport/DropBox 收不到，只剩我们自己写的日志）
+            if (prev != null) {
+                prev.uncaughtException(thread, t);
+            } else {
+                android.os.Process.killProcess(android.os.Process.myPid());
+            }
+        });
 
         // 首次启动进入引导页
         SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
