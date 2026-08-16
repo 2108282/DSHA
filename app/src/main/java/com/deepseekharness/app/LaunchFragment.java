@@ -125,13 +125,13 @@ public class LaunchFragment extends Fragment {
             lanAddrText.setVisibility(View.GONE);
             return;
         }
-        String addr = "http://" + ip + ":" + c.getPort() + "   （局域网设备可访问）";
+        String addr = "http://" + ip + ":" + LanProxyService.LAN_PORT + "   （App桥，局域网设备可访问）";
         lanAddrText.setText(addr);
         lanAddrText.setVisibility(View.VISIBLE);
         lanAddrText.setOnClickListener(v -> {
             android.content.ClipboardManager cm = (android.content.ClipboardManager)
                     requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("lan", "http://" + ip + ":" + c.getPort()));
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("lan", "http://" + ip + ":" + LanProxyService.LAN_PORT));
             Toast.makeText(requireContext(), "局域网地址已复制", Toast.LENGTH_SHORT).show();
         });
     }

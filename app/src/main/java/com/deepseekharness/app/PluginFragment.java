@@ -403,7 +403,8 @@ public class PluginFragment extends Fragment {
                 return;
             }
             status.setText("正在安装 " + npmName + " …");
-            String out = c.installPlugin(npmName);
+            // npm 名找不到时自动回退 github:owner/repo（市场条目多为仅 GitHub 发布的仓库插件）
+            String out = c.installPlugin(npmName, "github:" + owner + "/" + repo);
             final String fOut = out;
             runOnUiThreadSafely(() -> showInstallResult(npmName, display, fOut));
         }).start();

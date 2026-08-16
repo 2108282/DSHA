@@ -220,6 +220,44 @@ public class HarnessController {
     public String getWorkdir() { return prefs.getString("workdir", "deepseek-harness"); }
     public void setWorkdir(String v) { prefs.edit().putString("workdir", v).apply(); }
 
+    /** 局域网模式是否开启（App 设置项） */
+    public boolean isLanMode() {
+        return prefs.getBoolean("lan_mode", false);
+    }
+
+    /** rootfs 绝对路径（供桥等写日志） */
+    public String getRootfsDirPath() {
+        return proot.getRootfsDir().getAbsolutePath();
+    }
+
+    /** 实际工作目录自愈：prefs 指定名不存在时，扫描 rootfs /root 下含 apps/cli/lib/bin.js 的目录并回写 */
+    public String detectWorkdir() {
+        String wd = getWorkdir();
+        if (workdirExists(wd)) return wd;
+        try {
+            java.io.File root = new java.io.File(proot.getRootfsDir(), "root");
+            java.io.File[] dirs = root.isDirectory() ? root.listFiles(java.io.File::isDirectory) : null;
+            if (dirs != null) for (java.io.File d : dirs) {
+                if (new java.io.File(d, "apps/cli/lib/bin.js").isFile()
+                        || new java.io.File(d, "lib/bin.js").isFile()) {
+                    prefs.edit().putString("workdir", d.getName()).apply();
+                    return d.getName();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return wd;
+    }
+
+    private boolean workdirExists(String wd) {
+        try {
+            return new java.io.File(proot.getRootfsDir(), "root/" + wd + "/apps/cli/lib/bin.js").isFile()
+                    || new java.io.File(proot.getRootfsDir(), "root/" + wd + "/lib/bin.js").isFile();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public String effectiveApiKey() {
         return getApiKey();
     }
@@ -1021,11 +1059,8 @@ public class HarnessController {
         boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false);
         boolean lanReady = lan && tryEnableLanBind();
-        boolean rc6 = useRc6();
         StringBuilder sb = new StringBuilder();
-        sb.append("cd /root/").append(getWorkdir()).append(" && ")
-          .append(depsSelfHeal()) // 依赖自愈：workspace 关键包缺失时自动重跑 pnpm install
-          .append("export DSH_HOME=/root/.dsh && ")
+        sb.append("export DSH_HOME=/root/.dsh && ")
           .append("export DEEPSEEK_API_KEY='").append(effectiveApiKey()).append("' && ")
           .append("export DSH_PERMISSION_MODE=").append(getPermissionMode()).append(" && ")
           // 危险命令确认：agent 在 rootfs 内的 rm/dd 等操作需用户确认
@@ -1035,16 +1070,14 @@ public class HarnessController {
           // 预创建常见插件数据目录（防止插件扫描空目录崩溃拖垮 WebUI）
           .append("mkdir -p /root/.codex/pets /root/.dsh/plugins 2>/dev/null; ")
           // 局域网模式：补丁成功后绑定 0.0.0.0 并打印访问地址；失败只提示，不影响启动
-          .append(lanReady ? "echo '[DSHA] 局域网访问: http://$(hostname -I 2>/dev/null | cut -d' ' -f1):" + getPort() + "' && "
+          .append(lanReady ? "echo '[DSHA] 局域网访问(App桥): http://$(hostname -I 2>/dev/null | cut -d' ' -f1):3081' && "
                   : lan ? "echo '[DSHA] 局域网未开启(官方 0.0.0.0 未放行)，仅本机可访问' && " : "")
           // 先拉起看门狗（后台），再 exec WebUI（前台阻塞）——顺序不能反，否则看门狗永不启动
           .append("nohup bash /root/dsh-watchdog.sh >> /root/dsh-watchdog.log 2>&1 & ")
-          // 日志重定向到 ~/dsh-web.log（与 Termux 模式统一，方便终端 tail 查看）
-          // exec：替换当前 shell，保持 proot+node 进程存活便于 App 跟踪存活态
-          .append("exec ").append(runCoreCommand(rc6, lanReady))
-          .append("> ~/dsh-web.log 2>&1");
+          // 核心命令：源码目录存在走 node，否则自动回退全局 dsh（含 exec + 日志重定向）
+          .append(runCoreCommand(lanReady));
         // 写入看门狗（重启脚本 = 启动核心命令），并拉起看门狗守护
-        writeWatchdogFiles(runCoreCommand(rc6, lanReady) + "> ~/dsh-web.log 2>&1", parsePort());
+        writeWatchdogFiles(runCoreCommand(lanReady), parsePort());
         return sb.toString();
     }
 
@@ -1053,27 +1086,58 @@ public class HarnessController {
     private String depsSelfHeal() {
         if (useRc6()) return ""; // 预构建包（全局 node_modules）不走源码仓库结构
         String wd = getWorkdir();
-        return "node -e \"try{require.resolve('@deepseek-ai/dsh-app-boot')}catch(e){process.exit(1)}\" 2>/dev/null || "
+        // 关键 workspace 包清单：任一 require.resolve 失败即视为依赖缺失，自动 pnpm install
+        // 保底超时：offline 90s / 联网 180s，避免长卡拖崩启动
+        return "node -e \"['@deepseek-ai/dsh-app-boot','@deepseek-ai/dsh-workspace','@deepseek-ai/dsh-session','@deepseek-ai/dsh-base'].forEach(function(m){try{require.resolve(m)}catch(e){process.exit(1)}})\" 2>/dev/null || "
                 + "{ echo '[DSHA] 检测到 harness 依赖缺失，正在自动修复…'; "
-                + "pnpm install --offline 2>/dev/null || pnpm install; }; ";
+                + "(timeout 90 pnpm install --offline 2>/dev/null || timeout 180 pnpm install) >> /root/deps-selfheal.log 2>&1; }; ";
     }
 
-    /** WebUI 实际启动命令核心（看门狗重启与正常启动共用），仅 cd+env+进程 */
-    private String runCoreCommand(boolean rc6, boolean lanReady) {
+    /** WebUI 实际启动命令核心（看门狗重启与正常启动共用）。
+     *  自动判断：源码目录存在 → cd + 依赖自愈 + node apps/cli/lib/bin.js web；
+     *  否则回退全局 dsh web（预构建/目录缺失场景）。含 exec 与日志重定向。 */
+    private String runCoreCommand(boolean lanReady) {
         int port = parsePort();
         // 默认端口(3080)不显式传 --port —— 彻底避免 commander 报 'argument missing'；
         // 只有用户自定义端口才追加 --port
-        String cmd = rc6 ? "dsh web" : "node apps/cli/lib/bin.js web";
-        if (port != 3080) cmd += " --port " + port;
-        if (lanReady) cmd += " --host 0.0.0.0";
-        return cmd;
+        String opts = "";
+        if (port != 3080) opts += " --port " + port;
+        if (lanReady) opts += " --host 0.0.0.0" + lanTrustArgs(); // 0.0.0.0 + 信任本机所有 IP（Host 头校验放行）
+        String wd = detectWorkdir();
+        return "if [ -d /root/" + wd + " ]; then cd /root/" + wd + "; " + depsSelfHeal()
+                + "exec node apps/cli/lib/bin.js web" + opts + " > ~/dsh-web.log 2>&1; "
+                + "else echo '[DSHA] 源码目录缺失，尝试全局 dsh'; "
+                + "if command -v dsh >/dev/null 2>&1 && test -f \"$(command -v dsh)\"; then "
+                + "exec dsh web" + opts + " > ~/dsh-web.log 2>&1; "
+                + "else echo '[DSHA] 全局 dsh 不可用（悬空链接或未安装），请到分步安装页重装 ⑤ deepseek-harness'; exit 1; fi; fi";
+    }
+
+    /** 生成 --trusted-host 参数：枚举本机所有非 loopback IPv4（WiFi/热点/有线），供 LAN Host 头校验放行 */
+    private String lanTrustArgs() {
+        StringBuilder sb = new StringBuilder();
+        try {
+            java.util.Enumeration<java.net.NetworkInterface> nis = java.net.NetworkInterface.getNetworkInterfaces();
+            if (nis != null) while (nis.hasMoreElements()) {
+                java.net.NetworkInterface ni = nis.nextElement();
+                if (ni.isLoopback() || !ni.isUp()) continue;
+                java.util.Enumeration<java.net.InetAddress> addrs = ni.getInetAddresses();
+                if (addrs != null) while (addrs.hasMoreElements()) {
+                    java.net.InetAddress a = addrs.nextElement();
+                    if (a instanceof java.net.Inet4Address && !a.isLoopbackAddress()) {
+                        sb.append(" --trusted-host ").append(a.getHostAddress());
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return sb.toString();
     }
 
     /** 用当前配置刷新看门狗文件（启动页可见时调用，确保旧坏命令被覆盖） */
     public void ensureWatchdogFiles() {
         boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false);
-        writeWatchdogFiles(runCoreCommand(useRc6(), lan) + "> ~/dsh-web.log 2>&1", parsePort());
+        writeWatchdogFiles(runCoreCommand(lan), parsePort());
     }
 
     /**
@@ -1454,28 +1518,21 @@ public class HarnessController {
     }
 
     /**
-     * 修正版：已装插件 = profile manifest 声明的插件（dsh.profile.bundles + 插件特征 dependencies）
-     * 合并 node_modules 顶层与 .pnpm/ 虚拟目录中实际存在的包，与 dsh/WebUI 看到的数量对齐。
-     * @param hideBuiltin true 时隐藏 dsh 自带插件（快照文件 /root/dsha-builtin.txt）
+     * 已装插件：manifest 的 dsh.profile.bundles（系统插件层）+ 实际声明 dsh 元数据的包（用户实装）。
+     * 不把 node_modules 顶层普通依赖（react 等）误当插件；隐藏自带后仅剩用户实装。
      */
     public String[][] listPlugins(boolean hideBuiltin) {
-        java.util.Set<String> builtin = hideBuiltin ? readBuiltinSnapshot() : null;
+        java.util.Set<String> builtin = hideBuiltin ? readBuiltinSnapshot() : new java.util.HashSet<>();
         try {
             java.util.Set<String> names = new java.util.LinkedHashSet<>();
-            // 1. 权威清单：profile manifest（dsh 本体 / WebUI 同源）
-            names.addAll(readDeclaredPlugins());
-            // 2. 兜底：node_modules 顶层 + .pnpm/ 实际实体
-            names.addAll(scanNodeModulesTop());
-            names.addAll(scanPnpmStore());
-            if (builtin != null) names.removeAll(builtin); // 隐藏自带（开关开启时）
-
+            names.addAll(readBundles());            // manifest dsh.profile.bundles（系统插件层）
+            names.addAll(scanDshDeclaredPlugins()); // package.json 带 dsh 字段的包（用户实装）
+            if (hideBuiltin) names.removeAll(builtin);
+            names.removeIf(n -> n == null || n.startsWith("."));
             if (names.isEmpty()) return new String[0][];
             java.util.List<String[]> list = new java.util.ArrayList<>();
             for (String n : names) {
-                if (n.startsWith(".")) continue;
-                String plain = n.endsWith(".disabled") ? n.substring(0, n.length() - 9) : n;
-                if (plain.startsWith(".")) continue;
-                list.add(new String[]{plain, isPluginDisabled(plain) ? "禁用" : "启用"});
+                list.add(new String[]{n, isPluginDisabled(n) ? "禁用" : "启用"});
             }
             return list.toArray(new String[0][]);
         } catch (Exception ignored) {
@@ -1483,11 +1540,75 @@ public class HarnessController {
         return new String[0][];
     }
 
+    /** 读 profile package.json 的 dsh.profile.bundles（官方插件层清单） */
+    private java.util.Set<String> readBundles() {
+        java.util.Set<String> set = new java.util.LinkedHashSet<>();
+        try {
+            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+            if (!pf.isFile()) return set;
+            String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            org.json.JSONArray bundles = new org.json.JSONObject(txt)
+                    .optJSONObject("dsh").optJSONObject("profile").optJSONArray("bundles");
+            if (bundles != null) for (int i = 0; i < bundles.length(); i++) {
+                String v = bundles.optString(i, "").trim();
+                if (!v.isEmpty()) set.add(v);
+            }
+        } catch (Throwable ignored) {
+        }
+        return set;
+    }
+
+    /** 扫描所有已装包（node_modules 顶层 + .pnpm），返回 package.json 声明了 dsh 字段的包名（dsh 插件的判定标准） */
+    private java.util.Set<String> scanDshDeclaredPlugins() {
+        java.util.Set<String> set = new java.util.LinkedHashSet<>();
+        for (String d : PLUGIN_DIRS) {
+            java.io.File base = new java.io.File(proot.getRootfsDir(), d.substring(1));
+            // 顶层
+            java.io.File[] top = base.isDirectory() ? base.listFiles() : null;
+            if (top != null) for (java.io.File f : top) {
+                String n = f.getName();
+                String plain = n.endsWith(".disabled") ? n.substring(0, n.length() - 9) : n;
+                if (plain.startsWith(".")) continue;
+                if (hasDshField(f)) set.add(plain);
+            }
+            // .pnpm 虚拟目录
+            java.io.File pnpm = new java.io.File(base, ".pnpm");
+            java.io.File[] es = pnpm.isDirectory() ? pnpm.listFiles(java.io.File::isDirectory) : null;
+            if (es == null) continue;
+            for (java.io.File e : es) {
+                java.io.File nm = new java.io.File(e, "node_modules");
+                java.io.File[] pkgs = nm.isDirectory() ? nm.listFiles() : null;
+                if (pkgs == null) continue;
+                for (java.io.File p : pkgs) {
+                    String n = p.getName();
+                    if (n.startsWith(".")) continue;
+                    if (hasDshField(p)) set.add(n);
+                }
+            }
+        }
+        return set;
+    }
+
+    /** 判断包目录的 package.json 是否声明 dsh 元数据（顶层 "dsh" 对象存在） */
+    private boolean hasDshField(java.io.File pkgDir) {
+        try {
+            java.io.File pf = new java.io.File(pkgDir, "package.json");
+            if (!pf.isFile() || pf.length() > 300000) return false;
+            String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            org.json.JSONObject root = new org.json.JSONObject(txt);
+            return root.has("dsh");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** 读 profile package.json 声明：dsh.profile.bundles + dependencies 中插件特征包 */
     private java.util.Set<String> readDeclaredPlugins() {
         java.util.Set<String> set = new java.util.LinkedHashSet<>();
         try {
-            java.io.File pf = new java.io.File(proot.getRootfsDir(), ".dsh/profiles/web/package.json");
+            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
             if (!pf.isFile()) return set;
             String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()),
                     java.nio.charset.StandardCharsets.UTF_8);
@@ -1502,15 +1623,13 @@ public class HarnessController {
                 }
             } catch (Exception ignored) {
             }
-            // dependencies 中明显是插件的包（dsh / plugin / @deepseek-ai 特征）
+            // dependencies 全键（dsh profile 的依赖即插件清单，与 dsh/WebUI 统计口径一致）
             org.json.JSONObject deps = root.optJSONObject("dependencies");
             if (deps != null) {
                 java.util.Iterator<String> it = deps.keys();
                 while (it.hasNext()) {
                     String k = it.next();
-                    String lk = k.toLowerCase();
-                    if (lk.contains("dsh") || lk.contains("plugin") || lk.startsWith("@deepseek-ai"))
-                        set.add(k);
+                    if (k != null && !k.trim().isEmpty()) set.add(k);
                 }
             }
         } catch (Throwable ignored) {
@@ -1557,18 +1676,19 @@ public class HarnessController {
         return set;
     }
 
-    /** 判断插件当前启用/禁用：存在 <name>.disabled 则禁用 */
+    /** 判断插件当前启用/禁用：存在 <name>.disabled 则禁用（顶层或 .pnpm 内精确匹配） */
     private boolean isPluginDisabled(String name) {
         for (String d : PLUGIN_DIRS) {
             java.io.File base = new java.io.File(proot.getRootfsDir(), d.substring(1));
             if (new java.io.File(base, name + ".disabled").exists()) return true;
-            // 顶层可能是 symlink；.pnpm 里找 disabled 标记
             java.io.File pnpm = new java.io.File(base, ".pnpm");
-            if (pnpm.isDirectory()) {
-                java.io.File[] es = pnpm.listFiles(f -> f.isDirectory() && (f.getName().startsWith(name + "@")));
-                if (es != null) for (java.io.File e : es) {
-                    if (new java.io.File(e, "node_modules/" + name + ".disabled").exists()) return true;
-                }
+            if (!pnpm.isDirectory()) continue;
+            java.io.File[] es = pnpm.listFiles(java.io.File::isDirectory);
+            if (es == null) continue;
+            for (java.io.File e : es) {
+                java.io.File nm = new java.io.File(e, "node_modules");
+                if (!nm.isDirectory()) continue;
+                if (new java.io.File(nm, name + ".disabled").exists()) return true;
             }
         }
         return false;
@@ -1716,20 +1836,24 @@ public class HarnessController {
     }
 
     /** 拉取插件市场快照 JSON（GitHub API 列最新快照 → jsdelivr/raw 下载），返回 JSON 文本 */
-    /** 拉取插件市场索引：PLUGINS-ALL.md（全量列表式，jsdelivr 优先）；旧版 README 表格兜底 */
+    /** 拉取插件市场索引：PLUGINS-ALL.md（jsdelivr 优先，含多镜像）；失败时回退本地缓存 */
     public String fetchMarketIndex() {
         String[] urls = {
                 "https://cdn.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@main/PLUGINS-ALL.md",
                 "https://cdn.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@master/PLUGINS-ALL.md",
+                "https://gcore.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@main/PLUGINS-ALL.md",
+                "https://fastly.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@main/PLUGINS-ALL.md",
                 "https://raw.githubusercontent.com/AdamPlatin123/awesome-dsh-plugins/main/PLUGINS-ALL.md",
-                "https://cdn.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@main/README.md",
-                "https://ghfast.top/https://raw.githubusercontent.com/AdamPlatin123/awesome-dsh-plugins/main/PLUGINS-ALL.md"
+                "https://ghfast.top/https://raw.githubusercontent.com/AdamPlatin123/awesome-dsh-plugins/main/PLUGINS-ALL.md",
+                "https://ghproxy.net/https://raw.githubusercontent.com/AdamPlatin123/awesome-dsh-plugins/main/PLUGINS-ALL.md",
+                "https://cdn.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@main/README.md"
         };
+        String cached = readMarketCache(); // 先读缓存备用
         for (String u : urls) {
             try {
                 java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
-                conn.setConnectTimeout(8000);
-                conn.setReadTimeout(25000);
+                conn.setConnectTimeout(6000);
+                conn.setReadTimeout(20000);
                 conn.setRequestProperty("User-Agent", "DSHA/" + getVersionName());
                 if (conn.getResponseCode() != 200) {
                     conn.disconnect();
@@ -1747,11 +1871,38 @@ public class HarnessController {
                 // 全量列表包含分类折叠；README 兜底含旧表格。两种都够格解析
                 boolean ok = j.indexOf("<summary>") >= 0 && j.indexOf("<b>") >= 0
                         && (j.indexOf("[") >= 0) && j.length() > 8000;
-                if (ok) return j;
+                if (ok) {
+                    writeMarketCache(j); // 拉成功即缓存，网络抽风时也能秒开
+                    return j;
+                }
             } catch (Exception ignored) {
             }
         }
+        // 全部源失败：回退本地缓存（离线下仍可浏览上次成功的 1998 条）
+        if (cached != null && cached.length() > 8000) return cached;
         return null;
+    }
+
+    /** 读市场索引本地缓存（App 私有目录） */
+    private String readMarketCache() {
+        try {
+            java.io.File f = new java.io.File(appContext.getFilesDir(), "market-index.md");
+            if (f.isFile() && f.length() > 8000)
+                return new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                        java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    /** 写市场索引缓存 */
+    private void writeMarketCache(String s) {
+        try {
+            java.io.File f = new java.io.File(appContext.getFilesDir(), "market-index.md");
+            f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+        }
     }
 
     /** 解析市场索引（PLUGINS-ALL.md 列表式 / README 旧表格式）为 [name, star, owner, 兼容, 分类, 说明, url] */
@@ -1920,31 +2071,143 @@ public class HarnessController {
         return null;
     }
 
-    /** 卸载插件：dsh plugin remove（profile 内移除依赖） */
+    /** 卸载插件：先物理清理（Java+系统rm双通道）→ dsh remove → manifest 直改兜底；结果全部回显 */
     public String removePlugin(String pkg) {
+        StringBuilder log = new StringBuilder();
         try {
+            String esc = pkg.replace("'", "'\\''"); // 防注入
+            // 1. 先物理清理（即使后面异常，实体也已删除）
+            boolean cleared = physicalRemovePluginRobust(pkg);
+            log.append("[DSHA] 实体清理").append(cleared ? "完成 ✅" : "失败（仍存在）⚠️").append("\n");
+            // 2. dsh remove + manifest 直改
+            String py = "python3 - <<'PY'\n" +
+                    "import json,sys\n" +
+                    "p='/root/.dsh/profiles/web/package.json'\n" +
+                    "try:\n" +
+                    " d=json.load(open(p))\n" +
+                    " d.get('dependencies',{}).pop('" + esc + "',None)\n" +
+                    " b=d.get('dsh',{}).get('profile',{}).get('bundles')\n" +
+                    " if b: d['dsh']['profile']['bundles']=[x for x in b if x!='" + esc + "']\n" +
+                    " json.dump(d,open(p,'w'),indent=2,ensure_ascii=False)\n" +
+                    "except Exception as e:\n" +
+                    " print('[DSHA] manifest 修改失败:',e); sys.exit(1)\n" +
+                    "print('[DSHA] manifest 已移除: " + esc + "')\n" +
+                    "PY";
             String r = proot.execAndRead(
-                    "cd /root/" + getWorkdir() + " && set -o pipefail && " + depsSelfHeal() +
-                    "(dsh plugin --profile web remove " + pkg + " 2>&1 || " +
-                    "node apps/cli/lib/bin.js plugin --profile web remove " + pkg + " 2>&1) | tail -10; echo REMOVE_EXIT=$?");
-            return r;
+                    "( dsh plugin --profile web remove " + esc + " 2>&1 || " +
+                    "node apps/cli/lib/bin.js plugin --profile web remove " + esc + " 2>&1 || " +
+                    "echo '[DSHA] dsh remove 未生效，走 manifest 直改' ) ; " +
+                    py + "; echo REMOVE_EXIT=$?");
+            log.append(r);
         } catch (Exception e) {
-            return "卸载失败: " + e.getMessage();
+            log.append("卸载执行异常: ").append(e.getMessage());
+        }
+        return log.toString();
+    }
+
+    /** 双通道物理清理：Java 递归删 + 系统 rm -rf 兜底；返回是否删干净 */
+    private boolean physicalRemovePluginRobust(String pkg) {
+        java.io.File nm = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/node_modules");
+        try {
+            physicalRemovePlugin(pkg); // Java 递归删（.disabled 与 scoped 容器一并处理）
+            // 双保险：系统 rm -rf（Android /system/bin/rm，绕过一切 Java/Proot 层怪问题）
+            String[] targets = {pkg, pkg + ".disabled"};
+            for (String t : targets) {
+                java.io.File f = new java.io.File(nm, t);
+                if (f.exists()) {
+                    Process p = new ProcessBuilder("/system/bin/rm", "-rf", f.getAbsolutePath())
+                            .redirectErrorStream(true).start();
+                    p.waitFor();
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return !new java.io.File(nm, pkg).exists()
+                && !new java.io.File(nm, pkg + ".disabled").exists();
+    }
+
+    /** Java 侧物理清理：删 node_modules 顶层实体(.disabled 变体) + scoped 容器 + .pnpm 模糊匹配 */
+    private void physicalRemovePlugin(String pkg) {
+        try {
+            java.io.File nm = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/node_modules");
+            if (!nm.isDirectory()) return;
+            String core = pkg;
+            if (pkg.startsWith("@") && pkg.contains("/")) {
+                // scoped：先删容器内子包，空容器顺手删
+                java.io.File container = new java.io.File(nm, pkg.substring(0, pkg.indexOf('/')));
+                String sub = pkg.substring(pkg.indexOf('/') + 1);
+                deleteRecursively(new java.io.File(container, sub));
+                deleteRecursively(new java.io.File(container, sub + ".disabled"));
+                if (container.isDirectory()) {
+                    String[] left = container.list();
+                    if (left == null || left.length == 0) deleteRecursively(container);
+                }
+                core = pkg.substring(1).replace("/", "+");
+            } else {
+                deleteRecursively(new java.io.File(nm, pkg));
+                deleteRecursively(new java.io.File(nm, pkg + ".disabled"));
+            }
+            // .pnpm 模糊匹配（不管版本号变体）
+            java.io.File pnpm = new java.io.File(nm, ".pnpm");
+            if (pnpm.isDirectory()) {
+                java.io.File[] es = pnpm.listFiles(java.io.File::isDirectory);
+                if (es != null) for (java.io.File e : es) {
+                    String n = e.getName();
+                    if (n.equals(core) || n.startsWith(core + "@")) deleteRecursively(e);
+                }
+            }
+        } catch (Throwable ignored) {
         }
     }
 
-    /** 安装插件：dsh plugin 官方机制（profile 内 pnpm add + 自动启用 bundle 插件） */
+    /** 递归删除文件/目录（Java 侧，绕过 bash rm 的环境问题） */
+    private void deleteRecursively(java.io.File f) {
+        if (f == null || !f.exists()) return;
+        if (f.isDirectory()) {
+            java.io.File[] cs = f.listFiles();
+            if (cs != null) for (java.io.File c : cs) deleteRecursively(c);
+        }
+        //noinspection ResultOfMethodCallIgnored
+        f.delete();
+    }
+
+    /** 安装插件：优先源码目录（node bin.js），无源码目录自动回退全局 dsh；依赖自愈前置 */
     public String installPlugin(String pkg) {
+        return installPlugin(pkg, null);
+    }
+
+    /**
+     * 安装插件（带 GitHub 兜底）：先按 pkg 装（npm 名），若 404/找不到包 且给了 fallbackSpec，
+     * 自动用 github:owner/repo 重试一次（市场条目多为仅 GitHub 发布的仓库插件）。
+     */
+    public String installPlugin(String pkg, String fallbackSpec) {
+        String r = runPluginInstall(pkg);
+        if (r != null && fallbackSpec != null && !fallbackSpec.equals(pkg) && isPkgNotFound(r)) {
+            r = "\n[自动回退 GitHub 仓库方式安装…]\n" + runPluginInstall(fallbackSpec);
+        }
+        if (r != null && r.contains("INSTALL_EXIT=0")) {
+            return r + "\n\n[已安装到 profile，重启 WebUI 生效]";
+        }
+        return r == null ? "无输出" : r;
+    }
+
+    /** 判定安装输出是否为"包在 registry 找不到"（npm 404 类） */
+    private boolean isPkgNotFound(String out) {
+        return out.contains("ERR_PNPM_FETCH") || out.contains("not in the npm registry")
+                || out.contains("404") || out.contains("ENOTFOUND");
+    }
+
+    /** 单次插件安装执行（源码目录优先，无则全局 dsh） */
+    private String runPluginInstall(String pkg) {
         try {
-            String r = proot.execAndRead(
-                    "cd /root/" + getWorkdir() + " && set -o pipefail && " + depsSelfHeal() +
-                    "printf 'registry=https://registry.npmmirror.com\\\\n' > /root/.npmrc && " +
-                    "(dsh plugin --profile web add " + pkg + " 2>&1 || " +
-                    "node apps/cli/lib/bin.js plugin --profile web add " + pkg + " 2>&1) | tail -15; echo INSTALL_EXIT=$?");
-            if (r != null && r.contains("INSTALL_EXIT=0")) {
-                return r + "\n\n[已安装到 profile，重启 WebUI 生效]";
-            }
-            return r == null ? "无输出" : r;
+            String wd = detectWorkdir();
+            return proot.execAndRead(
+                    "if [ -d /root/" + wd + " ]; then cd /root/" + wd + "; " + depsSelfHeal() +
+                    "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc; " +
+                    "( node apps/cli/lib/bin.js plugin --profile web add " + pkg + " 2>&1 || dsh plugin --profile web add " + pkg + " 2>&1 ); " +
+                    "else echo '[DSHA] 无源码目录，回退全局 dsh'; " +
+                    "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc; " +
+                    "dsh plugin --profile web add " + pkg + " 2>&1; fi | tail -15; echo INSTALL_EXIT=${PIPESTATUS[0]}");
         } catch (Exception e) {
             return "安装失败: " + e.getMessage();
         }

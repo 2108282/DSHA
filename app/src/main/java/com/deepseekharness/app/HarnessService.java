@@ -32,6 +32,15 @@ public class HarnessService extends Service {
     private TaskNotifier taskNotifier;
     private final HarnessController.StateListener stateListener = this::refreshNotification;
 
+    // ================= WebUI 监听保活 =================
+    private Thread keepAliveThread;
+    private volatile boolean keepAliveRunning;
+    private final java.util.concurrent.atomic.AtomicBoolean restarting = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final java.util.concurrent.atomic.AtomicLong lastRestartAt = new java.util.concurrent.atomic.AtomicLong(0);
+    private static final long KEEPALIVE_INTERVAL_MS = 15000L;  // 探测间隔
+    private static final long RESTART_COOLDOWN_MS = 120000L;   // 重启冷却：2 分钟内不重复拉起
+    private static final int KEEPALIVE_MAX_FAIL = 3;           // 连续失败次数阈值
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -46,22 +55,91 @@ public class HarnessService extends Service {
         // 任务完成通知：agent 干活结束后提醒
         taskNotifier = new TaskNotifier(this, c);
         taskNotifier.start();
+        // 局域网转发桥：开启局域网模式时，App 侧 0.0.0.0:3081 → 127.0.0.1:3080
+        // （绕开官方 0.0.0.0 拦截与 Host 校验，Shizuku 式桥接思路；状态写 /root/dsh-lan.log 可终端查看）
+        if (c.isLanMode()) {
+            LanProxyService.start(c.getRootfsDirPath());
+        }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             c.stopWeb();
+            stopKeepAlive();
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
         }
         startWeb();
+        startKeepAlive();
         return START_STICKY;
     }
 
     private void startWeb() {
         c.startWeb();
+    }
+
+    /** 启动保活监听：TCP 探测 WebUI 端口，连续失联自动重启（带冷却防风暴） */
+    private void startKeepAlive() {
+        stopKeepAlive();
+        keepAliveRunning = true;
+        keepAliveThread = new Thread(() -> {
+            int fail = 0;
+            while (keepAliveRunning) {
+                try {
+                    Thread.sleep(KEEPALIVE_INTERVAL_MS);
+                } catch (InterruptedException e) {
+                    break;
+                }
+                if (!keepAliveRunning) break;
+                if (isWebUp()) {
+                    fail = 0;
+                    continue;
+                }
+                fail++;
+                if (fail < KEEPALIVE_MAX_FAIL) continue;
+                fail = 0;
+                long now = System.currentTimeMillis();
+                if (now - lastRestartAt.get() < RESTART_COOLDOWN_MS) continue; // 冷却期，等它自己缓过来
+                lastRestartAt.set(now);
+                if (restarting.compareAndSet(false, true)) {
+                    try {
+                        android.util.Log.w("DSHA", "[保活] WebUI 连续失联，自动重启");
+                        c.startWeb();
+                    } catch (Throwable ignored) {
+                    } finally {
+                        restarting.set(false);
+                    }
+                }
+            }
+        }, "dsha-keepalive");
+        keepAliveThread.setDaemon(true);
+        keepAliveThread.start();
+    }
+
+    private void stopKeepAlive() {
+        keepAliveRunning = false;
+        if (keepAliveThread != null) {
+            keepAliveThread.interrupt();
+            keepAliveThread = null;
+        }
+    }
+
+    /** TCP 探测 127.0.0.1:<port> 是否可达（proot 与宿主共享网络栈） */
+    private boolean isWebUp() {
+        int port;
+        try {
+            port = Integer.parseInt(c.getPort());
+        } catch (Exception e) {
+            return false;
+        }
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 3000);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private void refreshNotification() {
@@ -74,8 +152,10 @@ public class HarnessService extends Service {
 
     public void onDestroy() {
         c.removeStateListener(stateListener);
+        stopKeepAlive();
         if (shellHttp != null) shellHttp.stop();
         if (taskNotifier != null) taskNotifier.stop();
+        LanProxyService.stop();
         c.stopWeb();
         super.onDestroy();
     }
