@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.DeepseekHarness" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.DeepseekHarness" parent="Theme.Material3.Light.NoActionBar">
         <item name="colorPrimary">@color/primary</item>
         <item name="colorOnPrimary">@android:color/white</item>
         <item name="colorPrimaryContainer">#E3E8FF</item>
         <item name="colorSecondary">@color/primary_dark</item>
+        <item name="android:colorBackground">#F7F8FA</item>
     </style>
 </resources>

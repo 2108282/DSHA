@@ -1,23 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item
-        android:id="@+id/nav_install"
-        android:icon="@drawable/ic_install"
-        android:title="安装" />
-    <item
         android:id="@+id/nav_launch"
         android:icon="@drawable/ic_launch"
         android:title="启动" />
     <item
-        android:id="@+id/nav_config"
-        android:icon="@drawable/ic_config"
-        android:title="配置" />
-    <item
-        android:id="@+id/nav_workspace"
-        android:icon="@drawable/ic_workspace"
-        android:title="工作区" />
-    <item
         android:id="@+id/nav_terminal"
         android:icon="@drawable/ic_terminal"
         android:title="终端" />
+    <item
+        android:id="@+id/nav_market"
+        android:icon="@drawable/ic_market"
+        android:title="市场" />
+    <item
+        android:id="@+id/nav_settings"
+        android:icon="@drawable/ic_config"
+        android:title="设置" />
 </menu>

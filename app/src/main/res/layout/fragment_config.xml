@@ -110,17 +110,6 @@
             android:text="保存配置" />
 
         <TextView
-            android:id="@+id/config_plugins_entry"
-            android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:layout_marginTop="12dp"
-            android:gravity="center"
-            android:text="🧩 插件市场与控制器"
-            android:textColor="#E6EDF3"
-            android:textSize="14sp"
-            android:background="@drawable/bg_btn" />
-
-        <TextView
             android:id="@+id/config_repo_link"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

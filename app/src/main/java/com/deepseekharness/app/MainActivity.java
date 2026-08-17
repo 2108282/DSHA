@@ -75,22 +75,20 @@ public class MainActivity extends AppCompatActivity {
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
 
         if (savedInstanceState == null) {
-            switchFragment(new InstallFragment());
+            switchFragment(new LaunchFragment());
         }
 
         nav.setOnItemSelectedListener(item -> {
             int id = item.getItemId();
             Fragment f;
-            if (id == R.id.nav_install) {
-                f = new InstallFragment();
-            } else if (id == R.id.nav_launch) {
+            if (id == R.id.nav_launch) {
                 f = new LaunchFragment();
-            } else if (id == R.id.nav_config) {
-                f = new ConfigFragment();
             } else if (id == R.id.nav_terminal) {
                 f = new TerminalFragment();
+            } else if (id == R.id.nav_market) {
+                f = new PluginFragment();
             } else {
-                f = new WorkspaceFragment();
+                f = new SettingsFragment();
             }
             switchFragment(f);
             return true;

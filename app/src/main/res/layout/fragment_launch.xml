@@ -48,9 +48,9 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:padding="8dp"
-        android:background="#161B22"
+        android:background="#FFFFFF"
         android:textSize="13sp"
-        android:textColor="#58A6FF"
+        android:textColor="#0969DA"
         android:visibility="gone" />
 
     <FrameLayout
