@@ -477,8 +477,12 @@ public class ProotBootstrap {
     /** 内置离线包 asset 名称（GitHub Actions 构建时预置的预装 rootfs 整包） */
     public static final String OFFLINE_BUNDLE_ASSET = "offline-rootfs.tar.gz";
 
-    /** assets 中是否存在内置离线包 */
+    /** 是否带了内置离线包。优先扫 APK zip（大文件 AssetManager.open 在不少机型会直接失败）。 */
     public boolean hasOfflineBundle() {
+        try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(ctx.getPackageCodePath())) {
+            if (findBundleEntry(z) != null) return true;
+        } catch (Exception ignored) {
+        }
         try {
             ctx.getAssets().open(OFFLINE_BUNDLE_ASSET).close();
             return true;
@@ -487,42 +491,83 @@ public class ProotBootstrap {
         }
     }
 
+    private java.util.zip.ZipEntry findBundleEntry(java.util.zip.ZipFile z) {
+        String[] keys = {
+                "assets/" + OFFLINE_BUNDLE_ASSET,
+                OFFLINE_BUNDLE_ASSET,
+        };
+        for (String k : keys) {
+            java.util.zip.ZipEntry e = z.getEntry(k);
+            if (e != null && !e.isDirectory()) return e;
+        }
+        java.util.Enumeration<? extends java.util.zip.ZipEntry> en = z.entries();
+        while (en.hasMoreElements()) {
+            java.util.zip.ZipEntry e = en.nextElement();
+            if (e.getName().endsWith("/" + OFFLINE_BUNDLE_ASSET) && !e.isDirectory()) return e;
+        }
+        return null;
+    }
+
     /**
-     * 从内置 asset 解压预装好的 rootfs 整包到 rootfsDir。
-     * 先拷贝到 tmp（流式解压 gzip 大文件），再走 extractRootfs 校验。
-     * @param onProgress 进度回调（已解压字节 / 包总字节，包总字节未知时为 0）
+     * 从 APK 内置包解压预装 rootfs。优先按 zip 条目流式解压（不经 AssetManager，
+     * 也不先拷 300MB 到 tmp），失败再回退 assets。
      */
     public void extractOfflineBundle(java.util.function.BiConsumer<Long, Long> onProgress) throws IOException {
-        tmpDir.mkdirs();
-        File tarball = new File(tmpDir, OFFLINE_BUNDLE_ASSET);
-
-        // 1) asset → 临时文件（asset 可能被 aapt 压缩，无法直接 openFd）
-        try (InputStream in = ctx.getAssets().open(OFFLINE_BUNDLE_ASSET);
-             FileOutputStream out = new FileOutputStream(tarball)) {
-            byte[] buf = new byte[64 * 1024];
-            int n;
-            long done = 0;
-            long total = 0;
+        ensureRuntimeFiles();
+        java.util.zip.ZipFile apk = null;
+        InputStream raw = null;
+        long total = 0;
+        try {
+            apk = new java.util.zip.ZipFile(ctx.getPackageCodePath());
+            java.util.zip.ZipEntry e = findBundleEntry(apk);
+            if (e != null) {
+                raw = apk.getInputStream(e);
+                total = e.getSize() > 0 ? e.getSize() : 0;
+            }
+        } catch (IOException ignored) {
+            if (apk != null) {
+                try { apk.close(); } catch (IOException ignored2) {}
+                apk = null;
+            }
+        }
+        if (raw == null) {
+            raw = ctx.getAssets().open(OFFLINE_BUNDLE_ASSET);
             try {
                 total = ctx.getAssets().openFd(OFFLINE_BUNDLE_ASSET).getLength();
             } catch (IOException ignored) {
-                // openFd 失败（asset 被压缩）则总字节未知
-            }
-            while ((n = in.read(buf)) >= 0) {
-                out.write(buf, 0, n);
-                done += n;
-                if (onProgress != null) onProgress.accept(done, total);
             }
         }
 
-        // 2) 解压到 rootfsDir 并校验
-        extractRootfs(tarball);
-        //noinspection ResultOfMethodCallIgnored
-        tarball.delete();
+        final java.util.function.BiConsumer<Long, Long> cb = onProgress;
+        final long tot = total;
+        InputStream counted = new java.io.FilterInputStream(raw) {
+            long done = 0;
+            @Override
+            public int read(byte[] b, int off, int len) throws IOException {
+                int n = super.read(b, off, len);
+                if (n > 0 && cb != null) {
+                    done += n;
+                    cb.accept(done, tot);
+                }
+                return n;
+            }
+        };
 
-        // 3) 预装包自带 resolv.conf 可被覆盖为宿主可用 DNS
-        setupResolvConf();
-        markInstalled();
+        try {
+            if (rootfsDir.exists()) deleteRecursively(rootfsDir);
+            rootfsDir.mkdirs();
+            TarGzipExtractor.extract(counted, rootfsDir, 0);
+            if (!isInstalled()) {
+                throw new IOException("解压后 rootfs 不完整（缺少 bash）");
+            }
+            setupResolvConf();
+            markInstalled();
+        } finally {
+            try { counted.close(); } catch (Exception ignored) {}
+            if (apk != null) {
+                try { apk.close(); } catch (Exception ignored) {}
+            }
+        }
     }
 
     /** 诊断 rootfs 关键路径状态 */

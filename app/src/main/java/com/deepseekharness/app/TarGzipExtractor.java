@@ -27,8 +27,14 @@ public final class TarGzipExtractor {
     }
 
     public static void extract(File tarball, File dest, int strip) throws IOException {
-        try (InputStream raw = new FileInputStream(tarball);
-             GZIPInputStream gz = new GZIPInputStream(new BufferedInputStream(raw, 1 << 16))) {
+        try (InputStream raw = new FileInputStream(tarball)) {
+            extract(raw, dest, strip);
+        }
+    }
+
+    /** 从已打开的 gzip 流解压（调用方负责关闭流）。 */
+    public static void extract(InputStream rawGzip, File dest, int strip) throws IOException {
+        try (GZIPInputStream gz = new GZIPInputStream(new BufferedInputStream(rawGzip, 1 << 16))) {
             byte[] header = new byte[BLOCK];
             byte[] buf = new byte[8192];
             String pendingName = null;

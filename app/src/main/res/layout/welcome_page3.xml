@@ -18,14 +18,14 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="24dp"
         android:lineSpacingExtra="10dp"
-        android:text="1️⃣ 到「配置」页填入 DeepSeek API key\n\n2️⃣ 到「安装」页点「一键安装」\n（首次约 5~15 分钟）\n\n3️⃣ 到「启动」页启动 Web UI，即可使用"
+        android:text="1️⃣ 首次打开会自动解压内置环境\n（约几分钟，只需一次）\n\n2️⃣ 到「设置 → 配置」填入 API key\n\n3️⃣ 到「启动」页点启动，即可使用"
         android:textSize="16sp" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="32dp"
-        android:text="首次安装需联网下载环境，\n请保持网络畅通、屏幕常亮。"
+        android:text="解压时请保持屏幕常亮，\n不要划掉后台。"
         android:gravity="center"
         android:textColor="#888888"
         android:textSize="14sp" />

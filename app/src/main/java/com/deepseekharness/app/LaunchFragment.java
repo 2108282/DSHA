@@ -169,8 +169,9 @@ public class LaunchFragment extends Fragment {
         requireActivity().getOnBackPressedDispatcher().addCallback(getViewLifecycleOwner(), backCallback);
 
         startBtn.setOnClickListener(v -> {
+            if (goExtractIfNeeded()) return;
             if (!c.isHarnessInstalled()) {
-                Toast.makeText(requireContext(), "请先在「安装」模块完成安装", Toast.LENGTH_LONG).show();
+                Toast.makeText(requireContext(), "内置环境尚未就绪，请先等解压完成", Toast.LENGTH_LONG).show();
                 return;
             }
             // 通过前台服务启动：强保活 + 后台运行（切走不杀）
@@ -185,8 +186,9 @@ public class LaunchFragment extends Fragment {
         });
 
         restartBtn.setOnClickListener(v -> {
+            if (goExtractIfNeeded()) return;
             if (!c.isHarnessInstalled()) {
-                Toast.makeText(requireContext(), "请先完成安装", Toast.LENGTH_LONG).show();
+                Toast.makeText(requireContext(), "内置环境尚未就绪，请先等解压完成", Toast.LENGTH_LONG).show();
                 return;
             }
             exitFullscreen();
@@ -218,9 +220,27 @@ public class LaunchFragment extends Fragment {
         // 切模块回来：如果 Web 还在跑，自动恢复全屏预览
         if (c.isWebRunning()) {
             webView.post(this::openPreview);
+        } else if (goExtractIfNeeded()) {
+            statusText.setText("正在打开内置环境解压页…");
+        } else if (c.isHarnessInstalled()) {
+            statusText.setText("环境已就绪，点「启动」即可。");
         } else {
-            statusText.setText("提示：先到「安装」页完成安装，再回到这里启动。");
+            statusText.setText("环境未就绪。若刚装好 APK，请杀掉进程再打开一次以进入解压页。");
         }
+    }
+
+    /** 有内置包但还没落地 → 进解压页。返回 true 表示已经跳走。 */
+    private boolean goExtractIfNeeded() {
+        try {
+            ProotBootstrap p = c.getProot();
+            if (!p.isInstalled() && p.hasOfflineBundle()) {
+                startActivity(new Intent(requireContext(), ExtractActivity.class));
+                if (getActivity() != null) getActivity().finish();
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     /** 轮询检测 WebUI 就绪（HTTP 200），就绪后自动打开预览 */
