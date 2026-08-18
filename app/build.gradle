@@ -104,15 +104,24 @@ afterEvaluate {
             }
             def z = new java.util.zip.ZipFile(apk)
             def libs = []
+            def assets = []
             z.entries().each { e ->
                 if (e.name.startsWith("lib/") && e.name.endsWith(".so")) {
                     libs << e.name
+                }
+                if (e.name.contains("offline") || e.name.contains("rootfs") || e.name.startsWith("assets/")) {
+                    assets << (e.name + " size=" + e.size)
                 }
             }
             z.close()
             println "===== APK native libs ====="
             libs.each { println "  " + it }
+            println "===== APK assets ====="
+            assets.each { println "  " + it }
             println "==========================="
+            if (!assets.any { it.contains("offline-rootfs.tar.gz") }) {
+                throw new GradleException("APK 里没有 assets/offline-rootfs.tar.gz，装到手机不会出现解压页。实际: " + assets)
+            }
             if (libs.isEmpty()) {
                 throw new GradleException("APK 里没有 lib/*.so（proot 也不会工作）")
             }

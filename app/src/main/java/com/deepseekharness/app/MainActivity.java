@@ -59,15 +59,17 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        setContentView(R.layout.activity_main);
-
-        // 内置离线环境未解压时（例如跳过欢迎页或解压中途被中断），先补解压
-        ProotBootstrap proot = new ProotBootstrap(this);
-        if (!proot.isInstalled() && proot.hasOfflineBundle()) {
-            startActivity(new Intent(this, ExtractActivity.class));
-            finish();
-            return;
+        // 没解压过内置包：必须先走解压页（找不到包也会停在那页报诊断，不再偷偷进安装）
+        if (!getIntent().getBooleanExtra("skip_extract", false)) {
+            ProotBootstrap proot = new ProotBootstrap(this);
+            if (!proot.isOfflineExtracted()) {
+                startActivity(new Intent(this, ExtractActivity.class));
+                finish();
+                return;
+            }
         }
+
+        setContentView(R.layout.activity_main);
 
         // 沉浸式全屏（隐藏状态栏 + 系统导航栏）
         Window window = getWindow();

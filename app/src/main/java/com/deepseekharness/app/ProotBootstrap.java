@@ -77,7 +77,74 @@ public class ProotBootstrap {
     public File getRootfsDir() { return rootfsDir; }
 
     public boolean isInstalled() {
-        return markerFile.exists() && new File(rootfsDir, "bin").exists();
+        return hasBash();
+    }
+
+    public boolean hasBash() {
+        return new File(rootfsDir, "usr/bin/bash").isFile()
+                || new File(rootfsDir, "bin/bash").isFile();
+    }
+
+    /** 内置包是否已经解压成功过（和「网上分步装了一半」区分开） */
+    public boolean isOfflineExtracted() {
+        return new File(baseDir, ".offline-extracted").isFile() && hasBash();
+    }
+
+    public void markOfflineExtracted() {
+        markInstalled();
+        File f = new File(baseDir, ".offline-extracted");
+        try (FileOutputStream o = new FileOutputStream(f)) {
+            o.write(("ok=" + System.currentTimeMillis() + "\n").getBytes());
+        } catch (IOException ignored) {
+        }
+    }
+
+    /** 把 APK 里找包的过程摊开，解压页可以直接显示，避免再猜。 */
+    public String diagnoseBundle() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("version=").append(versionName()).append('\n');
+        sb.append("apk=").append(ctx.getPackageCodePath()).append('\n');
+        File apk = new File(ctx.getPackageCodePath());
+        sb.append("apkSize=").append(apk.isFile() ? apk.length() : -1).append('\n');
+        try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(apk)) {
+            java.util.zip.ZipEntry hit = findBundleEntry(z);
+            sb.append("zipHit=").append(hit == null ? "null" : hit.getName())
+                    .append(" size=").append(hit == null ? -1 : hit.getSize()).append('\n');
+            int n = 0;
+            java.util.Enumeration<? extends java.util.zip.ZipEntry> en = z.entries();
+            while (en.hasMoreElements() && n < 12) {
+                java.util.zip.ZipEntry e = en.nextElement();
+                String name = e.getName();
+                if (name.contains("asset") || name.contains("offline") || name.contains("rootfs")
+                        || name.endsWith(".gz")) {
+                    sb.append("  ").append(name).append(" ").append(e.getSize()).append('\n');
+                    n++;
+                }
+            }
+        } catch (Exception e) {
+            sb.append("zipErr=").append(e.getClass().getSimpleName())
+                    .append(": ").append(e.getMessage()).append('\n');
+        }
+        try {
+            String[] names = ctx.getAssets().list("");
+            sb.append("assets.list=");
+            if (names == null) sb.append("null\n");
+            else {
+                sb.append(names.length).append('\n');
+                for (String s : names) sb.append("  ").append(s).append('\n');
+            }
+        } catch (Exception e) {
+            sb.append("assetsErr=").append(e.getMessage()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private String versionName() {
+        try {
+            return ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "?";
+        }
     }
 
     public boolean isHarnessInstalled(String workdir) {

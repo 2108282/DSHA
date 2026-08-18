@@ -233,7 +233,7 @@ public class LaunchFragment extends Fragment {
     private boolean goExtractIfNeeded() {
         try {
             ProotBootstrap p = c.getProot();
-            if (!p.isInstalled() && p.hasOfflineBundle()) {
+            if (!p.isOfflineExtracted()) {
                 startActivity(new Intent(requireContext(), ExtractActivity.class));
                 if (getActivity() != null) getActivity().finish();
                 return true;
