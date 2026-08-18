@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:theme="@style/Theme.DeepseekHarness">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".WelcomeActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DeepseekHarness" />
+
+        <activity
+            android:name=".AdbPairActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:label="ADB 无线配对"
+            android:theme="@style/Theme.AppCompat.Dialog" />
+
+        <service
+            android:name=".HarnessService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- 关键修复：Shizuku UserService 必须注册，否则 bindUserService 永久失败 -->
+        <service
+            android:name=".ShellService"
+            android:exported="false"
+            android:process=":shizuku"
+            android:permission="moe.shizuku.manager.permission.API_V23" />
+
+        <!-- 设备桥服务（普通后台服务）：3090 桥 + ADB 预热 + 配对弹窗监听 -->
+        <service
+            android:name=".DeviceBridgeService"
+            android:exported="false" />
+
+        <receiver
+            android:name=".ConfirmReceiver"
+            android:exported="false" />
+
+        <!-- 通知卡片就地输入配对码（RemoteInput） -->
+        <receiver
+            android:name=".AdbPairReceiver"
+            android:exported="false" />
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+    </application>
+
+</manifest>

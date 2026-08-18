@@ -1,0 +1,35 @@
+diff --git a/packages/client/ui-sidebar/src/client/SidebarRoot.tsx b/packages/client/ui-sidebar/src/client/SidebarRoot.tsx
+index d3fe6a6..228e692 100644
+--- a/packages/client/ui-sidebar/src/client/SidebarRoot.tsx
++++ b/packages/client/ui-sidebar/src/client/SidebarRoot.tsx
+@@ -18,8 +18,8 @@
+ import { useEffect, useRef, useState } from 'react'
+ import clsx from 'clsx'
+ import {
+-  BrandWordmark, FishLogo,
+-  IconNewChatOutline16, IconPanelLeftOutline16,
++  BrandWordmark,
++  IconNewChatOutline16,
+   Tooltip,
+ } from '@deepseek-ai/dsh-client-ui-primitives'
+ import type { SidebarRootComponentProps } from './contract/slots.ts'
+@@ -142,18 +142,7 @@ export function SidebarRoot({
+         )}
+         {/* Rail resting state is the whale mark; hovering swaps in the panel
+             icon (the expand affordance, figma sidebar-hover flow). */}
+-        <Tooltip label={collapsed ? t('toggle.open') : t('toggle.collapse')} delayMs={500}>
+-          <button
+-            type="button"
+-            className={clsx(css.iconButton, css.toggle)}
+-            aria-label={collapsed ? t('toggle.open') : t('toggle.collapse')}
+-            onClick={() => { toggleSidebar() }}
+-          >
+-            {!wide && <FishLogo className={css.railFish} size={24} />}
+-            {/* Rail icons render at 18 (figma rail spec); expanded keeps the glyph-native sizes. */}
+-            <IconPanelLeftOutline16 className={css.panelIcon} size={wide ? 16 : 18} />
+-          </button>
+-        </Tooltip>
++        {/* 移动端适配：移除“打开/收起侧边栏”按钮（DSHA launcher patch） */}
+       </div>
+ 
+       {/* Expanded, the button carries its own label — tooltip only on the rail. */}

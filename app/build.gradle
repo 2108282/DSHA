@@ -1,0 +1,67 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.deepseekharness.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.dsh.client"
+        minSdk 26
+        targetSdk 34
+        versionCode 16
+        versionName "1.1.0"
+        // 面向 ARM64 设备（deepseek-harness 的 node-pty 等原生模块需 arm64）
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles(
+                getDefaultProguardFile('proguard-android-optimize.txt'),
+                'proguard-rules.pro'
+            )
+        }
+    }
+
+    // 关键：让 jniLibs 的 .so 真正解压到 nativeLibraryDir（可执行目录），
+    // 否则 proot 伪装成 .so 也无法直接 exec（默认从 APK mmap，目录里没文件）。
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        aidl = true
+    }
+
+    sourceSets {
+        main {
+            aidl.srcDirs = ['src/main/aidl']
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.fragment:fragment:1.6.2'
+    implementation 'androidx.viewpager2:viewpager2:1.0.0'
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
+    // 内置浏览器内核（GeckoView）：系统 WebView 版本过低时的替代内核
+    implementation 'org.mozilla.geckoview:geckoview:126.0.20240526221752'
+    // MT 管理器官方「注入文件提供器」编程版：免 ROOT 访问本 App 私有 data 目录（工作区）
+    debugImplementation 'com.github.L-JINBIN:MTDataFilesProvider:v1.0.0'
+}

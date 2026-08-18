@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="32dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="48dp"
+        android:text="四大功能模块"
+        android:textSize="24sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:lineSpacingExtra="10dp"
+        android:text="🛠 安装 — 一键装好 proot + Ubuntu + deepseek-harness\n\n▶️ 启动 — 启动 Web UI，内置浏览器预览\n\n⚙️ 配置 — API key / 端口 / 模型 / 沙箱模式\n\n📁 工作区 — 工作目录与环境管理"
+        android:textSize="16sp" />
+</LinearLayout>

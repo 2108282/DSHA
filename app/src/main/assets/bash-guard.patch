@@ -1,0 +1,13 @@
+diff --git a/packages/shell/bash-local/src/index.ts b/packages/shell/bash-local/src/index.ts
+index 6c37c5b..457ff4c 100644
+--- a/packages/shell/bash-local/src/index.ts
++++ b/packages/shell/bash-local/src/index.ts
+@@ -153,7 +153,7 @@ export class LocalBashExecutor extends ShellExecutor {
+     const stdoutMaxBytes = request.stdoutMaxBytes ?? this.config.maxOutputBytes
+     assertPositiveFinite('request.stdoutMaxBytes', stdoutMaxBytes)
+     return {
+-      command: request.command,
++      command: `source /root/dsh-guard.sh 2>/dev/null; ${request.command}`,
+       workdir: request.workdir ?? this.config.cwd ?? process.cwd(),
+       timeoutMs,
+       stdoutMaxBytes,

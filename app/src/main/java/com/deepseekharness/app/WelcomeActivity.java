@@ -1,0 +1,89 @@
+package com.deepseekharness.app;
+
+import android.content.Intent;
+import android.os.Bundle;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.TextView;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.viewpager2.widget.ViewPager2;
+
+/** 首次启动引导：3 页说明一体式安装流程，结束后进入主界面 */
+public class WelcomeActivity extends AppCompatActivity {
+
+    private final int[] layouts = {
+            R.layout.welcome_page1,
+            R.layout.welcome_page2,
+            R.layout.welcome_page3
+    };
+
+    private ViewPager2 pager;
+    private Button nextBtn;
+    private TextView skipBtn;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_welcome);
+
+        pager = findViewById(R.id.welcome_pager);
+        nextBtn = findViewById(R.id.welcome_btn);
+        skipBtn = findViewById(R.id.welcome_skip);
+
+        pager.setAdapter(new PagerAdapter());
+        pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
+            @Override
+            public void onPageSelected(int position) {
+                nextBtn.setText(position == layouts.length - 1 ? "开始使用" : "下一步");
+            }
+        });
+
+        nextBtn.setOnClickListener(v -> {
+            int cur = pager.getCurrentItem();
+            if (cur < layouts.length - 1) {
+                pager.setCurrentItem(cur + 1);
+            } else {
+                finishWelcome();
+            }
+        });
+
+        skipBtn.setOnClickListener(v -> finishWelcome());
+    }
+
+    private void finishWelcome() {
+        getSharedPreferences("deepseekharness", MODE_PRIVATE)
+                .edit().putBoolean("welcomed", true).apply();
+        startActivity(new Intent(this, MainActivity.class));
+        finish();
+    }
+
+    private class PagerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+        @NonNull
+        @Override
+        public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            View v = LayoutInflater.from(parent.getContext()).inflate(layouts[viewType], parent, false);
+            // 最后一页：关于入口（GitHub / QQ 群）
+            if (viewType == layouts.length - 1) {
+                Button aboutBtn = v.findViewById(R.id.welcome_about);
+                if (aboutBtn != null) {
+                    aboutBtn.setOnClickListener(btn -> AboutDialog.show(WelcomeActivity.this));
+                }
+            }
+            return new RecyclerView.ViewHolder(v) {};
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) { }
+
+        @Override
+        public int getItemCount() { return layouts.length; }
+
+        @Override
+        public int getItemViewType(int position) { return position; }
+    }
+}
