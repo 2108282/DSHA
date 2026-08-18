@@ -7,7 +7,9 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # ARM64 原生 runner:预装 rootfs 需要 arm64 本机执行(node-pty 等原生模块编译),
+    # 用 x86 qemu 模拟会 OOM(exit 137)。原生 arm64 又快又不占内存。
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -25,19 +27,14 @@ jobs:
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
-      # ===== 1. 用 qemu 在 arm64 Ubuntu 内预装 deepseek-harness =====
-      - name: Enable arm64 binfmt
-        run: |
-          docker run --rm --privileged tonistiigi/binfmt --install arm64
-
+      # ===== 1. 在原生 arm64 docker 内预装 deepseek-harness =====
       - name: Build offline rootfs bundle (provisioned, ready-to-use)
         run: |
           set -e
           mkdir -p bundle
-          # 用多架构 arm64 容器承载预装(rootfs 内容即容器文件系统)
+          # arm64 runner 上 docker 原生执行,不需 qemu(避免 OOM)
           docker create --platform linux/arm64 --name dshprovision arm64v8/ubuntu:24.04
           docker start dshprovision
-          # 注入补丁素材 + 预装脚本
           docker exec dshprovision bash -c "mkdir -p /root/patches"
           for f in webui-sidebar.patch bash-guard.patch webui-polyfill.sh rootfs-confirm-install.sh; do
             docker cp "app/src/main/assets/$f" "dshprovision:/root/patches/$f"
@@ -45,16 +42,16 @@ jobs:
           docker cp scripts/offline-provision.sh dshprovision:/root/offline-provision.sh
           docker exec dshprovision bash /root/offline-provision.sh
 
-          # 预处理：移除容器仅内建、App 不需要的东西，并写入 host resolv.conf
+          # 精简:清掉仅构建期需要的大文件
           docker exec dshprovision bash -c "rm -f /root/offline-provision.sh; \
-            rm -rf /root/.cache npm 日志 /var/lib/apt/lists /tmp/* 2>/dev/null || true"
+            rm -rf /var/lib/apt/lists /root/.cache /root/.npm /tmp/* 2>/dev/null || true"
 
-          # 导出为 rootfs tar.gz（顶层 . 即 / 根，与 App 解压目标一致）
-          docker export dshprovision | gzip > bundle/offline-rootfs.tar.gz
+          # 导出为 rootfs tar.gz(顶层 . 即 / 根)
+          docker export dshprovision | gzip -1 > bundle/offline-rootfs.tar.gz
           docker rm -f dshprovision
           ls -lh bundle/offline-rootfs.tar.gz
 
-      # ===== 2. 放进 app assets(构建时的离线包)=====
+      # ===== 2. 放进 app assets =====
       - name: Bundle asset into app
         run: |
           mkdir -p app/src/main/assets
@@ -67,7 +64,6 @@ jobs:
 
       - name: Build debug APK
         run: |
-          # CI 为 x86_64,移除仅适用于本地 ARM64 的 aapt2 路径覆盖
           sed -i '/aapt2FromMavenOverride/d' gradle.properties
           gradle :app:assembleDebug --no-daemon
 
@@ -82,3 +78,5 @@ jobs:
         with:
           name: offline-rootfs-bundle
           path: bundle/offline-rootfs.tar.gz
+W2-CBC
+echo "exit=$?"; echo "=== workflow 尾部 ==="; tail -3 .github/workflows/android-build.yml; echo "=== runs-on ==="; grep "runs-on\|arm" .github/workflows/android-build.yml | head -3
