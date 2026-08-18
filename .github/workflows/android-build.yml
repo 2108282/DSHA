@@ -2,14 +2,69 @@ name: Build Debug APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'arena/**']
   workflow_dispatch:
 
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  # Job 1：原生 arm64 预装 rootfs（node-pty 必须编 arm64）。
+  # 不在这里装 Android SDK —— ARM runner 上 setup-android 会失败。
+  bundle:
+    name: Offline rootfs (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore cached offline bundle
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: bundle/offline-rootfs.tar.gz
+          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/*.patch') }}
+
+      - name: Build offline rootfs bundle
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p bundle
+          bash scripts/ci-make-offline-bundle.sh
+          test -s bundle/offline-rootfs.tar.gz
+          ls -lh bundle/offline-rootfs.tar.gz
+
+      - name: Upload offline bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-rootfs-bundle
+          path: bundle/offline-rootfs.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  # Job 2：x86 runner 打 APK（官方 aapt2 只有 x86_64）
+  apk:
+    name: Assemble debug APK
+    needs: bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download offline bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: offline-rootfs-bundle
+          path: bundle
+
+      - name: Bundle asset into app
+        run: |
+          set -euo pipefail
+          test -s bundle/offline-rootfs.tar.gz
+          mkdir -p app/src/main/assets
+          cp bundle/offline-rootfs.tar.gz app/src/main/assets/offline-rootfs.tar.gz
+          ls -lh app/src/main/assets/offline-rootfs.tar.gz
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -25,48 +80,6 @@ jobs:
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
-      # ===== 从 Release 下载离线包 =====
-      - name: Download offline rootfs bundle from Release
-        run: |
-          set -e
-          mkdir -p bundle
-          # 尝试从最新 Release 下载已构建好的离线包
-          # 你第一次需要手动构建并上传到 Release（见 scripts/make-offline-bundle.sh）
-          DOWNLOAD_URL=$(curl -s \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
-            | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-for a in d.get('assets',[]):
-    if a['name'] == 'offline-rootfs.tar.gz':
-        print(a['browser_download_url'])
-        break
-" 2>/dev/null || true)
-          if [ -z "$DOWNLOAD_URL" ]; then
-            echo "❌ 未找到 Release 中的离线包 offline-rootfs.tar.gz"
-            echo ""
-            echo "首次构建需要你手动在手机上跑一次："
-            echo "  1. 在 Termux 中执行: bash scripts/make-offline-bundle.sh"
-            echo "  2. 产物: ~/offline-rootfs.tar.gz"
-            echo "  3. 上传到 Release:"
-            echo "     https://github.com/\${{ github.repository }}/releases/new"
-            echo "     Tag: v1.1.0-offline-bundle"
-            echo "     附件: offline-rootfs.tar.gz"
-            echo ""
-            echo "上传后重新触发 CI 即可。"
-            exit 1
-          else
-            echo "下载离线包: $DOWNLOAD_URL"
-            curl -fsSL -o bundle/offline-rootfs.tar.gz "$DOWNLOAD_URL"
-            ls -lh bundle/offline-rootfs.tar.gz
-          fi
-
-      - name: Bundle asset into app
-        run: |
-          mkdir -p app/src/main/assets
-          cp bundle/offline-rootfs.tar.gz app/src/main/assets/offline-rootfs.tar.gz
-
       - name: Set up Gradle 8.5
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -74,11 +87,16 @@ for a in d.get('assets',[]):
 
       - name: Build debug APK
         run: |
+          set -euo pipefail
+          # CI 是 x86_64：去掉仅适用于本地 ARM64 的 aapt2 覆盖
           sed -i '/aapt2FromMavenOverride/d' gradle.properties
           gradle :app:assembleDebug --no-daemon
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: dsha-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
