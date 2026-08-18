@@ -20,15 +20,28 @@ android {
         targetSdk 34
         versionCode 16
         versionName "1.1.0"
-        // 面向 ARM64 设备（deepseek-harness 的 node-pty 等原生模块需 arm64）
+        // 只打 arm64。CI 跑在 x86 机器上，但产物必须是手机 ABI。
         ndk {
             abiFilters 'arm64-v8a'
         }
     }
 
+    // 部分国产系统装包解析依赖 v1 签名，显式打开
+    signingConfigs {
+        debug {
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing true
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.debug
             proguardFiles(
                 getDefaultProguardFile('proguard-android-optimize.txt'),
                 'proguard-rules.pro'
@@ -41,6 +54,7 @@ android {
     packagingOptions {
         jniLibs {
             useLegacyPackaging = true
+            excludes += ['**/x86/**', '**/x86_64/**', '**/armeabi/**', '**/armeabi-v7a/**']
         }
     }
 
@@ -75,7 +89,43 @@ dependencies {
     implementation 'dev.rikka.shizuku:api:13.1.5'
     implementation 'dev.rikka.shizuku:provider:13.1.5'
     // 内置浏览器内核（GeckoView）：系统 WebView 版本过低时的替代内核
-    implementation 'org.mozilla.geckoview:geckoview:126.0.20240526221752'
+    implementation 'org.mozilla.geckoview:geckoview-arm64-v8a:126.0.20240526221752'
     // MT 管理器官方「注入文件提供器」编程版：免 ROOT 访问本 App 私有 data 目录（工作区）
     debugImplementation 'com.github.L-JINBIN:MTDataFilesProvider:v1.0.0'
+}
+
+// 构建完立刻核对 APK 里的 .so 架构，避免再打出 x86 包
+afterEvaluate {
+    def verify = tasks.register("verifyArm64Apk") {
+        doLast {
+            def apk = file("build/outputs/apk/debug/app-debug.apk")
+            if (!apk.isFile()) {
+                throw new GradleException("找不到 " + apk)
+            }
+            def z = new java.util.zip.ZipFile(apk)
+            def libs = []
+            z.entries().each { e ->
+                if (e.name.startsWith("lib/") && e.name.endsWith(".so")) {
+                    libs << e.name
+                }
+            }
+            z.close()
+            println "===== APK native libs ====="
+            libs.each { println "  " + it }
+            println "==========================="
+            if (libs.isEmpty()) {
+                throw new GradleException("APK 里没有 lib/*.so（proot 也不会工作）")
+            }
+            if (!libs.any { it.startsWith("lib/arm64-v8a/") }) {
+                throw new GradleException("APK 不含 lib/arm64-v8a/，不能装到手机。实际: " + libs)
+            }
+            def bad = libs.findAll { !it.startsWith("lib/arm64-v8a/") }
+            if (!bad.isEmpty()) {
+                throw new GradleException("APK 混进了非 arm64 库: " + bad)
+            }
+        }
+    }
+    tasks.matching { it.name == "assembleDebug" }.configureEach {
+        finalizedBy(verify)
+    }
 }
