@@ -33,7 +33,7 @@ public class ExtractActivity extends AppCompatActivity {
         bar = findViewById(R.id.extract_bar);
         bar.setVisibility(ProgressBar.VISIBLE);
 
-        String ver = "1.1.1";
+        String ver = "1.1.2";
         try {
             ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
         } catch (Exception ignored) {

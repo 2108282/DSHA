@@ -3,11 +3,31 @@ plugins {
 }
 
 // 内置离线环境包缺失时给出明确中文报错(直接从 assets 缺失会悄悄打出不可用的 APK)
-if (!file("src/main/assets/offline-rootfs.tar.gz").exists()) {
+def offlineGz = file("src/main/assets/offline-rootfs.tar.gz")
+def offlineBin = file("src/main/assets/offline-rootfs.bin")
+if (!offlineGz.exists() && !offlineBin.exists()) {
     throw new GradleException(
         "缺少内置离线环境包 app/src/main/assets/offline-rootfs.tar.gz ——\n" +
         "它由 GitHub Actions 在 ubuntu-24.04-arm 上 chroot 预装生成。\n" +
         "本地构建请从 Actions 的 offline-rootfs-bundle 产物拷到该路径。")
+}
+
+// aapt 会把 .tar.gz 自动解压成 .tar（用户机上就变成找不着 .gz）。
+// 打进 APK 前改名为 .bin，避免被动手脚。
+tasks.register("protectOfflineBundle") {
+    doLast {
+        if (offlineGz.exists()) {
+            offlineBin.delete()
+            if (!offlineGz.renameTo(offlineBin)) {
+                throw new GradleException("无法把 offline-rootfs.tar.gz 改名为 .bin")
+            }
+        }
+    }
+}
+tasks.configureEach { t ->
+    if (t.name == "preBuild" || t.name == "preDebugBuild") {
+        t.dependsOn("protectOfflineBundle")
+    }
 }
 
 android {
@@ -18,8 +38,8 @@ android {
         applicationId "com.dsh.client"
         minSdk 26
         targetSdk 34
-        versionCode 16
-        versionName "1.1.0"
+        versionCode 18
+        versionName "1.1.2"
         // 只打 arm64。CI 跑在 x86 机器上，但产物必须是手机 ABI。
         ndk {
             abiFilters 'arm64-v8a'
@@ -119,9 +139,11 @@ afterEvaluate {
             println "===== APK assets ====="
             assets.each { println "  " + it }
             println "==========================="
-            def hasBundle = assets.any { it.contains("offline-rootfs") || it.contains("rootfs.tar") }
+            def hasBundle = assets.any {
+                it.contains("offline-rootfs") || it.contains("rootfs.tar") || it.contains("offline_rootfs")
+            }
             if (!hasBundle) {
-                throw new GradleException("APK 里没有 offline-rootfs。assets 扫描: " + assets)
+                throw new GradleException("APK 里没有 offline-rootfs。assets: " + assets)
             }
             if (libs.isEmpty()) {
                 throw new GradleException("APK 里没有 lib/*.so（proot 也不会工作）")

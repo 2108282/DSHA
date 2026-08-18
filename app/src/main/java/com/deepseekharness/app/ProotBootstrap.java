@@ -544,35 +544,47 @@ public class ProotBootstrap {
     /** 内置离线包 asset 名称（GitHub Actions 构建时预置的预装 rootfs 整包） */
     public static final String OFFLINE_BUNDLE_ASSET = "offline-rootfs.tar.gz";
 
-    /** 是否带了内置离线包。优先扫 APK zip（大文件 AssetManager.open 在不少机型会直接失败）。 */
+    /** aapt 会把 .tar.gz 自动解成 .tar，所以这些名字都算内置包。 */
+    private static final String[] BUNDLE_NAMES = {
+            "offline-rootfs.tar.gz",
+            "offline-rootfs.tar",
+            "offline-rootfs.bin",
+            "offline-rootfs.tgz",
+    };
+
     public boolean hasOfflineBundle() {
         try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(ctx.getPackageCodePath())) {
             if (findBundleEntry(z) != null) return true;
         } catch (Exception ignored) {
         }
-        try {
-            ctx.getAssets().open(OFFLINE_BUNDLE_ASSET).close();
-            return true;
-        } catch (IOException e) {
-            return false;
+        for (String n : BUNDLE_NAMES) {
+            try {
+                ctx.getAssets().open(n).close();
+                return true;
+            } catch (IOException ignored) {
+            }
         }
+        return false;
     }
 
     private java.util.zip.ZipEntry findBundleEntry(java.util.zip.ZipFile z) {
-        String[] keys = {
-                "assets/" + OFFLINE_BUNDLE_ASSET,
-                OFFLINE_BUNDLE_ASSET,
-        };
-        for (String k : keys) {
-            java.util.zip.ZipEntry e = z.getEntry(k);
+        for (String n : BUNDLE_NAMES) {
+            java.util.zip.ZipEntry e = z.getEntry("assets/" + n);
+            if (e != null && !e.isDirectory()) return e;
+            e = z.getEntry(n);
             if (e != null && !e.isDirectory()) return e;
         }
+        java.util.zip.ZipEntry best = null;
         java.util.Enumeration<? extends java.util.zip.ZipEntry> en = z.entries();
         while (en.hasMoreElements()) {
             java.util.zip.ZipEntry e = en.nextElement();
-            if (e.getName().endsWith("/" + OFFLINE_BUNDLE_ASSET) && !e.isDirectory()) return e;
+            String name = e.getName();
+            if (e.isDirectory()) continue;
+            if (name.contains("offline-rootfs") || name.contains("offline_rootfs")) {
+                if (best == null || e.getSize() > best.getSize()) best = e;
+            }
         }
-        return null;
+        return best;
     }
 
     /**
@@ -598,10 +610,21 @@ public class ProotBootstrap {
             }
         }
         if (raw == null) {
-            raw = ctx.getAssets().open(OFFLINE_BUNDLE_ASSET);
-            try {
-                total = ctx.getAssets().openFd(OFFLINE_BUNDLE_ASSET).getLength();
-            } catch (IOException ignored) {
+            IOException last = null;
+            for (String n : BUNDLE_NAMES) {
+                try {
+                    raw = ctx.getAssets().open(n);
+                    try {
+                        total = ctx.getAssets().openFd(n).getLength();
+                    } catch (IOException ignored) {
+                    }
+                    break;
+                } catch (IOException e) {
+                    last = e;
+                }
+            }
+            if (raw == null) {
+                throw last != null ? last : new IOException("assets 里也没有离线包");
             }
         }
 
@@ -623,7 +646,7 @@ public class ProotBootstrap {
         try {
             if (rootfsDir.exists()) deleteRecursively(rootfsDir);
             rootfsDir.mkdirs();
-            TarGzipExtractor.extract(counted, rootfsDir, 0);
+            TarGzipExtractor.extractAuto(counted, rootfsDir, 0);
             if (!hasBash()) {
                 throw new IOException("解压后 rootfs 不完整（缺少 bash）\n" + diagnoseRootfs());
             }
