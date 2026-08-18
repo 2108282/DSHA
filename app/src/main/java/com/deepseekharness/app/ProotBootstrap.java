@@ -624,11 +624,11 @@ public class ProotBootstrap {
             if (rootfsDir.exists()) deleteRecursively(rootfsDir);
             rootfsDir.mkdirs();
             TarGzipExtractor.extract(counted, rootfsDir, 0);
-            if (!isInstalled()) {
-                throw new IOException("解压后 rootfs 不完整（缺少 bash）");
+            if (!hasBash()) {
+                throw new IOException("解压后 rootfs 不完整（缺少 bash）\n" + diagnoseRootfs());
             }
             setupResolvConf();
-            markInstalled();
+            markOfflineExtracted();
         } finally {
             try { counted.close(); } catch (Exception ignored) {}
             if (apk != null) {
