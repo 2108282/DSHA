@@ -12,14 +12,12 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.function.Supplier;
 
 /**
- * 设置模块容器：安装 / 配置 / 工作区 等子页以纵向列表呈现。
- * <p>扩展方式：在 {@link #TAB_OPTIONS} 中追加一项（标题 + 子页工厂）即可，
- * 列表项、点击切换、选中高亮全部自动生成，无需改动其他代码。</p>
+ * 设置模块列表：安装 / 配置 / 工作区 等入口。
+ * <p>点击一项→以二级页面（全屏）打开对应子页，返回键回到列表。</p>
+ * <p>扩展方式：在 {@link #TAB_OPTIONS} 中追加一项（标题 + 子页工厂）即可。</p>
  */
 public class SettingsFragment extends Fragment {
 
@@ -29,8 +27,6 @@ public class SettingsFragment extends Fragment {
             new TabOption("配置", ConfigFragment::new),
             new TabOption("工作区", WorkspaceFragment::new),
     };
-
-    private final List<LinearLayout> tabRows = new ArrayList<>();
 
     @Nullable
     @Override
@@ -46,12 +42,9 @@ public class SettingsFragment extends Fragment {
         for (int i = 0; i < TAB_OPTIONS.length; i++) {
             tabs.addView(buildRow(i));
         }
-        if (savedInstanceState == null) {
-            showSub(0);
-        }
     }
 
-    /** 构建一行列表项：标题 + 右侧箭头，点击切换到对应子页 */
+    /** 构建一行列表项：标题 + 右侧箭头，点击进入二级页面 */
     private LinearLayout buildRow(final int index) {
         TabOption opt = TAB_OPTIONS[index];
 
@@ -81,30 +74,14 @@ public class SettingsFragment extends Fragment {
 
         row.addView(title);
         row.addView(arrow);
-        row.setOnClickListener(v -> showSub(index));
-        tabRows.add(row);
+        row.setOnClickListener(v -> {
+            Fragment f = TAB_OPTIONS[index].factory.get();
+            requireActivity().getSupportFragmentManager().beginTransaction()
+                    .replace(R.id.fragment_container, f)
+                    .addToBackStack("settings")
+                    .commit();
+        });
         return row;
-    }
-
-    /** 切换子页并刷新列表选中态 */
-    private void showSub(int index) {
-        Fragment f = TAB_OPTIONS[index].factory.get();
-        getChildFragmentManager().beginTransaction()
-                .replace(R.id.settings_container, f)
-                .commit();
-        updateTabs(index);
-    }
-
-    private void updateTabs(int index) {
-        for (int i = 0; i < tabRows.size(); i++) {
-            LinearLayout row = tabRows.get(i);
-            boolean sel = i == index;
-            row.setBackgroundResource(sel ? R.drawable.settings_tab_selected : R.drawable.bg_btn);
-            TextView title = (TextView) row.getChildAt(0);
-            TextView arrow = (TextView) row.getChildAt(1);
-            title.setTextColor(sel ? 0xFFFFFFFF : 0xFF1F2328);
-            arrow.setTextColor(sel ? 0xFFFFFFFF : 0xFF999999);
-        }
     }
 
     private int dp(int v) {
