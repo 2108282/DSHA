@@ -264,18 +264,16 @@ public class HarnessController {
 
     public ProotBootstrap getProot() { return proot; }
 
-    /** 是否已安装 deepseek-harness（跟随自定义工作区路径；RC6 模式检查 dsh 命令） */
+    /** 是否已安装 deepseek-harness（源码树 或 RC6 全局 dsh，任一即可） */
     public boolean isHarnessInstalled() {
-        if (useRc6()) {
-            try {
-                String r = proot.execAndRead("command -v dsh 2>/dev/null || echo MISSING");
-                // execAndRead 出错会返回 "ERROR: ..." 前缀，须排除，避免误判已安装
-                return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
-            } catch (Exception e) {
-                return false;
-            }
+        if (proot.isHarnessInstalled(getWorkdir())) return true;
+        try {
+            String r = proot.execAndRead("command -v dsh 2>/dev/null || echo MISSING");
+            // execAndRead 出错会返回 "ERROR: ..." 前缀，须排除，避免误判已安装
+            return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
+        } catch (Exception e) {
+            return false;
         }
-        return proot.isHarnessInstalled(getWorkdir());
     }
 
     /** Web UI 进程是否在运行 */
@@ -380,31 +378,36 @@ public class HarnessController {
         }
     }
 
-    /** 第 4 步完成判定：已装 + node-pty 就绪。RC6 用一次 proot 进程查完（省一次子进程，降低卡顿） */
+    /** 第 ⑤ 步完成判定：源码树或 RC6 全局安装，且 node-pty 就绪。 */
     private boolean isHarnessReady() {
-        if (useRc6()) {
-            try {
-                String r = proot.execAndRead(
-                        "command -v dsh >/dev/null 2>&1 && " +
-                        "(find /usr/local/lib/node_modules -maxdepth 8 \\( -path '*/node-pty/build/Release/pty.node' -o -path '*/node-pty/prebuilds/linux-arm64/pty.node' \\) 2>/dev/null | head -1) || echo MISSING");
-                return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
-            } catch (Exception e) {
-                return false;
-            }
+        boolean src = proot.isHarnessInstalled(getWorkdir()) && hasPtyNodeInWorkdir();
+        if (src) return true;
+        try {
+            String r = proot.execAndRead(
+                    "command -v dsh >/dev/null 2>&1 && " +
+                    "(find /usr/local/lib/node_modules -maxdepth 8 \\( -path '*/node-pty/build/Release/pty.node' -o -path '*/node-pty/prebuilds/linux-arm64/pty.node' \\) 2>/dev/null | head -1) || echo MISSING");
+            return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
+        } catch (Exception e) {
+            return false;
         }
-        return proot.isHarnessInstalled(getWorkdir()) && hasPtyNode();
     }
 
-    /** 检查 node-pty 编译产物（pty.node）是否就绪（RC6 模式查 npm 包，源码模式查项目目录） */
+    /** 检查 node-pty 编译产物（pty.node）是否就绪（源码工作区 + 全局 npm，任一即可） */
     private boolean hasPtyNode() {
+        if (hasPtyNodeInWorkdir()) return true;
         try {
-            if (useRc6()) {
-                String r = proot.execAndRead(
-                        "find /usr/local/lib/node_modules -maxdepth 8 -path '*/node-pty/build/Release/pty.node' 2>/dev/null | head -1; " +
-                        "find /usr/local/lib/node_modules -maxdepth 8 -path '*/node-pty/prebuilds/linux-arm64/pty.node' 2>/dev/null | head -1");
-                // execAndRead 出错返回 "ERROR: ..." 前缀，须排除（不能把执行失败当成有 pty.node）
-                return r != null && !r.startsWith("ERROR") && !r.trim().isEmpty();
-            }
+            String r = proot.execAndRead(
+                    "find /usr/local/lib/node_modules -maxdepth 8 -path '*/node-pty/build/Release/pty.node' 2>/dev/null | head -1; " +
+                    "find /usr/local/lib/node_modules -maxdepth 8 -path '*/node-pty/prebuilds/linux-arm64/pty.node' 2>/dev/null | head -1");
+            return r != null && !r.startsWith("ERROR") && !r.trim().isEmpty();
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /** 只查源码工作区里的 pty.node（纯文件探测，不起 proot） */
+    private boolean hasPtyNodeInWorkdir() {
+        try {
             File wdDir = new File(proot.getRootfsDir(), "root/" + getWorkdir());
             File pnpmDir = new File(wdDir, "node_modules/.pnpm");
             if (!pnpmDir.isDirectory()) return false;

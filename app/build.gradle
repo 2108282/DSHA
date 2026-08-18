@@ -6,8 +6,8 @@ plugins {
 if (!file("src/main/assets/offline-rootfs.tar.gz").exists()) {
     throw new GradleException(
         "缺少内置离线环境包 app/src/main/assets/offline-rootfs.tar.gz ——\n" +
-        "它由 GitHub Actions 在线(qemu arm64)预装生成。\n" +
-        "本地构建时请先运行 .github 对应的预装流程,或从 Release 下载 offline-rootfs-bundle。")
+        "它由 GitHub Actions 在 ubuntu-24.04-arm 上 chroot 预装生成。\n" +
+        "本地构建请从 Actions 的 offline-rootfs-bundle 产物拷到该路径。")
 }
 
 android {
