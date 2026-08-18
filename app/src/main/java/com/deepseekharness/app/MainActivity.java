@@ -61,6 +61,14 @@ public class MainActivity extends AppCompatActivity {
 
         setContentView(R.layout.activity_main);
 
+        // 内置离线环境未解压时（例如跳过欢迎页或解压中途被中断），先补解压
+        ProotBootstrap proot = new ProotBootstrap(this);
+        if (!proot.isInstalled() && proot.hasOfflineBundle()) {
+            startActivity(new Intent(this, ExtractActivity.class));
+            finish();
+            return;
+        }
+
         // 沉浸式全屏（隐藏状态栏 + 系统导航栏）
         Window window = getWindow();
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,

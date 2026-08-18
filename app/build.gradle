@@ -2,6 +2,14 @@ plugins {
     id 'com.android.application'
 }
 
+// 内置离线环境包缺失时给出明确中文报错(直接从 assets 缺失会悄悄打出不可用的 APK)
+if (!file("src/main/assets/offline-rootfs.tar.gz").exists()) {
+    throw new GradleException(
+        "缺少内置离线环境包 app/src/main/assets/offline-rootfs.tar.gz ——\n" +
+        "它由 GitHub Actions 在线(qemu arm64)预装生成。\n" +
+        "本地构建时请先运行 .github 对应的预装流程,或从 Release 下载 offline-rootfs-bundle。")
+}
+
 android {
     namespace 'com.deepseekharness.app'
     compileSdk 34
@@ -36,6 +44,12 @@ android {
         }
     }
 
+    // 内置离线 rootfs 包很大:不对 .gz 二次压缩(节省构建时间/体积,
+    // 且 openFd 可拿到真实长度用于解压进度)。
+    androidResources {
+        noCompress += ['gz', 'xz']
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -53,8 +67,7 @@ android {
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'    implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.fragment:fragment:1.6.2'
     implementation 'androidx.viewpager2:viewpager2:1.0.0'

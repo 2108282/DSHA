@@ -39,6 +39,11 @@
             android:exported="false"
             android:theme="@style/Theme.DeepseekHarness" />
 
+        <activity
+            android:name=".ExtractActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DeepseekHarness" />
+
         <service
             android:name=".HarnessService"
             android:exported="false"

@@ -474,6 +474,57 @@ public class ProotBootstrap {
         }
     }
 
+    /** 内置离线包 asset 名称（GitHub Actions 构建时预置的预装 rootfs 整包） */
+    public static final String OFFLINE_BUNDLE_ASSET = "offline-rootfs.tar.gz";
+
+    /** assets 中是否存在内置离线包 */
+    public boolean hasOfflineBundle() {
+        try {
+            ctx.getAssets().open(OFFLINE_BUNDLE_ASSET).close();
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 从内置 asset 解压预装好的 rootfs 整包到 rootfsDir。
+     * 先拷贝到 tmp（流式解压 gzip 大文件），再走 extractRootfs 校验。
+     * @param onProgress 进度回调（已解压字节 / 包总字节，包总字节未知时为 0）
+     */
+    public void extractOfflineBundle(java.util.function.BiConsumer<Long, Long> onProgress) throws IOException {
+        tmpDir.mkdirs();
+        File tarball = new File(tmpDir, OFFLINE_BUNDLE_ASSET);
+
+        // 1) asset → 临时文件（asset 可能被 aapt 压缩，无法直接 openFd）
+        try (InputStream in = ctx.getAssets().open(OFFLINE_BUNDLE_ASSET);
+             FileOutputStream out = new FileOutputStream(tarball)) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            long done = 0;
+            long total = 0;
+            try {
+                total = ctx.getAssets().openFd(OFFLINE_BUNDLE_ASSET).getLength();
+            } catch (IOException ignored) {
+                // openFd 失败（asset 被压缩）则总字节未知
+            }
+            while ((n = in.read(buf)) >= 0) {
+                out.write(buf, 0, n);
+                done += n;
+                if (onProgress != null) onProgress.accept(done, total);
+            }
+        }
+
+        // 2) 解压到 rootfsDir 并校验
+        extractRootfs(tarball);
+        //noinspection ResultOfMethodCallIgnored
+        tarball.delete();
+
+        // 3) 预装包自带 resolv.conf 可被覆盖为宿主可用 DNS
+        setupResolvConf();
+        markInstalled();
+    }
+
     /** 诊断 rootfs 关键路径状态 */
     public String diagnoseRootfs() {
         StringBuilder sb = new StringBuilder();
