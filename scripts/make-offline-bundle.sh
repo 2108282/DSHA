@@ -61,6 +61,8 @@ echo "==> [4/7] 配置 proot 环境 + 写入 resolv.conf"
 mkdir -p "$ROOTFS_DIR"/{proc,sys,dev,dev/pts}
 echo "nameserver 223.5.5.5" > "$ROOTFS_DIR/etc/resolv.conf"
 echo "nameserver 8.8.8.8" >> "$ROOTFS_DIR/etc/resolv.conf"
+# 修复 /bin 符号链接（Ubuntu 24.04 默认 /bin → usr/bin，Termux 解压可能丢失）
+[ -L "$ROOTFS_DIR/bin" ] || [ -d "$ROOTFS_DIR/bin" ] || ln -sf usr/bin "$ROOTFS_DIR/bin" 2>/dev/null || true
 
 PROOT_ARGS=(
   proot
@@ -71,10 +73,11 @@ PROOT_ARGS=(
   -b /sys:/sys
   -b /dev/pts:/dev/pts
   -w /root
+  -e PATH=/usr/bin:/bin
 )
 
 echo "==> [5/7] 注入预装脚本与补丁"
-"${PROOT_ARGS[@]}" bash -c "mkdir -p /root/patches" 2>/dev/null
+"${PROOT_ARGS[@]}" /usr/bin/bash -c "mkdir -p /root/patches" 2>/dev/null
 if [ -d "$REPO_ROOT/app/src/main/assets" ]; then
   for f in webui-sidebar.patch bash-guard.patch webui-polyfill.sh rootfs-confirm-install.sh; do
     cp "$REPO_ROOT/app/src/main/assets/$f" "$ROOTFS_DIR/root/patches/$f" 2>/dev/null || true
@@ -85,14 +88,14 @@ chmod +x "$ROOTFS_DIR/root/offline-provision.sh"
 
 echo "==> [6/7] 在 proot 内执行预装(apt-get / node / pnpm / harness)"
 echo "    预计耗时 15~30 分钟（取决于网络与设备性能）"
-"${PROOT_ARGS[@]}" /bin/bash -c "
+"${PROOT_ARGS[@]}" /usr/bin/bash -c "
   cd /root
   export DEBIAN_FRONTEND=noninteractive
   bash /root/offline-provision.sh
 "
 
 echo "==> [7/7] 清理 + 打包"
-"${PROOT_ARGS[@]}" bash -c "rm -f /root/offline-provision.sh; \
+"${PROOT_ARGS[@]}" /usr/bin/bash -c "rm -f /root/offline-provision.sh; \
   rm -rf /var/lib/apt/lists /root/.cache /root/.npm /tmp/* 2>/dev/null || true"
 cd "$ROOTFS_DIR"
 tar -czf "$OUTPUT" .
