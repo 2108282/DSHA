@@ -40,9 +40,22 @@ done
 echo "  下载完成 ($(du -h "$TARBALL" | cut -f1))"
 
 echo "==> [3/7] 解压 rootfs"
-tar -xzf "$TARBALL" -C "$ROOTFS_DIR"
+# Termux 文件系统不支持硬链接，平台 tar/bsdtar 会在 perl/uncompress 等硬链接上
+# 报 Permission denied。用 bsdtar 且容忍失败（清除残留后手动补）。
+if command -v bsdtar >/dev/null 2>&1; then
+  bsdtar -xzf "$TARBALL" -C "$ROOTFS_DIR" 2>/dev/null || true
+else
+  tar -xzf "$TARBALL" -C "$ROOTFS_DIR" 2>/dev/null || true
+fi
 rm -f "$TARBALL"
 [ -f "$ROOTFS_DIR/usr/bin/bash" ] || { echo "rootfs 不完整(缺少 bash)"; exit 1; }
+# 硬链接失败的文件用软链接回退(软链在 Termux 可用)
+[ -e "$ROOTFS_DIR/usr/bin/perl" ] && \
+  [ ! -e "$ROOTFS_DIR/usr/bin/perl5.38.2" ] && \
+  ln -sf perl "$ROOTFS_DIR/usr/bin/perl5.38.2" 2>/dev/null || true
+[ -e "$ROOTFS_DIR/usr/bin/gunzip" ] && \
+  [ ! -e "$ROOTFS_DIR/usr/bin/uncompress" ] && \
+  ln -sf gunzip "$ROOTFS_DIR/usr/bin/uncompress" 2>/dev/null || true
 
 echo "==> [4/7] 配置 proot 环境 + 写入 resolv.conf"
 mkdir -p "$ROOTFS_DIR"/{proc,sys,dev,dev/pts}
