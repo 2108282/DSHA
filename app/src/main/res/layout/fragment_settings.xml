@@ -4,47 +4,13 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
+    <!-- 设置子页列表：选项由 SettingsFragment 动态生成，新增选项只需扩展 TAB_OPTIONS -->
     <LinearLayout
+        android:id="@+id/settings_tabs"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:padding="12dp">
-
-        <TextView
-            android:id="@+id/settings_tab_install"
-            android:layout_width="0dp"
-            android:layout_height="40dp"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:text="安装"
-            android:textColor="#FFFFFF"
-            android:textSize="14sp"
-            android:background="@drawable/settings_tab_selected" />
-
-        <TextView
-            android:id="@+id/settings_tab_config"
-            android:layout_width="0dp"
-            android:layout_height="40dp"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:gravity="center"
-            android:text="配置"
-            android:textColor="#1F2328"
-            android:textSize="14sp"
-            android:background="@drawable/bg_btn" />
-
-        <TextView
-            android:id="@+id/settings_tab_workspace"
-            android:layout_width="0dp"
-            android:layout_height="40dp"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:gravity="center"
-            android:text="工作区"
-            android:textColor="#1F2328"
-            android:textSize="14sp"
-            android:background="@drawable/bg_btn" />
-    </LinearLayout>
+        android:orientation="vertical"
+        android:padding="12dp" />
 
     <FrameLayout
         android:id="@+id/settings_container"
