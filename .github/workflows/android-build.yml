@@ -78,5 +78,3 @@ jobs:
         with:
           name: offline-rootfs-bundle
           path: bundle/offline-rootfs.tar.gz
-W2-CBC
-echo "exit=$?"; echo "=== workflow 尾部 ==="; tail -3 .github/workflows/android-build.yml; echo "=== runs-on ==="; grep "runs-on\|arm" .github/workflows/android-build.yml | head -3
