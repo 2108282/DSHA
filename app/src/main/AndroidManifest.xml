@@ -44,13 +44,37 @@
             android:exported="false"
             android:theme="@style/Theme.DeepseekHarness" />
 
+        <activity
+            android:name=".AdbPairActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:label="ADB 无线配对"
+            android:theme="@style/Theme.AppCompat.Dialog" />
+
         <service
             android:name=".HarnessService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- 关键修复：Shizuku UserService 必须注册，否则 bindUserService 永久失败 -->
+        <service
+            android:name=".ShellService"
+            android:exported="false"
+            android:process=":shizuku"
+            android:permission="moe.shizuku.manager.permission.API_V23" />
+
+        <!-- 设备桥服务（普通后台服务）：3090 桥 + ADB 预热 + 配对弹窗监听 -->
+        <service
+            android:name=".DeviceBridgeService"
+            android:exported="false" />
+
         <receiver
             android:name=".ConfirmReceiver"
+            android:exported="false" />
+
+        <!-- 通知卡片就地输入配对码（RemoteInput） -->
+        <receiver
+            android:name=".AdbPairReceiver"
             android:exported="false" />
 
         <provider

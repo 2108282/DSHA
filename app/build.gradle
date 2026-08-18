@@ -2,7 +2,6 @@ plugins {
     id 'com.android.application'
 }
 
-// 内置离线环境包缺失时给出明确中文报错(直接从 assets 缺失会悄悄打出不可用的 APK)
 def offlineGz = file("src/main/assets/offline-rootfs.tar.gz")
 def offlineBin = file("src/main/assets/offline-rootfs.bin")
 if (!offlineGz.exists() && !offlineBin.exists()) {
@@ -12,8 +11,7 @@ if (!offlineGz.exists() && !offlineBin.exists()) {
         "本地构建请从 Actions 的 offline-rootfs-bundle 产物拷到该路径。")
 }
 
-// aapt 会把 .tar.gz 自动解压成 .tar（用户机上就变成找不着 .gz）。
-// 打进 APK 前改名为 .bin，避免被动手脚。
+// aapt 会把 .tar.gz 自动解压成 .tar。打进 APK 前改名为 .bin。
 tasks.register("protectOfflineBundle") {
     doLast {
         if (offlineGz.exists()) {
@@ -40,13 +38,11 @@ android {
         targetSdk 34
         versionCode 18
         versionName "1.1.2"
-        // 只打 arm64。CI 跑在 x86 机器上，但产物必须是手机 ABI。
         ndk {
             abiFilters 'arm64-v8a'
         }
     }
 
-    // 部分国产系统装包解析依赖 v1 签名，显式打开
     signingConfigs {
         debug {
             enableV1Signing true
@@ -69,8 +65,6 @@ android {
         }
     }
 
-    // 关键：让 jniLibs 的 .so 真正解压到 nativeLibraryDir（可执行目录），
-    // 否则 proot 伪装成 .so 也无法直接 exec（默认从 APK mmap，目录里没文件）。
     packagingOptions {
         jniLibs {
             useLegacyPackaging = true
@@ -78,8 +72,6 @@ android {
         }
     }
 
-    // 内置离线 rootfs 包很大:不对 .gz 二次压缩(节省构建时间/体积,
-    // 且 openFd 可拿到真实长度用于解压进度)。
     androidResources {
         noCompress += ['gz', 'xz']
     }
@@ -108,13 +100,10 @@ dependencies {
     implementation 'androidx.viewpager2:viewpager2:1.0.0'
     implementation 'dev.rikka.shizuku:api:13.1.5'
     implementation 'dev.rikka.shizuku:provider:13.1.5'
-    // 内置浏览器内核（GeckoView）：系统 WebView 版本过低时的替代内核
     implementation 'org.mozilla.geckoview:geckoview-arm64-v8a:126.0.20240526221752'
-    // MT 管理器官方「注入文件提供器」编程版：免 ROOT 访问本 App 私有 data 目录（工作区）
     debugImplementation 'com.github.L-JINBIN:MTDataFilesProvider:v1.0.0'
 }
 
-// 构建完立刻核对 APK 里的 .so 架构，避免再打出 x86 包
 afterEvaluate {
     def verify = tasks.register("verifyArm64Apk") {
         doLast {
@@ -138,7 +127,6 @@ afterEvaluate {
             libs.each { println "  " + it }
             println "===== APK assets ====="
             assets.each { println "  " + it }
-            println "==========================="
             def hasBundle = assets.any {
                 it.contains("offline-rootfs") || it.contains("rootfs.tar") || it.contains("offline_rootfs")
             }
@@ -146,10 +134,10 @@ afterEvaluate {
                 throw new GradleException("APK 里没有 offline-rootfs。assets: " + assets)
             }
             if (libs.isEmpty()) {
-                throw new GradleException("APK 里没有 lib/*.so（proot 也不会工作）")
+                throw new GradleException("APK 里没有 lib/*.so")
             }
             if (!libs.any { it.startsWith("lib/arm64-v8a/") }) {
-                throw new GradleException("APK 不含 lib/arm64-v8a/，不能装到手机。实际: " + libs)
+                throw new GradleException("APK 不含 lib/arm64-v8a/")
             }
             def bad = libs.findAll { !it.startsWith("lib/arm64-v8a/") }
             if (!bad.isEmpty()) {

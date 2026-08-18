@@ -258,9 +258,11 @@ public class InstallFragment extends Fragment {
         step1Btn.setText(stepLabel(done, HarnessController.STEP_ROOTFS));
         step2Btn.setText(stepLabel(done, HarnessController.STEP_TOOLS));
         step3Btn.setText(stepLabel(done, HarnessController.STEP_NODE));
-        step4Btn.setText(stepLabel(done, HarnessController.STEP_HARNESS));
-        step5Btn.setText(stepLabel(done, HarnessController.STEP_PNPM));
+        // 修正 123546 bug（对齐 fixed45）：按钮4=④ pnpm，按钮5=⑤ harness
+        step4Btn.setText(stepLabel(done, HarnessController.STEP_PNPM));
+        step5Btn.setText(stepLabel(done, HarnessController.STEP_HARNESS));
         step6Btn.setText(stepLabel(done, HarnessController.STEP_GUARD));
+        // 修正 123546 bug（对齐 fixed45）：按钮4=④ pnpm，按钮5=⑤ harness，按钮6=⑥ 安全与补丁
         stepStatusText.setText(
                 "① Linux 环境（rootfs）   " + mark(done, HarnessController.STEP_ROOTFS) + "\n" +
                 "② 基础工具（apt）       " + mark(done, HarnessController.STEP_TOOLS) + "\n" +

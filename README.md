@@ -59,7 +59,6 @@ cp -r agent-skills/screen-ocr-operator ~/.agents/skills/
 ```sh
 ./build.sh   # 需要 Gradle 8.5 + Android SDK + JDK 17
 # 还需要先有 app/src/main/assets/offline-rootfs.tar.gz
-# （从某次 Actions 的 offline-rootfs-bundle 产物拷来）
 ```
 
 ## 🧱 技术架构

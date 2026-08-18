@@ -59,7 +59,6 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        // 没解压过内置包：必须先走解压页（找不到包也会停在那页报诊断，不再偷偷进安装）
         if (!getIntent().getBooleanExtra("skip_extract", false)) {
             ProotBootstrap proot = new ProotBootstrap(this);
             if (!proot.isOfflineExtracted()) {
@@ -81,6 +80,9 @@ public class MainActivity extends AppCompatActivity {
         requestBatteryOptimization();
         maybeShowBackupReminder();
         maybeCheckUpdate();
+        // 拉起设备桥服务（普通后台服务，无 FGS 崩溃风险）：
+        // 3090 桥 + Shizuku + ADB 预热 + 配对弹窗监听/通知输码配对
+        ensureDeviceBridge();
 
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
 
@@ -93,16 +95,20 @@ public class MainActivity extends AppCompatActivity {
             Fragment f;
             if (id == R.id.nav_launch) {
                 f = new LaunchFragment();
-            } else if (id == R.id.nav_terminal) {
-                f = new TerminalFragment();
-            } else if (id == R.id.nav_market) {
+            } else if (id == R.id.nav_install) {
+                f = new InstallFragment();
+            } else if (id == R.id.nav_config) {
+                f = new ConfigFragment();
+            } else if (id == R.id.nav_plugins) {
                 f = new PluginFragment();
             } else {
-                f = new SettingsFragment();
+                f = new TerminalFragment();
             }
             switchFragment(f);
             return true;
         });
+        // 首页 = 启动页（与内测版一致）
+        nav.setSelectedItemId(R.id.nav_launch);
     }
 
     private void switchFragment(Fragment f) {
@@ -123,6 +129,18 @@ public class MainActivity extends AppCompatActivity {
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 100);
+        }
+    }
+
+    /** 拉起设备桥服务（普通后台服务，不 startForeground → 永不触发 FGS 杀进程崩溃） */
+    private void ensureDeviceBridge() {
+        if (isFinishing() || isDestroyed()) return;
+        if (DeviceBridgeService.isRunning()) return;
+        try {
+            startService(new Intent(this, DeviceBridgeService.class));
+            android.util.Log.i("DSHA", "device bridge started");
+        } catch (Throwable e) {
+            android.util.Log.e("DSHA", "start device bridge failed: " + e, e);
         }
     }
 

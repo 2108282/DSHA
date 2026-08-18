@@ -37,6 +37,30 @@ public class HarnessController {
     public static final int TASK_HARNESS = 3;
 
     private static final String PREFS = "deepseekharness";
+
+    // ================= 统一 GitHub 加速代理 =================
+    /** 用户指定的 GitHub 反向代理前缀（前缀式拼接，如: <代理>/https://github.com/...）。 */
+    public static final String GH_PROXY = "https://gh.fplj123580.qzz.io/";
+    private static final String[] GH_PROXY_HOSTS = {
+            "https://github.com/",
+            "https://raw.githubusercontent.com/",
+            "https://api.github.com/",
+            "https://codeload.github.com/",
+    };
+
+    /** 给 github 系链接加统一代理前缀；非 github / 已带代理前缀的保持原样。 */
+    public static String gitHubProxy(String u) {
+        if (u == null) return u;
+        if (u.startsWith(GH_PROXY)) return u;
+        for (String host : GH_PROXY_HOSTS) {
+            if (u.startsWith(host)) return GH_PROXY + u;
+        }
+        return u;
+    }
+
+    /** 市场索引本地缓存新鲜期（命中直接秒开，不请求网络）。 */
+    private static final long MARKET_CACHE_TTL_MS = 6L * 3600 * 1000;
+
     private static HarnessController instance;
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
 
@@ -58,6 +82,160 @@ public class HarnessController {
     private volatile boolean busy = false;
     private volatile int currentStep = 0;
     private volatile Process webProcess;
+    /** Web 进程“代际”/硬重启计数：让启动页感知重启并刷新预览（拿到最新 manifest/插件） */
+    private volatile long webEpoch = System.currentTimeMillis();
+    private volatile long hardRestartEpoch = 0;
+    /** 强重启/深停机配套 */
+    private final java.util.concurrent.atomic.AtomicBoolean webRestartLock = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final Object webStartLock = new Object();
+    private boolean webStarting = false;
+    private final java.util.Set<Process> webProcesses = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    public long getWebEpoch() { return webEpoch; }
+    public void bumpWebEpoch() { webEpoch = System.currentTimeMillis(); }
+    public long getHardRestartEpoch() { return hardRestartEpoch; }
+    public void bumpHardRestart() { hardRestartEpoch = System.currentTimeMillis(); }
+    public boolean isWebRestartLocked() { return webRestartLock.get(); }
+    public boolean tryAcquireWebRestartLock() { return webRestartLock.compareAndSet(false, true); }
+    public void releaseWebRestartLock() { webRestartLock.set(false); }
+
+    /** 端口探测：ms 超时内是否可连接 Web 端口 */
+    private boolean isWebPortUp(int timeoutMs) {
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.connect(new java.net.InetSocketAddress("127.0.0.1", parsePort()), timeoutMs);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 轮询等待 Web 端口彻底关闭；maxMs 内仍被占用返回 false */
+    private boolean waitPortClosed(long maxMs) {
+        int port = parsePort();
+        long deadline = System.currentTimeMillis() + maxMs;
+        while (System.currentTimeMillis() < deadline) {
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 200);
+                try { Thread.sleep(250); } catch (InterruptedException ignored) { }
+            } catch (Exception e) {
+                return true; // 端口已不可达
+            }
+        }
+        return false;
+    }
+
+    private void destroyAllWebProcesses() {
+        for (Process p : webProcesses) {
+            try { p.destroy(); } catch (Throwable ignored) {
+            }
+        }
+        try { webProcesses.clear(); } catch (Throwable ignored) {
+        }
+        synchronized (webStartLock) {
+            webProcess = null;
+        }
+    }
+
+    /** 同步停止（等端口关透）：供强重启/插件变更使用；常规杀不净则宽杀 node */
+    public void stopWebAndWait() {
+        try {
+            destroyAllWebProcesses();
+            proot.execAndRead(stopWebCommand());
+            if (!waitPortClosed(5000)) {
+                proot.execAndRead("pkill -9 -f node 2>/dev/null; pkill -9 -f 'dsh web' 2>/dev/null; "
+                        + "pkill -9 -f 'bin.js' 2>/dev/null; sleep 1; echo done");
+                waitPortClosed(5000);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 强重启（进程级，杀干净）：先深停 web → 杀 App 进程 → Alarm 拉起全新进程 */
+    public void restartAppProcess(final android.content.Context ctx) {
+        new Thread(() -> {
+            try {
+                destroyAllWebProcesses();
+                proot.execAndRead(stopWebCommand());
+                waitPortClosed(6000);
+            } catch (Throwable ignored) {
+            }
+            try { Thread.sleep(300); } catch (InterruptedException ignored) {
+            }
+            try {
+                android.app.AlarmManager am = (android.app.AlarmManager)
+                        ctx.getSystemService(android.content.Context.ALARM_SERVICE);
+                android.content.Intent i = new android.content.Intent(ctx, MainActivity.class);
+                i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                android.app.PendingIntent pi = android.app.PendingIntent.getActivity(
+                        ctx, 0, i,
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+                if (am != null) am.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 350, pi);
+            } catch (Throwable ignored) {
+            }
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                try {
+                    android.os.Process.killProcess(android.os.Process.myPid());
+                } catch (Throwable ignored) {
+                }
+            }, 250);
+        }).start();
+    }
+
+    /** 是否正在“自动补构建”（缺 bin.js 时启动触发） */
+    public boolean isBuilding() {
+        try {
+            return new java.io.File(proot.getRootfsDir(), "root/.dsha-building").isFile();
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /** 解析 rootfs ~/dsh-web.log 尾部，抽取关键错误给启动页展示 */
+    public String diagnoseWebFailure() {
+        try {
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsh-web.log");
+            if (!f.isFile() || f.length() == 0) return "未找到 WebUI 日志（~/dsh-web.log）";
+            long len = Math.min(f.length(), 16384);
+            byte[] bytes;
+            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                bytes = new byte[(int) len];
+                int off = 0;
+                while (off < bytes.length) {
+                    int n = in.read(bytes, off, bytes.length - off);
+                    if (n < 0) break;
+                    off += n;
+                }
+            }
+            String log = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("Cannot find module '([^']+)'").matcher(log);
+            if (m.find()) {
+                String mod = m.group(1);
+                if (mod.endsWith("apps/cli/lib/bin.js")) {
+                    return "入口文件缺失：" + mod + "\n（deepseek-harness 未构建成功；请点「重启」自动补构建，或重跑安装步骤⑤）";
+                }
+                return "缺少模块：" + mod + "\n（依赖安装不完整，已自动重装；仍失败请重跑步骤⑤）";
+            }
+            if (log.contains("MODULE_NOT_FOUND")) {
+                return "MODULE_NOT_FOUND：入口依赖缺失，请重跑安装步骤⑤（应用已自动尝试自愈）";
+            }
+            java.util.regex.Matcher vm = java.util.regex.Pattern.compile("ValidationError[^\\n]*").matcher(log);
+            if (vm.find()) {
+                return "配置校验失败：" + vm.group().trim() + "\n（已自动钳制超限配置；仍有问题可重置配置）";
+            }
+            String tail = log.trim();
+            int nl = tail.lastIndexOf('\n');
+            if (nl >= 0) tail = tail.substring(nl + 1);
+            if (log.contains("dsh web:")) {
+                boolean up = isWebPortUp(600);
+                return up
+                        ? "Web 服务正在运行但页面探测失败，可点「打开预览」或「重启」再试。"
+                        : "Web 启动过（已打印 URL）但端口 3080 未就绪：\n可能原因：启动中 / 端口被占 / 依赖加载卡住。\n请稍等或「重启」；仍不行请查看 ~/dsh-web.log 完整内容。";
+            }
+            return tail.isEmpty() ? "WebUI 异常退出（日志为空）" : "WebUI 异常退出：\n" + tail;
+        } catch (Exception e) {
+            return "无法解析 WebUI 日志：" + e.getMessage();
+        }
+    }
     /** 局域网 0.0.0.0 放行补丁是否已就绪（防重复打补丁） */
     private volatile boolean lanBindReady = false;
     /** 进度持久化节流用时间戳 */
@@ -264,12 +442,11 @@ public class HarnessController {
 
     public ProotBootstrap getProot() { return proot; }
 
-    /** 是否已安装 deepseek-harness（源码树 或 RC6 全局 dsh，任一即可） */
+    /** 是否已安装 deepseek-harness（跟随自定义工作区路径；RC6 模式检查 dsh 命令） */
     public boolean isHarnessInstalled() {
         if (proot.isHarnessInstalled(getWorkdir())) return true;
         try {
             String r = proot.execAndRead("command -v dsh 2>/dev/null || echo MISSING");
-            // execAndRead 出错会返回 "ERROR: ..." 前缀，须排除，避免误判已安装
             return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
         } catch (Exception e) {
             return false;
@@ -279,6 +456,63 @@ public class HarnessController {
     /** Web UI 进程是否在运行 */
     public boolean isWebRunning() {
         return webProcess != null && webProcess.isAlive();
+    }
+
+    /** 用户手动停止后，keepAlive 是否应暂停自动拉起（直到再次 startWeb） */
+    public boolean isKeepAlivePaused() {
+        return prefs.getBoolean("keepalive_paused", false);
+    }
+
+    /** 预启动阈值：距上次手动停止小于该值则尊重用户、不自动拉起（ms） */
+    private static final long PREWARM_STOP_GUARD_MS = 90_000;
+
+    /**
+     * 自动后台预启动（进入启动页/App 前台时调用）：
+     * 环境就绪 && web 未运行 && 用户近期未手动停止 → 后台静默 startWeb()，
+     * 让用户点「启动」时基本秒开。幂等：web 已在跑/启动中自动跳过。
+     */
+    /** 确保配置自愈脚本已写入 rootfs（启动前把超限 timeoutMs 钳回合法值，防 ValidationError 崩溃 WebUI） */
+    private void ensureConfigFixAsset() {
+        try {
+            String js = readAsset("config-fix.js");
+            if (js == null || js.isEmpty()) return;
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsh-config-fix.js");
+            f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), js.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            f.setExecutable(true, false);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** 确保前端"插件失败降级"热补丁已应用（对编译产物打，幂等，RC6/源码通用）：
+     *  坏插件不再卡死整个 WebUI 启动。 */
+    private void ensureWebUiDegrade() {
+        try {
+            String script = readAsset("webui-degrade-patch.sh");
+            if (script == null || script.isEmpty()) return;
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-degrade.sh");
+            f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
+            proot.execAndRead("bash /root/dsha-degrade.sh; rm -f /root/dsha-degrade.sh");
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public void maybePrewarmWeb() {
+        try {
+            ensureWebUiDegrade(); // 每次启动前置自愈（幂等秒回，防插件失败卡启动）
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (!proot.isInstalled() || !isHarnessInstalled()) return; // 环境/harness 未装
+            if (webProcess != null && webProcess.isAlive()) return;    // 已在运行
+            // 尊重用户：90s 内手动停止过 → 不自动拉起
+            long lastStop = prefs.getLong("last_web_stop", 0);
+            if (System.currentTimeMillis() - lastStop < PREWARM_STOP_GUARD_MS) return;
+            android.util.Log.i("DSHA", "[预启动] 后台预热 Web UI…");
+            startWeb();
+        } catch (Throwable ignored) {
+        }
     }
 
     // ================= 分步安装 =================
@@ -378,36 +612,31 @@ public class HarnessController {
         }
     }
 
-    /** 第 ⑤ 步完成判定：源码树或 RC6 全局安装，且 node-pty 就绪。 */
+    /** 第 4 步完成判定：已装 + node-pty 就绪。RC6 用一次 proot 进程查完（省一次子进程，降低卡顿） */
     private boolean isHarnessReady() {
-        boolean src = proot.isHarnessInstalled(getWorkdir()) && hasPtyNodeInWorkdir();
-        if (src) return true;
-        try {
-            String r = proot.execAndRead(
-                    "command -v dsh >/dev/null 2>&1 && " +
-                    "(find /usr/local/lib/node_modules -maxdepth 8 \\( -path '*/node-pty/build/Release/pty.node' -o -path '*/node-pty/prebuilds/linux-arm64/pty.node' \\) 2>/dev/null | head -1) || echo MISSING");
-            return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
-        } catch (Exception e) {
-            return false;
+        if (useRc6()) {
+            try {
+                String r = proot.execAndRead(
+                        "command -v dsh >/dev/null 2>&1 && " +
+                        "(find /usr/local/lib/node_modules -maxdepth 8 \\( -path '*/node-pty/build/Release/pty.node' -o -path '*/node-pty/prebuilds/linux-arm64/pty.node' \\) 2>/dev/null | head -1) || echo MISSING");
+                return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
+            } catch (Exception e) {
+                return false;
+            }
         }
+        return proot.isHarnessInstalled(getWorkdir()) && hasPtyNode();
     }
 
-    /** 检查 node-pty 编译产物（pty.node）是否就绪（源码工作区 + 全局 npm，任一即可） */
+    /** 检查 node-pty 编译产物（pty.node）是否就绪（RC6 模式查 npm 包，源码模式查项目目录） */
     private boolean hasPtyNode() {
-        if (hasPtyNodeInWorkdir()) return true;
         try {
-            String r = proot.execAndRead(
-                    "find /usr/local/lib/node_modules -maxdepth 8 -path '*/node-pty/build/Release/pty.node' 2>/dev/null | head -1; " +
-                    "find /usr/local/lib/node_modules -maxdepth 8 -path '*/node-pty/prebuilds/linux-arm64/pty.node' 2>/dev/null | head -1");
-            return r != null && !r.startsWith("ERROR") && !r.trim().isEmpty();
-        } catch (Throwable ignored) {
-        }
-        return false;
-    }
-
-    /** 只查源码工作区里的 pty.node（纯文件探测，不起 proot） */
-    private boolean hasPtyNodeInWorkdir() {
-        try {
+            if (useRc6()) {
+                String r = proot.execAndRead(
+                        "find /usr/local/lib/node_modules -maxdepth 8 -path '*/node-pty/build/Release/pty.node' 2>/dev/null | head -1; " +
+                        "find /usr/local/lib/node_modules -maxdepth 8 -path '*/node-pty/prebuilds/linux-arm64/pty.node' 2>/dev/null | head -1");
+                // execAndRead 出错返回 "ERROR: ..." 前缀，须排除（不能把执行失败当成有 pty.node）
+                return r != null && !r.startsWith("ERROR") && !r.trim().isEmpty();
+            }
             File wdDir = new File(proot.getRootfsDir(), "root/" + getWorkdir());
             File pnpmDir = new File(wdDir, "node_modules/.pnpm");
             if (!pnpmDir.isDirectory()) return false;
@@ -521,6 +750,13 @@ public class HarnessController {
         } catch (Throwable ignored) {
         }
         ensureWatchdogFiles();  // 看门狗 + 重启命令（最新端口）
+        // ===== 原生内置移动端 UI 适配（免第三方插件） =====
+        // 把 dsh-client-ui-mobile-adapt 的 client 产物直接注入 web-app 前端，
+        // 手机端单栏/抽屉/汉堡/全屏设置开箱即用。幂等，失败不阻塞安装。
+        try {
+            ensureNativeMobileAdapt();
+        } catch (Throwable ignored) {
+        }
         // 内置插件快照：只录实体目录（排除符号链接=用户安装插件），安装完成时最干净基线
         // 快照缺失时才生成（后续沿用；想重扫可删 /root/dsha-builtin.txt）
         runStep("生成内置插件快照", 98,
@@ -655,10 +891,9 @@ public class HarnessController {
         */
     }
 
-    /** 是否使用 RC6 版本（npm 安装 @deepseek-ai/dsh@0.1.0-rc.6，插件兼容性更好） */
+    /** 是否使用 RC6 版本。已改为“始终最新 RC”（@deepseek-ai/dsh@rc），无开关。 */
     public boolean useRc6() {
-        return appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
-                .getBoolean("use_rc6", true);
+        return true;
     }
 
     /** 字节格式化：134833152 -> "134.8MB"，1.33GB -> "1.33GB" */
@@ -676,12 +911,12 @@ public class HarnessController {
     private void installHarnessRc6() throws Exception {
         requireRootfs();
         requireTools();
-        setProgress("安装 RC6（npm 全局安装 @deepseek-ai/dsh）", 91);
+        setProgress("安装 deepseek-harness 最新 RC（npm 全局）", 91);
         runStep("RC6 安装环境准备", 92,
                 "npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user 2>/dev/null; " +
                 "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc");
-        runStep("安装 @deepseek-ai/dsh@0.1.0-rc.6", 95,
-                "npm install -g @deepseek-ai/dsh@0.1.0-rc.6 --force --registry=https://registry.npmmirror.com 2>&1 | tail -25; " +
+        runStep("安装 @deepseek-ai/dsh 最新 RC", 95,
+                "npm install -g @deepseek-ai/dsh@rc --force --registry=https://registry.npmmirror.com 2>&1 | tail -25; " +
                 "echo \">> npm 退出码: ${PIPESTATUS[0]}\"; " +
                 "if [ \"${PIPESTATUS[0]}\" != 0 ]; then echo 'npm 安装失败，请重试或检查网络'; fi");
         runStep("编译 node-pty 原生模块", 98,
@@ -739,6 +974,7 @@ public class HarnessController {
                 "echo '源码已存在，跳过克隆（尝试增量更新）'; " +
                 "(cd " + wd + " && git pull --ff-only 2>/dev/null || true); " +
                 "else rm -rf " + wd + " && ( " +
+                "git clone --depth 1 " + gitHubProxy("https://github.com/deepseek-ai/deepseek-harness.git") + " " + wd + " || " +
                 "git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
                 "git clone --depth 1 https://gitclone.com/github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
                 "git clone --depth 1 https://ghfast.top/https://github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
@@ -746,7 +982,8 @@ public class HarnessController {
                 "git clone --depth 1 https://ghproxy.net/https://github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
                 "git clone --depth 1 https://gitcode.com/gh_mirrors/de/deepseek-harness.git " + wd + " ) || " +
                 "(echo 'git 克隆失败，改用源码包下载…'; rm -rf " + wd + " && " +
-                "(curl -kfsSL --retry 3 -m 300 https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
+                "(curl -kfsSL --retry 3 -m 300 " + gitHubProxy("https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main") + " -o dsh-src.tar.gz || " +
+                "curl -kfsSL --retry 3 -m 300 https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
                 "curl -kfsSL --retry 3 -m 300 https://ghfast.top/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
                 "curl -kfsSL --retry 3 -m 300 https://gh-proxy.com/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
                 "curl -kfsSL --retry 3 -m 300 https://ghproxy.net/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz) && " +
@@ -1057,6 +1294,8 @@ public class HarnessController {
     }
 
     public String startWebCommand() {
+        // 启动前自愈：确保配置修复脚本已就位（钳制超限 timeoutMs）
+        ensureConfigFixAsset();
         // 局域网访问：deepseek-harness 官方 CLI 默认拒绝 --host 0.0.0.0，
         // 需先打 lan-bind-patch.sh 放行（失败则回落到 127.0.0.1，服务保证能起）。
         boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
@@ -1107,7 +1346,8 @@ public class HarnessController {
         if (port != 3080) opts += " --port " + port;
         if (lanReady) opts += " --host 0.0.0.0" + lanTrustArgs(); // 0.0.0.0 + 信任本机所有 IP（Host 头校验放行）
         String wd = detectWorkdir();
-        return "if [ -d /root/" + wd + " ]; then cd /root/" + wd + "; " + depsSelfHeal()
+        return "node /root/dsh-config-fix.js 2>/dev/null || true; "
+                + "if [ -d /root/" + wd + " ]; then cd /root/" + wd + "; " + depsSelfHeal()
                 + "exec node apps/cli/lib/bin.js web" + opts + " > ~/dsh-web.log 2>&1; "
                 + "else echo '[DSHA] 源码目录缺失，尝试全局 dsh'; "
                 + "if command -v dsh >/dev/null 2>&1 && test -f \"$(command -v dsh)\"; then "
@@ -1203,6 +1443,95 @@ public class HarnessController {
      * 移除 deepseek-harness CLI 对 --host 0.0.0.0 的拒绝（底层 webServer 本就支持）。
      * 幂等；返回 true 表示本次可用 0.0.0.0。
      */
+    /** 内置移动端 UI 适配：把 dsh-client-ui-mobile-adapt 的 client 产物注入 web-app 前端。
+     *  原则：
+     *  - 不依赖第三方插件仓库（assets 里自带完整 client.js/index.js/cordis.patch.yml）；
+     *  - 注入点是「web-app 的 dist 静态目录 + cordis.patch insert」；
+     *  - 幂等：已注入（/root/dsha-mobile-adapt-installed 标记）则跳过；
+     *  - 失败绝不影响安装（catch 吞掉）。
+     */
+    private void ensureNativeMobileAdapt() {
+        try {
+            // 1) 往 rootfs 写注入脚本（heredoc 防引号问题）
+            String script =
+                    "set -e; " +
+                    "DST=$(find /usr/local/lib/node_modules /root -maxdepth 14 " +
+                    "  \\( -path '*dsh-web-app/dist*/client' -o -path '*dsh-web-app/lib/client' \\) " +
+                    "  -type d 2>/dev/null | head -1); " +
+                    "if [ -z \"$DST\" ]; then echo '[DSHA] 未找到 web-app client 目录，跳过移动端适配'; exit 0; fi; " +
+                    "echo \"[DSHA] 注入移动端适配 -> $DST\"; " +
+                    "cp -f /root/dsha-mobile-adapt/client.js \"$DST/dsh-client-ui-mobile-adapt.js\" && " +
+                    "touch /root/dsha-mobile-adapt-installed && echo OK";
+            java.io.File sF = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-inject.sh");
+            java.io.File aDir = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-adapt");
+            aDir.mkdirs();
+            // 2) 把 assets 里的 client.js / index.js / cordis.patch.yml 写进 rootfs
+            writeAssetTo("mobile-adapt/client.js", new java.io.File(aDir, "client.js"));
+            writeAssetTo("mobile-adapt/index.js", new java.io.File(aDir, "index.js"));
+            writeAssetTo("mobile-adapt/cordis.patch.yml", new java.io.File(aDir, "cordis.patch.yml"));
+            java.nio.file.Files.write(sF.toPath(), script.getBytes(StandardCharsets.UTF_8));
+            // 3) 执行注入（幂等标记存在则跳过）
+            String r = proot.execAndRead(
+                    "if [ -f /root/dsha-mobile-adapt-installed ]; then echo ALREADY; "
+                    + "else bash /root/dsha-mobile-inject.sh; fi; "
+                    + "rm -f /root/dsha-mobile-inject.sh");
+            // 4) 【新增】profile 注册：把移动端适配作为 web profile 的 bundle 挂上
+            //    （仅当 manifest 还没包含时追加；dependencies 用 file: 指向本机目录，零网络）
+            if (r != null && (r.contains("OK") || r.contains("ALREADY"))) {
+                registerMobileAdaptBundle();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** profile 注册移动端适配 bundle：dependencies + dsh.profile.bundles（幂等） */
+    private void registerMobileAdaptBundle() {
+        try {
+            final String NAME = "dsh-client-ui-mobile-adapt";
+            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+            if (!pf.isFile()) return;
+            String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
+            org.json.JSONObject root = new org.json.JSONObject(txt);
+            // dependencies 加 file: 指向我们注入的目录（零网络）
+            org.json.JSONObject deps = root.optJSONObject("dependencies");
+            if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
+            if (!deps.has(NAME)) {
+                deps.put(NAME, "file:/root/dsha-mobile-adapt");
+            }
+            // dsh.profile.bundles 追加
+            org.json.JSONObject dsh = root.optJSONObject("dsh");
+            org.json.JSONObject prof = dsh == null ? null : dsh.optJSONObject("profile");
+            if (prof == null) {
+                prof = new org.json.JSONObject();
+                if (dsh == null) dsh = new org.json.JSONObject();
+                dsh.put("profile", prof);
+                root.put("dsh", dsh);
+            }
+            org.json.JSONArray bundles = prof.optJSONArray("bundles");
+            if (bundles == null) { bundles = new org.json.JSONArray(); prof.put("bundles", bundles); }
+            boolean has = false;
+            for (int i = 0; i < bundles.length(); i++) {
+                if (NAME.equals(bundles.optString(i, "").trim())) { has = true; break; }
+            }
+            if (!has) bundles.put(NAME);
+            String s;
+            try { s = root.toString(2); } catch (Throwable e) { s = root.toString(); }
+            java.nio.file.Files.write(pf.toPath(), s.getBytes(StandardCharsets.UTF_8));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 把 assets 内文本资源写入 rootfs 指定文件（目录自动建） */
+    private void writeAssetTo(String assetName, java.io.File dst) {
+        try {
+            String s = readAsset(assetName);
+            if (s == null || s.isEmpty()) return;
+            if (dst.getParentFile() != null) dst.getParentFile().mkdirs();
+            java.nio.file.Files.write(dst.toPath(), s.getBytes(StandardCharsets.UTF_8));
+        } catch (Throwable ignored) {
+        }
+    }
+
     private boolean tryEnableLanBind() {
         if (lanBindReady) return true;
         try {
@@ -1348,17 +1677,36 @@ public class HarnessController {
     }
 
     public void startWeb() {
-        if (webProcess != null && webProcess.isAlive()) {
-            return; // 已在运行，避免重复启动
+        synchronized (webStartLock) {
+            if (webProcess != null && webProcess.isAlive()) {
+                return; // 已在运行，避免重复启动
+            }
+            if (webStarting) return; // 已有启动在进行（防 keepAlive/手动并发起第二个实例 → EADDRINUSE）
+            webStarting = true;
         }
         IO.execute(() -> {
             try {
+                // 启动前预检：端口仍被占 → 深杀残留（根治 EADDRINUSE）
+                if (isWebPortUp(400)) {
+                    destroyAllWebProcesses();
+                    proot.execAndRead(stopWebCommand());
+                    if (!waitPortClosed(4000)) {
+                        proot.execAndRead("pkill -9 -f node 2>/dev/null; pkill -9 -f 'bin.js' 2>/dev/null; sleep 1; echo done");
+                        waitPortClosed(4000);
+                    }
+                }
                 setProgress("正在启动 Web UI", 0);
                 proot.ensureRuntimeFiles();
                 ensureDangerGuard(); // 安全包装器缺失则自动补装
                 ensureBashGuardPatch(); // bash 工具 lib 强制加载守卫（不依赖重装）
                 Process p = proot.execRootfs(startWebCommand());
-                webProcess = p;
+                webProcesses.add(p);
+                synchronized (webStartLock) {
+                    webProcess = p;
+                }
+                // web 已由用户/预启动成功拉起 → 解除 keepAlive 暂停（恢复崩溃自愈）
+                prefs.edit().putBoolean("keepalive_paused", false).apply();
+                bumpWebEpoch(); // 新 web 进程已起：通知预览端刷新
                 // 阻塞读取输出，保持 proot+node 进程存活（后台 nohup 会被 --kill-on-exit 杀掉）
                 String out = proot.drainOutput(p);
                 // 输出已重定向到 ~/dsh-web.log，stdout 为空时抓「Error 块 + 尾部」
@@ -1380,6 +1728,10 @@ public class HarnessController {
     }
 
     public void stopWeb() {
+        // 记录手动停止时间：最近停止后 90s 内关闭自动预启动（尊重用户）
+        prefs.edit().putLong("last_web_stop", System.currentTimeMillis()).apply();
+        // 标记"用户主动停止"：keepAlive 暂停自动拉起，直到用户/预启动再次 startWeb
+        prefs.edit().putBoolean("keepalive_paused", true).apply();
         IO.execute(() -> {
             try {
                 Process p = webProcess;
@@ -1841,7 +2193,11 @@ public class HarnessController {
     /** 拉取插件市场快照 JSON（GitHub API 列最新快照 → jsdelivr/raw 下载），返回 JSON 文本 */
     /** 拉取插件市场索引：PLUGINS-ALL.md（jsdelivr 优先，含多镜像）；失败时回退本地缓存 */
     public String fetchMarketIndex() {
+        // 未过期缓存直接秒开（不请求网络）；失败再回退旧缓存
+        String fresh = readMarketCache(true);
+        if (fresh != null) return fresh;
         String[] urls = {
+                gitHubProxy("https://raw.githubusercontent.com/AdamPlatin123/awesome-dsh-plugins/main/PLUGINS-ALL.md"),
                 "https://cdn.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@main/PLUGINS-ALL.md",
                 "https://cdn.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@master/PLUGINS-ALL.md",
                 "https://gcore.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@main/PLUGINS-ALL.md",
@@ -1851,7 +2207,7 @@ public class HarnessController {
                 "https://ghproxy.net/https://raw.githubusercontent.com/AdamPlatin123/awesome-dsh-plugins/main/PLUGINS-ALL.md",
                 "https://cdn.jsdelivr.net/gh/AdamPlatin123/awesome-dsh-plugins@main/README.md"
         };
-        String cached = readMarketCache(); // 先读缓存备用
+        String cached = readMarketCache(false); // 全部源失败时回退旧缓存（离线可浏览）
         for (String u : urls) {
             try {
                 java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
@@ -1887,15 +2243,40 @@ public class HarnessController {
     }
 
     /** 读市场索引本地缓存（App 私有目录） */
-    private String readMarketCache() {
+    /** 读市场索引本地缓存。freshOnly=true 仅当未超 {@link #MARKET_CACHE_TTL_MS} 才返回（过期则由调用方决定是否用旧缓存）。 */
+    private String readMarketCache(boolean freshOnly) {
         try {
             java.io.File f = new java.io.File(appContext.getFilesDir(), "market-index.md");
-            if (f.isFile() && f.length() > 8000)
+            if (f.isFile() && f.length() > 8000) {
+                if (freshOnly && System.currentTimeMillis() - f.lastModified() > MARKET_CACHE_TTL_MS) {
+                    return null; // 已过期：需要去拉取刷新
+                }
                 return new String(java.nio.file.Files.readAllBytes(f.toPath()),
                         java.nio.charset.StandardCharsets.UTF_8);
+            }
         } catch (Exception ignored) {
         }
         return null;
+    }
+
+    /** 市场索引缓存已有多旧（ms），供 UI 显示“缓存于 N 分钟前”；无缓存返回 -1 */
+    public long getMarketCacheAgeMs() {
+        try {
+            java.io.File f = new java.io.File(appContext.getFilesDir(), "market-index.md");
+            if (f.isFile() && f.length() > 8000) return System.currentTimeMillis() - f.lastModified();
+        } catch (Throwable ignored) {
+        }
+        return -1;
+    }
+
+    /** 强制刷新市场索引：先清本地缓存，下次拉取即走网络 */
+    public void refreshMarketIndex() {
+        try {
+            java.io.File f = new java.io.File(appContext.getFilesDir(), "market-index.md");
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 写市场索引缓存 */
@@ -2043,6 +2424,8 @@ public class HarnessController {
     public String fetchNpmName(String owner, String repo) {
         if (owner == null || owner.isEmpty() || repo == null || repo.isEmpty()) return null;
         String[] urls = {
+                gitHubProxy("https://raw.githubusercontent.com/" + owner + "/" + repo + "/main/package.json"),
+                gitHubProxy("https://raw.githubusercontent.com/" + owner + "/" + repo + "/master/package.json"),
                 "https://raw.githubusercontent.com/" + owner + "/" + repo + "/main/package.json",
                 "https://raw.githubusercontent.com/" + owner + "/" + repo + "/master/package.json",
                 "https://ghfast.top/https://raw.githubusercontent.com/" + owner + "/" + repo + "/main/package.json"

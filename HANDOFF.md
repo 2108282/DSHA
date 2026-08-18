@@ -7,32 +7,25 @@
 
 ## 0. 你现在接手的是什么局面
 
-日期：2026-08-18（用户时区 Asia/Shanghai）。
+日期：2026-08-19（用户时区 Asia/Shanghai）。
 
 主人是 GitHub 用户 **`rthdfd`**，仓库是他自己的 fork：  
 https://github.com/rthdfd/DSHA
 
 上游原作：https://github.com/qiannianhuanxiang/DSHA  
-主人已获作者**书面同意**可以往上游提 PR。今晚作者（QQ 群主）睡着了，**明天再交上游**。今晚继续改 fork。
+主人已获作者**书面同意**，并已被加成上游 Write 协作者。本环境的 GitHub App **仍然不是**主人账号，不能替他在上游点「Create pull request」（403）。
 
 **当前工作分支（必须一直待在这里，不要切分支）：**  
 `arena/01a0149c-dsha`
 
-**当前 HEAD：** `e17144a`  
-`fix: aapt 会把 offline-rootfs.tar.gz 解成 .tar，按这个名字解压`
-
 **版本：** `versionName 1.1.2` / `versionCode 18` / 文件 `VERSION` = `v1.1.2`
 
-**fork 上已有一份给作者 AI 看的 PR 说明（开在自己仓库，等于自己给自己提，上游看不到）：**  
+**fork 上已有一份给作者 AI 看的 PR 说明（开在自己仓库，上游看不到）：**  
 https://github.com/rthdfd/DSHA/pull/1
 
-**为什么还没交到上游：**
+**历史已接上：** 本分支用 `--allow-unrelated-histories` 合并了上游 `main`（`v1.1.0-fixed50` / `6e8d6a7`）。保留上游 ADB / mobile-adapt 等文件，也保留我们的解压页 + 两段 CI。不要再 `reset --soft` 到上游。
 
-1. `rthdfd/DSHA` 和 `qiannianhuanxiang/DSHA` **没有共同祖先**（`git merge-base` 为空）。GitHub 比较页会显示「没有任何东西可以比较」，**没有绿色 Create pull request 按钮**。
-2. 本环境的 GitHub App token **不能**往别人的仓库建 PR（403），也不能改别人仓库的 collaborator。
-3. 上游 `main` 已经走到 `v1.1.0-fixed50`，比 fork 的 `main`（`3da7e96`）新很多：有 ADB 配对、mobile-adapt、config-fix 等。**不能**把 fork 树硬 reset 到上游，否则会删掉作者那些文件。
-
-明天交上游的正确做法见第 8 节。不要再让用户去 Issues 里「交 PR」。Issues ≠ PR。
+用户要用 **rthdfd 账号**打开比较页，点绿色 **Create pull request**。Issues ≠ PR。
 
 ---
 

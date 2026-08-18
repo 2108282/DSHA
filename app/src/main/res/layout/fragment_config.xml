@@ -17,9 +17,20 @@
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/config_workspace_entry"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:text="📁 工作区 · 备份/恢复 · 环境管理"
+            android:textColor="#E6EDF3"
+            android:textSize="14sp"
+            android:background="@drawable/bg_btn" />
+
+        <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
+            android:layout_marginTop="12dp"
             android:text="DeepSeek API Key" />
 
         <EditText
@@ -100,7 +111,8 @@
             android:id="@+id/config_rc6"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="使用 RC6 版本（npm 安装，插件兼容性更好；需重装第 4 步）" />
+            android:visibility="gone"
+            android:text="deepseek-harness：默认最新 RC（@deepseek-ai/dsh@rc）" />
 
         <Button
             android:id="@+id/config_save"
@@ -108,6 +120,30 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
             android:text="保存配置" />
+
+        <TextView
+            android:id="@+id/config_adb_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:lineSpacingExtra="3dp"
+            android:textSize="13sp"
+            android:text="ADB 设备通道：未检测（需先安装环境）" />
+
+        <Button
+            android:id="@+id/config_adb_pair"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="🔐 ADB 无线配对（免 Shizuku）" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:lineSpacingExtra="3dp"
+            android:textSize="12sp"
+            android:text="启用后 agent 可直连设备 adbd（uid=2000）执行命令；也可在常驻通知卡「🔐 输码配对」就地输入。手机：设置→开发者选项→无线调试→「使用配对码配对设备」。" />
 
         <TextView
             android:id="@+id/config_repo_link"

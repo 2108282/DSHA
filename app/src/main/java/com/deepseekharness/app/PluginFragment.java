@@ -24,6 +24,14 @@ import java.util.List;
  * + 已装插件管理（启用/禁用/导入/导出）
  */
 public class PluginFragment extends Fragment {
+    private final android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+
+    /** 市场缓存年龄提示（" · 缓存于 N 分钟前"）；无缓存返回空串 */
+    private String cacheHint() {
+        long age = c.getMarketCacheAgeMs();
+        if (age < 0) return "";
+        return String.format(java.util.Locale.US, " · 缓存于 %d 分钟前", age / 60000);
+    }
 
     private enum Mode { MARKET, INSTALLED }
 
@@ -104,6 +112,17 @@ public class PluginFragment extends Fragment {
         });
         btnSort.setOnClickListener(v -> showSortMenu(btnSort));
 
+        // 强制刷新市场缓存（清缓存 → 重新拉网络）
+        TextView btnRefresh = view.findViewById(R.id.btnRefresh);
+        if (btnRefresh != null) {
+            btnRefresh.setOnClickListener(v -> {
+                status.setText("已清除缓存，正在重新拉取…");
+                c.refreshMarketIndex();
+                items.clear();
+                showMarket();
+            });
+        }
+
         view.findViewById(R.id.btnExport).setOnClickListener(v -> exportPlugins());
         view.findViewById(R.id.btnImport).setOnClickListener(v -> importPlugins());
         // 隐藏自带插件开关：记住选择，切换时刷新已装列表
@@ -171,7 +190,7 @@ public class PluginFragment extends Fragment {
         if (!items.isEmpty()) {
             applySort();
             adapter.setData(items, true);
-            status.setText("共 " + items.size() + " 个插件 · 点击查看详情/安装");
+            status.setText("共 " + items.size() + " 个插件 · 点击查看详情/安装" + cacheHint());
             return;
         }
         status.setText("正在拉取插件市场…");
@@ -187,7 +206,7 @@ public class PluginFragment extends Fragment {
                 items.addAll(list);
                 applySort();
                 adapter.setData(items, true);
-                status.setText("共 " + items.size() + " 个插件 · 点击查看详情/安装");
+                status.setText("共 " + items.size() + " 个插件 · 点击查看详情/安装" + cacheHint());
                 fetchStars(items); // 异步批量拉真实 star 数
             });
         }).start();
@@ -330,9 +349,11 @@ public class PluginFragment extends Fragment {
                     }
                 }
                 if (n == 0) continue;
+                String uApi = "https://api.github.com/search/repositories?" + q + "&per_page=100";
                 String[] urls = {
-                        "https://api.github.com/search/repositories?" + q + "&per_page=100",
-                        "https://ghfast.top/https://api.github.com/search/repositories?" + q + "&per_page=100"
+                        HarnessController.gitHubProxy(uApi),
+                        uApi,
+                        "https://ghfast.top/" + uApi
                 };
                 for (String u : urls) {
                     try {

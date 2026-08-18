@@ -58,7 +58,6 @@ public class WelcomeActivity extends AppCompatActivity {
     private void finishWelcome() {
         getSharedPreferences("deepseekharness", MODE_PRIVATE)
                 .edit().putBoolean("welcomed", true).apply();
-        // 欢迎页之后一律进解压页，由解压页决定成功还是把错误摊在屏幕上
         startActivity(new Intent(this, ExtractActivity.class));
         finish();
     }

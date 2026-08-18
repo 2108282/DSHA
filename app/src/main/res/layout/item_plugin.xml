@@ -3,7 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:background="#FFFFFF"
+    android:background="#161B22"
     android:padding="12dp"
     android:layout_marginStart="12dp"
     android:layout_marginEnd="12dp"
@@ -19,7 +19,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:textColor="#1F2328"
+            android:textColor="#E6EDF3"
             android:textSize="15sp"
             android:textStyle="bold" />
 
@@ -31,7 +31,7 @@
             android:paddingEnd="14dp"
             android:gravity="center"
             android:text="安装"
-            android:textColor="#0969DA"
+            android:textColor="#58A6FF"
             android:textSize="12sp"
             android:background="@drawable/bg_btn" />
 
@@ -47,7 +47,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
-        android:textColor="#0969DA"
+        android:textColor="#58A6FF"
         android:textSize="12sp" />
 
     <TextView
@@ -55,7 +55,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:textColor="#656D76"
+        android:textColor="#8B949E"
         android:textSize="13sp"
         android:maxLines="3"
         android:ellipsize="end" />

@@ -3,7 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#F7F8FA">
+    android:background="#0D1117">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -18,7 +18,7 @@
             android:layout_weight="1"
             android:gravity="center"
             android:text="插件市场"
-            android:textColor="#1F2328"
+            android:textColor="#E6EDF3"
             android:textSize="15sp"
             android:background="@drawable/bg_btn" />
 
@@ -30,7 +30,7 @@
             android:layout_marginStart="8dp"
             android:gravity="center"
             android:text="已装插件"
-            android:textColor="#1F2328"
+            android:textColor="#E6EDF3"
             android:textSize="15sp"
             android:background="@drawable/bg_btn" />
 
@@ -43,8 +43,21 @@
             android:paddingEnd="10dp"
             android:gravity="center"
             android:text="排序⭐"
-            android:textColor="#1F2328"
+            android:textColor="#E6EDF3"
             android:textSize="13sp"
+            android:background="@drawable/bg_btn" />
+
+        <TextView
+            android:id="@+id/btnRefresh"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginStart="8dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:gravity="center"
+            android:text="🔄"
+            android:textColor="#E6EDF3"
+            android:textSize="15sp"
             android:background="@drawable/bg_btn" />
     </LinearLayout>
 
@@ -65,7 +78,7 @@
             android:layout_weight="1"
             android:gravity="center"
             android:text="导出插件包"
-            android:textColor="#1F2328"
+            android:textColor="#E6EDF3"
             android:textSize="13sp"
             android:background="@drawable/bg_btn" />
 
@@ -77,7 +90,7 @@
             android:layout_marginStart="8dp"
             android:gravity="center"
             android:text="导入插件包"
-            android:textColor="#1F2328"
+            android:textColor="#E6EDF3"
             android:textSize="13sp"
             android:background="@drawable/bg_btn" />
     </LinearLayout>
@@ -89,7 +102,7 @@
         android:layout_marginStart="12dp"
         android:paddingTop="2dp"
         android:text="隐藏 dsh 自带插件（只看自己装的）"
-        android:textColor="#1F2328"
+        android:textColor="#E6EDF3"
         android:textSize="13sp"
         android:visibility="gone" />
 
@@ -101,8 +114,8 @@
         android:layout_marginEnd="12dp"
         android:layout_marginBottom="6dp"
         android:hint="🔍 搜索插件名称…"
-        android:textColor="#1F2328"
-        android:textColorHint="#656D76"
+        android:textColor="#E6EDF3"
+        android:textColorHint="#8B949E"
         android:textSize="14sp"
         android:singleLine="true"
         android:paddingStart="12dp"
@@ -123,6 +136,6 @@
         android:layout_height="wrap_content"
         android:padding="12dp"
         android:text="加载中…"
-        android:textColor="#656D76"
+        android:textColor="#8B949E"
         android:textSize="13sp" />
 </LinearLayout>
