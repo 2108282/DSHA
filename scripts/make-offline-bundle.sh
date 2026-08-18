@@ -13,6 +13,10 @@
 #       至少 4GB 空闲存储空间，网络畅通。
 # ============================================================
 set -e
+# 记录脚本所在仓库根路径(绝对)，避免后面 cd 后相对路径失效。
+# $0 形如 scripts/make-offline-bundle.sh → 先取脚本目录 scripts，再上一级到仓库根
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOTFS_DIR="$HOME/dsha-offline-rootfs"
 OUTPUT="$HOME/offline-rootfs.tar.gz"
 
@@ -57,8 +61,6 @@ PROOT_ARGS=(
 )
 
 echo "==> [5/7] 注入预装脚本与补丁"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 "${PROOT_ARGS[@]}" bash -c "mkdir -p /root/patches" 2>/dev/null
 if [ -d "$REPO_ROOT/app/src/main/assets" ]; then
   for f in webui-sidebar.patch bash-guard.patch webui-polyfill.sh rootfs-confirm-install.sh; do
