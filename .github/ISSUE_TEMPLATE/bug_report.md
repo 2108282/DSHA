@@ -1,0 +1,64 @@
+---
+name: Bug 反馈
+about: 报告 DSHA 使用中遇到的缺陷或问题
+title: "[Bug] "
+labels: bug
+assignees: ''
+---
+
+[!NOTE]
+使用前请先在 [Releases](https://github.com/qiannianhuanxiang/DSHA/releases) 确认已是最新版本，并搜索是否已存在相同问题。
+
+<!---请注意，你正在使用Markdown格式的Issue模板，如果你删除该模板的框架、更改问题的tag/类型/受理人或者不按照规范填写，你的Issue可能被直接关闭，如果你对Markdown不熟悉，请使用位于该选项下方的反馈入口继续反馈，感谢配合！-->
+
+<!---感谢你的反馈！请详细填写以下内容，便于我们定位问题。-->
+<!---Thank you for your feedback! Please fill out the following information to help us locate the issue.-->
+
+> [!important]
+> 重要：如果要提出**多个 Bug**，请为每一个 Bug 开一个单独的 issue。
+> Important: If you want to report **multiple bugs**, please open a separate issue for each bug.
+
+> [!note]
+> 上传附件时**请优先使用 GitHub 的附件系统上传附件**，将需要上传的附件粘贴或拖动到撰写区域即可上传。多个文件可打包为 zip 格式后上传。**尽量避免使用需要登陆或安装客户端才能接收附件的网盘（如*度网盘、*克网盘、1*3网盘等）上传附件**，以避免开发者因不具有对应网盘客户端或账户而延误问题诊断。
+> When uploading attachments, **please use GitHub's attachment system first**. Paste or drag files into the editor to upload. Multiple files can be packed as a zip. **Avoid cloud drives that require login or a client (e.g. Baidu Netdisk, Quark Netdisk, 123 Pan)** so maintainers can access them without extra accounts.
+
+### 检查清单 | Checklist (必填 | Required)
+
+- [ ] 您在生产环境中发现了此问题，并稳定复现 | You have encountered this issue in a production environment and can reliably reproduce it.
+- [ ] 您尝试了自行解决（包括但不限于重置配置文件，全新安装）但始终无法解决 | You have tried to resolve it yourself (including but not limited to resetting config files and doing a clean install), but could not fix it.
+- [ ] 您可以在其它设备上稳定复现此问题 | You can reliably reproduce this issue on another device.
+- [ ] 您确认此问题并非由实验性功能引起 | You confirm that this issue is not caused by an experimental feature.
+- [ ] 您确认此问题严重影响了使用并且可明确定义为漏洞或缺陷 | You confirm that this issue seriously affects usage and can be clearly defined as a bug or defect.
+- [ ] 您了解开发者无法及时回复和及时修复 | You understand that developers may not respond or fix issues promptly.
+- [ ] 您确认、知晓无意义提交 Bug 类反馈的后果，并同意以下条款 | You confirm that you understand the consequences of submitting meaningless bug reports and agree to the following terms.
+- [ ] 被认定为无意义的反馈将会被直接关闭 | Feedback deemed meaningless will be closed directly.
+- [ ] 多次提交无意义的 Bug 类反馈将会被处以 7 天内不再接受您反馈的处罚 | Repeated meaningless bug reports will result in your feedback being suspended for 7 days.
+
+### 软件版本 | App Version (必填 | Required)
+
+<!---可在设置中的"关于"界面查看 | You can find it on the "About" interface in the settings-->
+<!---例如 v1.2.3 | e.g. v1.2.3-->
+
+### 问题描述 | Description (必填 | Required)
+
+<!---简要描述遇到的问题 | Briefly describe the problem-->
+
+### 复现步骤 | Steps to Reproduce (必填 | Required)
+
+<!---如何复现该问题？如有必要可附截图/录屏/触发该问题的文件 | How to reproduce this bug? Screenshots/recordings/specific files if needed-->
+
+1.
+2.
+3.
+
+### 期望结果 | Expected Behavior (必填 | Required)
+
+<!---你期望的正确行为或结果 | What did you expect to happen?-->
+
+### 其他补充信息 | Additional Info (可选 | Optional)
+
+<!---其他相关信息（如日志文件、崩溃日志文件、配置文件、特殊环境等）| Any other context, logs, crash logs, configs, special environment, etc.-->
+
+### 上传有关文件 | Upload relevant files (可选 | Optional)
+
+<!---你可以在此处上传相关文件 | You can upload relevant files here-->

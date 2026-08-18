@@ -59,6 +59,15 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        if (!getIntent().getBooleanExtra("skip_extract", false)) {
+            ProotBootstrap proot = new ProotBootstrap(this);
+            if (!proot.isOfflineExtracted()) {
+                startActivity(new Intent(this, ExtractActivity.class));
+                finish();
+                return;
+            }
+        }
+
         setContentView(R.layout.activity_main);
 
         // 沉浸式全屏（隐藏状态栏 + 系统导航栏）

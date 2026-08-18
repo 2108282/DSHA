@@ -444,16 +444,13 @@ public class HarnessController {
 
     /** 是否已安装 deepseek-harness（跟随自定义工作区路径；RC6 模式检查 dsh 命令） */
     public boolean isHarnessInstalled() {
-        if (useRc6()) {
-            try {
-                String r = proot.execAndRead("command -v dsh 2>/dev/null || echo MISSING");
-                // execAndRead 出错会返回 "ERROR: ..." 前缀，须排除，避免误判已安装
-                return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
-            } catch (Exception e) {
-                return false;
-            }
+        if (proot.isHarnessInstalled(getWorkdir())) return true;
+        try {
+            String r = proot.execAndRead("command -v dsh 2>/dev/null || echo MISSING");
+            return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
+        } catch (Exception e) {
+            return false;
         }
-        return proot.isHarnessInstalled(getWorkdir());
     }
 
     /** Web UI 进程是否在运行 */

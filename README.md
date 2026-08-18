@@ -1,5 +1,7 @@
 # DSHA
 
+> 下一个 AI / 开发者请先读 **[HANDOFF.md](HANDOFF.md)**，不要先全库扫描。
+
 **DeepSeek Harness 安卓启动器** —— 在手机上跑 deepseek-harness 的一体化方案，无需 Termux、无需 ROOT。
 
 内置 proot + Ubuntu rootfs，一键（或分步）安装 deepseek-harness，内嵌 WebView 直接使用 Web UI。
@@ -21,9 +23,9 @@
 
 ## 🚀 快速上手
 
-1. 安装 APK（仅 arm64）
-2. 「配置」页填入 DeepSeek API key
-3. 「安装」页点一键安装（约 5~15 分钟，多源测速自选）
+1. 安装 APK（仅 arm64；GitHub Actions 产物已内置完整 Linux 环境）
+2. 首次启动会解压内置环境（数分钟，只需一次）
+3. 「配置」页填入 DeepSeek API key
 4. 「启动」页启动 Web UI，自动打开预览
 
 ## 🧰 Agent Skills（智能体技能包）
@@ -44,8 +46,19 @@ cp -r agent-skills/screen-ocr-operator ~/.agents/skills/
 
 ## 🔧 构建
 
+公开仓库用 GitHub Actions 免费构建（**不需要电脑、不需要 Termux**）：
+
+1. 推送到 `main`（或在 Actions 页点 Run workflow）
+2. 流水线分两段：
+   - `ubuntu-24.04-arm`：原生 arm64 chroot 预装 Ubuntu + Node + dsh RC6
+   - `ubuntu-latest`：把离线包打进 APK
+3. 在 Actions 的 Artifacts 下载 `dsha-debug-apk`
+
+本地：
+
 ```sh
-./build.sh   # 需要 Gradle 8.5 + Android SDK/NDK 26 + JDK 17
+./build.sh   # 需要 Gradle 8.5 + Android SDK + JDK 17
+# 还需要先有 app/src/main/assets/offline-rootfs.tar.gz
 ```
 
 ## 🧱 技术架构

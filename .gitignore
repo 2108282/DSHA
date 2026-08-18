@@ -13,6 +13,12 @@ captures/
 *.apk
 *.aab
 
+# 离线 rootfs（由 CI 生成，体积 200MB+，不要提交）
+app/src/main/assets/offline-rootfs.tar.gz
+app/src/main/assets/offline-rootfs.bin
+app/src/main/assets/offline-rootfs.tar
+bundle/
+
 # 系统/编辑器
 .DS_Store
 *.log

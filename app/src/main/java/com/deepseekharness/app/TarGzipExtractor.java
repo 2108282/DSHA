@@ -8,13 +8,12 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PushbackInputStream;
 import java.util.zip.GZIPInputStream;
 
 /**
- * 纯 Java 流式 tar.gz 解压器，不依赖系统 tar（Android toybox tar 对 Ubuntu rootfs
- * 的符号链接、pax 长文件名、权限位支持差，会导致解压失败或闪退）。
- *
- * 支持：普通文件、目录、符号链接、硬链接、GNU/pax 长文件名；特殊文件安全跳过。
+ * 纯 Java 流式 tar / tar.gz 解压器。
+ * aapt 会把 assets 里的 .tar.gz 自动解成 .tar，所以必须同时支持两种。
  */
 public final class TarGzipExtractor {
 
@@ -27,103 +26,123 @@ public final class TarGzipExtractor {
     }
 
     public static void extract(File tarball, File dest, int strip) throws IOException {
-        try (InputStream raw = new FileInputStream(tarball);
-             GZIPInputStream gz = new GZIPInputStream(new BufferedInputStream(raw, 1 << 16))) {
-            byte[] header = new byte[BLOCK];
-            byte[] buf = new byte[8192];
-            String pendingName = null;
+        try (InputStream raw = new FileInputStream(tarball)) {
+            extractAuto(raw, dest, strip);
+        }
+    }
 
-            while (true) {
-                if (!readFull(gz, header, BLOCK)) break;          // EOF
-                if (isZeroBlock(header)) {
-                    if (!readFull(gz, header, BLOCK)) break;      // 结束块
-                    if (isZeroBlock(header)) break;               // 双零块 = 结束
-                    continue;                                     // 单零块 = padding，继续
+    /** gzip 或裸 tar 自动识别。 */
+    public static void extractAuto(InputStream raw, File dest, int strip) throws IOException {
+        PushbackInputStream pin = new PushbackInputStream(new BufferedInputStream(raw, 1 << 16), 2);
+        int b0 = pin.read();
+        int b1 = pin.read();
+        if (b0 >= 0) {
+            if (b1 >= 0) pin.unread(new byte[]{(byte) b0, (byte) b1});
+            else pin.unread(b0);
+        }
+        if (b0 == 0x1f && b1 == 0x8b) {
+            try (GZIPInputStream gz = new GZIPInputStream(pin)) {
+                extractTar(gz, dest, strip);
+            }
+        } else {
+            extractTar(pin, dest, strip);
+        }
+    }
+
+    public static void extract(InputStream rawGzip, File dest, int strip) throws IOException {
+        extractAuto(rawGzip, dest, strip);
+    }
+
+    public static void extractTar(InputStream tar, File dest, int strip) throws IOException {
+        InputStream in = (tar instanceof BufferedInputStream) ? tar : new BufferedInputStream(tar, 1 << 16);
+        byte[] header = new byte[BLOCK];
+        byte[] buf = new byte[8192];
+        String pendingName = null;
+
+        while (true) {
+            if (!readFull(in, header, BLOCK)) break;
+            if (isZeroBlock(header)) {
+                if (!readFull(in, header, BLOCK)) break;
+                if (isZeroBlock(header)) break;
+                continue;
+            }
+
+            String name = parseString(header, 0, 100);
+            long size = parseOctal(header, 124, 12);
+            int mode = (int) parseOctal(header, 100, 8);
+            int type = header[156] & 0xFF;
+            String linkname = parseString(header, 157, 100);
+
+            if (type == 'L' || type == 'x') {
+                byte[] longData = new byte[clampSize(size)];
+                readFull(in, longData, longData.length);
+                skipPadding(in, size);
+                pendingName = (type == 'L')
+                        ? parseString(longData, 0, longData.length)
+                        : parsePaxPath(longData);
+                continue;
+            }
+
+            if (pendingName != null) {
+                name = pendingName;
+                pendingName = null;
+            }
+
+            String prefix = parseString(header, 345, 155);
+            if (prefix != null && !prefix.isEmpty()) {
+                name = prefix + "/" + name;
+            }
+
+            if (strip > 0) {
+                for (int i = 0; i < strip; i++) {
+                    int idx = name.indexOf('/');
+                    if (idx < 0) { name = null; break; }
+                    name = name.substring(idx + 1);
                 }
-
-                String name = parseString(header, 0, 100);
-                long size = parseOctal(header, 124, 12);
-                int mode = (int) parseOctal(header, 100, 8);
-                int type = header[156] & 0xFF;
-                String linkname = parseString(header, 157, 100);
-
-                // 长文件名头（GNU 'L' / pax 'x'）
-                if (type == 'L' || type == 'x') {
-                    byte[] longData = new byte[clampSize(size)];
-                    readFull(gz, longData, longData.length);
-                    skipPadding(gz, size);
-                    pendingName = (type == 'L')
-                            ? parseString(longData, 0, longData.length)
-                            : parsePaxPath(longData);
+                if (name == null || name.isEmpty()) {
+                    skipPadding(in, size);
                     continue;
                 }
+            }
 
-                if (pendingName != null) {
-                    name = pendingName;
-                    pendingName = null;
-                }
+            File out = new File(dest, name);
 
-                // ustar prefix
-                String prefix = parseString(header, 345, 155);
-                if (prefix != null && !prefix.isEmpty()) {
-                    name = prefix + "/" + name;
-                }
+            if (name == null || name.isEmpty() || name.startsWith("/")
+                    || name.contains("\\\"") || name.contains(",")
+                    || name.contains("..") || name.contains("\u0000")) {
+                throw new IOException("预构建包损坏（非法文件条目: " + safeName(name)
+                        + "），请重新下载或改用「直连源码构建」");
+            }
 
-                // 去掉前 strip 层目录（用于去掉 tarball 的顶层目录）
-                if (strip > 0) {
-                    for (int i = 0; i < strip; i++) {
-                        int idx = name.indexOf('/');
-                        if (idx < 0) { name = null; break; }
-                        name = name.substring(idx + 1);
+            switch (type) {
+                case '0':
+                case 0:
+                case '7':
+                    writeFile(in, out, size, mode, buf);
+                    break;
+                case '5':
+                    out.mkdirs();
+                    skipPadding(in, size);
+                    break;
+                case '2':
+                    if (out.getParentFile() != null) out.getParentFile().mkdirs();
+                    try {
+                        Os.symlink(linkname, out.getAbsolutePath());
+                    } catch (Throwable ignored) {
                     }
-                    if (name == null || name.isEmpty()) {
-                        skipPadding(gz, size);
-                        continue;
+                    skipPadding(in, size);
+                    break;
+                case '1':
+                    if (out.getParentFile() != null) out.getParentFile().mkdirs();
+                    try {
+                        Os.link(new File(dest, linkname).getAbsolutePath(), out.getAbsolutePath());
+                    } catch (Throwable ignored) {
                     }
-                }
-
-                File out = new File(dest, name);
-
-                // 防御：条目名非法 = 预构建包损坏（下载被墙/截断的假包），直接报错
-                // 而不是用乱码路径创建文件（否则会抛 FileNotFoundException: <乱码路径>）
-                if (name == null || name.isEmpty() || name.startsWith("/")
-                        || name.contains("\"") || name.contains(",")
-                        || name.contains("..") || name.contains("\u0000")) {
-                    throw new IOException("预构建包损坏（非法文件条目: " + safeName(name)
-                            + "），请重新下载或改用「直连源码构建」");
-                }
-
-                switch (type) {
-                    case '0':
-                    case 0:
-                    case '7':
-                        writeFile(gz, out, size, mode, buf);
-                        break;
-                    case '5':
-                        out.mkdirs();
-                        skipPadding(gz, size);
-                        break;
-                    case '2':
-                        out.getParentFile().mkdirs();
-                        try {
-                            Os.symlink(linkname, out.getAbsolutePath());
-                        } catch (Throwable ignored) {
-                        }
-                        skipPadding(gz, size);
-                        break;
-                    case '1':
-                        out.getParentFile().mkdirs();
-                        try {
-                            Os.link(new File(dest, linkname).getAbsolutePath(), out.getAbsolutePath());
-                        } catch (Throwable ignored) {
-                        }
-                        skipPadding(gz, size);
-                        break;
-                    default:
-                        // 设备节点等特殊文件：安全跳过
-                        skipPadding(gz, size);
-                        break;
-                }
+                    skipPadding(in, size);
+                    break;
+                default:
+                    skipPadding(in, size);
+                    break;
             }
         }
     }

@@ -58,7 +58,7 @@ public class WelcomeActivity extends AppCompatActivity {
     private void finishWelcome() {
         getSharedPreferences("deepseekharness", MODE_PRIVATE)
                 .edit().putBoolean("welcomed", true).apply();
-        startActivity(new Intent(this, MainActivity.class));
+        startActivity(new Intent(this, ExtractActivity.class));
         finish();
     }
 

@@ -18,6 +18,6 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="24dp"
         android:lineSpacingExtra="10dp"
-        android:text="🛠 安装 — 一键装好 proot + Ubuntu + deepseek-harness\n\n▶️ 启动 — 启动 Web UI，内置浏览器预览\n\n⚙️ 配置 — API key / 端口 / 模型 / 沙箱模式\n\n📁 工作区 — 工作目录与环境管理"
+        android:text="📦 首次打开会解压内置 Linux 环境（只需一次）\n\n▶️ 启动 — 填 API key 后启动 Web UI\n\n⚙️ 配置 — API key / 端口 / 模型\n\n📁 工作区 — 工作目录与备份"
         android:textSize="16sp" />
 </LinearLayout>

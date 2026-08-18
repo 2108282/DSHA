@@ -77,7 +77,74 @@ public class ProotBootstrap {
     public File getRootfsDir() { return rootfsDir; }
 
     public boolean isInstalled() {
-        return markerFile.exists() && new File(rootfsDir, "bin").exists();
+        return hasBash();
+    }
+
+    public boolean hasBash() {
+        return new File(rootfsDir, "usr/bin/bash").isFile()
+                || new File(rootfsDir, "bin/bash").isFile();
+    }
+
+    /** 内置包是否已经解压成功过（和「网上分步装了一半」区分开） */
+    public boolean isOfflineExtracted() {
+        return new File(baseDir, ".offline-extracted").isFile() && hasBash();
+    }
+
+    public void markOfflineExtracted() {
+        markInstalled();
+        File f = new File(baseDir, ".offline-extracted");
+        try (FileOutputStream o = new FileOutputStream(f)) {
+            o.write(("ok=" + System.currentTimeMillis() + "\n").getBytes());
+        } catch (IOException ignored) {
+        }
+    }
+
+    /** 把 APK 里找包的过程摊开，解压页可以直接显示，避免再猜。 */
+    public String diagnoseBundle() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("version=").append(versionName()).append('\n');
+        sb.append("apk=").append(ctx.getPackageCodePath()).append('\n');
+        File apk = new File(ctx.getPackageCodePath());
+        sb.append("apkSize=").append(apk.isFile() ? apk.length() : -1).append('\n');
+        try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(apk)) {
+            java.util.zip.ZipEntry hit = findBundleEntry(z);
+            sb.append("zipHit=").append(hit == null ? "null" : hit.getName())
+                    .append(" size=").append(hit == null ? -1 : hit.getSize()).append('\n');
+            int n = 0;
+            java.util.Enumeration<? extends java.util.zip.ZipEntry> en = z.entries();
+            while (en.hasMoreElements() && n < 12) {
+                java.util.zip.ZipEntry e = en.nextElement();
+                String name = e.getName();
+                if (name.contains("asset") || name.contains("offline") || name.contains("rootfs")
+                        || name.endsWith(".gz")) {
+                    sb.append("  ").append(name).append(" ").append(e.getSize()).append('\n');
+                    n++;
+                }
+            }
+        } catch (Exception e) {
+            sb.append("zipErr=").append(e.getClass().getSimpleName())
+                    .append(": ").append(e.getMessage()).append('\n');
+        }
+        try {
+            String[] names = ctx.getAssets().list("");
+            sb.append("assets.list=");
+            if (names == null) sb.append("null\n");
+            else {
+                sb.append(names.length).append('\n');
+                for (String s : names) sb.append("  ").append(s).append('\n');
+            }
+        } catch (Exception e) {
+            sb.append("assetsErr=").append(e.getMessage()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private String versionName() {
+        try {
+            return ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "?";
+        }
     }
 
     public boolean isHarnessInstalled(String workdir) {
@@ -471,6 +538,125 @@ public class ProotBootstrap {
         try (FileOutputStream o = new FileOutputStream(markerFile)) {
             o.write(("installed=" + System.currentTimeMillis() + "\n").getBytes());
         } catch (IOException ignored) {
+        }
+    }
+
+    /** 内置离线包 asset 名称（GitHub Actions 构建时预置的预装 rootfs 整包） */
+    public static final String OFFLINE_BUNDLE_ASSET = "offline-rootfs.tar.gz";
+
+    /** aapt 会把 .tar.gz 自动解成 .tar，所以这些名字都算内置包。 */
+    private static final String[] BUNDLE_NAMES = {
+            "offline-rootfs.tar.gz",
+            "offline-rootfs.tar",
+            "offline-rootfs.bin",
+            "offline-rootfs.tgz",
+    };
+
+    public boolean hasOfflineBundle() {
+        try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(ctx.getPackageCodePath())) {
+            if (findBundleEntry(z) != null) return true;
+        } catch (Exception ignored) {
+        }
+        for (String n : BUNDLE_NAMES) {
+            try {
+                ctx.getAssets().open(n).close();
+                return true;
+            } catch (IOException ignored) {
+            }
+        }
+        return false;
+    }
+
+    private java.util.zip.ZipEntry findBundleEntry(java.util.zip.ZipFile z) {
+        for (String n : BUNDLE_NAMES) {
+            java.util.zip.ZipEntry e = z.getEntry("assets/" + n);
+            if (e != null && !e.isDirectory()) return e;
+            e = z.getEntry(n);
+            if (e != null && !e.isDirectory()) return e;
+        }
+        java.util.zip.ZipEntry best = null;
+        java.util.Enumeration<? extends java.util.zip.ZipEntry> en = z.entries();
+        while (en.hasMoreElements()) {
+            java.util.zip.ZipEntry e = en.nextElement();
+            String name = e.getName();
+            if (e.isDirectory()) continue;
+            if (name.contains("offline-rootfs") || name.contains("offline_rootfs")) {
+                if (best == null || e.getSize() > best.getSize()) best = e;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * 从 APK 内置包解压预装 rootfs。优先按 zip 条目流式解压（不经 AssetManager，
+     * 也不先拷 300MB 到 tmp），失败再回退 assets。
+     */
+    public void extractOfflineBundle(java.util.function.BiConsumer<Long, Long> onProgress) throws IOException {
+        ensureRuntimeFiles();
+        java.util.zip.ZipFile apk = null;
+        InputStream raw = null;
+        long total = 0;
+        try {
+            apk = new java.util.zip.ZipFile(ctx.getPackageCodePath());
+            java.util.zip.ZipEntry e = findBundleEntry(apk);
+            if (e != null) {
+                raw = apk.getInputStream(e);
+                total = e.getSize() > 0 ? e.getSize() : 0;
+            }
+        } catch (IOException ignored) {
+            if (apk != null) {
+                try { apk.close(); } catch (IOException ignored2) {}
+                apk = null;
+            }
+        }
+        if (raw == null) {
+            IOException last = null;
+            for (String n : BUNDLE_NAMES) {
+                try {
+                    raw = ctx.getAssets().open(n);
+                    try {
+                        total = ctx.getAssets().openFd(n).getLength();
+                    } catch (IOException ignored) {
+                    }
+                    break;
+                } catch (IOException e) {
+                    last = e;
+                }
+            }
+            if (raw == null) {
+                throw last != null ? last : new IOException("assets 里也没有离线包");
+            }
+        }
+
+        final java.util.function.BiConsumer<Long, Long> cb = onProgress;
+        final long tot = total;
+        InputStream counted = new java.io.FilterInputStream(raw) {
+            long done = 0;
+            @Override
+            public int read(byte[] b, int off, int len) throws IOException {
+                int n = super.read(b, off, len);
+                if (n > 0 && cb != null) {
+                    done += n;
+                    cb.accept(done, tot);
+                }
+                return n;
+            }
+        };
+
+        try {
+            if (rootfsDir.exists()) deleteRecursively(rootfsDir);
+            rootfsDir.mkdirs();
+            TarGzipExtractor.extractAuto(counted, rootfsDir, 0);
+            if (!hasBash()) {
+                throw new IOException("解压后 rootfs 不完整（缺少 bash）\n" + diagnoseRootfs());
+            }
+            setupResolvConf();
+            markOfflineExtracted();
+        } finally {
+            try { counted.close(); } catch (Exception ignored) {}
+            if (apk != null) {
+                try { apk.close(); } catch (Exception ignored) {}
+            }
         }
     }
 
