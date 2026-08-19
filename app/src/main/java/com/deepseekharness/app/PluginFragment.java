@@ -43,6 +43,10 @@ public class PluginFragment extends Fragment {
     private TextView status;
     /** 当前排序：0 star / 1 名称 / 2 分类 / 3 兼容性 */
     private int sortMode = 0;
+    /** 市场筛选：兼容性关键字（可用/待定/未测/不兼容，null=全部）与分类（null=全部） */
+    private String filterCompat = null;
+    private String filterCategory = null;
+    private android.widget.EditText searchBox;
 
     @Nullable
     @Override
@@ -64,7 +68,8 @@ public class PluginFragment extends Fragment {
         TextView btnMarket = view.findViewById(R.id.btnMarket);
         TextView btnInstalled = view.findViewById(R.id.btnInstalled);
         TextView btnSort = view.findViewById(R.id.btnSort);
-        android.widget.EditText searchBox = view.findViewById(R.id.pluginSearch);
+        TextView btnFilter = view.findViewById(R.id.btnFilter);
+        searchBox = view.findViewById(R.id.pluginSearch);
         view.findViewById(R.id.actionBar).setVisibility(View.GONE);
 
         // 搜索：按名称过滤（忽略大小写）
@@ -77,12 +82,7 @@ public class PluginFragment extends Fragment {
             public void onTextChanged(CharSequence s, int a, int b, int c) {
                 String q = s.toString().trim().toLowerCase();
                 if (mode == Mode.MARKET) {
-                    java.util.List<String[]> filtered = new java.util.ArrayList<>();
-                    for (String[] it : items) {
-                        if (q.isEmpty() || it[0].toLowerCase().contains(q)) filtered.add(it);
-                    }
-                    adapter.setData(filtered, true);
-                    status.setText("共 " + filtered.size() + " 个插件" + (q.isEmpty() ? " · 点击查看详情/安装" : "（搜索：" + q + "）"));
+                    applyMarketFilter(); // 搜索与筛选统一走一个入口，可叠加
                 } else if (mode == Mode.INSTALLED) {
                     java.util.List<String[]> filtered = new java.util.ArrayList<>();
                     for (String[] it : installed) {
@@ -115,6 +115,17 @@ public class PluginFragment extends Fragment {
             showInstalled();
         });
         btnSort.setOnClickListener(v -> showSortMenu(btnSort));
+        btnFilter.setOnClickListener(v -> {
+            if (mode != Mode.MARKET) {
+                Toast.makeText(requireContext(), "筛选仅用于插件市场列表", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (items.isEmpty()) {
+                Toast.makeText(requireContext(), "市场列表还没加载出来", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            showFilterMenu(btnFilter);
+        });
 
         // 强制刷新市场缓存（清缓存 → 重新拉网络）
         TextView btnRefresh = view.findViewById(R.id.btnRefresh);
@@ -157,10 +168,79 @@ public class PluginFragment extends Fragment {
         pm.setOnMenuItemClickListener(item -> {
             sortMode = item.getItemId();
             ((android.widget.TextView) anchor).setText(options[sortMode].replace("排序：", ""));
-            if (mode == Mode.MARKET && !items.isEmpty()) applySort();
+            if (mode == Mode.MARKET && !items.isEmpty()) {
+                applySort();
+                applyMarketFilter(); // 排序后保持当前筛选/搜索
+            }
             return true;
         });
         pm.show();
+    }
+
+    /** 筛选菜单：全部 / 按兼容性 / 按分类（分类从当前索引动态取） */
+    private void showFilterMenu(android.view.View anchor) {
+        android.widget.PopupMenu pm = new android.widget.PopupMenu(requireContext(), anchor);
+        pm.getMenu().add(0, 0, 0, "全部（清除筛选）");
+        final String[] compats = {"可用", "待定", "未测", "不兼容"};
+        final String[] compatLabels = {"✅ 可用", "⏳ 待定", "⏳ 未测", "❌ 不兼容"};
+        android.view.SubMenu smCompat = pm.getMenu().addSubMenu(0, 1, 0, "按兼容性 ▸");
+        for (int i = 0; i < compats.length; i++) smCompat.add(0, 100 + i, 0, compatLabels[i]);
+        java.util.LinkedHashSet<String> catSet = new java.util.LinkedHashSet<>();
+        for (String[] it : items) if (!it[4].isEmpty()) catSet.add(it[4]);
+        final java.util.List<String> cats = new java.util.ArrayList<>(catSet);
+        android.view.SubMenu smCat = pm.getMenu().addSubMenu(0, 2, 0, "按分类 ▸");
+        for (int i = 0; i < cats.size(); i++) smCat.add(0, 200 + i, 0, cats.get(i));
+        pm.setOnMenuItemClickListener(item -> {
+            int id = item.getItemId();
+            if (id == 1 || id == 2) return false; // 父级条目：展开子菜单
+            if (id == 0) {
+                filterCompat = null;
+                filterCategory = null;
+            } else if (id >= 100 && id < 200) {
+                filterCompat = compats[id - 100];
+            } else if (id >= 200 && id - 200 < cats.size()) {
+                filterCategory = cats.get(id - 200);
+            }
+            ((android.widget.TextView) anchor).setText(filterLabel());
+            applyMarketFilter();
+            return true;
+        });
+        pm.show();
+    }
+
+    /** 筛选按钮文案：无筛选显示"筛选"，有则显示当前条件缩写 */
+    private String filterLabel() {
+        if (filterCompat == null && filterCategory == null) return "筛选";
+        StringBuilder sb = new StringBuilder("筛:");
+        if (filterCompat != null) sb.append(filterCompat);
+        if (filterCategory != null) {
+            if (filterCompat != null) sb.append("·");
+            sb.append(filterCategory.length() > 4 ? filterCategory.substring(0, 4) : filterCategory);
+        }
+        return sb.toString();
+    }
+
+    /** 市场列表统一过滤入口：搜索词 + 兼容性 + 分类 三条件叠加 */
+    private void applyMarketFilter() {
+        String q = searchBox == null ? "" : searchBox.getText().toString().trim().toLowerCase();
+        java.util.List<String[]> filtered = new java.util.ArrayList<>();
+        for (String[] it : items) {
+            if (!q.isEmpty() && !it[0].toLowerCase().contains(q)) continue;
+            if (filterCompat != null && !it[3].contains(filterCompat)) continue;
+            if (filterCompat != null && "可用".equals(filterCompat) && it[3].contains("不兼容")) continue;
+            if (filterCategory != null && !filterCategory.equals(it[4])) continue;
+            filtered.add(it);
+        }
+        adapter.setData(filtered, true);
+        if (filtered.size() == items.size()) {
+            status.setText("共 " + items.size() + " 个插件 · 点击查看详情/安装" + cacheHint());
+        } else {
+            StringBuilder sb = new StringBuilder("筛出 " + filtered.size() + " / " + items.size() + " 个插件");
+            if (filterCompat != null) sb.append(" · ").append(filterCompat);
+            if (filterCategory != null) sb.append(" · ").append(filterCategory);
+            if (!q.isEmpty()) sb.append(" · 搜索:").append(q);
+            status.setText(sb.toString());
+        }
     }
 
     private void applySort() {
@@ -198,8 +278,7 @@ public class PluginFragment extends Fragment {
     private void showMarket() {
         if (!items.isEmpty()) {
             applySort();
-            adapter.setData(items, true);
-            status.setText("共 " + items.size() + " 个插件 · 点击查看详情/安装" + cacheHint());
+            applyMarketFilter(); // 尊重当前筛选/搜索条件
             return;
         }
         status.setText("正在拉取插件市场…");
@@ -214,8 +293,7 @@ public class PluginFragment extends Fragment {
                 items.clear();
                 items.addAll(list);
                 applySort();
-                adapter.setData(items, true);
-                status.setText("共 " + items.size() + " 个插件 · 点击查看详情/安装" + cacheHint());
+                applyMarketFilter(); // 尊重当前筛选/搜索条件
                 fetchStars(items); // 异步批量拉真实 star 数
             });
         }).start();
@@ -555,16 +633,20 @@ public class PluginFragment extends Fragment {
                 });
                 h.switchView.setOnCheckedChangeListener(null);
                 h.switchView.setChecked(enabled);
+                h.switchView.setEnabled(true);
                 h.switchView.setOnCheckedChangeListener((btn, checked) -> {
-                    boolean ok = c.togglePlugin(it[0], checked);
-                    if (ok) {
-                        it[1] = checked ? "启用" : "禁用";
-                        h.status.setText(checked ? "已启用" : "已禁用");
-                        Toast.makeText(requireContext(), it[0] + (checked ? " 已启用（重启 WebUI 生效）" : " 已禁用"), Toast.LENGTH_SHORT).show();
-                    } else {
-                        btn.setChecked(!checked);
-                        Toast.makeText(requireContext(), "操作失败", Toast.LENGTH_SHORT).show();
-                    }
+                    // togglePlugin 内部会跑 proot 子进程（秒级耗时），不能在主线程执行，否则卡 UI/ANR
+                    btn.setEnabled(false);
+                    new Thread(() -> {
+                        boolean ok = c.togglePlugin(it[0], checked);
+                        runOnUiThreadSafely(() -> {
+                            if (ok) it[1] = checked ? "启用" : "禁用";
+                            adapter.notifyDataSetChanged(); // 重新绑定：成功刷新状态，失败恢复开关原位
+                            Toast.makeText(requireContext(), ok
+                                    ? it[0] + (checked ? " 已启用（重启 WebUI 生效）" : " 已禁用")
+                                    : "操作失败", Toast.LENGTH_SHORT).show();
+                        });
+                    }).start();
                 });
             }
         }
