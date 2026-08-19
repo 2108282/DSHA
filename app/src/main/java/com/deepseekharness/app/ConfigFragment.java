@@ -115,6 +115,14 @@ public class ConfigFragment extends Fragment {
     private void showAdbPairNotification() {
         try {
             Context ctx = requireContext();
+            // Android 13+：无通知权限直接 notify 会抛 SecurityException → 先引导授权
+            if (Build.VERSION.SDK_INT >= 33
+                    && ctx.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(ctx, "需要通知权限才能显示配对卡片，请在系统弹窗中允许", Toast.LENGTH_LONG).show();
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 100);
+                return;
+            }
             String CH = "dsh_adbpair_channel";
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return;
@@ -127,9 +135,10 @@ public class ConfigFragment extends Fragment {
             RemoteInput ri = new RemoteInput.Builder(AdbPairReceiver.EXTRA_CODE)
                     .setLabel("6 位配对码")
                     .build();
+            // RemoteInput 必须用 FLAG_MUTABLE：IMMUTABLE 的 PendingIntent 收不到输入内容
             PendingIntent pi = PendingIntent.getBroadcast(
                     ctx, 0, intent,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
             NotificationCompat.Action action = new NotificationCompat.Action.Builder(
                     R.drawable.ic_launch, "输码配对", pi)
                     .addRemoteInput(ri)
@@ -148,7 +157,8 @@ public class ConfigFragment extends Fragment {
                     .setPriority(NotificationCompat.PRIORITY_HIGH);
             nm.notify(3003, b.build());
         } catch (Throwable t) {
-            Toast.makeText(requireContext(), "通知创建失败：" + t.getMessage(), Toast.LENGTH_LONG).show();
+            Toast.makeText(requireContext(), "通知创建失败（可先到系统设置允许通知权限）：" + t.getMessage(),
+                    Toast.LENGTH_LONG).show();
         }
     }
 

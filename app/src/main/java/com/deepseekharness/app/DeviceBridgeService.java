@@ -162,8 +162,9 @@ public class DeviceBridgeService extends Service {
                     .build();
             Intent pairIntent = new Intent(this, AdbPairReceiver.class)
                     .setAction(AdbPairReceiver.ACTION_PAIR);
+            // RemoteInput 必须 FLAG_MUTABLE：IMMUTABLE 收不到通知里输入的内容
             PendingIntent pi = PendingIntent.getBroadcast(this, 23, pairIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
             NotificationCompat.Action action =
                     new NotificationCompat.Action.Builder(0, "🔐 输码配对", pi)
                             .addRemoteInput(ri)
@@ -256,8 +257,9 @@ public class DeviceBridgeService extends Service {
                     .build();
             Intent pairIntent = new Intent(this, AdbPairReceiver.class)
                     .setAction(AdbPairReceiver.ACTION_PAIR);
+            // RemoteInput 必须 FLAG_MUTABLE：IMMUTABLE 收不到通知里输入的内容
             PendingIntent pi = PendingIntent.getBroadcast(this, 23, pairIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
             NotificationCompat.Action action =
                     new NotificationCompat.Action.Builder(0, "🔐 输码配对", pi)
                             .addRemoteInput(ri)
