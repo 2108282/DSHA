@@ -23,6 +23,7 @@ public class HarnessService extends Service {
 
     public static final String ACTION_START = "com.deepseekharness.app.START";
     public static final String ACTION_STOP = "com.deepseekharness.app.STOP";
+    public static final String ACTION_RESTART = "com.deepseekharness.app.RESTART";
 
     private static final String CHANNEL_ID = "dsh_harness_channel";
     private static final int NOTIF_ID = 1001;
@@ -70,6 +71,12 @@ public class HarnessService extends Service {
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
+        }
+        if (intent != null && ACTION_RESTART.equals(intent.getAction())) {
+            // 软重启：深停 → 等端口关透 → 重新拉起（不再杀 App 进程「闪退」重启）
+            c.restartWeb();
+            startKeepAlive();
+            return START_STICKY;
         }
         startWeb();
         startKeepAlive();
