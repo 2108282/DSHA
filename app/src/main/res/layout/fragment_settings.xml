@@ -15,9 +15,11 @@
         android:paddingBottom="24dp">
 
         <TextView
-            style="@style/DshaCardLabel"
+           
             android:layout_marginStart="4dp"
-            android:text="模块" />
+            android:text="模块" 
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
 
         <LinearLayout
             android:id="@+id/settings_tabs"
@@ -28,10 +30,12 @@
             android:padding="2dp" />
 
         <TextView
-            style="@style/DshaCardLabel"
+           
             android:layout_marginStart="4dp"
             android:layout_marginTop="18dp"
-            android:text="其他" />
+            android:text="其他" 
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
 
         <LinearLayout
             android:layout_width="match_parent"

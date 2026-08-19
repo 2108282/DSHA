@@ -5,8 +5,6 @@
         <item name="colorOnPrimary">@color/accent_on</item>
         <item name="colorPrimaryContainer">@color/accent_dim</item>
         <item name="colorSecondary">@color/accent</item>
-        <item name="colorSurface">@color/surface</item>
-        <item name="colorOnSurface">@color/text</item>
         <item name="android:colorBackground">@color/surface</item>
         <item name="android:statusBarColor">@color/surface</item>
         <item name="android:navigationBarColor">@color/surface</item>
@@ -14,81 +12,5 @@
         <item name="android:textColorPrimary">@color/text</item>
         <item name="android:textColorSecondary">@color/text_secondary</item>
         <item name="android:textColorHint">@color/text_muted</item>
-    </style>
-
-    <style name="DshaBtn" parent="Widget.AppCompat.Button">
-        <item name="android:textAllCaps">false</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:minHeight">44dp</item>
-        <item name="android:background">@drawable/bg_btn_primary</item>
-        <item name="android:textColor">@color/accent_on</item>
-    </style>
-
-    <style name="DshaBtnSecondary" parent="Widget.AppCompat.Button">
-        <item name="android:textAllCaps">false</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:minHeight">44dp</item>
-        <item name="android:background">@drawable/bg_btn</item>
-        <item name="android:textColor">@color/text_secondary</item>
-    </style>
-
-    <style name="DshaBtnDanger" parent="Widget.AppCompat.Button">
-        <item name="android:textAllCaps">false</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:minHeight">44dp</item>
-        <item name="android:background">@drawable/bg_btn_danger</item>
-        <item name="android:textColor">@color/err</item>
-    </style>
-
-    <style name="DshaWelcomeItem" parent="@android:style/Widget">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:orientation">horizontal</item>
-        <item name="android:gravity">center_vertical</item>
-        <item name="android:padding">15dp</item>
-        <item name="android:layout_marginBottom">10dp</item>
-        <item name="android:background">@drawable/bg_card</item>
-    </style>
-
-    <style name="DshaWelcomeIcon" parent="@android:style/Widget">
-        <item name="android:layout_width">36dp</item>
-        <item name="android:layout_height">36dp</item>
-        <item name="android:layout_marginEnd">14dp</item>
-        <item name="android:background">@drawable/bg_icon</item>
-        <item name="android:gravity">center</item>
-        <item name="android:textColor">@color/accent</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:textStyle">bold</item>
-    </style>
-
-    <style name="DshaFieldLabel" parent="@android:style/Widget">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginBottom">7dp</item>
-        <item name="android:textColor">@color/text_muted</item>
-        <item name="android:textSize">12.5sp</item>
-    </style>
-
-    <style name="DshaInput" parent="@android:style/Widget">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">46dp</item>
-        <item name="android:background">@drawable/bg_input</item>
-        <item name="android:paddingStart">14dp</item>
-        <item name="android:paddingEnd">14dp</item>
-        <item name="android:textColor">@color/text</item>
-        <item name="android:textColorHint">@color/text_muted</item>
-        <item name="android:textSize">14sp</item>
-    </style>
-
-    <style name="DshaCardLabel" parent="@android:style/Widget">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginBottom">12dp</item>
-        <item name="android:textAllCaps">true</item>
-        <item name="android:textColor">@color/text_muted</item>
-        <item name="android:textSize">11sp</item>
-        <item name="android:textStyle">bold</item>
     </style>
 </resources>

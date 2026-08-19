@@ -34,6 +34,7 @@
             android:orientation="horizontal">
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/launch_start"
                 android:layout_width="0dp"
                 android:layout_height="44dp"
@@ -41,8 +42,9 @@
                 android:text="启动" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/launch_open"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="0dp"
                 android:layout_height="44dp"
                 android:layout_marginStart="9dp"
@@ -50,8 +52,9 @@
                 android:text="重启" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/launch_stop"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="0dp"
                 android:layout_height="44dp"
                 android:layout_marginStart="9dp"

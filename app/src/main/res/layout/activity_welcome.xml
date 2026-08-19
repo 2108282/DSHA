@@ -31,6 +31,7 @@
             android:textStyle="bold" />
 
         <Button
+                android:background="@drawable/bg_btn"
             android:id="@+id/welcome_btn"
             android:layout_width="0dp"
             android:layout_height="50dp"

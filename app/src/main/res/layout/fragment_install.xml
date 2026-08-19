@@ -70,6 +70,7 @@
                 android:visibility="gone" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/install_btn"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -86,8 +87,10 @@
             android:padding="18dp">
 
             <TextView
-                style="@style/DshaCardLabel"
-                android:text="分步安装 · 每步可单独重装 / 更新" />
+               
+                android:text="分步安装 · 每步可单独重装 / 更新" 
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
 
             <TextView
                 android:id="@+id/install_steps"
@@ -98,48 +101,54 @@
                 android:textSize="13sp" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/install_step1"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
                 android:text="① Linux 环境（rootfs）" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/install_step2"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:text="② 基础工具（apt）" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/install_step3"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:text="③ Node.js" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/install_step4"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:text="④ Node 附加工具（pnpm/node-gyp）" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/install_step5"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:text="⑤ deepseek-harness" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/install_step6"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -155,8 +164,10 @@
             android:padding="18dp">
 
             <TextView
-                style="@style/DshaCardLabel"
-                android:text="安装日志" />
+               
+                android:text="安装日志" 
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -164,8 +175,9 @@
                 android:orientation="horizontal">
 
                 <Button
+                android:background="@drawable/bg_btn"
                     android:id="@+id/install_copy"
-                    style="@style/DshaBtnSecondary"
+                   
                     android:layout_width="0dp"
                     android:layout_height="36dp"
                     android:layout_weight="1"
@@ -173,8 +185,9 @@
                     android:visibility="gone" />
 
                 <Button
+                android:background="@drawable/bg_btn"
                     android:id="@+id/install_crash"
-                    style="@style/DshaBtnSecondary"
+                   
                     android:layout_width="0dp"
                     android:layout_height="36dp"
                     android:layout_marginStart="8dp"
@@ -193,8 +206,10 @@
             android:padding="18dp">
 
             <TextView
-                style="@style/DshaCardLabel"
-                android:text="说明" />
+               
+                android:text="说明" 
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
 
             <TextView
                 android:layout_width="match_parent"
@@ -206,8 +221,9 @@
         </LinearLayout>
 
         <Button
+                android:background="@drawable/bg_btn"
             android:id="@+id/install_uninstall"
-            style="@style/DshaBtnDanger"
+           
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"

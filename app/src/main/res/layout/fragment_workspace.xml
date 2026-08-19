@@ -27,7 +27,9 @@
             android:orientation="vertical"
             android:padding="18dp">
 
-            <TextView style="@style/DshaCardLabel" android:text="环境信息" />
+            <TextView android:text="环境信息" 
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
 
             <TextView
                 android:id="@+id/workspace_info"
@@ -47,17 +49,22 @@
             android:orientation="vertical"
             android:padding="18dp">
 
-            <TextView style="@style/DshaCardLabel" android:text="工作目录（rootfs 内）" />
+            <TextView android:text="工作目录（rootfs 内）" 
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
 
             <EditText
                 android:id="@+id/workspace_path"
-                style="@style/DshaInput"
+               
                 android:fontFamily="monospace"
-                android:hint="deepseek-harness" />
+                android:hint="deepseek-harness" 
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/workspace_apply"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
@@ -72,7 +79,9 @@
             android:orientation="vertical"
             android:padding="18dp">
 
-            <TextView style="@style/DshaCardLabel" android:text="设备 Shell 桥接 · Shizuku" />
+            <TextView android:text="设备 Shell 桥接 · Shizuku" 
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
 
             <TextView
                 android:id="@+id/workspace_shizuku_status"
@@ -93,8 +102,9 @@
                 android:textSize="11.5sp" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/workspace_shizuku_auth"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
@@ -109,7 +119,9 @@
             android:orientation="vertical"
             android:padding="18dp">
 
-            <TextView style="@style/DshaCardLabel" android:text="免 ROOT 文件共享" />
+            <TextView android:text="免 ROOT 文件共享" 
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
 
             <TextView
                 android:id="@+id/workspace_share_status"
@@ -129,34 +141,40 @@
             android:orientation="vertical"
             android:padding="18dp">
 
-            <TextView style="@style/DshaCardLabel" android:text="数据安全" />
+            <TextView android:text="数据安全" 
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/workspace_backup"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="备份配置" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/workspace_restore"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:text="恢复备份" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/workspace_reset"
-                style="@style/DshaBtnSecondary"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:text="重置配置" />
 
             <Button
+                android:background="@drawable/bg_btn"
                 android:id="@+id/workspace_clear"
-                style="@style/DshaBtnDanger"
+               
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
