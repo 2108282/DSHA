@@ -63,7 +63,6 @@
         android:background="@color/nav_scrim"
         app:elevation="0dp"
         app:itemIconTint="@color/nav_item_color"
-        app:itemRippleColor="@color/accent_dim"
         app:itemTextColor="@color/nav_item_color"
         app:labelVisibilityMode="labeled"
         app:menu="@menu/bottom_nav_menu" />

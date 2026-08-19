@@ -4,23 +4,15 @@
         <item name="colorPrimary">@color/accent</item>
         <item name="colorOnPrimary">@color/accent_on</item>
         <item name="colorPrimaryContainer">@color/accent_dim</item>
-        <item name="colorOnPrimaryContainer">@color/accent</item>
         <item name="colorSecondary">@color/accent</item>
-        <item name="colorOnSecondary">@color/accent_on</item>
         <item name="colorSurface">@color/surface</item>
         <item name="colorOnSurface">@color/text</item>
-        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
-        <item name="colorOutline">@color/line</item>
         <item name="android:colorBackground">@color/surface</item>
         <item name="android:statusBarColor">@color/surface</item>
         <item name="android:navigationBarColor">@color/surface</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
         <item name="android:textColorPrimary">@color/text</item>
         <item name="android:textColorSecondary">@color/text_secondary</item>
         <item name="android:textColorHint">@color/text_muted</item>
-        <item name="materialButtonStyle">@style/Widget.Dsha.Button</item>
-        <item name="alertDialogTheme">@style/Theme.Dsha.Dialog</item>
-        <item name="bottomNavigationStyle">@style/Widget.Dsha.BottomNav</item>
     </style>
 </resources>
