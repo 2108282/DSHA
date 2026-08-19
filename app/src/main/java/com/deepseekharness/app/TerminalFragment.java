@@ -173,4 +173,30 @@ public class TerminalFragment extends Fragment {
         // 只解绑视图，不杀会话、不清 buffer —— 换页/返回历史保留
         boundOutput = null;
     }
+
+    /** 外部注入文本到终端 buffer（ADB 配对失败日志等）。跨线程安全，终端页可见可复制。 */
+    public static void inject(String text) {
+        if (text == null || text.isEmpty()) return;
+        android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+        h.post(() -> {
+            synchronized (TerminalFragment.class) {
+                buffer.append(text);
+                if (!text.endsWith("\n")) buffer.append('\n');
+                if (buffer.length() > 300000) buffer.setLength(0);
+                TextView out = boundOutput;
+                if (out == null) return;
+                String show = buffer.length() > 100000
+                        ? "…（输出过长已截断）\n" + buffer.substring(buffer.length() - 100000)
+                        : buffer.toString();
+                out.setText(show);
+                // 滚动到底（从视图层级找 ScrollView 父级）
+                android.view.ViewParent p = out.getParent();
+                while (p != null && !(p instanceof ScrollView)) p = p.getParent();
+                if (p instanceof ScrollView) {
+                    final ScrollView sv = (ScrollView) p;
+                    sv.post(() -> sv.fullScroll(View.FOCUS_DOWN));
+                }
+            }
+        });
+    }
 }

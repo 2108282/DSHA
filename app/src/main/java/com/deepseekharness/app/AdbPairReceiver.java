@@ -84,19 +84,24 @@ public class AdbPairReceiver extends BroadcastReceiver {
                 out = "ERROR: " + e;
             }
             boolean ok = out.contains("PAIR_OK");
+            // 失败时把完整输出注入内置终端（通知栏有字数上限且无法复制，终端可滚动可复制）
+            if (!ok) TerminalFragment.inject("========== ADB 配对失败 ==========\n" + out);
             notifyResult(context,
                     ok ? "🎉 ADB 配对成功！" : "❌ ADB 配对失败",
                     ok
                             ? "已直连 adbd（uid=2000），agent 可用：\n/root/dsh-bin/adb-shell \"id\"\n\n" + out
-                            : "配对未成功。请按提示操作：\n"
-                            + (out.contains("PORT_UNREACHABLE")
-                                ? "配对端口连不上 → 请回手机「无线调试」重新点「使用配对码配对设备」"
-                                : out.contains("SPAKE2_ERROR")
-                                    ? "配对码错误/已失效 → 重新打开配对弹窗，输入新码"
-                                    : out.contains("TLS_ERROR")
-                                        ? "TLS 握手失败 → 重开无线调试后重试"
-                                        : "请回手机「无线调试」重新点「使用配对码配对设备」，再在该卡片重新输入新码")
-                            + "\n\n详细输出：\n" + out,
+                            : "配对未成功。完整日志已写入「终端」页（可滚动/复制）：\n"
+                            + (out.contains("PIP_MISSING")
+                                ? "rootfs 缺 pip → 已尝试自动安装，请看终端日志"
+                                : out.contains("DEPS_FAILED")
+                                    ? "Python 依赖安装失败 → 请看终端日志"
+                                    : out.contains("PORT_UNREACHABLE")
+                                        ? "配对端口连不上 → 请回手机「无线调试」重新点「使用配对码配对设备」"
+                                        : out.contains("SPAKE2_ERROR")
+                                            ? "配对码错误/已失效 → 重新打开配对弹窗，输入新码"
+                                            : out.contains("TLS_ERROR")
+                                                ? "TLS 握手失败 → 重开无线调试后重试"
+                                                : "请回手机「无线调试」重新点「使用配对码配对设备」，再在该卡片重新输入新码。详情见终端页"),
                     ok);
         }, "dsha-adb-pair").start();
     }
