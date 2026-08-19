@@ -31,6 +31,7 @@ public class ConfigFragment extends Fragment {
     private EditText apiKeyEdit, portEdit, modelEdit;
     private Spinner modeSpinner;
     private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb;
+    private EditText autoBackupEdit;
     private Button saveBtn;
     private TextView repoLink;
 
@@ -53,6 +54,7 @@ public class ConfigFragment extends Fragment {
         desktopModeCb = view.findViewById(R.id.config_desktop_mode);
         lanModeCb = view.findViewById(R.id.config_lan_mode);
         rc6Cb = view.findViewById(R.id.config_rc6);
+        autoBackupEdit = view.findViewById(R.id.config_auto_backup);
         geckoCb = view.findViewById(R.id.config_gecko_core);
         adbCb = view.findViewById(R.id.config_adb_enable);
         saveBtn = view.findViewById(R.id.config_save);
@@ -183,6 +185,7 @@ public class ConfigFragment extends Fragment {
                     .putBoolean("use_rc6", rc6Cb.isChecked())
                     .putBoolean("gecko_core", geckoCb != null && geckoCb.isChecked())
                     .putBoolean(DeviceBridgeService.PREF_ADB, adbCb != null && adbCb.isChecked())
+                    .putInt("auto_backup_launches", parseAutoBackup())
                     .apply();
             DeviceBridgeService.apply(requireContext());
             refreshAdbStatus();
@@ -201,6 +204,16 @@ public class ConfigFragment extends Fragment {
             } catch (Exception ignored) {
             }
             repoLink.setOnClickListener(v -> AboutDialog.show(requireContext()));
+        }
+    }
+
+    /** 解析"每启动 N 次自动备份"输入（0=关闭，非法回退 5） */
+    private int parseAutoBackup() {
+        try {
+            int n = Integer.parseInt(autoBackupEdit.getText().toString().trim());
+            return Math.max(0, Math.min(n, 999));
+        } catch (Exception e) {
+            return 5;
         }
     }
 
@@ -235,6 +248,12 @@ public class ConfigFragment extends Fragment {
         }
         if (adbCb != null) {
             adbCb.setChecked(DeviceBridgeService.isAdbEnabled(requireContext()));
+        }
+        if (autoBackupEdit != null) {
+            int n = requireContext()
+                    .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .getInt("auto_backup_launches", 5);
+            autoBackupEdit.setText(String.valueOf(n));
         }
         if (repoLink != null) {
             try {

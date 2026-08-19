@@ -118,6 +118,20 @@
             android:layout_height="wrap_content"
             android:text="局域网访问（同网段设备可打开 WebUI，注意安全）" />
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="自动备份（每启动 N 次备份一次，0=关闭）" />
+
+        <EditText
+            android:id="@+id/config_auto_backup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="5"
+            android:inputType="number"
+            android:text="5" />
+
         <CheckBox
             android:id="@+id/config_rc6"
             android:layout_width="match_parent"
