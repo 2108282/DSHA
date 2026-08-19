@@ -75,4 +75,4 @@ cp -r agent-skills/screen-ocr-operator ~/.agents/skills/
 - 仅支持 arm64-v8a 设备，Android 8.0+
 - 环境存储在 App 私有空间，卸载即清除（可先用「备份配置」）
 - 设备 Shell 能力需要安装并授权 [Shizuku](https://shizuku.rikka.app/)
-- QQ交流群960636357🐧
+- QQ交流群960636357🐧可实时跟进体验最新测试版
