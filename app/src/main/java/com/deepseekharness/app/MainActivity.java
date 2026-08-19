@@ -73,6 +73,8 @@ public class MainActivity extends AppCompatActivity {
         HarnessController.get(this).upgradeGuard();
         // 每启动 5 次自动备份一次（固定名覆盖；与手动备份独立）
         HarnessController.get(this).maybeAutoBackupOnLaunch();
+        // 崩溃自愈提示：上次异常退出时读 crash.log 告知原因（不阻塞使用）
+        showCrashRecoveryNotice();
         // 解压完成后进入主界面（skip_extract=true）才检测"全新环境可恢复"，
         // 避免首启解压前 rootfs 未就绪误弹恢复框（恢复内容会被解压流程覆盖）
         if (getIntent().getBooleanExtra("skip_extract", false)) {
@@ -135,6 +137,39 @@ public class MainActivity extends AppCompatActivity {
     private void setAppTitle(String title) {
         android.widget.TextView t = findViewById(R.id.app_title);
         if (t != null) t.setText(title);
+    }
+
+    /** 崩溃自愈提示：上次有未处理崩溃时，读 crash.log 首条摘要告知用户（不阻塞，仅提示） */
+    private void showCrashRecoveryNotice() {
+        try {
+            final java.io.File f = new java.io.File(getFilesDir(), "crash.log");
+            if (!f.isFile() || f.length() == 0) return;
+            String all = new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            if (all.trim().isEmpty()) return;
+            // 只取最后一条崩溃的异常类型/消息（首个堆栈帧）
+            String[] blocks = all.split("===== ");
+            String last = blocks[blocks.length - 1];
+            String summary = "";
+            for (String line : last.split("\n")) {
+                String t = line.trim();
+                if (t.startsWith("java.") || t.startsWith("android.") || t.startsWith("kotlin.")) {
+                    summary = t.length() > 180 ? t.substring(0, 180) : t;
+                    break;
+                }
+            }
+            final String info = summary.isEmpty() ? "发生异常" : summary;
+            // 删除已读日志（下次崩溃再提示，避免每次启动都弹）
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> new AlertDialog.Builder(this)
+                    .setTitle("上次异常退出")
+                    .setMessage("DSHA 上次运行发生了未处理异常，已自动恢复。\n\n" + info
+                            + "\n\n如果问题反复出现，请把内置终端里 `cat /data/data/com.dsh.client/files/crash.log` 的内容发给开发者。")
+                    .setPositiveButton("知道了", null)
+                    .show(), 1200);
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 自动申请所需权限：通知（前台服务需要）+ 电池优化白名单（保活） */

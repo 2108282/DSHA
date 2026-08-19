@@ -80,6 +80,10 @@ public class HarnessController {
     private volatile String message = "";
     private volatile String error = "";
     private volatile boolean busy = false;
+    /** busy 置位时间戳：超时自愈用（任务卡死 >10 分钟强制释放，防 App 假死） */
+    private volatile long busySince = 0;
+    /** busy 超时阈值：安装/启动单步不应超过 10 分钟 */
+    private static final long BUSY_STALE_MS = 10 * 60 * 1000L;
     private volatile int currentStep = 0;
     private volatile Process webProcess;
     /** Web 进程“代际”/硬重启计数：让启动页感知重启并刷新预览（拿到最新 manifest/插件） */
@@ -278,7 +282,29 @@ public class HarnessController {
     public int getPercent() { return percent; }
     public String getMessage() { return message; }
     public String getError() { return error; }
-    public boolean isBusy() { return busy; }
+    /** 是否忙碌。带超时自愈：busy 卡住超过阈值视为假死，自动释放并记录。 */
+    public boolean isBusy() {
+        if (busy && busySince > 0 && System.currentTimeMillis() - busySince > BUSY_STALE_MS) {
+            // 自愈：任务卡死超时，强制释放 busy，避免后续操作全部被挡（App 假死）
+            android.util.Log.w("DSHA", "busy 超时自愈：任务卡死超过 " + (BUSY_STALE_MS / 60000) + " 分钟，强制释放");
+            busy = false;
+            busySince = 0;
+            error = "上一次操作超时被自愈（可能是网络/环境问题），请重试";
+        }
+        return busy;
+    }
+
+    /** 尝试原子获取 busy（防并发重入）；获取失败返回 false */
+    public boolean tryBeginBusy() {
+        if (isBusy()) return false; // isBusy 内部已处理超时自愈
+        synchronized (this) {
+            if (busy) return false;
+            busy = true;
+            busySince = System.currentTimeMillis();
+            return true;
+        }
+    }
+
     /** 当前正在执行的步骤（0 = 空闲） */
     public int getCurrentStep() { return currentStep; }
 
@@ -288,6 +314,7 @@ public class HarnessController {
         this.message = msg;
         this.error = err;
         this.busy = b;
+        this.busySince = b ? System.currentTimeMillis() : 0;
         // 持久化进度，闪退后下次启动可定位中断步骤（节流：最多 2 秒写一次，避免磁盘 IO 卡顿）
         if (!stage.isEmpty()) {
             long now = System.currentTimeMillis();
@@ -519,7 +546,7 @@ public class HarnessController {
 
     /** 一键安装：按顺序补装尚未完成的步骤 */
     public void install() {
-        if (busy) return;
+        if (!tryBeginBusy()) return;
         invalidateStepCache(); // 重新判定安装状态
         IO.execute(() -> {
             try {
@@ -535,7 +562,7 @@ public class HarnessController {
 
     /** 单独执行一个步骤（已完成则视为重装/更新） */
     public void installStep(int step) {
-        if (busy) return;
+        if (!tryBeginBusy()) return;
         invalidateStepCache(); // 重新判定安装状态
         IO.execute(() -> {
             try {
@@ -1685,6 +1712,7 @@ public class HarnessController {
             webStarting = true;
         }
         IO.execute(() -> {
+            boolean started = false;
             try {
                 // 启动前预检：端口仍被占 → 深杀残留（根治 EADDRINUSE）
                 if (isWebPortUp(400)) {
@@ -1719,12 +1747,37 @@ public class HarnessController {
                             "if [ -n \"$L\" ] && [ \"$L\" -gt 50 ]; then sed -n \"$((L-8)),$((L))p\" ~/dsh-web.log 2>/dev/null; fi; " +
                             "tail -c 500 ~/dsh-web.log 2>/dev/null");
                 }
+                // 自愈：进程退出且非用户主动停止 → 自动重试 1 次（排除配置错误/API key 缺失）
+                if (!isKeepAlivePaused()) {
+                    String low = out == null ? "" : out.toLowerCase();
+                    boolean configErr = low.contains("invalid api key") || low.contains("validationerror")
+                            || low.contains("api key") && low.contains("missing");
+                    if (!configErr && autoRetryWebOnce()) {
+                        return; // 已自动重试，状态由重试流程管理
+                    }
+                }
                 String tail = out.length() > 600 ? out.substring(out.length() - 600) : out;
                 setState("", 0, "", "Web UI 意外退出：\n" + tail, false);
             } catch (Throwable e) {
                 setState("", 0, "", errMsg("启动出错：", e), false);
+            } finally {
+                synchronized (webStartLock) {
+                    webStarting = false; // 关键：无论成功失败都要释放，否则后续启动全被挡
+                }
             }
         });
+    }
+
+    /** Web 意外退出自动重试（限 1 次，防抖动死循环）。返回 true=已重试 */
+    private volatile long lastAutoRetryAt = 0;
+    private boolean autoRetryWebOnce() {
+        long now = System.currentTimeMillis();
+        if (now - lastAutoRetryAt < 30_000) return false; // 30s 内不重复重试
+        lastAutoRetryAt = now;
+        android.util.Log.w("DSHA", "Web 意外退出，30s 后自动重试 1 次");
+        prefs.edit().putLong("web_auto_retry_at", now).apply();
+        new Handler(Looper.getMainLooper()).postDelayed(this::startWeb, 30_000);
+        return true;
     }
 
     public void stopWeb() {
