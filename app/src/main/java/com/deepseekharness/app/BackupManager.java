@@ -26,8 +26,21 @@ public final class BackupManager {
     private BackupManager() {
     }
 
+    /** 自动备份固定文件名（自动覆盖上一个自动备份；与手动备份独立） */
+    public static final String AUTO_BACKUP_NAME = "DSHA-backup-auto.tar.gz";
+
     /** 执行备份并导出，返回外部存储中的完整路径；失败返回 null */
     public static String backupToExternal(Context ctx, HarnessController c) {
+        return backup(ctx, c, null);
+    }
+
+    /** 自动备份：固定文件名，自动覆盖上一个自动备份（与手动备份独立，手动每次保留） */
+    public static String backupToExternalAuto(Context ctx, HarnessController c) {
+        return backup(ctx, c, AUTO_BACKUP_NAME);
+    }
+
+    /** 内部实现。name=null 表示手动备份（时间戳命名，每次独立保留）；否则固定名覆盖。 */
+    private static String backup(Context ctx, HarnessController c, String fixedName) {
         try {
             // 1. rootfs 内打包
             String wd = c.getWorkdir();
@@ -37,10 +50,12 @@ public final class BackupManager {
             File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-backup.tar.gz");
             if (!tmp.isFile() || tmp.length() == 0) return null;
 
-            String name = "DSHA-backup-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
-                    .format(new Date()) + ".tar.gz";
+            String name = fixedName != null
+                    ? fixedName
+                    : "DSHA-backup-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+                            .format(new Date()) + ".tar.gz";
             String path = Build.VERSION.SDK_INT >= 29
-                    ? writeViaMediaStore(ctx, tmp, name)
+                    ? writeViaMediaStore(ctx, tmp, name, fixedName != null)
                     : writeDirect(tmp, name);
             //noinspection ResultOfMethodCallIgnored
             tmp.delete();
@@ -50,8 +65,28 @@ public final class BackupManager {
         }
     }
 
-    /** Android 10+：MediaStore Downloads 集合，无需存储权限 */
-    private static String writeViaMediaStore(Context ctx, File src, String name) throws Exception {
+    /** Android 10+：MediaStore Downloads 集合，无需存储权限。overwrite=true 时先删同名旧条目。 */
+    private static String writeViaMediaStore(Context ctx, File src, String name, boolean overwrite) throws Exception {
+        if (overwrite) {
+            // 删除同名的旧自动备份（MediaStore 同名会新建条目，必须先清旧的）
+            try {
+                Uri collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+                String sel = MediaStore.MediaColumns.DISPLAY_NAME + "=? AND "
+                        + MediaStore.MediaColumns.RELATIVE_PATH + "=?";
+                String[] args = {name, Environment.DIRECTORY_DOWNLOADS + "/DSHA/"};
+                android.database.Cursor cur = ctx.getContentResolver().query(collection,
+                        new String[]{MediaStore.MediaColumns._ID}, sel, args, null);
+                if (cur != null) {
+                    while (cur.moveToNext()) {
+                        long id = cur.getLong(0);
+                        ctx.getContentResolver().delete(
+                                android.content.ContentUris.withAppendedId(collection, id), null, null);
+                    }
+                    cur.close();
+                }
+            } catch (Throwable ignored) {
+            }
+        }
         ContentValues values = new ContentValues();
         values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
         values.put(MediaStore.MediaColumns.MIME_TYPE, "application/gzip");

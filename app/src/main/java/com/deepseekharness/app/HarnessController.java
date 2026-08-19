@@ -1819,6 +1819,28 @@ public class HarnessController {
         return true;
     }
 
+    /** 启动计数自动备份：每启动 5 次触发一次自动备份（固定名自动覆盖上一个自动备份）。
+     *  与手动备份独立（手动每次保留时间戳文件）。幂等、后台执行、失败静默。 */
+    public void maybeAutoBackupOnLaunch() {
+        try {
+            final SharedPreferences prefs =
+                    appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
+            final int n = prefs.getInt("launch_count", 0) + 1;
+            prefs.edit().putInt("launch_count", n).apply();
+            if (n % 5 != 0) return; // 每 5 次才备份
+            IO.execute(() -> {
+                try {
+                    if (proot.isInstalled() && rootfsFile("root/.dsh").isDirectory()) {
+                        String p = BackupManager.backupToExternalAuto(appContext, HarnessController.this);
+                        if (p != null) android.util.Log.i("DSHA", "第 " + n + " 次启动，自动备份完成: " + p);
+                    }
+                } catch (Throwable ignored) {
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** 外部下载目录 Download/DSHA 里最新的 DSHA 备份；没有返回 null */
     public File findLatestExternalBackup() {
         try {
