@@ -1769,25 +1769,11 @@ public class HarnessController {
      * 备份内容：.env + 整个 .dsh（含 settings.yaml、对话记录等）。
      * 返回备份目录绝对路径；失败返回 null。
      */
+    /** 配置备份：导出到外部 Download/DSHA（卸载重装不丢）。
+     *  统一走 BackupManager（tar.gz 含 .dsh 配置+对话 + .env + 日志）。 */
     public String backupConfig() {
         try {
-            File backupRoot = new File(appContext.getFilesDir(), "backup");
-            File dir = new File(backupRoot, "config-" +
-                    new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
-                            .format(new java.util.Date()));
-            dir.mkdirs();
-            int n = 0;
-            File env = rootfsFile("root/" + getWorkdir() + "/.env");
-            if (env.isFile()) {
-                copyFile(env, new File(dir, "env-" + getWorkdir() + ".txt"));
-                n++;
-            }
-            File dsh = rootfsFile("root/.dsh");
-            if (dsh.isDirectory()) {
-                copyDir(dsh, new File(dir, "dsh"));
-                n++;
-            }
-            return n > 0 ? dir.getAbsolutePath() : null;
+            return BackupManager.backupToExternal(appContext, this);
         } catch (Exception e) {
             return null;
         }
