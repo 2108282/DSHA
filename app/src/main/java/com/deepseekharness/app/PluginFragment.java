@@ -187,6 +187,16 @@ public class PluginFragment extends Fragment {
         });
     }
 
+    /** 判断某条目是否"不兼容"（兼容新旧索引格式的多种表述）：
+     *  ❌不兼容 / ❌ 不兼容 / 不兼容 / 运行级不兼容 等一律命中；
+     *  但"可用"类表述（✅可用/✅ 可用/可用）绝不误判。 */
+    private static boolean isIncompat(String compat) {
+        if (compat == null) return false;
+        String c = compat.trim();
+        if (c.startsWith("❌")) return true;
+        return c.contains("不兼容") && !c.contains("可用");
+    }
+
     /** 刷新市场视图：按 搜索词 + 仅兼容开关 过滤，再排序，更新列表与状态栏。
      * 基于全量 items 每次重新计算，保证各条件可叠加。 */
     private void refreshMarketView() {
@@ -194,16 +204,20 @@ public class PluginFragment extends Fragment {
         applySort();
         java.util.List<String[]> filtered = new java.util.ArrayList<>();
         String q = searchQuery.trim().toLowerCase();
+        int skipped = 0;
         for (String[] it : items) {
             if (!q.isEmpty() && !it[0].toLowerCase().contains(q)) continue;
-            // 仅兼容开关：滤掉 ❌不兼容（⏳待定/未测 保留，未知兼容性不误杀）
-            if (filterIncompat && it[3].startsWith("❌")) continue;
+            // 仅兼容开关：滤掉不兼容条目（⏳待定/未测 保留，未知兼容性不误杀）
+            if (filterIncompat && isIncompat(it[3])) {
+                skipped++;
+                continue;
+            }
             filtered.add(it);
         }
         adapter.setData(filtered, true);
         String hint = "共 " + filtered.size() + " 个插件";
         if (!q.isEmpty()) hint += "（搜索：\"" + q + "\"）";
-        if (filterIncompat) hint += " · 仅显示兼容";
+        if (filterIncompat) hint += " · 仅显示兼容（已滤 " + skipped + " 条不兼容）";
         hint += " · 点击查看详情/安装" + cacheHint();
         status.setText(hint);
     }
