@@ -939,7 +939,7 @@ public class HarnessController {
         requireRootfs();
         requireTools();
         setProgress("安装 deepseek-harness 最新 RC（npm 全局）", 91);
-        runStep("RC6 安装环境准备", 92,
+        runStep("RC 安装环境准备", 92,
                 "npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user 2>/dev/null; " +
                 "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc");
         runStep("安装 @deepseek-ai/dsh 最新 RC", 95,
@@ -958,8 +958,8 @@ public class HarnessController {
                 "if [ ! -f \"$npty_dir/build/Release/pty.node\" ]; then " +
                 "(cd \"$npty_dir\" && node-gyp rebuild > /tmp/rc6-gyp.log 2>&1) || " +
                 "{ echo 'node-pty 编译失败：'; tail -10 /tmp/rc6-gyp.log 2>&1; exit 1; }; fi; " +
-                "ls \"$npty_dir/build/Release/pty.node\" >/dev/null 2>&1 && echo 'pty.node 已就绪' && command -v dsh && echo 'RC6 安装完成'");
-        setProgress("RC6 安装完成", 100);
+                "ls \"$npty_dir/build/Release/pty.node\" >/dev/null 2>&1 && echo 'pty.node 已就绪' && command -v dsh && echo 'RC 安装完成'");
+        setProgress("RC 安装完成", 100);
     }
 
     /** 直连 GitHub 源码构建（clone 多通道 fallback + npmmirror 依赖/headers 源） */
@@ -1482,8 +1482,10 @@ public class HarnessController {
             // 1) 往 rootfs 写注入脚本（heredoc 防引号问题）
             String script =
                     "set -e; " +
+                    // rc.8：client bundle 在 @deepseek-ai/dsh-client-connection/lib（全局 npm 包内）；
+                    // 兼容旧版：dsh-web-app/dist|lib/client
                     "DST=$(find /usr/local/lib/node_modules /root -maxdepth 14 " +
-                    "  \\( -path '*dsh-web-app/dist*/client' -o -path '*dsh-web-app/lib/client' \\) " +
+                    "  \\( -path '*dsh-client-connection/lib/client' -o -path '*dsh-web-app/dist*/client' -o -path '*dsh-web-app/lib/client' \\) " +
                     "  -type d 2>/dev/null | head -1); " +
                     "if [ -z \"$DST\" ]; then echo '[DSHA] 未找到 web-app client 目录，跳过移动端适配'; exit 0; fi; " +
                     "echo \"[DSHA] 注入移动端适配 -> $DST\"; " +

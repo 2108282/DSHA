@@ -119,7 +119,7 @@ done
 sudo cp "$REPO_ROOT/scripts/offline-provision.sh" "$ROOTFS_DIR/root/offline-provision.sh"
 sudo chmod +x "$ROOTFS_DIR/root/offline-provision.sh"
 
-log "[5/6] chroot 预装（apt / Node / pnpm / dsh RC6 / 守卫）"
+log "[5/6] chroot 预装（apt / Node / pnpm / dsh（默认 rc.8，见 offline-provision.sh）/ 守卫）"
 # CI 里走官方源；保留 ca-certificates（真 chroot 下 postinst 可用）
 sudo chroot "$ROOTFS_DIR" /usr/bin/env \
   DEBIAN_FRONTEND=noninteractive \

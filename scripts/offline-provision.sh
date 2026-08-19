@@ -3,8 +3,9 @@
 # offline-provision.sh — 在 arm64 rootfs（chroot / proot）内
 # 预装 deepseek-harness 运行环境，产出「解压即用」的 rootfs。
 #
-# 默认装 RC6（@deepseek-ai/dsh@0.1.0-rc.6），与 App 默认开关
-# use_rc6=true 对齐；RC6 失败再回退源码构建。
+# 默认装 rc.8（@deepseek-ai/dsh@0.1.0-rc.8，2026-08-19 发布），
+# 与 App 在线安装（@rc 跟随最新）对齐；rc.8 失败再回退源码构建。
+# 升级 rc 版本时同步改 DSH_VERSION 常量即可。
 #
 # 环境变量：
 #   GITHUB_ACTIONS=true  → 官方源优先（GitHub runner 在海外）
@@ -12,6 +13,8 @@
 # ============================================================
 set -euo pipefail
 
+# dsh 版本（pin 到具体 rc，保证离线包可复现；与 App 在线 @rc 策略解耦）
+DSH_VERSION="${DSH_VERSION:-0.1.0-rc.8}"
 WORKDIR="${WORKDIR:-deepseek-harness}"
 IN_CI="${GITHUB_ACTIONS:-}"
 KEEP_CA="${DSHA_KEEP_CA:-}"
@@ -103,23 +106,23 @@ build_pty() {
   [ -f "$dir/build/Release/pty.node" ] || [ -f "$dir/prebuilds/linux-arm64/pty.node" ]
 }
 
-echo "==> [5/8] 安装 @deepseek-ai/dsh@0.1.0-rc.6（App 默认 RC6）"
+echo "==> [5/8] 安装 @deepseek-ai/dsh@${DSH_VERSION}（App 默认 dsh 版本）"
 install_headers
-RC6_OK=0
+RC_OK=0
 npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user 2>/dev/null || true
-if npm install -g @deepseek-ai/dsh@0.1.0-rc.6 --force; then
+if npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" --force; then
   NP=$(find /usr/local/lib/node_modules -maxdepth 8 -path '*/node-pty' -type d 2>/dev/null | head -1)
   if build_pty "$NP"; then
-    RC6_OK=1
-    echo "RC6 + node-pty 就绪"
+    RC_OK=1
+    echo "dsh ${DSH_VERSION} + node-pty 就绪"
   else
-    echo "WARN: RC6 已装但 node-pty 编译失败，尝试源码回退"
+    echo "WARN: dsh ${DSH_VERSION} 已装但 node-pty 编译失败，尝试源码回退"
   fi
 else
-  echo "WARN: npm 安装 RC6 失败，回退源码构建"
+  echo "WARN: npm 安装 dsh ${DSH_VERSION} 失败，回退源码构建"
 fi
 
-if [ "$RC6_OK" != 1 ]; then
+if [ "$RC_OK" != 1 ]; then
   echo "==> [5b/8] 回退：克隆 deepseek-harness 源码并构建"
   cd /root
   rm -rf "${WORKDIR}"

@@ -50,7 +50,7 @@ cp -r agent-skills/screen-ocr-operator ~/.agents/skills/
 
 1. 推送到 `main`（或在 Actions 页点 Run workflow）
 2. 流水线分两段：
-   - `ubuntu-24.04-arm`：原生 arm64 chroot 预装 Ubuntu + Node + dsh RC6
+   - `ubuntu-24.04-arm`：原生 arm64 chroot 预装 Ubuntu + Node + dsh rc.8（见 scripts/offline-provision.sh）
    - `ubuntu-latest`：把离线包打进 APK
 3. 在 Actions 的 Artifacts 下载 `dsha-debug-apk`
 
