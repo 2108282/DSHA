@@ -41,8 +41,12 @@ public class PluginFragment extends Fragment {
     private PluginAdapter adapter;
     private HarnessController c;
     private TextView status;
-    /** 当前排序：0 star / 1 名称 / 2 分类 / 3 兼容性 */
+    /** 当前排序：0 star / 1 名称 */
     private int sortMode = 0;
+    /** 仅显示兼容插件（过滤 ❌不兼容） */
+    private boolean filterIncompat = false;
+    /** 当前搜索词（供过滤/排序后刷新视图复用） */
+    private String searchQuery = "";
 
     @Nullable
     @Override
@@ -75,15 +79,11 @@ public class PluginFragment extends Fragment {
 
             @Override
             public void onTextChanged(CharSequence s, int a, int b, int c) {
-                String q = s.toString().trim().toLowerCase();
+                searchQuery = s.toString();
                 if (mode == Mode.MARKET) {
-                    java.util.List<String[]> filtered = new java.util.ArrayList<>();
-                    for (String[] it : items) {
-                        if (q.isEmpty() || it[0].toLowerCase().contains(q)) filtered.add(it);
-                    }
-                    adapter.setData(filtered, true);
-                    status.setText("共 " + filtered.size() + " 个插件" + (q.isEmpty() ? " · 点击查看详情/安装" : "（搜索：" + q + "）"));
+                    refreshMarketView();
                 } else if (mode == Mode.INSTALLED) {
+                    String q = searchQuery.trim().toLowerCase();
                     java.util.List<String[]> filtered = new java.util.ArrayList<>();
                     for (String[] it : installed) {
                         if (q.isEmpty() || it[0].toLowerCase().contains(q)) filtered.add(it);
@@ -115,6 +115,17 @@ public class PluginFragment extends Fragment {
             showInstalled();
         });
         btnSort.setOnClickListener(v -> showSortMenu(btnSort));
+
+        // 仅兼容开关：滤掉 ❌不兼容 条目（⏳待定/未测 保留）
+        final TextView btnFilterCompat = view.findViewById(R.id.btnFilterCompat);
+        btnFilterCompat.setOnClickListener(v -> {
+            filterIncompat = !filterIncompat;
+            btnFilterCompat.setBackgroundResource(filterIncompat ? R.drawable.bg_tab_on : R.drawable.bg_tab);
+            btnFilterCompat.setTextColor(requireContext().getColor(
+                    filterIncompat ? R.color.primary : R.color.text_muted));
+            btnFilterCompat.setText(filterIncompat ? "仅兼容✓" : "仅兼容");
+            if (mode == Mode.MARKET) refreshMarketView();
+        });
 
         // 强制刷新市场缓存（清缓存 → 重新拉网络）
         TextView btnRefresh = view.findViewById(R.id.btnRefresh);
@@ -149,7 +160,7 @@ public class PluginFragment extends Fragment {
 
     /** 排序下拉菜单：点一下展开选择，不用一直点循环 */
     private void showSortMenu(android.view.View anchor) {
-        final String[] options = {"⭐ Star 数", "🔤 名称 A-Z", "✅ 兼容性"};
+        final String[] options = {"⭐ Star 数", "🔤 名称 A-Z"};
         android.widget.PopupMenu pm = new android.widget.PopupMenu(requireContext(), anchor);
         for (int i = 0; i < options.length; i++) {
             pm.getMenu().add(0, i, 0, options[i]);
@@ -157,7 +168,7 @@ public class PluginFragment extends Fragment {
         pm.setOnMenuItemClickListener(item -> {
             sortMode = item.getItemId();
             ((android.widget.TextView) anchor).setText(options[sortMode].replace("排序：", ""));
-            if (mode == Mode.MARKET && !items.isEmpty()) applySort();
+            if (mode == Mode.MARKET) refreshMarketView();
             return true;
         });
         pm.show();
@@ -171,13 +182,31 @@ public class PluginFragment extends Fragment {
                     int sa = Integer.parseInt(a[1].isEmpty() ? "0" : a[1]);
                     int sb = Integer.parseInt(b[1].isEmpty() ? "0" : b[1]);
                     return sb - sa;
-                case 1: // 名称
+                default: // 名称
                     return a[0].toLowerCase().compareTo(b[0].toLowerCase());
-                default: // 兼容性：✅ 可用 > ⏳未测 > ❌不兼容 > 未知
-                    return rankCompat(a[3]) - rankCompat(b[3]);
             }
         });
-        adapter.notifyDataSetChanged();
+    }
+
+    /** 刷新市场视图：按 搜索词 + 仅兼容开关 过滤，再排序，更新列表与状态栏。
+     * 基于全量 items 每次重新计算，保证各条件可叠加。 */
+    private void refreshMarketView() {
+        if (mode != Mode.MARKET) return;
+        applySort();
+        java.util.List<String[]> filtered = new java.util.ArrayList<>();
+        String q = searchQuery.trim().toLowerCase();
+        for (String[] it : items) {
+            if (!q.isEmpty() && !it[0].toLowerCase().contains(q)) continue;
+            // 仅兼容开关：滤掉 ❌不兼容（⏳待定/未测 保留，未知兼容性不误杀）
+            if (filterIncompat && it[3].startsWith("❌")) continue;
+            filtered.add(it);
+        }
+        adapter.setData(filtered, true);
+        String hint = "共 " + filtered.size() + " 个插件";
+        if (!q.isEmpty()) hint += "（搜索：\"" + q + "\"）";
+        if (filterIncompat) hint += " · 仅显示兼容";
+        hint += " · 点击查看详情/安装" + cacheHint();
+        status.setText(hint);
     }
 
     /** 线程回调安全切主线程（Fragment detach 后不再崩溃）：未 attach 则丢弃 */
@@ -188,18 +217,9 @@ public class PluginFragment extends Fragment {
         a.runOnUiThread(r);
     }
 
-    private int rankCompat(String v) {
-        if (v.startsWith("✅")) return 0;
-        if (v.startsWith("⏳")) return 1;
-        if (v.startsWith("❌")) return 2;
-        return 3;
-    }
-
     private void showMarket() {
         if (!items.isEmpty()) {
-            applySort();
-            adapter.setData(items, true);
-            status.setText("共 " + items.size() + " 个插件 · 点击查看详情/安装" + cacheHint());
+            refreshMarketView();
             return;
         }
         status.setText("正在拉取插件市场…");
@@ -213,9 +233,7 @@ public class PluginFragment extends Fragment {
                 }
                 items.clear();
                 items.addAll(list);
-                applySort();
-                adapter.setData(items, true);
-                status.setText("共 " + items.size() + " 个插件 · 点击查看详情/安装" + cacheHint());
+                refreshMarketView();
                 fetchStars(items); // 异步批量拉真实 star 数
             });
         }).start();
