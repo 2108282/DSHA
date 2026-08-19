@@ -42,7 +42,7 @@
         <item name="android:textColor">@color/err</item>
     </style>
 
-    <style name="Widget.Dsha.WelcomeItem">
+    <style name="Widget.Dsha.WelcomeItem" parent="">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:orientation">horizontal</item>
@@ -52,7 +52,7 @@
         <item name="android:background">@drawable/bg_card</item>
     </style>
 
-    <style name="Widget.Dsha.WelcomeIcon">
+    <style name="Widget.Dsha.WelcomeIcon" parent="">
         <item name="android:layout_width">36dp</item>
         <item name="android:layout_height">36dp</item>
         <item name="android:layout_marginEnd">14dp</item>
@@ -63,7 +63,7 @@
         <item name="android:textStyle">bold</item>
     </style>
 
-    <style name="Widget.Dsha.FieldLabel">
+    <style name="Widget.Dsha.FieldLabel" parent="">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_marginBottom">7dp</item>
@@ -82,7 +82,7 @@
         <item name="android:textSize">14sp</item>
     </style>
 
-    <style name="Widget.Dsha.CardLabel">
+    <style name="Widget.Dsha.CardLabel" parent="">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_marginBottom">12dp</item>
