@@ -66,11 +66,10 @@
         <item name="itemIconTint">@color/nav_item_color</item>
         <item name="itemTextColor">@color/nav_item_color</item>
         <item name="itemRippleColor">@color/accent_dim</item>
-        <item name="itemActiveIndicatorStyle">@style/Widget.Dsha.NavIndicator</item>
         <item name="elevation">0dp</item>
     </style>
 
-    <style name="Widget.Dsha.NavIndicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+    <style name="Widget.Dsha.NavIndicator">
         <item name="android:color">@color/accent_dim</item>
     </style>
 
