@@ -2339,6 +2339,9 @@ public class HarnessController {
                 int u1 = t.indexOf('(', rb), u2 = t.indexOf(')', u1 + 1);
                 if (u1 < 0 || u2 < 0) continue;
                 String url = t.substring(u1 + 1, u2).trim();
+                // 有的加速代理（如 GH_PROXY）会改写内容里的链接为 <代理>/https://github.com/…，剥掉前缀还原
+                int ghPos = url.indexOf("https://github.com/");
+                if (ghPos > 0) url = url.substring(ghPos);
                 if (!url.startsWith("http")) continue;
                 String rest = t.substring(u2 + 1);
                 // ★star
@@ -2380,6 +2383,9 @@ public class HarnessController {
                 int u1 = first.indexOf('('), u2 = first.lastIndexOf(')');
                 if (u1 < 0 || u2 < 0) continue;
                 String url = first.substring(u1 + 1, u2).trim();
+                // 同上：剥掉代理改写前缀
+                int ghPos2 = url.indexOf("https://github.com/");
+                if (ghPos2 > 0) url = url.substring(ghPos2);
                 if (!url.startsWith("http")) continue;
                 String compat = cells.length > 3 ? cells[3].trim() : "";
                 String desc = cells.length > 4 ? cells[4].trim() : "";
