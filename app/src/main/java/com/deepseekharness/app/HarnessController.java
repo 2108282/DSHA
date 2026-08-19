@@ -1793,6 +1793,103 @@ public class HarnessController {
         }
     }
 
+    // ================= 升级自动备份 / 恢复（防卸载重装丢数据） =================
+
+    /** 当前 App 的 versionCode；读取失败返回 0 */
+    private int currentVersionCode() {
+        try {
+            return appContext.getPackageManager().getPackageInfo(appContext.getPackageName(), 0).versionCode;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /**
+     * 升级/首次启动自愈（幂等）：版本号比上次运行时提升 → 后台自动把旧环境
+     * （.dsh 配置+对话记录 + .env）备份到外部 Download/DSHA，
+     * 避免后续覆盖安装/卸载重装导致数据丢失。
+     * @return true = 本次为升级或首次启动（调用方可据此检测"全新环境可恢复"）
+     */
+    public boolean upgradeGuard() {
+        final int cur = currentVersionCode();
+        if (cur <= 0) return false;
+        final SharedPreferences prefs =
+                appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
+        final int last = prefs.getInt("last_version_code", 0);
+        if (cur <= last) return false; // 版本未变，幂等返回
+        prefs.edit().putInt("last_version_code", cur).apply();
+        if (last > 0) { // 真升级（非全新安装）：后台自动备份旧环境
+            IO.execute(() -> {
+                try {
+                    if (rootfsFile("root/.dsh").isDirectory()) {
+                        String p = BackupManager.backupToExternal(appContext, HarnessController.this);
+                        if (p != null) android.util.Log.i("DSHA", "升级自动备份完成: " + p);
+                    }
+                } catch (Throwable ignored) {
+                }
+            });
+        }
+        return true;
+    }
+
+    /** 外部下载目录 Download/DSHA 里最新的 DSHA 备份；没有返回 null */
+    public File findLatestExternalBackup() {
+        try {
+            File dir = new File(android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS), "DSHA");
+            File[] fs = dir.listFiles((d, n) -> n.startsWith("DSHA-backup-") && n.endsWith(".tar.gz"));
+            if (fs == null || fs.length == 0) return null;
+            File best = null;
+            for (File f : fs) {
+                if (best == null || f.lastModified() > best.lastModified()) best = f;
+            }
+            return best;
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /** 从外部备份 tar.gz 恢复 .dsh + .env 到 rootfs；返回结果文案 */
+    public String restoreFromBackup(File backup) {
+        try {
+            File tmp = rootfsFile("root/.dsha-restore.tar.gz");
+            copyFile(backup, tmp);
+            TarGzipExtractor.extract(tmp, new File(proot.getRootfsDir(), "root"));
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+            return "恢复完成（配置 + 对话记录），重启 WebUI 生效";
+        } catch (Exception e) {
+            return "恢复失败: " + e.getMessage();
+        }
+    }
+
+    /**
+     * 全新环境检测：若 rootfs 尚无数据（卸载重装后的空环境）且 Download/DSHA 存在旧备份，
+     * 弹窗询问是否恢复。仅在 App 升级/首次启动时由调用方触发。
+     */
+    public void maybePromptRestore(final android.app.Activity act) {
+        IO.execute(() -> {
+            try {
+                if (rootfsFile("root/.dsh").isDirectory()) return; // 已有数据，不打扰
+                final File b = findLatestExternalBackup();
+                if (b == null) return;
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    new android.app.AlertDialog.Builder(act)
+                            .setTitle("检测到旧版备份")
+                            .setMessage("发现备份：\n" + b.getName()
+                                    + "\n\n是否恢复到当前环境？\n（恢复配置、API Key 与对话记录）")
+                            .setPositiveButton("恢复", (d, w) -> {
+                                String r = restoreFromBackup(b);
+                                android.widget.Toast.makeText(act, r, android.widget.Toast.LENGTH_LONG).show();
+                            })
+                            .setNegativeButton("忽略", null)
+                            .show();
+                });
+            } catch (Throwable ignored) {
+            }
+        });
+    }
+
     /** 重置配置：删除 settings.yaml + .env（保留对话记录），并重写 .env。 */
     public String resetConfig() {
         try {
@@ -2119,7 +2216,7 @@ public class HarnessController {
                 "const p=JSON.parse(fs.readFileSync(pkg,'utf-8'));\n" +
                 "if(!p.dependencies)p.dependencies={};\n" +
                 "if(mode==='on'){\n" +
-                "  p.dependencies[pn]=src;\n" +
+                "  if(src&&src!=='null'&&src!=='*')p.dependencies[pn]=src;\n" +
                 "  if(p.dsh&&p.dsh.profile&&Array.isArray(p.dsh.profile.bundles)&&p.dsh.profile.bundles.indexOf(pn)<0)p.dsh.profile.bundles.push(pn);\n" +
                 "}else{\n" +
                 "  if(p.dependencies[pn])fs.writeFileSync('/root/.dsh/profiles/web/.dsha-src-'+pn,String(p.dependencies[pn]));\n" +
