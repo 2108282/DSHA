@@ -22,13 +22,16 @@ public final class AdbBridge {
     private AdbBridge() {
     }
 
-    /** assets 脚本是否已注入 rootfs */
+    /** assets 脚本是否已注入 rootfs（校验版本标记，防止旧脚本残留不更新） */
     public static boolean injected(ProotBootstrap proot) {
-        String r = proot.execAndRead("test -f /root/.dsh/adb-pair.py && echo YES || echo NO");
-        return r != null && r.contains("YES");
+        String r = proot.execAndRead("test -f /root/.dsh/script-version && cat /root/.dsh/script-version || echo NO");
+        return r != null && r.trim().contains(SCRIPT_VERSION);
     }
 
-    /** 幂等注入：把三个 assets 脚本 base64 写入 /root/.dsh/ 并加执行位 */
+    /** 当前 assets 脚本版本：每次改脚本 +1，旧版 APK 的残留脚本会因版本不符被强制重注入 */
+    private static final String SCRIPT_VERSION = "3";
+
+    /** 幂等注入：把三个 assets 脚本 base64 写入 /root/.dsh/ 并加执行位 + 写版本标记 */
     public static String inject(Context ctx, ProotBootstrap proot) {
         StringBuilder cmds = new StringBuilder("set -e; mkdir -p /root/.dsh; ");
         for (String name : SCRIPTS) {
@@ -38,6 +41,7 @@ public final class AdbBridge {
             cmds.append("printf '%s' '").append(b64).append("' | base64 -d > /root/.dsh/").append(name)
                     .append("; chmod +x /root/.dsh/").append(name).append("; ");
         }
+        cmds.append("printf '%s' '").append(SCRIPT_VERSION).append("' > /root/.dsh/script-version; ");
         return proot.execAndRead(cmds.toString());
     }
 

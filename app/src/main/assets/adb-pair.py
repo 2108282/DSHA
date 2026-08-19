@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# DSHA_ADB_SCRIPT_VERSION=3
 """
 DSHA ADB 无线配对（绕过 Shizuku）—— 单次配对脚本。
 协议：Android 11+ wireless debugging pairing（TLS1.3-PSK + SPAKE2，AOSP/BoringSSL）。

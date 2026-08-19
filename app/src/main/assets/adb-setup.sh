@@ -1,4 +1,5 @@
 #!/bin/bash
+# DSHA_ADB_SCRIPT_VERSION=3
 # DSHA ADB 无线配对环境安装（幂等；rootfs 内执行）
 # 步骤：依赖(adb_shell_wifi/spake2-cffi) → 密钥 → 包装命令 /root/dsh-bin/adb-shell
 # 完整日志写入 /root/.dsh/adb-setup.log（App 内置终端可 cat 查看）
