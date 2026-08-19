@@ -16,14 +16,39 @@
         android:orientation="vertical"
         android:padding="18dp">
 
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/launch_run_dot"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="●"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/launch_run_state"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:text="DSH 未运行"
+                android:textColor="@color/text"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
         <TextView
             android:id="@+id/launch_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Web UI 未运行"
-            android:textColor="@color/text"
-            android:textSize="15sp"
-            android:textStyle="bold" />
+            android:layout_marginTop="8dp"
+            android:textColor="@color/text_muted"
+            android:textSize="12sp" />
 
         <LinearLayout
             android:id="@+id/launch_controls"
@@ -78,16 +103,41 @@
             android:visibility="gone" />
     </LinearLayout>
 
-    <FrameLayout
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_marginTop="12dp"
         android:layout_weight="1"
-        android:background="@drawable/bg_preview">
+        android:background="@drawable/bg_preview"
+        android:orientation="vertical">
 
-        <FrameLayout
-            android:id="@+id/previewContainer"
+        <TextView
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
-    </FrameLayout>
+            android:layout_height="wrap_content"
+            android:paddingStart="14dp"
+            android:paddingTop="10dp"
+            android:paddingEnd="14dp"
+            android:text="日志  ·  dsh-web.log"
+            android:textColor="@color/text_muted"
+            android:textSize="11sp" />
+
+        <ScrollView
+            android:id="@+id/launch_log_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fillViewport="true">
+
+            <TextView
+                android:id="@+id/launch_log"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:padding="14dp"
+                android:text="还没有日志。"
+                android:textColor="@color/text_secondary"
+                android:textIsSelectable="true"
+                android:textSize="12sp" />
+        </ScrollView>
+    </LinearLayout>
 </LinearLayout>
