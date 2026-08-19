@@ -68,6 +68,11 @@ public class MainActivity extends AppCompatActivity {
 
         setContentView(R.layout.activity_main);
 
+        // 升级/首次启动自愈：自动备份旧环境；全新环境且 Download/DSHA 有旧备份时提示恢复
+        if (HarnessController.get(this).upgradeGuard()) {
+            HarnessController.get(this).maybePromptRestore(this);
+        }
+
         requestPermissions();
         requestBatteryOptimization();
         maybeShowBackupReminder();
