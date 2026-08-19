@@ -2300,14 +2300,27 @@ public class HarnessController {
             "windows", "macos", "swiftui"
     };
 
-    /** 判断条目是否像"非插件"（客户端壳/合集）。只查名字，命中即从市场隐藏。 */
+    /** 判断条目是否像"非插件"（客户端壳/合集/主仓库/市场UI）。只查名字与URL，命中即隐藏。
+     * 规则分层（用真实索引 1940 条验证过）：
+     * 1. 客户端壳关键词（desktop/tui/docker/...）
+     * 2. 官方主仓库本体 deepseek-ai/deepseek-harness（DSH 本身不是插件）
+     * 3. 市场 UI 插件（plugin-market/plugin-hub/... 几十个重复的市场入口，App 自带市场，滤掉）；
+     *    注意别误伤 dsh-stock-market(股票)/dsh-webui-market-plugin(真插件)
+     * 4. awesome- 合集 */
     private static boolean isLikelyNonPlugin(String name, String url, String desc) {
         String n = name.toLowerCase();
+        String u = url == null ? "" : url.toLowerCase();
         // 例外：atuin（shell 历史工具插件）名字含 tui 子串，放行
         if (n.contains("atuin")) return false;
         for (String k : NON_PLUGIN_NAME_KEYS) {
             if (n.contains(k)) return true;
         }
+        // 官方主仓库本体：deepseek-ai/deepseek-harness（DSH 本身不是插件）
+        if (u.contains("github.com/deepseek-ai/deepseek-harness")) return true;
+        // 市场 UI 插件（重复度高，App 自带市场；不含 stock-market 等真功能词）
+        if (n.contains("plugin-market") || n.contains("plugins-market")
+                || n.contains("plugin-hub") || n.contains("plugins-hub")
+                || n.contains("plugin-store") || n.contains("dsh-market")) return true;
         // awesome- 合集（任意位置；含 plugin/skill/theme/pack 词干的可能是真插件，放行）
         if (n.contains("awesome-") && !(n.contains("plugin") || n.contains("skill")
                 || n.contains("theme") || n.contains("pack"))) return true;
