@@ -68,6 +68,14 @@ public class MainActivity extends AppCompatActivity {
 
         setContentView(R.layout.activity_main);
 
+        // 升级自动备份（幂等；rootfs 未就绪时内部自动跳过）
+        HarnessController.get(this).upgradeGuard();
+        // 解压完成后进入主界面（skip_extract=true）才检测"全新环境可恢复"，
+        // 避免首启解压前 rootfs 未就绪误弹恢复框（恢复内容会被解压流程覆盖）
+        if (getIntent().getBooleanExtra("skip_extract", false)) {
+            HarnessController.get(this).maybePromptRestore(this);
+        }
+
         requestPermissions();
         requestBatteryOptimization();
         maybeShowBackupReminder();
