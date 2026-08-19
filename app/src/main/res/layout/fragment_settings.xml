@@ -15,7 +15,7 @@
         android:paddingBottom="24dp">
 
         <TextView
-            style="@style/Widget.Dsha.CardLabel"
+            style="@style/DshaCardLabel"
             android:layout_marginStart="4dp"
             android:text="模块" />
 
@@ -28,7 +28,7 @@
             android:padding="2dp" />
 
         <TextView
-            style="@style/Widget.Dsha.CardLabel"
+            style="@style/DshaCardLabel"
             android:layout_marginStart="4dp"
             android:layout_marginTop="18dp"
             android:text="其他" />

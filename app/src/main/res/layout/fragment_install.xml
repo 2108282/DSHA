@@ -86,7 +86,7 @@
             android:padding="18dp">
 
             <TextView
-                style="@style/Widget.Dsha.CardLabel"
+                style="@style/DshaCardLabel"
                 android:text="分步安装 · 每步可单独重装 / 更新" />
 
             <TextView
@@ -99,7 +99,7 @@
 
             <Button
                 android:id="@+id/install_step1"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
@@ -107,7 +107,7 @@
 
             <Button
                 android:id="@+id/install_step2"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -115,7 +115,7 @@
 
             <Button
                 android:id="@+id/install_step3"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -123,7 +123,7 @@
 
             <Button
                 android:id="@+id/install_step4"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -131,7 +131,7 @@
 
             <Button
                 android:id="@+id/install_step5"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -139,7 +139,7 @@
 
             <Button
                 android:id="@+id/install_step6"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -155,7 +155,7 @@
             android:padding="18dp">
 
             <TextView
-                style="@style/Widget.Dsha.CardLabel"
+                style="@style/DshaCardLabel"
                 android:text="安装日志" />
 
             <LinearLayout
@@ -165,7 +165,7 @@
 
                 <Button
                     android:id="@+id/install_copy"
-                    style="@style/Widget.Dsha.Button.Secondary"
+                    style="@style/DshaBtnSecondary"
                     android:layout_width="0dp"
                     android:layout_height="36dp"
                     android:layout_weight="1"
@@ -174,7 +174,7 @@
 
                 <Button
                     android:id="@+id/install_crash"
-                    style="@style/Widget.Dsha.Button.Secondary"
+                    style="@style/DshaBtnSecondary"
                     android:layout_width="0dp"
                     android:layout_height="36dp"
                     android:layout_marginStart="8dp"
@@ -193,7 +193,7 @@
             android:padding="18dp">
 
             <TextView
-                style="@style/Widget.Dsha.CardLabel"
+                style="@style/DshaCardLabel"
                 android:text="说明" />
 
             <TextView
@@ -207,7 +207,7 @@
 
         <Button
             android:id="@+id/install_uninstall"
-            style="@style/Widget.Dsha.Button.Danger"
+            style="@style/DshaBtnDanger"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"

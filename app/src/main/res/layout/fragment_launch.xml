@@ -42,7 +42,7 @@
 
             <Button
                 android:id="@+id/launch_open"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="0dp"
                 android:layout_height="44dp"
                 android:layout_marginStart="9dp"
@@ -51,7 +51,7 @@
 
             <Button
                 android:id="@+id/launch_stop"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="0dp"
                 android:layout_height="44dp"
                 android:layout_marginStart="9dp"

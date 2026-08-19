@@ -16,7 +16,7 @@
         <item name="android:textColorHint">@color/text_muted</item>
     </style>
 
-    <style name="Widget.Dsha.Button" parent="Widget.AppCompat.Button">
+    <style name="DshaBtn" parent="Widget.AppCompat.Button">
         <item name="android:textAllCaps">false</item>
         <item name="android:textSize">14sp</item>
         <item name="android:textStyle">bold</item>
@@ -25,7 +25,7 @@
         <item name="android:textColor">@color/accent_on</item>
     </style>
 
-    <style name="Widget.Dsha.Button.Secondary" parent="Widget.AppCompat.Button">
+    <style name="DshaBtnSecondary" parent="Widget.AppCompat.Button">
         <item name="android:textAllCaps">false</item>
         <item name="android:textSize">14sp</item>
         <item name="android:textStyle">bold</item>
@@ -34,7 +34,7 @@
         <item name="android:textColor">@color/text_secondary</item>
     </style>
 
-    <style name="Widget.Dsha.Button.Danger" parent="Widget.AppCompat.Button">
+    <style name="DshaBtnDanger" parent="Widget.AppCompat.Button">
         <item name="android:textAllCaps">false</item>
         <item name="android:textStyle">bold</item>
         <item name="android:minHeight">44dp</item>
@@ -42,7 +42,7 @@
         <item name="android:textColor">@color/err</item>
     </style>
 
-    <style name="Widget.Dsha.WelcomeItem" parent="">
+    <style name="DshaWelcomeItem" parent="@android:style/Widget">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:orientation">horizontal</item>
@@ -52,7 +52,7 @@
         <item name="android:background">@drawable/bg_card</item>
     </style>
 
-    <style name="Widget.Dsha.WelcomeIcon" parent="">
+    <style name="DshaWelcomeIcon" parent="@android:style/Widget">
         <item name="android:layout_width">36dp</item>
         <item name="android:layout_height">36dp</item>
         <item name="android:layout_marginEnd">14dp</item>
@@ -63,7 +63,7 @@
         <item name="android:textStyle">bold</item>
     </style>
 
-    <style name="Widget.Dsha.FieldLabel" parent="">
+    <style name="DshaFieldLabel" parent="@android:style/Widget">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_marginBottom">7dp</item>
@@ -71,7 +71,7 @@
         <item name="android:textSize">12.5sp</item>
     </style>
 
-    <style name="Widget.Dsha.Input">
+    <style name="DshaInput" parent="@android:style/Widget">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">46dp</item>
         <item name="android:background">@drawable/bg_input</item>
@@ -82,7 +82,7 @@
         <item name="android:textSize">14sp</item>
     </style>
 
-    <style name="Widget.Dsha.CardLabel" parent="">
+    <style name="DshaCardLabel" parent="@android:style/Widget">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_marginBottom">12dp</item>

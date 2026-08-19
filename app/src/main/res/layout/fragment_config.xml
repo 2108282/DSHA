@@ -28,7 +28,7 @@
             android:padding="18dp">
 
             <TextView
-                style="@style/Widget.Dsha.CardLabel"
+                style="@style/DshaCardLabel"
                 android:text="核心配置" />
 
             <TextView
@@ -42,30 +42,30 @@
                 android:textColor="@color/text"
                 android:textSize="14sp" />
 
-            <TextView style="@style/Widget.Dsha.FieldLabel" android:text="DeepSeek API Key" />
+            <TextView style="@style/DshaFieldLabel" android:text="DeepSeek API Key" />
             <EditText
                 android:id="@+id/config_api_key"
-                style="@style/Widget.Dsha.Input"
+                style="@style/DshaInput"
                 android:fontFamily="monospace"
                 android:hint="sk-..."
                 android:inputType="textPassword" />
 
-            <TextView style="@style/Widget.Dsha.FieldLabel" android:layout_marginTop="14dp" android:text="端口（默认 3080）" />
+            <TextView style="@style/DshaFieldLabel" android:layout_marginTop="14dp" android:text="端口（默认 3080）" />
             <EditText
                 android:id="@+id/config_port"
-                style="@style/Widget.Dsha.Input"
+                style="@style/DshaInput"
                 android:fontFamily="monospace"
                 android:hint="3080"
                 android:inputType="number" />
 
-            <TextView style="@style/Widget.Dsha.FieldLabel" android:layout_marginTop="14dp" android:text="模型（默认 deepseek-v4-flash）" />
+            <TextView style="@style/DshaFieldLabel" android:layout_marginTop="14dp" android:text="模型（默认 deepseek-v4-flash）" />
             <EditText
                 android:id="@+id/config_model"
-                style="@style/Widget.Dsha.Input"
+                style="@style/DshaInput"
                 android:fontFamily="monospace"
                 android:hint="deepseek-v4-flash" />
 
-            <TextView style="@style/Widget.Dsha.FieldLabel" android:layout_marginTop="14dp" android:text="沙箱权限模式" />
+            <TextView style="@style/DshaFieldLabel" android:layout_marginTop="14dp" android:text="沙箱权限模式" />
             <Spinner
                 android:id="@+id/config_mode"
                 android:layout_width="match_parent"
@@ -84,7 +84,7 @@
             android:padding="18dp">
 
             <TextView
-                style="@style/Widget.Dsha.CardLabel"
+                style="@style/DshaCardLabel"
                 android:text="行为选项" />
 
             <CheckBox
@@ -169,7 +169,7 @@
 
         <Button
             android:id="@+id/config_adb_pair"
-            style="@style/Widget.Dsha.Button.Secondary"
+            style="@style/DshaBtnSecondary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"

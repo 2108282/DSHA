@@ -112,7 +112,7 @@
 
     <EditText
         android:id="@+id/pluginSearch"
-        style="@style/Widget.Dsha.Input"
+        style="@style/DshaInput"
         android:layout_marginStart="18dp"
         android:layout_marginEnd="18dp"
         android:layout_marginBottom="6dp"

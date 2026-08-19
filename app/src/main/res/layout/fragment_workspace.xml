@@ -27,7 +27,7 @@
             android:orientation="vertical"
             android:padding="18dp">
 
-            <TextView style="@style/Widget.Dsha.CardLabel" android:text="环境信息" />
+            <TextView style="@style/DshaCardLabel" android:text="环境信息" />
 
             <TextView
                 android:id="@+id/workspace_info"
@@ -47,17 +47,17 @@
             android:orientation="vertical"
             android:padding="18dp">
 
-            <TextView style="@style/Widget.Dsha.CardLabel" android:text="工作目录（rootfs 内）" />
+            <TextView style="@style/DshaCardLabel" android:text="工作目录（rootfs 内）" />
 
             <EditText
                 android:id="@+id/workspace_path"
-                style="@style/Widget.Dsha.Input"
+                style="@style/DshaInput"
                 android:fontFamily="monospace"
                 android:hint="deepseek-harness" />
 
             <Button
                 android:id="@+id/workspace_apply"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
@@ -72,7 +72,7 @@
             android:orientation="vertical"
             android:padding="18dp">
 
-            <TextView style="@style/Widget.Dsha.CardLabel" android:text="设备 Shell 桥接 · Shizuku" />
+            <TextView style="@style/DshaCardLabel" android:text="设备 Shell 桥接 · Shizuku" />
 
             <TextView
                 android:id="@+id/workspace_shizuku_status"
@@ -94,7 +94,7 @@
 
             <Button
                 android:id="@+id/workspace_shizuku_auth"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
@@ -109,7 +109,7 @@
             android:orientation="vertical"
             android:padding="18dp">
 
-            <TextView style="@style/Widget.Dsha.CardLabel" android:text="免 ROOT 文件共享" />
+            <TextView style="@style/DshaCardLabel" android:text="免 ROOT 文件共享" />
 
             <TextView
                 android:id="@+id/workspace_share_status"
@@ -129,18 +129,18 @@
             android:orientation="vertical"
             android:padding="18dp">
 
-            <TextView style="@style/Widget.Dsha.CardLabel" android:text="数据安全" />
+            <TextView style="@style/DshaCardLabel" android:text="数据安全" />
 
             <Button
                 android:id="@+id/workspace_backup"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="备份配置" />
 
             <Button
                 android:id="@+id/workspace_restore"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -148,7 +148,7 @@
 
             <Button
                 android:id="@+id/workspace_reset"
-                style="@style/Widget.Dsha.Button.Secondary"
+                style="@style/DshaBtnSecondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -156,7 +156,7 @@
 
             <Button
                 android:id="@+id/workspace_clear"
-                style="@style/Widget.Dsha.Button.Danger"
+                style="@style/DshaBtnDanger"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
