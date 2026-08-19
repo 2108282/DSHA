@@ -1,13 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/surface">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="24dp">
+        <TextView
+            android:id="@+id/sub_back"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingBottom="10dp"
+            android:text="‹ 返回"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
 
         <TextView
             android:layout_width="wrap_content"
@@ -47,12 +58,12 @@
             android:layout_marginTop="16dp"
             android:background="#11FF0000"
             android:padding="12dp"
-            android:textColor="#CC0000"
+            android:textColor="@color/err"
             android:textIsSelectable="true"
             android:textSize="13sp"
             android:visibility="gone" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/install_copy"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -60,7 +71,7 @@
             android:text="复制报错内容"
             android:visibility="gone" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/install_crash"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -68,7 +79,7 @@
             android:text="查看崩溃日志"
             android:visibility="gone" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn_primary" android:textAllCaps="false"
             android:id="@+id/install_btn"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -83,49 +94,49 @@
             android:lineSpacingExtra="4dp"
             android:textSize="14sp" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/install_step1"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:text="① Linux 环境（rootfs）" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/install_step2"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="② 基础工具（apt）" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/install_step3"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="③ Node.js" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/install_step4"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="④ Node 附加工具（pnpm/node-gyp）" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/install_step5"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="⑤ deepseek-harness" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/install_step6"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="⑥ 安全与补丁" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn_danger" android:textAllCaps="false"
             android:id="@+id/install_uninstall"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

@@ -1,13 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/surface">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="24dp">
+        <TextView
+            android:id="@+id/sub_back"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingBottom="10dp"
+            android:text="‹ 返回"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
 
         <TextView
             android:layout_width="wrap_content"
@@ -23,7 +34,7 @@
             android:layout_marginTop="10dp"
             android:gravity="center"
             android:text="📁 工作区 · 备份/恢复 · 环境管理"
-            android:textColor="#E6EDF3"
+            android:textColor="@color/text"
             android:textSize="14sp"
             android:background="@drawable/bg_btn" />
 
@@ -114,7 +125,7 @@
             android:visibility="gone"
             android:text="deepseek-harness：默认最新 RC（@deepseek-ai/dsh@rc）" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn_primary" android:textAllCaps="false"
             android:id="@+id/config_save"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -130,7 +141,7 @@
             android:textSize="13sp"
             android:text="ADB 设备通道：未检测（需先安装环境）" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/config_adb_pair"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -152,7 +163,7 @@
             android:layout_marginTop="16dp"
             android:gravity="center"
             android:text="DSHA"
-            android:textColor="#999999"
+            android:textColor="@color/text_muted"
             android:textSize="12sp" />
     </LinearLayout>
 </ScrollView>

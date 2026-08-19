@@ -55,7 +55,8 @@ public class ConfigFragment extends Fragment {
         rc6Cb = view.findViewById(R.id.config_rc6);
         saveBtn = view.findViewById(R.id.config_save);
         repoLink = view.findViewById(R.id.config_repo_link);
-        setupCommonControls(); // 模式 spiner / 保存 / 关于
+        SubPageBack.bind(this, view);
+        setupCommonControls(); // 模式 spinner / 保存 / 关于
         // 工作区（文件/备份恢复/环境管理）→ 二级页面
         TextView workspaceEntry = view.findViewById(R.id.config_workspace_entry);
         if (workspaceEntry != null) {

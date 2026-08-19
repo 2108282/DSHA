@@ -2,62 +2,88 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/surface"
     android:orientation="vertical"
-    android:padding="12dp">
+    android:paddingStart="18dp"
+    android:paddingEnd="18dp"
+    android:paddingTop="6dp"
+    android:paddingBottom="12dp">
 
     <LinearLayout
-        android:id="@+id/launch_controls"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:background="@drawable/bg_card"
+        android:orientation="vertical"
+        android:padding="18dp">
 
-        <Button
-            android:id="@+id/launch_start"
-            android:layout_width="0dp"
+        <TextView
+            android:id="@+id/launch_status"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="启动" />
+            android:text="Web UI 未运行"
+            android:textColor="@color/text"
+            android:textSize="15sp"
+            android:textStyle="bold" />
 
-        <Button
-            android:id="@+id/launch_open"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:id="@+id/launch_controls"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:text="重启" />
+            android:layout_marginTop="15dp"
+            android:orientation="horizontal">
 
-        <Button
-            android:id="@+id/launch_stop"
-            android:layout_width="0dp"
+            <Button
+                android:id="@+id/launch_start"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn_primary"
+                android:text="启动"
+                android:textAllCaps="false"
+                android:textColor="@color/accent_on" />
+
+            <Button
+                android:id="@+id/launch_open"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="9dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn"
+                android:text="重启"
+                android:textAllCaps="false"
+                android:textColor="@color/text_secondary" />
+
+            <Button
+                android:id="@+id/launch_stop"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="9dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn"
+                android:text="停止"
+                android:textAllCaps="false"
+                android:textColor="@color/text_secondary" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/lan_addr"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:text="停止" />
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_chip"
+            android:fontFamily="monospace"
+            android:padding="10dp"
+            android:textColor="@color/primary"
+            android:textSize="12sp"
+            android:visibility="gone" />
     </LinearLayout>
-
-    <TextView
-        android:id="@+id/launch_status"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:textSize="14sp" />
-
-    <TextView
-        android:id="@+id/lan_addr"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:padding="8dp"
-        android:background="#161B22"
-        android:textSize="13sp"
-        android:textColor="#58A6FF"
-        android:visibility="gone" />
 
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
+        android:layout_marginTop="12dp"
         android:layout_weight="1"
-        android:layout_marginTop="8dp">
+        android:background="@drawable/bg_preview">
 
         <FrameLayout
             android:id="@+id/previewContainer"
