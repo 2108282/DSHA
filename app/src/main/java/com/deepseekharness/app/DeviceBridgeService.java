@@ -21,21 +21,43 @@ import androidx.annotation.Nullable;
  * 设备桥服务（普通后台服务，非前台 —— 不 startForeground，杜绝
  * CannotPostForegroundServiceNotificationException 杀进程）。
  *
- * 职责：
- *  1. 3090 Shizuku 桥 + Shizuku 绑定（App 打开即有设备命令能力）；
- *  2. ADB 配对环境后台预热（首次配对秒级完成，配对码不过期）；
- *  3. Nsd 持续监听「无线调试配对弹窗」出现 → 弹一张带 RemoteInput 的
- *     「🔐 输码配对」通知：用户直接在通知卡片输入 6 位码即完成配对
- *     （不离开通知栏，码从出现到输完只隔几秒，几乎不会失效）。
+ * 职责（仅在用户勾选「启用 ADB」后才会启动本服务）：
+ *  1. 3090 Shizuku 桥 + Shizuku 绑定；
+ *  2. ADB 配对环境后台预热；
+ *  3. Nsd 监听无线调试配对弹窗 → 通知里输 6 位码。
  *
  * 通知显示需要 Android 13+ 通知权限；无权限时静默跳过（App 内工作区仍可配对）。
  */
 public class DeviceBridgeService extends Service {
 
+    public static final String PREF_ADB = "adb_enabled";
+
     private static volatile boolean running = false;
 
     /** 最近一次发现的配对端口（供 AdbPairReceiver 秒级直用） */
     public static volatile int pairPort = 0;
+
+    public static boolean isAdbEnabled(Context ctx) {
+        return ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
+                .getBoolean(PREF_ADB, false);
+    }
+
+    /** 按开关启停。默认关：不想用 ADB 的人不会被后台扫描/通知拖慢。 */
+    public static void apply(Context ctx) {
+        Context app = ctx.getApplicationContext();
+        Intent i = new Intent(app, DeviceBridgeService.class);
+        if (isAdbEnabled(app)) {
+            try {
+                app.startService(i);
+            } catch (Throwable ignored) {
+            }
+        } else {
+            try {
+                app.stopService(i);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
 
     private static final String WATCH_CHANNEL = "dsh_adb_watch_channel";
     private static final int WATCH_NOTIF_ID = 3005;
@@ -54,9 +76,12 @@ public class DeviceBridgeService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        if (!isAdbEnabled(this)) {
+            stopSelf();
+            return;
+        }
         running = true;
         try {
-            // 3090 Shizuku 桥（HttpShellService 自带 running 单例防重复启动）
             new HttpShellService(this).start();
         } catch (Throwable ignored) {
         }
@@ -65,8 +90,8 @@ public class DeviceBridgeService extends Service {
         } catch (Throwable ignored) {
         }
         prewarmAdb();
-        postCard();        // 常驻通知卡（像 Shizuku：卡片上直接输配对码）
-        startPairWatcher(); // 配对弹窗出现 → 弹高优先级提醒
+        postCard();
+        startPairWatcher();
     }
 
     @Override

@@ -100,12 +100,16 @@ public class PluginFragment extends Fragment {
 
         btnMarket.setOnClickListener(v -> {
             mode = Mode.MARKET;
+            styleTab(btnMarket, true);
+            styleTab(btnInstalled, false);
             view.findViewById(R.id.actionBar).setVisibility(View.GONE);
             view.findViewById(R.id.chkHideBuiltin).setVisibility(View.GONE);
             showMarket();
         });
         btnInstalled.setOnClickListener(v -> {
             mode = Mode.INSTALLED;
+            styleTab(btnMarket, false);
+            styleTab(btnInstalled, true);
             view.findViewById(R.id.actionBar).setVisibility(View.VISIBLE);
             view.findViewById(R.id.chkHideBuiltin).setVisibility(View.VISIBLE);
             showInstalled();
@@ -136,6 +140,11 @@ public class PluginFragment extends Fragment {
         });
 
         showMarket();
+    }
+
+    private void styleTab(TextView tab, boolean on) {
+        tab.setBackgroundResource(on ? R.drawable.bg_tab_on : R.drawable.bg_tab);
+        tab.setTextColor(requireContext().getColor(on ? R.color.primary : R.color.text_muted));
     }
 
     /** 排序下拉菜单：点一下展开选择，不用一直点循环 */

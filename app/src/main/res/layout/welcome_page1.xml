@@ -2,29 +2,51 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:gravity="center"
+    android:background="@color/surface"
+    android:gravity="center_horizontal"
     android:orientation="vertical"
-    android:padding="32dp">
+    android:paddingStart="34dp"
+    android:paddingEnd="34dp"
+    android:paddingTop="72dp"
+    android:paddingBottom="20dp">
 
-    <ImageView
-        android:layout_width="96dp"
-        android:layout_height="96dp"
-        android:src="@mipmap/ic_launcher" />
+    <FrameLayout
+        android:layout_width="88dp"
+        android:layout_height="88dp"
+        android:background="@drawable/bg_logo">
+
+        <ImageView
+            android:layout_width="42dp"
+            android:layout_height="42dp"
+            android:layout_gravity="center"
+            android:src="@mipmap/ic_launcher" />
+    </FrameLayout>
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
+        android:layout_marginTop="26dp"
         android:text="DSHA"
-        android:textSize="28sp"
+        android:textColor="@color/text"
+        android:textSize="30sp"
         android:textStyle="bold" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="14dp"
         android:gravity="center"
         android:lineSpacingExtra="6dp"
         android:text="DeepSeek Harness 一键启动器\n\n内置 Linux 环境，无需 Termux，\n自动安装并启动，开箱即用。"
-        android:textSize="16sp" />
+        android:textColor="@color/text_secondary"
+        android:textSize="15sp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="48dp"
+        android:gravity="center"
+        android:text="仅支持 arm64-v8a · Android 8.0+ · 免 ROOT"
+        android:textColor="@color/text_muted"
+        android:textSize="12sp" />
 </LinearLayout>

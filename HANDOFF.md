@@ -18,7 +18,8 @@ https://github.com/rthdfd/DSHA
 **当前工作分支（必须一直待在这里，不要切分支）：**  
 `arena/01a0149c-dsha`
 
-**版本：** `versionName 1.1.2` / `versionCode 18` / 文件 `VERSION` = `v1.1.2`
+**版本：** `versionName 1.1.3` / `versionCode 19` / 文件 `VERSION` = `v1.1.3`  
+ADB 默认关（`adb_enabled=false`）。预览默认系统 WebView，Gecko 要手动开。
 
 **fork 上已有一份给作者 AI 看的 PR 说明（开在自己仓库，上游看不到）：**  
 https://github.com/rthdfd/DSHA/pull/1

@@ -35,6 +35,10 @@ public class AdbPairReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         if (!ACTION_PAIR.equals(intent.getAction())) return;
+        if (!DeviceBridgeService.isAdbEnabled(context)) {
+            notifyResult(context, "ADB 已关闭", "设置 → 配置里先勾选「启用 ADB」并保存。", false);
+            return;
+        }
         CharSequence cs = null;
         try {
             Bundle result = RemoteInput.getResultsFromIntent(intent);

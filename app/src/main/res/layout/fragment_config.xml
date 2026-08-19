@@ -1,13 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/surface">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="24dp">
+        <TextView
+            android:id="@+id/sub_back"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingBottom="10dp"
+            android:text="‹ 返回"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
 
         <TextView
             android:layout_width="wrap_content"
@@ -23,7 +34,7 @@
             android:layout_marginTop="10dp"
             android:gravity="center"
             android:text="📁 工作区 · 备份/恢复 · 环境管理"
-            android:textColor="#E6EDF3"
+            android:textColor="@color/text"
             android:textSize="14sp"
             android:background="@drawable/bg_btn" />
 
@@ -99,7 +110,7 @@
             android:id="@+id/config_gecko_core"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="内置浏览器内核（系统 WebView 过旧时使用，加载稍慢）" />
+            android:text="内置浏览器内核（系统 WebView 过旧时再开，会更吃内存）" />
 
         <CheckBox
             android:id="@+id/config_lan_mode"
@@ -114,23 +125,30 @@
             android:visibility="gone"
             android:text="deepseek-harness：默认最新 RC（@deepseek-ai/dsh@rc）" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn_primary" android:textAllCaps="false"
             android:id="@+id/config_save"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
             android:text="保存配置" />
 
+        <CheckBox
+            android:id="@+id/config_adb_enable"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="启用 ADB 设备通道（默认关闭）" />
+
         <TextView
             android:id="@+id/config_adb_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="6dp"
             android:lineSpacingExtra="3dp"
             android:textSize="13sp"
-            android:text="ADB 设备通道：未检测（需先安装环境）" />
+            android:text="ADB 已关闭。不用无线调试就保持关闭。" />
 
-        <Button
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/config_adb_pair"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -143,7 +161,7 @@
             android:layout_marginTop="4dp"
             android:lineSpacingExtra="3dp"
             android:textSize="12sp"
-            android:text="启用后 agent 可直连设备 adbd（uid=2000）执行命令；也可在常驻通知卡「🔐 输码配对」就地输入。手机：设置→开发者选项→无线调试→「使用配对码配对设备」。" />
+            android:text="默认关闭。只有你勾选并保存后，才会后台预热、扫配对、弹通知。不用就别开。要用时：设置→开发者选项→无线调试→「使用配对码配对设备」。" />
 
         <TextView
             android:id="@+id/config_repo_link"
@@ -152,7 +170,7 @@
             android:layout_marginTop="16dp"
             android:gravity="center"
             android:text="DSHA"
-            android:textColor="#999999"
+            android:textColor="@color/text_muted"
             android:textSize="12sp" />
     </LinearLayout>
 </ScrollView>
