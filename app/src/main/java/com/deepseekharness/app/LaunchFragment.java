@@ -1,6 +1,8 @@
 package com.deepseekharness.app;
 
+import android.annotation.SuppressLint;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -8,11 +10,20 @@ import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
@@ -22,22 +33,42 @@ import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
-/** 启动模块：启停 dsh，运行中点「进入」用系统浏览器打开；下面刷 Web 日志。 */
+/** 启动页：状态 + 日志。点「进入」才在本 App 的 WebView 里打开，不跳系统浏览器。 */
 public class LaunchFragment extends Fragment {
 
     private HarnessController c;
     private TextView runDot, runState, statusText, lanAddrText, logText;
     private ScrollView logScroll;
-    private Button startBtn, restartBtn, stopBtn;
+    private Button startBtn;
+    private View homePane, webPane;
+    private FrameLayout webBox;
+    private WebView webView;
 
     private boolean webReady = false;
     private boolean starting = false;
+    private boolean insideWeb = false;
     private String lastLog = "";
+
+    private ValueCallback<Uri[]> filePathCallback;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Runnable tick = this::tickOnce;
-
     private final HarnessController.StateListener stateListener = this::refreshHint;
+
+    private final ActivityResultLauncher<String> pickFile =
+            registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
+                if (filePathCallback != null) {
+                    filePathCallback.onReceiveValue(uri == null ? null : new Uri[]{uri});
+                    filePathCallback = null;
+                }
+            });
+
+    private final OnBackPressedCallback backToHome = new OnBackPressedCallback(false) {
+        @Override
+        public void handleOnBackPressed() {
+            closeWeb();
+        }
+    };
 
     @Nullable
     @Override
@@ -49,6 +80,9 @@ public class LaunchFragment extends Fragment {
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         c = HarnessController.get(requireContext());
+        homePane = view.findViewById(R.id.launch_home);
+        webPane = view.findViewById(R.id.launch_web);
+        webBox = view.findViewById(R.id.launch_web_box);
         runDot = view.findViewById(R.id.launch_run_dot);
         runState = view.findViewById(R.id.launch_run_state);
         statusText = view.findViewById(R.id.launch_status);
@@ -56,14 +90,16 @@ public class LaunchFragment extends Fragment {
         logText = view.findViewById(R.id.launch_log);
         logScroll = view.findViewById(R.id.launch_log_scroll);
         startBtn = view.findViewById(R.id.launch_start);
-        restartBtn = view.findViewById(R.id.launch_open);
-        stopBtn = view.findViewById(R.id.launch_stop);
+        Button restartBtn = view.findViewById(R.id.launch_open);
+        Button stopBtn = view.findViewById(R.id.launch_stop);
+        TextView webBack = view.findViewById(R.id.launch_web_back);
 
         updateLanAddr();
         applyRunUi(false);
         refreshHint();
-
         c.addStateListener(stateListener);
+        requireActivity().getOnBackPressedDispatcher().addCallback(getViewLifecycleOwner(), backToHome);
+
         mainHandler.postDelayed(() -> new Thread(() -> {
             try {
                 c.ensureWatchdogFiles();
@@ -77,7 +113,7 @@ public class LaunchFragment extends Fragment {
 
         startBtn.setOnClickListener(v -> {
             if (webReady) {
-                AboutDialog.openBrowser(requireContext(), uiUrl());
+                openWeb();
                 return;
             }
             if (goExtractIfNeeded()) return;
@@ -98,6 +134,7 @@ public class LaunchFragment extends Fragment {
 
         restartBtn.setOnClickListener(v -> {
             if (goExtractIfNeeded()) return;
+            closeWeb();
             starting = true;
             applyRunUi(false);
             statusText.setText("正在强重启…");
@@ -105,6 +142,7 @@ public class LaunchFragment extends Fragment {
         });
 
         stopBtn.setOnClickListener(v -> {
+            closeWeb();
             starting = false;
             webReady = false;
             applyRunUi(false);
@@ -114,10 +152,12 @@ public class LaunchFragment extends Fragment {
             statusText.setText("已发送停止命令");
         });
 
+        webBack.setOnClickListener(v -> closeWeb());
+
         if (goExtractIfNeeded()) {
             statusText.setText("正在打开内置环境解压页…");
         } else if (c.getProot().isOfflineExtracted()) {
-            statusText.setText("环境已就绪。");
+            statusText.setText("环境已就绪。起来后点「进入」，在本软件里打开。");
         } else {
             statusText.setText("环境未就绪。若刚装好 APK，请杀掉进程再打开一次以进入解压页。");
         }
@@ -136,7 +176,7 @@ public class LaunchFragment extends Fragment {
                 if (up) starting = false;
                 webReady = up;
                 applyRunUi(up);
-                if (log != null && !log.equals(lastLog)) {
+                if (!insideWeb && log != null && !log.equals(lastLog)) {
                     lastLog = log;
                     logText.setText(log.isEmpty() ? "还没有日志。" : log);
                     logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
@@ -159,6 +199,58 @@ public class LaunchFragment extends Fragment {
             runDot.setTextColor(requireContext().getColor(R.color.text_muted));
             runState.setText("DSH 未运行");
             startBtn.setText("启动");
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void openWeb() {
+        if (insideWeb) return;
+        insideWeb = true;
+        homePane.setVisibility(View.GONE);
+        webPane.setVisibility(View.VISIBLE);
+        backToHome.setEnabled(true);
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).setBottomNavVisible(false);
+        }
+        if (webView == null) {
+            webView = new WebView(requireContext());
+            WebSettings ws = webView.getSettings();
+            ws.setJavaScriptEnabled(true);
+            ws.setDomStorageEnabled(true);
+            boolean desktop = requireContext()
+                    .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .getBoolean("desktop_mode", false);
+            if (desktop) {
+                ws.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+            }
+            webView.setWebViewClient(new WebViewClient());
+            webView.setWebChromeClient(new WebChromeClient() {
+                @Override
+                public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> cb,
+                                                 FileChooserParams params) {
+                    filePathCallback = cb;
+                    String[] accept = params.getAcceptTypes();
+                    String mime = (accept != null && accept.length > 0 && accept[0] != null && !accept[0].isEmpty())
+                            ? accept[0] : "*/*";
+                    pickFile.launch(mime);
+                    return true;
+                }
+            });
+            webBox.addView(webView, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        webView.loadUrl(uiUrl());
+    }
+
+    private void closeWeb() {
+        if (!insideWeb) return;
+        insideWeb = false;
+        webPane.setVisibility(View.GONE);
+        homePane.setVisibility(View.VISIBLE);
+        backToHome.setEnabled(false);
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).setBottomNavVisible(true);
         }
     }
 
@@ -226,7 +318,6 @@ public class LaunchFragment extends Fragment {
         }
     }
 
-    /** 直接读宿主上的 rootfs 文件，不进 proot，免得卡界面。 */
     private String readWebLogTail() {
         try {
             File f = new File(c.getProot().getRootfsDir(), "root/dsh-web.log");
@@ -254,5 +345,13 @@ public class LaunchFragment extends Fragment {
         super.onDestroyView();
         mainHandler.removeCallbacks(tick);
         if (c != null) c.removeStateListener(stateListener);
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).setBottomNavVisible(true);
+        }
+        if (webView != null) {
+            webBox.removeAllViews();
+            webView.destroy();
+            webView = null;
+        }
     }
 }
