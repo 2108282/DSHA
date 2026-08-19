@@ -25,6 +25,13 @@ public final class TarGzipExtractor {
         extract(tarball, dest, 0);
     }
 
+    /** 恢复备份用：宽松模式（只拦路径穿越，不拦逗号/引号等正常文件名） */
+    public static void extractLenient(File tarball, File dest) throws IOException {
+        try (InputStream raw = new FileInputStream(tarball)) {
+            extractAuto(raw, dest, 0, true);
+        }
+    }
+
     public static void extract(File tarball, File dest, int strip) throws IOException {
         try (InputStream raw = new FileInputStream(tarball)) {
             extractAuto(raw, dest, strip);
@@ -33,6 +40,11 @@ public final class TarGzipExtractor {
 
     /** gzip 或裸 tar 自动识别。 */
     public static void extractAuto(InputStream raw, File dest, int strip) throws IOException {
+        extractAuto(raw, dest, strip, false);
+    }
+
+    /** gzip 或裸 tar 自动识别。lenient=true 用于恢复用户备份：文件名含逗号/引号不判损坏。 */
+    public static void extractAuto(InputStream raw, File dest, int strip, boolean lenient) throws IOException {
         PushbackInputStream pin = new PushbackInputStream(new BufferedInputStream(raw, 1 << 16), 2);
         int b0 = pin.read();
         int b1 = pin.read();
@@ -42,10 +54,10 @@ public final class TarGzipExtractor {
         }
         if (b0 == 0x1f && b1 == 0x8b) {
             try (GZIPInputStream gz = new GZIPInputStream(pin)) {
-                extractTar(gz, dest, strip);
+                extractTar(gz, dest, strip, lenient);
             }
         } else {
-            extractTar(pin, dest, strip);
+            extractTar(pin, dest, strip, lenient);
         }
     }
 
@@ -54,6 +66,10 @@ public final class TarGzipExtractor {
     }
 
     public static void extractTar(InputStream tar, File dest, int strip) throws IOException {
+        extractTar(tar, dest, strip, false);
+    }
+
+    public static void extractTar(InputStream tar, File dest, int strip, boolean lenient) throws IOException {
         InputStream in = (tar instanceof BufferedInputStream) ? tar : new BufferedInputStream(tar, 1 << 16);
         byte[] header = new byte[BLOCK];
         byte[] buf = new byte[8192];
@@ -107,9 +123,11 @@ public final class TarGzipExtractor {
 
             File out = new File(dest, name);
 
-            if (name == null || name.isEmpty() || name.startsWith("/")
-                    || name.contains("\\\"") || name.contains(",")
-                    || name.contains("..") || name.contains("\u0000")) {
+            // 路径安全校验：普通模式拦一切可疑字符；宽松模式（恢复备份）只拦真正的
+            // 路径穿越（绝对路径 / .. / NUL），文件名里的逗号/引号等正常放行
+            if (name == null || name.isEmpty()
+                    || name.startsWith("/") || name.contains("..") || name.contains("\u0000")
+                    || (!lenient && (name.contains("\\\"") || name.contains(",")))) {
                 throw new IOException("预构建包损坏（非法文件条目: " + safeName(name)
                         + "），请重新下载或改用「直连源码构建」");
             }

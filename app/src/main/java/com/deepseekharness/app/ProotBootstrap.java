@@ -644,6 +644,24 @@ public class ProotBootstrap {
         };
 
         try {
+            // ===== 数据保护：重解压前备份用户数据（.dsh 配置/对话 + .env），解压后自动还原 =====
+            // 旧 rootfs 存在但 isOfflineExtracted() 判定失败（标记丢失/bash 路径变化）会走到这里，
+            // 直接删整个 rootfs 会连对话记录一起丢掉（issue#9 第1条）——必须先备份再删。
+            java.io.File dataBak = null;
+            if (rootfsDir.exists()) {
+                java.io.File dshDir = new java.io.File(rootfsDir, "root/.dsh");
+                java.io.File envFile = new java.io.File(rootfsDir, "root/" + getWorkdirDefault() + "/.env");
+                if (dshDir.isDirectory() || envFile.isFile()) {
+                    dataBak = new java.io.File(baseDir, ".data-preserve-" + System.currentTimeMillis());
+                    dataBak.mkdirs();
+                    if (dshDir.isDirectory()) {
+                        copyRecursively(dshDir, new java.io.File(dataBak, "dsh"));
+                    }
+                    if (envFile.isFile()) {
+                        copyFile(envFile, new java.io.File(dataBak, "env"));
+                    }
+                }
+            }
             if (rootfsDir.exists()) deleteRecursively(rootfsDir);
             rootfsDir.mkdirs();
             TarGzipExtractor.extractAuto(counted, rootfsDir, 0);
@@ -651,6 +669,27 @@ public class ProotBootstrap {
                 throw new IOException("解压后 rootfs 不完整（缺少 bash）\n" + diagnoseRootfs());
             }
             setupResolvConf();
+            // 解压完成后还原用户数据
+            if (dataBak != null) {
+                try {
+                    java.io.File dshDst = new java.io.File(rootfsDir, "root/.dsh");
+                    java.io.File dshBak = new java.io.File(dataBak, "dsh");
+                    if (dshBak.isDirectory()) {
+                        if (!dshDst.exists()) dshDst.mkdirs();
+                        copyRecursively(dshBak, dshDst);
+                    }
+                    java.io.File envBak = new java.io.File(dataBak, "env");
+                    if (envBak.isFile()) {
+                        java.io.File envDst = new java.io.File(rootfsDir, "root/" + getWorkdirDefault() + "/.env");
+                        if (envDst.getParentFile() != null) envDst.getParentFile().mkdirs();
+                        copyFile(envBak, envDst);
+                    }
+                    android.util.Log.i("DSHA", "重解压已还原用户数据 (.dsh + .env)");
+                } catch (Throwable e) {
+                    android.util.Log.w("DSHA", "还原用户数据失败: " + e);
+                }
+                deleteRecursively(dataBak);
+            }
             markOfflineExtracted();
         } finally {
             try { counted.close(); } catch (Exception ignored) {}
@@ -691,5 +730,40 @@ public class ProotBootstrap {
         }
         //noinspection ResultOfMethodCallIgnored
         f.delete();
+    }
+
+    /** 递归拷贝目录/文件（重解压前数据保护用） */
+    private void copyRecursively(File src, File dst) throws IOException {
+        if (src.isDirectory()) {
+            if (!dst.exists() && !dst.mkdirs()) {
+                throw new IOException("无法创建目录: " + dst);
+            }
+            File[] children = src.listFiles();
+            if (children != null) {
+                for (File c : children) {
+                    copyRecursively(c, new File(dst, c.getName()));
+                }
+            }
+        } else if (src.isFile()) {
+            copyFile(src, dst);
+        }
+    }
+
+    /** 拷贝单个文件 */
+    private void copyFile(File src, File dst) throws IOException {
+        if (dst.getParentFile() != null && !dst.getParentFile().exists() && !dst.getParentFile().mkdirs()) {
+            throw new IOException("无法创建父目录: " + dst.getParentFile());
+        }
+        try (java.io.InputStream in = new java.io.FileInputStream(src);
+             java.io.OutputStream out = new java.io.FileOutputStream(dst)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+        }
+    }
+
+    /** 默认工作目录名（deepseek-harness 源码树）；重解压数据保护用 */
+    private String getWorkdirDefault() {
+        return "deepseek-harness";
     }
 }

@@ -1851,13 +1851,14 @@ public class HarnessController {
     }
 
     /** 从外部备份 tar.gz 恢复 .dsh + .env 到 rootfs；返回结果文案。
-     *  备份 tar 内为相对路径（.dsh / <wd>/.env / dsh-web.log），解压到 rootfs/root 即还原。 */
+     *  备份 tar 内为相对路径（.dsh / <wd>/.env / dsh-web.log），解压到 rootfs/root 即还原。
+     *  使用宽松解压（文件名含逗号/引号不误判损坏，issue#9 第2条）。 */
     public String restoreFromBackup(File backup) {
         try {
             if (!proot.isInstalled()) return "环境未就绪，请先完成环境解压/安装后再恢复";
             File tmp = rootfsFile("root/.dsha-restore.tar.gz");
             copyFile(backup, tmp);
-            TarGzipExtractor.extract(tmp, new File(proot.getRootfsDir(), "root"));
+            TarGzipExtractor.extractLenient(tmp, new File(proot.getRootfsDir(), "root"));
             //noinspection ResultOfMethodCallIgnored
             tmp.delete();
             return "恢复完成（配置 + 对话记录），重启 WebUI 生效";
