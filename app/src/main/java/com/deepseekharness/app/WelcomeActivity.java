@@ -6,7 +6,6 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
@@ -24,7 +23,6 @@ public class WelcomeActivity extends AppCompatActivity {
 
     private ViewPager2 pager;
     private Button nextBtn;
-    private TextView skipBtn;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -33,7 +31,6 @@ public class WelcomeActivity extends AppCompatActivity {
 
         pager = findViewById(R.id.welcome_pager);
         nextBtn = findViewById(R.id.welcome_btn);
-        skipBtn = findViewById(R.id.welcome_skip);
 
         pager.setAdapter(new PagerAdapter());
         pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
@@ -51,8 +48,6 @@ public class WelcomeActivity extends AppCompatActivity {
                 finishWelcome();
             }
         });
-
-        skipBtn.setOnClickListener(v -> finishWelcome());
     }
 
     private void finishWelcome() {

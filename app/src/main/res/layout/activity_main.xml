@@ -46,7 +46,7 @@
             android:background="@android:color/transparent"
             android:contentDescription="关于"
             android:padding="8dp"
-            android:src="@drawable/ic_config"
+            android:src="@drawable/ic_about"
             android:tint="@color/text_muted" />
     </LinearLayout>
 

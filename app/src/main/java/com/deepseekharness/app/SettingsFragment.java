@@ -46,7 +46,7 @@ public class SettingsFragment extends Fragment {
             tabs.addView(buildRow(i));
         }
 
-        String version = "1.1.3";
+        String version = "1.1.4";
         try {
             version = requireContext().getPackageManager()
                     .getPackageInfo(requireContext().getPackageName(), 0).versionName;
