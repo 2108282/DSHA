@@ -6,7 +6,6 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
@@ -24,7 +23,6 @@ public class WelcomeActivity extends AppCompatActivity {
 
     private ViewPager2 pager;
     private Button nextBtn;
-    private TextView skipBtn;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -33,7 +31,6 @@ public class WelcomeActivity extends AppCompatActivity {
 
         pager = findViewById(R.id.welcome_pager);
         nextBtn = findViewById(R.id.welcome_btn);
-        skipBtn = findViewById(R.id.welcome_skip);
 
         pager.setAdapter(new PagerAdapter());
         pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
@@ -51,20 +48,12 @@ public class WelcomeActivity extends AppCompatActivity {
                 finishWelcome();
             }
         });
-
-        skipBtn.setOnClickListener(v -> finishWelcome());
     }
 
     private void finishWelcome() {
         getSharedPreferences("deepseekharness", MODE_PRIVATE)
                 .edit().putBoolean("welcomed", true).apply();
-        // 欢迎页之后：若内置环境未解压，先进解压页；否则直接进主界面
-        ProotBootstrap proot = new ProotBootstrap(this);
-        if (!proot.isInstalled() && proot.hasOfflineBundle()) {
-            startActivity(new Intent(this, ExtractActivity.class));
-        } else {
-            startActivity(new Intent(this, MainActivity.class));
-        }
+        startActivity(new Intent(this, ExtractActivity.class));
         finish();
     }
 

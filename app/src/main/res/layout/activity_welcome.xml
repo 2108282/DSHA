@@ -2,32 +2,30 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/surface"
     android:orientation="vertical">
 
-    <FrameLayout
+    <androidx.viewpager2.widget.ViewPager2
+        android:id="@+id/welcome_pager"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1">
+        android:layout_weight="1" />
 
-        <androidx.viewpager2.widget.ViewPager2
-            android:id="@+id/welcome_pager"
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingStart="26dp"
+        android:paddingEnd="26dp"
+        android:paddingBottom="30dp">
+
+        <Button
+            android:id="@+id/welcome_btn"
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
-    </FrameLayout>
-
-    <Button
-        android:id="@+id/welcome_btn"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_margin="24dp"
-        android:text="下一步" />
-
-    <TextView
-        android:id="@+id/welcome_skip"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:paddingBottom="16dp"
-        android:text="跳过"
-        android:textColor="@color/primary" />
+            android:layout_height="50dp"
+            android:background="@drawable/bg_btn_primary"
+            android:text="下一步"
+            android:textAllCaps="false"
+            android:textColor="@color/accent_on" />
+    </LinearLayout>
 </LinearLayout>

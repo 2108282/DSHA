@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.DeepseekHarness" parent="Theme.Material3.Light.NoActionBar">
+    <style name="Theme.DeepseekHarness" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/primary</item>
-        <item name="colorOnPrimary">@android:color/white</item>
-        <item name="colorPrimaryContainer">#E3E8FF</item>
+        <item name="colorOnPrimary">@color/accent_on</item>
+        <item name="colorPrimaryContainer">@color/raised</item>
         <item name="colorSecondary">@color/primary_dark</item>
-        <item name="android:colorBackground">#F7F8FA</item>
+        <item name="android:colorBackground">@color/surface</item>
+        <item name="android:statusBarColor">@color/surface</item>
+        <item name="android:navigationBarColor">@color/surface</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
     </style>
 </resources>

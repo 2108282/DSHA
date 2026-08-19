@@ -1,16 +1,12 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ============================================================
-# make-offline-bundle.sh — 在 Termux(arm64 真机)上构建离线
-# rootfs 预装包，供 APK 内置解压即用。
+# make-offline-bundle.sh — Termux 兜底方案（一般不需要）。
+# 正常构建请走 GitHub Actions：scripts/ci-make-offline-bundle.sh
+# 会在 ubuntu-24.04-arm 上原生 chroot 预装，无需手机、无需 Termux。
 #
-# 用法：
-#   1. 在 Termux 中执行：bash scripts/make-offline-bundle.sh
-#   2. 产物：~/offline-rootfs.tar.gz（约 200~400MB）
-#   3. 上传到 GitHub Releases 作为资源
-#   4. 后续 CI 自动下载并打进 APK
-#
-# 要求：Termux（pkg install proot curl git），
-#       至少 4GB 空闲存储空间，网络畅通。
+# 仅当 CI 不可用时，才在 Termux 里跑本脚本：
+#   bash scripts/make-offline-bundle.sh
+# 产物：~/offline-rootfs.tar.gz
 # ============================================================
 set -e
 # 记录脚本所在仓库根路径(绝对)，避免后面 cd 后相对路径失效。

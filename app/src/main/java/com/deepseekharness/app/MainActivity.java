@@ -13,8 +13,6 @@ import android.os.PowerManager;
 import android.provider.Settings;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.view.Window;
-import android.view.WindowManager;
 import android.widget.CheckBox;
 import android.widget.Toast;
 
@@ -59,48 +57,64 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        setContentView(R.layout.activity_main);
-
-        // 内置离线环境未解压时（例如跳过欢迎页或解压中途被中断），先补解压
-        ProotBootstrap proot = new ProotBootstrap(this);
-        if (!proot.isInstalled() && proot.hasOfflineBundle()) {
-            startActivity(new Intent(this, ExtractActivity.class));
-            finish();
-            return;
+        if (!getIntent().getBooleanExtra("skip_extract", false)) {
+            ProotBootstrap proot = new ProotBootstrap(this);
+            if (!proot.isOfflineExtracted()) {
+                startActivity(new Intent(this, ExtractActivity.class));
+                finish();
+                return;
+            }
         }
 
-        // 沉浸式全屏（隐藏状态栏 + 系统导航栏）
-        Window window = getWindow();
-        window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                WindowManager.LayoutParams.FLAG_FULLSCREEN);
-        hideSystemUI();
+        setContentView(R.layout.activity_main);
+
+        // 升级/首次启动自愈：自动备份旧环境；全新环境且 Download/DSHA 有旧备份时提示恢复
+        if (HarnessController.get(this).upgradeGuard()) {
+            // 仅解压完成进入主界面（skip_extract=true）才检测"全新环境可恢复"，
+            // 避免首启解压前 rootfs 未就绪误弹恢复框（恢复内容会被解压流程覆盖）
+            if (getIntent().getBooleanExtra("skip_extract", false)) {
+                HarnessController.get(this).maybePromptRestore(this);
+            }
+        }
 
         requestPermissions();
         requestBatteryOptimization();
         maybeShowBackupReminder();
         maybeCheckUpdate();
+        maybeRunUpgradeMigration();
+        // ADB 默认关。只有用户在配置里勾选后才会拉设备桥。
+        DeviceBridgeService.apply(this);
 
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
-
-        if (savedInstanceState == null) {
-            switchFragment(new LaunchFragment());
+        View about = findViewById(R.id.btn_about);
+        if (about != null) {
+            about.setOnClickListener(v -> AboutDialog.show(this));
         }
 
         nav.setOnItemSelectedListener(item -> {
             int id = item.getItemId();
+            getSupportFragmentManager().popBackStack(null,
+                    androidx.fragment.app.FragmentManager.POP_BACK_STACK_INCLUSIVE);
             Fragment f;
             if (id == R.id.nav_launch) {
                 f = new LaunchFragment();
+                setAppTitle("启动");
             } else if (id == R.id.nav_terminal) {
                 f = new TerminalFragment();
-            } else if (id == R.id.nav_market) {
+                setAppTitle("终端");
+            } else if (id == R.id.nav_plugins) {
                 f = new PluginFragment();
+                setAppTitle("市场");
             } else {
                 f = new SettingsFragment();
+                setAppTitle("设置");
             }
             switchFragment(f);
             return true;
         });
+        if (savedInstanceState == null) {
+            nav.setSelectedItemId(R.id.nav_launch);
+        }
     }
 
     private void switchFragment(Fragment f) {
@@ -113,6 +127,13 @@ public class MainActivity extends AppCompatActivity {
     public void setBottomNavVisible(boolean visible) {
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
         if (nav != null) nav.setVisibility(visible ? View.VISIBLE : View.GONE);
+        View bar = findViewById(R.id.app_bar);
+        if (bar != null) bar.setVisibility(visible ? View.VISIBLE : View.GONE);
+    }
+
+    private void setAppTitle(String title) {
+        android.widget.TextView t = findViewById(R.id.app_title);
+        if (t != null) t.setText(title);
     }
 
     /** 自动申请所需权限：通知（前台服务需要）+ 电池优化白名单（保活） */
@@ -139,10 +160,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void requestBatteryOptimization() {
-        // 电池优化白名单（保活更稳，跳转系统设置让用户一键允许）
         try {
+            SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
+            if (prefs.getBoolean("asked_battery", false)) return;
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                prefs.edit().putBoolean("asked_battery", true).apply();
                 Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
                 i.setData(Uri.parse("package:" + getPackageName()));
                 startActivity(i);
@@ -178,15 +201,117 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
-    private void hideSystemUI() {
-        View decor = getWindow().getDecorView();
-        decor.setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                        | View.SYSTEM_UI_FLAG_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+    // ================= 升级迁移：检测 → 自动备份 → 恢复 =================
+    // 覆盖安装（prefs/rootfs 保留）时：版本一变就自动备份，防止后续误操作丢数据；
+    // 卸载重装 / 数据被清（prefs 没了、rootfs 全新、.dsh 为空）时：只要外部还有历史备份就提示恢复。
+    private String currentVersionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void maybeRunUpgradeMigration() {
+        final SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
+        final String current = currentVersionName();
+        if (current == null) return;
+        final String last = prefs.getString("last_version", "");
+        if (current.equals(last)) {
+            // 版本没变：仍可能是重装后 prefs 恰好同版本，交给恢复检查兜底
+            maybeOfferRestore(prefs);
+            return;
+        }
+        if (last.isEmpty()) {
+            // 首次运行（或卸载重装后被清空）：建立基线
+            prefs.edit().putString("last_version", current).apply();
+            HarnessController c = HarnessController.get(this);
+            boolean hasData = c.getProot().isInstalled()
+                    && new java.io.File(c.getProot().getRootfsDir(), "root/.dsh").isDirectory();
+            if (hasData && !prefs.getBoolean("migration_seeded", false)) {
+                // 老用户在旧版本上没有 last_version，但已有 .dsh 数据：升级到本版时补一次初始备份
+                final String seed = current;
+                new Thread(() -> {
+                    try {
+                        String path = BackupManager.autoBackupForUpgrade(
+                                MainActivity.this, HarnessController.get(MainActivity.this), "old", seed);
+                        if (path != null) {
+                            getSharedPreferences("deepseekharness", MODE_PRIVATE)
+                                    .edit().putBoolean("migration_seeded", true).apply();
+                            runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                                    "检测到升级到 v" + seed + "，已自动备份数据", Toast.LENGTH_SHORT).show());
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }).start();
+                return;
+            }
+            maybeOfferRestore(prefs);
+            return;
+        }
+        // 检测到升级：先记版本，再后台自动备份当前数据
+        prefs.edit().putString("last_version", current).apply();
+        final String from = last;
+        new Thread(() -> {
+            try {
+                HarnessController c = HarnessController.get(MainActivity.this);
+                if (!c.getProot().isInstalled()) return;
+                if (!new java.io.File(c.getProot().getRootfsDir(), "root/.dsh").isDirectory()) return;
+                String path = BackupManager.autoBackupForUpgrade(MainActivity.this, c, from, current);
+                if (path != null) {
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                            "检测到升级 v" + from + " → v" + current + "，已自动备份数据", Toast.LENGTH_SHORT).show());
+                }
+            } catch (Exception ignored) {
+            }
+        }).start();
+    }
+
+    /** rootfs 内没有 .dsh（全新/数据丢失）且外部存在历史备份时，提示恢复 */
+    private void maybeOfferRestore(SharedPreferences prefs) {
+        final String current = currentVersionName();
+        if (current == null || prefs.getBoolean("restore_ignored_" + current, false)) return;
+        HarnessController c = HarnessController.get(this);
+        try {
+            if (c.getProot().isInstalled()
+                    && new java.io.File(c.getProot().getRootfsDir(), "root/.dsh").isDirectory()) {
+                return; // 已有数据，不需要也不应覆盖
+            }
+        } catch (Exception e) {
+            return;
+        }
+        final String ref = BackupManager.findLatestSnapshot(this);
+        if (ref == null) return;
+        new AlertDialog.Builder(this)
+                .setTitle("发现历史数据备份")
+                .setMessage("检测到 Download/DSHA 中存在历史备份。\n"
+                        + "是否在首次使用前恢复配置与对话记录？")
+                .setPositiveButton("恢复", (d, w) -> doRestore(ref))
+                .setNegativeButton("暂不", (d, w) -> prefs.edit()
+                        .putBoolean("restore_ignored_" + current, true).apply())
+                .show();
+    }
+
+    /** 后台把备份解压回 rootfs，完成后刷新 Web UI 配置 */
+    private void doRestore(String ref) {
+        Toast.makeText(this, "正在恢复数据，请稍候…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            boolean ok = BackupManager.restoreSnapshotToRootfs(this, HarnessController.get(this), ref);
+            runOnUiThread(() -> {
+                if (ok) {
+                    HarnessController.get(this).bumpWebEpoch();
+                    // prefs 里 last_version 是新版基线，标记已恢复过，避免再次弹出
+                    String cur = currentVersionName();
+                    if (cur != null) {
+                        getSharedPreferences("deepseekharness", MODE_PRIVATE)
+                                .edit().putBoolean("restore_ignored_" + cur, true).apply();
+                    }
+                    Toast.makeText(this, "数据已恢复", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(this, "恢复失败：备份可能已损坏或环境未就绪", Toast.LENGTH_LONG).show();
+                }
+            });
+        }).start();
     }
 
     // ================= 备份提醒 =================
@@ -260,11 +385,5 @@ public class MainActivity extends AppCompatActivity {
                         .show();
             });
         }).start();
-    }
-
-    @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
-        super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) hideSystemUI();
     }
 }

@@ -2,6 +2,7 @@ package com.deepseekharness.app;
 
 import android.annotation.SuppressLint;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -9,109 +10,269 @@ import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
+import java.io.File;
+import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
-/** 启动模块：启动/重启/停止 Web UI；启动后自动检测就绪并弹出预览 */
+/** 启动页：状态 + 日志。点「进入」才在本 App 的 WebView 里打开，不跳系统浏览器。 */
 public class LaunchFragment extends Fragment {
 
     private HarnessController c;
+    private TextView runDot, runState, statusText, lanAddrText, logText;
+    private ScrollView logScroll;
+    private Button startBtn;
+    private View homePane, webPane;
+    private FrameLayout webBox;
     private WebView webView;
-    private FrameLayout previewContainer;
-    private org.mozilla.geckoview.GeckoView geckoView;
-    private org.mozilla.geckoview.GeckoSession geckoSession;
-    private org.mozilla.geckoview.GeckoRuntime geckoRuntime;
-    private TextView statusText;
-    private TextView lanAddrText;
-    private Button startBtn, restartBtn, stopBtn;
-    private LinearLayout controls;
-    private boolean fullscreen = false;
-    private boolean polling = false;
-    private boolean previewBusy = false;
+
+    private boolean webReady = false;
+    private boolean starting = false;
+    private boolean enterWhenReady = false;
+    private boolean insideWeb = false;
+    private String lastLog = "";
+
+    private ValueCallback<Uri[]> filePathCallback;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable tick = this::tickOnce;
+    private final HarnessController.StateListener stateListener = this::refreshHint;
 
-    private final OnBackPressedCallback backCallback = new OnBackPressedCallback(false) {
+    private final ActivityResultLauncher<String> pickFile =
+            registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
+                if (filePathCallback != null) {
+                    filePathCallback.onReceiveValue(uri == null ? null : new Uri[]{uri});
+                    filePathCallback = null;
+                }
+            });
+
+    private final OnBackPressedCallback backToHome = new OnBackPressedCallback(false) {
         @Override
         public void handleOnBackPressed() {
-            exitFullscreen();
+            closeWeb();
         }
     };
 
-    /** 根据设置初始化预览内核：系统 WebView 或内置 GeckoView；电脑模式设置桌面 UA */
-    @SuppressLint("SetJavaScriptEnabled")
-    private void initPreview() {
-        android.content.SharedPreferences prefs = requireContext()
-                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
-        boolean useGecko = prefs.getBoolean("gecko_core", false);
-        boolean desktopMode = prefs.getBoolean("desktop_mode", false);
-        previewContainer.removeAllViews();
-        if (useGecko) {
+    @Nullable
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
+                             @Nullable Bundle savedInstanceState) {
+        return inflater.inflate(R.layout.fragment_launch, container, false);
+    }
+
+    @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        c = HarnessController.get(requireContext());
+        homePane = view.findViewById(R.id.launch_home);
+        webPane = view.findViewById(R.id.launch_web);
+        webBox = view.findViewById(R.id.launch_web_box);
+        runDot = view.findViewById(R.id.launch_run_dot);
+        runState = view.findViewById(R.id.launch_run_state);
+        statusText = view.findViewById(R.id.launch_status);
+        lanAddrText = view.findViewById(R.id.lan_addr);
+        logText = view.findViewById(R.id.launch_log);
+        logScroll = view.findViewById(R.id.launch_log_scroll);
+        startBtn = view.findViewById(R.id.launch_start);
+        Button restartBtn = view.findViewById(R.id.launch_open);
+        Button stopBtn = view.findViewById(R.id.launch_stop);
+
+        updateLanAddr();
+        applyRunUi(false);
+        refreshHint();
+        c.addStateListener(stateListener);
+        requireActivity().getOnBackPressedDispatcher().addCallback(getViewLifecycleOwner(), backToHome);
+
+        mainHandler.postDelayed(() -> new Thread(() -> {
             try {
-                webView = null;
-                geckoView = new org.mozilla.geckoview.GeckoView(requireContext());
-                previewContainer.addView(geckoView,
-                        new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-                if (geckoRuntime == null) {
-                    geckoRuntime = org.mozilla.geckoview.GeckoRuntime.create(requireContext());
-                }
-                geckoSession = new org.mozilla.geckoview.GeckoSession();
-                geckoSession.open(geckoRuntime);
-                geckoView.setSession(geckoSession);
-            } catch (Throwable e) {
-                // GeckoView 初始化失败（如 so 加载异常）回退系统 WebView
-                geckoView = null;
-                geckoSession = null;
-                webView = new WebView(requireContext());
-                setupWebView(webView, desktopMode);
-                previewContainer.addView(webView,
-                        new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                c.ensureWatchdogFiles();
+            } catch (Throwable ignored) {
             }
+            try {
+                c.maybePrewarmWeb();
+            } catch (Throwable ignored) {
+            }
+        }, "dsha-prewarm").start(), 1500);
+
+        startBtn.setOnClickListener(v -> {
+            if (webReady) {
+                openWeb();
+                return;
+            }
+            if (goExtractIfNeeded()) return;
+            if (!c.getProot().isOfflineExtracted()) {
+                Toast.makeText(requireContext(), "内置环境尚未就绪，请先等解压完成", Toast.LENGTH_LONG).show();
+                return;
+            }
+            starting = true;
+            enterWhenReady = true;
+            applyRunUi(false);
+            statusText.setText("正在启动，起来后直接进入…");
+            Intent i = new Intent(requireContext(), HarnessService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                requireContext().startForegroundService(i);
+            } else {
+                requireContext().startService(i);
+            }
+        });
+
+        restartBtn.setOnClickListener(v -> {
+            if (goExtractIfNeeded()) return;
+            closeWeb();
+            starting = true;
+            applyRunUi(false);
+            statusText.setText("正在强重启…");
+            c.restartAppProcess(requireContext());
+        });
+
+        stopBtn.setOnClickListener(v -> {
+            closeWeb();
+            starting = false;
+            enterWhenReady = false;
+            webReady = false;
+            applyRunUi(false);
+            Intent i = new Intent(requireContext(), HarnessService.class)
+                    .setAction(HarnessService.ACTION_STOP);
+            requireContext().startService(i);
+            statusText.setText("已发送停止命令");
+        });
+
+        if (goExtractIfNeeded()) {
+            statusText.setText("正在打开内置环境解压页…");
+        } else if (c.getProot().isOfflineExtracted()) {
+            statusText.setText("环境已就绪。点「启动」起来后会直接进入。");
         } else {
-            geckoView = null;
-            geckoSession = null;
+            statusText.setText("环境未就绪。若刚装好 APK，请杀掉进程再打开一次以进入解压页。");
+        }
+
+        mainHandler.post(tick);
+    }
+
+    private void tickOnce() {
+        if (!isAdded()) return;
+        new Thread(() -> {
+            final boolean up = httpOk(uiUrl());
+            final String log = readWebLogTail();
+            if (!isAdded()) return;
+            mainHandler.post(() -> {
+                if (!isAdded()) return;
+                if (up) starting = false;
+                webReady = up;
+                applyRunUi(up);
+                if (up && enterWhenReady && !insideWeb) {
+                    enterWhenReady = false;
+                    openWeb();
+                }
+                if (!insideWeb && log != null && !log.equals(lastLog)) {
+                    lastLog = log;
+                    logText.setText(log.isEmpty() ? "还没有日志。" : log);
+                    logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
+                }
+                mainHandler.postDelayed(tick, 1500);
+            });
+        }, "dsha-launch-tick").start();
+    }
+
+    private void applyRunUi(boolean up) {
+        if (up) {
+            runDot.setTextColor(requireContext().getColor(R.color.ok));
+            runState.setText("DSH 运行中");
+            startBtn.setText("进入");
+        } else if (starting || c.isWebRunning()) {
+            runDot.setTextColor(requireContext().getColor(R.color.warn));
+            runState.setText("DSH 启动中");
+            startBtn.setText("启动");
+        } else {
+            runDot.setTextColor(requireContext().getColor(R.color.text_muted));
+            runState.setText("DSH 未运行");
+            startBtn.setText("启动");
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void openWeb() {
+        if (insideWeb) return;
+        insideWeb = true;
+        homePane.setVisibility(View.GONE);
+        webPane.setVisibility(View.VISIBLE);
+        backToHome.setEnabled(true);
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).setBottomNavVisible(false);
+        }
+        if (webView == null) {
             webView = new WebView(requireContext());
-            setupWebView(webView, desktopMode);
-            previewContainer.addView(webView,
-                    new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            WebSettings ws = webView.getSettings();
+            ws.setJavaScriptEnabled(true);
+            ws.setDomStorageEnabled(true);
+            boolean desktop = requireContext()
+                    .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .getBoolean("desktop_mode", false);
+            if (desktop) {
+                ws.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+            }
+            webView.setWebViewClient(new WebViewClient());
+            webView.setWebChromeClient(new WebChromeClient() {
+                @Override
+                public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> cb,
+                                                 FileChooserParams params) {
+                    filePathCallback = cb;
+                    String[] accept = params.getAcceptTypes();
+                    String mime = (accept != null && accept.length > 0 && accept[0] != null && !accept[0].isEmpty())
+                            ? accept[0] : "*/*";
+                    pickFile.launch(mime);
+                    return true;
+                }
+            });
+            webBox.addView(webView, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        webView.loadUrl(uiUrl());
+    }
+
+    private void closeWeb() {
+        if (!insideWeb) return;
+        insideWeb = false;
+        webPane.setVisibility(View.GONE);
+        homePane.setVisibility(View.VISIBLE);
+        backToHome.setEnabled(false);
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).setBottomNavVisible(true);
         }
     }
 
-    private void setupWebView(WebView wv, boolean desktopMode) {
-        WebSettings ws = wv.getSettings();
-        ws.setJavaScriptEnabled(true);
-        ws.setDomStorageEnabled(true);
-        if (desktopMode) {
-            wv.getSettings().setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
-        }
-        wv.setWebViewClient(new WebViewClient());
-    }
-
-    /** 加载预览 URL（按当前内核分发） */
-    private void loadPreview(String url) {
-        if (webView != null) {
-            webView.loadUrl(url);
-        } else if (geckoSession != null) {
-            geckoSession.load(new org.mozilla.geckoview.GeckoSession.Loader().uri(url));
+    private void refreshHint() {
+        if (!isAdded() || statusText == null) return;
+        if (c.getError() != null && !c.getError().isEmpty()) {
+            statusText.setText(c.getError());
+        } else if (c.getMessage() != null && !c.getMessage().isEmpty()) {
+            statusText.setText(c.getMessage());
+        } else if (c.isBusy()) {
+            statusText.setText(c.getStage());
         }
     }
 
-    /** 局域网访问地址显示（lan_mode 开启且检测到 IP 时显示，点击复制） */
+    private String uiUrl() {
+        return "http://127.0.0.1:" + c.getPort() + "/";
+    }
+
     private void updateLanAddr() {
         boolean lan = requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
@@ -125,141 +286,34 @@ public class LaunchFragment extends Fragment {
             lanAddrText.setVisibility(View.GONE);
             return;
         }
-        String addr = "http://" + ip + ":" + LanProxyService.LAN_PORT + "   （App桥，局域网设备可访问）";
-        lanAddrText.setText(addr);
+        final String copyAddr = "http://" + ip + ":" + c.getPort() + "/";
+        lanAddrText.setText("局域网访问: " + copyAddr + "  （同 WiFi 设备可打开）");
         lanAddrText.setVisibility(View.VISIBLE);
         lanAddrText.setOnClickListener(v -> {
             android.content.ClipboardManager cm = (android.content.ClipboardManager)
                     requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("lan", "http://" + ip + ":" + LanProxyService.LAN_PORT));
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("lan", copyAddr));
             Toast.makeText(requireContext(), "局域网地址已复制", Toast.LENGTH_SHORT).show();
         });
     }
 
-    private final HarnessController.StateListener stateListener = this::refreshFromState;
-
-    @Nullable
-    @Override
-    public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
-                             @Nullable Bundle savedInstanceState) {
-        return inflater.inflate(R.layout.fragment_launch, container, false);
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
-    @Override
-    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
-        c = HarnessController.get(requireContext());
-        previewContainer = view.findViewById(R.id.previewContainer);
-        statusText = view.findViewById(R.id.launch_status);
-        lanAddrText = view.findViewById(R.id.lan_addr);
-        startBtn = view.findViewById(R.id.launch_start);
-        restartBtn = view.findViewById(R.id.launch_open);
-        stopBtn = view.findViewById(R.id.launch_stop);
-        controls = view.findViewById(R.id.launch_controls);
-
-        initPreview();
-        updateLanAddr();
-        // 刷新看门狗命令文件（覆盖历史坏命令，避免旧 watchdog 用空端口 restart 反复失败）
+    private boolean goExtractIfNeeded() {
         try {
-            c.ensureWatchdogFiles();
+            if (!c.getProot().isOfflineExtracted()) {
+                startActivity(new Intent(requireContext(), ExtractActivity.class));
+                if (getActivity() != null) getActivity().finish();
+                return true;
+            }
         } catch (Throwable ignored) {
         }
-
-        c.addStateListener(stateListener);
-        requireActivity().getOnBackPressedDispatcher().addCallback(getViewLifecycleOwner(), backCallback);
-
-        startBtn.setOnClickListener(v -> {
-            if (!c.isHarnessInstalled()) {
-                Toast.makeText(requireContext(), "请先在「安装」模块完成安装", Toast.LENGTH_LONG).show();
-                return;
-            }
-            // 通过前台服务启动：强保活 + 后台运行（切走不杀）
-            Intent i = new Intent(requireContext(), HarnessService.class);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                requireContext().startForegroundService(i);
-            } else {
-                requireContext().startService(i);
-            }
-            statusText.setText("正在启动 Web UI，检测到就绪后自动打开预览…");
-            pollWebReady();
-        });
-
-        restartBtn.setOnClickListener(v -> {
-            if (!c.isHarnessInstalled()) {
-                Toast.makeText(requireContext(), "请先完成安装", Toast.LENGTH_LONG).show();
-                return;
-            }
-            exitFullscreen();
-            statusText.setText("正在重启 Web UI…");
-            Intent stop = new Intent(requireContext(), HarnessService.class)
-                    .setAction(HarnessService.ACTION_STOP);
-            requireContext().startService(stop);
-            // 稍等进程退出，再重新拉起
-            mainHandler.postDelayed(() -> {
-                Intent i = new Intent(requireContext(), HarnessService.class);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    requireContext().startForegroundService(i);
-                } else {
-                    requireContext().startService(i);
-                }
-                statusText.setText("正在重启 Web UI，检测到就绪后自动打开预览…");
-                pollWebReady();
-            }, 1500);
-        });
-
-        stopBtn.setOnClickListener(v -> {
-            Intent i = new Intent(requireContext(), HarnessService.class)
-                    .setAction(HarnessService.ACTION_STOP);
-            requireContext().startService(i);
-            exitFullscreen();
-            statusText.setText("已发送停止命令");
-        });
-
-        // 切模块回来：如果 Web 还在跑，自动恢复全屏预览
-        if (c.isWebRunning()) {
-            webView.post(this::openPreview);
-        } else {
-            statusText.setText("提示：先到「安装」页完成安装，再回到这里启动。");
-        }
-    }
-
-    /** 轮询检测 WebUI 就绪（HTTP 200），就绪后自动打开预览 */
-    private void pollWebReady() {
-        if (polling) return;
-        polling = true;
-        final String url = "http://127.0.0.1:" + c.getPort() + "/";
-        new Thread(() -> {
-            boolean ok = false;
-            for (int i = 0; i < 180; i++) { // 最多约 6 分钟（首次 RC6 启动较慢）
-                if (!c.isWebRunning() && !ok) {
-                    // 服务进程都没了就别等了（除非刚启动拉起中），放宽到 80 秒后才判死
-                    if (i > 40) break;
-                }
-                if (httpOk(url)) {
-                    ok = true;
-                    break;
-                }
-                try {
-                    Thread.sleep(2000);
-                } catch (InterruptedException e) {
-                    break;
-                }
-            }
-            polling = false;
-            if (ok && isAdded()) {
-                mainHandler.post(this::openPreview);
-            } else if (isAdded()) {
-                mainHandler.post(() ->
-                        statusText.setText("等待 Web UI 就绪超时，可点「重启」再试，或检查日志"));
-            }
-        }).start();
+        return false;
     }
 
     private boolean httpOk(String url) {
         try {
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-            conn.setConnectTimeout(2000);
-            conn.setReadTimeout(2000);
+            conn.setConnectTimeout(1200);
+            conn.setReadTimeout(1200);
             int code = conn.getResponseCode();
             conn.disconnect();
             return code >= 200 && code < 500;
@@ -268,73 +322,40 @@ public class LaunchFragment extends Fragment {
         }
     }
 
-    private void openPreview() {
-        // 防重入：openPreview → loadPreview → loadUrl 反复触发（多入口 post 叠加）会递归爆栈
-        if (previewBusy) return;
-        previewBusy = true;
+    private String readWebLogTail() {
         try {
-            String url = "http://127.0.0.1:" + c.getPort() + "/";
-            loadPreview(url);
-            enterFullscreen();
-        } catch (Throwable t) {
-            // 预览闪避：内核异常不拖垮 App
-            try {
-                statusText.setText("预览加载异常，可点「重启」再试");
-            } catch (Throwable ignored) {
+            File f = new File(c.getProot().getRootfsDir(), "root/dsh-web.log");
+            if (!f.isFile() || f.length() == 0) return "";
+            long len = f.length();
+            long start = Math.max(0, len - 24000);
+            try (RandomAccessFile raf = new RandomAccessFile(f, "r")) {
+                raf.seek(start);
+                byte[] buf = new byte[(int) (len - start)];
+                raf.readFully(buf);
+                String s = new String(buf, java.nio.charset.StandardCharsets.UTF_8);
+                if (start > 0) {
+                    int nl = s.indexOf('\n');
+                    if (nl >= 0 && nl + 1 < s.length()) s = s.substring(nl + 1);
+                }
+                return s;
             }
-        } finally {
-            previewBusy = false;
-        }
-    }
-
-    private void enterFullscreen() {
-        fullscreen = true;
-        backCallback.setEnabled(true);
-        controls.setVisibility(View.GONE);
-        statusText.setVisibility(View.GONE);
-        if (getActivity() instanceof MainActivity) {
-            ((MainActivity) getActivity()).setBottomNavVisible(false);
-        }
-        View decor = getActivity() != null ? getActivity().getWindow().getDecorView() : null;
-        if (decor != null) {
-            decor.setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                            | View.SYSTEM_UI_FLAG_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
-        }
-    }
-
-    private void exitFullscreen() {
-        fullscreen = false;
-        backCallback.setEnabled(false);
-        controls.setVisibility(View.VISIBLE);
-        statusText.setVisibility(View.VISIBLE);
-        if (getActivity() instanceof MainActivity) {
-            ((MainActivity) getActivity()).setBottomNavVisible(true);
+        } catch (Exception e) {
+            return "";
         }
     }
 
     @Override
     public void onDestroyView() {
         super.onDestroyView();
+        mainHandler.removeCallbacks(tick);
         if (c != null) c.removeStateListener(stateListener);
-        // 退出 Fragment 时恢复底部导航
         if (getActivity() instanceof MainActivity) {
             ((MainActivity) getActivity()).setBottomNavVisible(true);
         }
-    }
-
-    private void refreshFromState() {
-        if (!isAdded()) return;
-        if (c.getError() != null && !c.getError().isEmpty()) {
-            statusText.setText(c.getError());
-        } else if (c.getMessage() != null && !c.getMessage().isEmpty()) {
-            statusText.setText(c.getMessage());
-        } else if (c.isBusy()) {
-            statusText.setText(c.getStage());
+        if (webView != null) {
+            webBox.removeAllViews();
+            webView.destroy();
+            webView = null;
         }
     }
 }

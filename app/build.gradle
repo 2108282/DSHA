@@ -2,12 +2,30 @@ plugins {
     id 'com.android.application'
 }
 
-// 内置离线环境包缺失时给出明确中文报错(直接从 assets 缺失会悄悄打出不可用的 APK)
-if (!file("src/main/assets/offline-rootfs.tar.gz").exists()) {
+def offlineGz = file("src/main/assets/offline-rootfs.tar.gz")
+def offlineBin = file("src/main/assets/offline-rootfs.bin")
+if (!offlineGz.exists() && !offlineBin.exists()) {
     throw new GradleException(
         "缺少内置离线环境包 app/src/main/assets/offline-rootfs.tar.gz ——\n" +
-        "它由 GitHub Actions 在线(qemu arm64)预装生成。\n" +
-        "本地构建时请先运行 .github 对应的预装流程,或从 Release 下载 offline-rootfs-bundle。")
+        "它由 GitHub Actions 在 ubuntu-24.04-arm 上 chroot 预装生成。\n" +
+        "本地构建请从 Actions 的 offline-rootfs-bundle 产物拷到该路径。")
+}
+
+// aapt 会把 .tar.gz 自动解压成 .tar。打进 APK 前改名为 .bin。
+tasks.register("protectOfflineBundle") {
+    doLast {
+        if (offlineGz.exists()) {
+            offlineBin.delete()
+            if (!offlineGz.renameTo(offlineBin)) {
+                throw new GradleException("无法把 offline-rootfs.tar.gz 改名为 .bin")
+            }
+        }
+    }
+}
+tasks.configureEach { t ->
+    if (t.name == "preBuild" || t.name == "preDebugBuild") {
+        t.dependsOn("protectOfflineBundle")
+    }
 }
 
 android {
@@ -18,17 +36,28 @@ android {
         applicationId "com.dsh.client"
         minSdk 26
         targetSdk 34
-        versionCode 16
-        versionName "1.1.0"
-        // 面向 ARM64 设备（deepseek-harness 的 node-pty 等原生模块需 arm64）
+        versionCode 21
+        versionName "1.1.5"
         ndk {
             abiFilters 'arm64-v8a'
         }
     }
 
+    signingConfigs {
+        debug {
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing true
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.debug
             proguardFiles(
                 getDefaultProguardFile('proguard-android-optimize.txt'),
                 'proguard-rules.pro'
@@ -36,16 +65,13 @@ android {
         }
     }
 
-    // 关键：让 jniLibs 的 .so 真正解压到 nativeLibraryDir（可执行目录），
-    // 否则 proot 伪装成 .so 也无法直接 exec（默认从 APK mmap，目录里没文件）。
     packagingOptions {
         jniLibs {
             useLegacyPackaging = true
+            excludes += ['**/x86/**', '**/x86_64/**', '**/armeabi/**', '**/armeabi-v7a/**']
         }
     }
 
-    // 内置离线 rootfs 包很大:不对 .gz 二次压缩(节省构建时间/体积,
-    // 且 openFd 可拿到真实长度用于解压进度)。
     androidResources {
         noCompress += ['gz', 'xz']
     }
@@ -67,14 +93,59 @@ android {
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.fragment:fragment:1.6.2'
     implementation 'androidx.viewpager2:viewpager2:1.0.0'
     implementation 'dev.rikka.shizuku:api:13.1.5'
     implementation 'dev.rikka.shizuku:provider:13.1.5'
-    // 内置浏览器内核（GeckoView）：系统 WebView 版本过低时的替代内核
-    implementation 'org.mozilla.geckoview:geckoview:126.0.20240526221752'
-    // MT 管理器官方「注入文件提供器」编程版：免 ROOT 访问本 App 私有 data 目录（工作区）
+    implementation 'org.mozilla.geckoview:geckoview-arm64-v8a:126.0.20240526221752'
     debugImplementation 'com.github.L-JINBIN:MTDataFilesProvider:v1.0.0'
+}
+
+afterEvaluate {
+    def verify = tasks.register("verifyArm64Apk") {
+        doLast {
+            def apk = file("build/outputs/apk/debug/app-debug.apk")
+            if (!apk.isFile()) {
+                throw new GradleException("找不到 " + apk)
+            }
+            def z = new java.util.zip.ZipFile(apk)
+            def libs = []
+            def assets = []
+            z.entries().each { e ->
+                if (e.name.startsWith("lib/") && e.name.endsWith(".so")) {
+                    libs << e.name
+                }
+                if (e.name.contains("offline") || e.name.contains("rootfs") || e.name.startsWith("assets/")) {
+                    assets << (e.name + " size=" + e.size)
+                }
+            }
+            z.close()
+            println "===== APK native libs ====="
+            libs.each { println "  " + it }
+            println "===== APK assets ====="
+            assets.each { println "  " + it }
+            def hasBundle = assets.any {
+                it.contains("offline-rootfs") || it.contains("rootfs.tar") || it.contains("offline_rootfs")
+            }
+            if (!hasBundle) {
+                throw new GradleException("APK 里没有 offline-rootfs。assets: " + assets)
+            }
+            if (libs.isEmpty()) {
+                throw new GradleException("APK 里没有 lib/*.so")
+            }
+            if (!libs.any { it.startsWith("lib/arm64-v8a/") }) {
+                throw new GradleException("APK 不含 lib/arm64-v8a/")
+            }
+            def bad = libs.findAll { !it.startsWith("lib/arm64-v8a/") }
+            if (!bad.isEmpty()) {
+                throw new GradleException("APK 混进了非 arm64 库: " + bad)
+            }
+        }
+    }
+    tasks.matching { it.name == "assembleDebug" }.configureEach {
+        finalizedBy(verify)
+    }
 }

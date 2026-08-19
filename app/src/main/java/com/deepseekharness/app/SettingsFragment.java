@@ -1,31 +1,28 @@
 package com.deepseekharness.app;
 
 import android.os.Bundle;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.fragment.app.Fragment;
 
 import java.util.function.Supplier;
 
-/**
- * 设置模块列表：安装 / 配置 / 工作区 等入口。
- * <p>点击一项→以二级页面（全屏）打开对应子页，返回键回到列表。</p>
- * <p>扩展方式：在 {@link #TAB_OPTIONS} 中追加一项（标题 + 子页工厂）即可。</p>
- */
 public class SettingsFragment extends Fragment {
 
-    /** 设置子页选项：新增子页只需在此追加一项 */
     private static final TabOption[] TAB_OPTIONS = {
-            new TabOption("安装", InstallFragment::new),
-            new TabOption("配置", ConfigFragment::new),
-            new TabOption("工作区", WorkspaceFragment::new),
+            new TabOption("安装", "分步安装 rootfs / 工具 / Node / harness", InstallFragment::new),
+            new TabOption("配置", "API key · 端口 · 模型 · 沙箱模式", ConfigFragment::new),
+            new TabOption("工作区", "工作目录 · 文件共享 · 备份恢复 · Shizuku", WorkspaceFragment::new),
     };
 
     @Nullable
@@ -37,64 +34,126 @@ public class SettingsFragment extends Fragment {
 
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
-        super.onViewCreated(view, savedInstanceState);
         LinearLayout tabs = view.findViewById(R.id.settings_tabs);
         for (int i = 0; i < TAB_OPTIONS.length; i++) {
+            if (i > 0) {
+                View divider = new View(requireContext());
+                divider.setLayoutParams(new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, 1));
+                divider.setBackgroundColor(requireContext().getColor(R.color.line));
+                tabs.addView(divider);
+            }
             tabs.addView(buildRow(i));
         }
+
+        String version = "1.1.5";
+        try {
+            version = requireContext().getPackageManager()
+                    .getPackageInfo(requireContext().getPackageName(), 0).versionName;
+        } catch (Exception ignored) {
+        }
+        TextView ver = view.findViewById(R.id.settings_ver);
+        ver.setText("DSHA v" + version + " · MIT License");
+        TextView updateSub = view.findViewById(R.id.settings_update_sub);
+        updateSub.setText("当前 v" + version + " · 从 GitHub Releases 检查");
+        view.findViewById(R.id.settings_about).setOnClickListener(v -> AboutDialog.show(requireContext()));
+        view.findViewById(R.id.settings_update).setOnClickListener(v -> checkUpdate());
     }
 
-    /** 构建一行列表项：标题 + 右侧箭头，点击进入二级页面 */
     private LinearLayout buildRow(final int index) {
         TabOption opt = TAB_OPTIONS[index];
-
         LinearLayout row = new LinearLayout(requireContext());
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(16), 0, dp(16), 0);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
-        if (index > 0) {
-            lp.topMargin = dp(8);
-        }
-        row.setLayoutParams(lp);
-        row.setBackgroundResource(R.drawable.bg_btn);
+        row.setPadding(dp(15), dp(15), dp(15), dp(15));
+        TypedValue tv = new TypedValue();
+        requireContext().getTheme().resolveAttribute(android.R.attr.selectableItemBackground, tv, true);
+        row.setBackgroundResource(tv.resourceId);
+        row.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout body = new LinearLayout(requireContext());
+        body.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        body.setLayoutParams(blp);
 
         TextView title = new TextView(requireContext());
         title.setText(opt.title);
-        title.setTextSize(15);
-        title.setTextColor(0xFF1F2328);
-        title.setLayoutParams(new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        title.setTextSize(14);
+        title.setTextColor(requireContext().getColor(R.color.text));
+        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
 
-        TextView arrow = new TextView(requireContext());
-        arrow.setText("›");
-        arrow.setTextSize(18);
-        arrow.setTextColor(0xFF999999);
+        TextView sub = new TextView(requireContext());
+        sub.setText(opt.sub);
+        sub.setTextSize(12);
+        sub.setTextColor(requireContext().getColor(R.color.text_muted));
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.topMargin = dp(2);
+        sub.setLayoutParams(slp);
 
-        row.addView(title);
-        row.addView(arrow);
-        row.setOnClickListener(v -> {
-            Fragment f = TAB_OPTIONS[index].factory.get();
-            requireActivity().getSupportFragmentManager().beginTransaction()
-                    .replace(R.id.fragment_container, f)
-                    .addToBackStack("settings")
-                    .commit();
-        });
+        body.addView(title);
+        body.addView(sub);
+
+        TextView chev = new TextView(requireContext());
+        chev.setText("›");
+        chev.setTextSize(18);
+        chev.setTextColor(requireContext().getColor(R.color.text_muted));
+
+        row.addView(body);
+        row.addView(chev);
+        row.setOnClickListener(v -> requireActivity().getSupportFragmentManager().beginTransaction()
+                .replace(R.id.fragment_container, opt.factory.get())
+                .addToBackStack("settings")
+                .commit());
         return row;
+    }
+
+    private void checkUpdate() {
+        Toast.makeText(requireContext(), "正在检查更新…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            String tag = UpdateChecker.checkLatestVersion();
+            String current;
+            try {
+                current = requireContext().getPackageManager()
+                        .getPackageInfo(requireContext().getPackageName(), 0).versionName;
+            } catch (Exception e) {
+                current = "?";
+            }
+            final String cur = current;
+            if (!isAdded()) return;
+            requireActivity().runOnUiThread(() -> {
+                if (tag == null) {
+                    Toast.makeText(requireContext(), "检查失败，请稍后再试", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (!UpdateChecker.isNewer(tag, cur)) {
+                    Toast.makeText(requireContext(), "当前 v" + cur + " 已是最新", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                new AlertDialog.Builder(requireContext())
+                        .setTitle("发现新版本 " + tag)
+                        .setMessage("当前版本 v" + cur + "\n是否前往下载？")
+                        .setPositiveButton("更新", (d, w) -> AboutDialog.openBrowser(
+                                requireContext(), "https://github.com/qiannianhuanxiang/DSHA/releases/latest"))
+                        .setNegativeButton("取消", null)
+                        .show();
+            });
+        }).start();
     }
 
     private int dp(int v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
-    /** 设置子页选项定义 */
     private static final class TabOption {
         final String title;
+        final String sub;
         final Supplier<Fragment> factory;
 
-        TabOption(String title, Supplier<Fragment> factory) {
+        TabOption(String title, String sub, Supplier<Fragment> factory) {
             this.title = title;
+            this.sub = sub;
             this.factory = factory;
         }
     }
