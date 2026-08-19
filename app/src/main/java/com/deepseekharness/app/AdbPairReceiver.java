@@ -74,7 +74,8 @@ public class AdbPairReceiver extends BroadcastReceiver {
                     String cp = discovered[2];
                     String prep = AdbBridge.ensureReady(context, hc.getProot());
                     if (!prep.contains("SETUP_DONE")) {
-                        out = "环境准备失败，详见输出：\n" + prep;
+                        out = "环境准备失败，详见输出：\n" + prep
+                                + "\n\n完整日志：App 终端里执行\ncat /root/.dsh/adb-setup.log";
                     } else {
                         out = AdbBridge.pair(hc.getProot(), code, pp, cp, host);
                     }

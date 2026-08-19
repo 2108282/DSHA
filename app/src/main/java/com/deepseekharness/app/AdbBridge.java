@@ -65,9 +65,9 @@ public final class AdbBridge {
         return r != null && r.contains("YES");
     }
 
-    /** 依赖是否已装（adb_shell_wifi + spake2_cffi） */
+    /** 依赖是否已装（adb_shell_wifi + spake2-cffi；注意新版库从 spake2.spake2 导入，模块名无下划线） */
     public static boolean depsOk(ProotBootstrap proot) {
-        String r = proot.execAndRead("python3 -c 'import adb_shell_wifi,spake2_cffi' 2>/dev/null && echo YES || echo NO");
+        String r = proot.execAndRead("python3 -c 'import adb_shell_wifi; from spake2.spake2 import Spake2_Alice, Spake2_Bob' 2>/dev/null && echo YES || echo NO");
         return r != null && r.contains("YES");
     }
 
