@@ -2,43 +2,53 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="#F7F8FA"
+    android:background="@color/surface"
     android:gravity="center"
-    android:padding="32dp">
+    android:orientation="vertical"
+    android:padding="40dp">
+
+    <FrameLayout
+        android:layout_width="92dp"
+        android:layout_height="92dp"
+        android:layout_marginBottom="30dp"
+        android:background="@drawable/bg_card">
+
+        <ProgressBar
+            android:id="@+id/extract_bar"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="center"
+            android:indeterminateTint="@color/accent" />
+    </FrameLayout>
 
     <TextView
         android:id="@+id/extract_title"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="正在准备运行环境"
-        android:textSize="22sp"
-        android:textStyle="bold"
-        android:textColor="#1F2328" />
-
-    <ProgressBar
-        android:id="@+id/extract_bar"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="28dp" />
+        android:textColor="@color/text"
+        android:textSize="21sp"
+        android:textStyle="bold" />
 
     <TextView
         android:id="@+id/extract_status"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="20dp"
+        android:layout_marginTop="12dp"
+        android:gravity="center"
+        android:lineSpacingExtra="4dp"
         android:text="首次启动需要解压内置环境，请稍候…"
-        android:textSize="14sp"
-        android:textColor="#656D76"
-        android:gravity="center" />
+        android:textColor="@color/text_secondary"
+        android:textSize="13sp" />
 
     <TextView
         android:id="@+id/extract_error"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
-        android:visibility="gone"
+        android:gravity="center"
+        android:textColor="@color/err"
+        android:textIsSelectable="true"
         android:textSize="13sp"
-        android:textColor="#D1242F"
-        android:gravity="center" />
+        android:visibility="gone" />
 </LinearLayout>

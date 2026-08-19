@@ -13,8 +13,6 @@ import android.os.PowerManager;
 import android.provider.Settings;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.view.Window;
-import android.view.WindowManager;
 import android.widget.CheckBox;
 import android.widget.Toast;
 
@@ -70,12 +68,6 @@ public class MainActivity extends AppCompatActivity {
 
         setContentView(R.layout.activity_main);
 
-        // 沉浸式全屏（隐藏状态栏 + 系统导航栏）
-        Window window = getWindow();
-        window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                WindowManager.LayoutParams.FLAG_FULLSCREEN);
-        hideSystemUI();
-
         requestPermissions();
         requestBatteryOptimization();
         maybeShowBackupReminder();
@@ -85,29 +77,37 @@ public class MainActivity extends AppCompatActivity {
         ensureDeviceBridge();
 
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
+        View about = findViewById(R.id.btn_about);
+        if (about != null) {
+            about.setOnClickListener(v -> AboutDialog.show(this));
+        }
 
         if (savedInstanceState == null) {
             switchFragment(new LaunchFragment());
+            setAppTitle("启动");
         }
 
         nav.setOnItemSelectedListener(item -> {
             int id = item.getItemId();
+            getSupportFragmentManager().popBackStack(null,
+                    androidx.fragment.app.FragmentManager.POP_BACK_STACK_INCLUSIVE);
             Fragment f;
             if (id == R.id.nav_launch) {
                 f = new LaunchFragment();
-            } else if (id == R.id.nav_install) {
-                f = new InstallFragment();
-            } else if (id == R.id.nav_config) {
-                f = new ConfigFragment();
+                setAppTitle("启动");
+            } else if (id == R.id.nav_terminal) {
+                f = new TerminalFragment();
+                setAppTitle("终端");
             } else if (id == R.id.nav_plugins) {
                 f = new PluginFragment();
+                setAppTitle("市场");
             } else {
-                f = new TerminalFragment();
+                f = new SettingsFragment();
+                setAppTitle("设置");
             }
             switchFragment(f);
             return true;
         });
-        // 首页 = 启动页（与内测版一致）
         nav.setSelectedItemId(R.id.nav_launch);
     }
 
@@ -121,6 +121,13 @@ public class MainActivity extends AppCompatActivity {
     public void setBottomNavVisible(boolean visible) {
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
         if (nav != null) nav.setVisibility(visible ? View.VISIBLE : View.GONE);
+        View bar = findViewById(R.id.app_bar);
+        if (bar != null) bar.setVisibility(visible ? View.VISIBLE : View.GONE);
+    }
+
+    private void setAppTitle(String title) {
+        android.widget.TextView t = findViewById(R.id.app_title);
+        if (t != null) t.setText(title);
     }
 
     /** 自动申请所需权限：通知（前台服务需要）+ 电池优化白名单（保活） */
@@ -198,17 +205,6 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
-    private void hideSystemUI() {
-        View decor = getWindow().getDecorView();
-        decor.setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                        | View.SYSTEM_UI_FLAG_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
-    }
-
     // ================= 备份提醒 =================
     // 提醒频率分级：默认每 6 次 → 勾选"少提醒我"依次升级为 15 / 30 / 100 次
     private static final int[] REMIND_INTERVALS = {6, 15, 30, 100};
@@ -282,9 +278,4 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
-    @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
-        super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) hideSystemUI();
-    }
 }

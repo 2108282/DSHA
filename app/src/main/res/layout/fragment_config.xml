@@ -1,124 +1,160 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/surface">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="24dp">
+        android:padding="18dp">
 
         <TextView
+            android:id="@+id/sub_back"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="配置模块"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/config_workspace_entry"
-            android:layout_width="match_parent"
-            android:layout_height="44dp"
-            android:layout_marginTop="10dp"
-            android:gravity="center"
-            android:text="📁 工作区 · 备份/恢复 · 环境管理"
-            android:textColor="#E6EDF3"
+            android:paddingBottom="10dp"
+            android:text="‹ 返回"
+            android:textColor="@color/text_secondary"
             android:textSize="14sp"
-            android:background="@drawable/bg_btn" />
+            android:visibility="gone" />
 
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="18dp">
+
+            <TextView
+                style="@style/Widget.Dsha.CardLabel"
+                android:text="核心配置" />
+
+            <TextView
+                android:id="@+id/config_workspace_entry"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:layout_marginBottom="14dp"
+                android:background="@drawable/bg_btn"
+                android:gravity="center"
+                android:text="工作区 · 备份/恢复 · 环境管理"
+                android:textColor="@color/text"
+                android:textSize="14sp" />
+
+            <TextView style="@style/Widget.Dsha.FieldLabel" android:text="DeepSeek API Key" />
+            <EditText
+                android:id="@+id/config_api_key"
+                style="@style/Widget.Dsha.Input"
+                android:fontFamily="monospace"
+                android:hint="sk-..."
+                android:inputType="textPassword" />
+
+            <TextView style="@style/Widget.Dsha.FieldLabel" android:layout_marginTop="14dp" android:text="端口（默认 3080）" />
+            <EditText
+                android:id="@+id/config_port"
+                style="@style/Widget.Dsha.Input"
+                android:fontFamily="monospace"
+                android:hint="3080"
+                android:inputType="number" />
+
+            <TextView style="@style/Widget.Dsha.FieldLabel" android:layout_marginTop="14dp" android:text="模型（默认 deepseek-v4-flash）" />
+            <EditText
+                android:id="@+id/config_model"
+                style="@style/Widget.Dsha.Input"
+                android:fontFamily="monospace"
+                android:hint="deepseek-v4-flash" />
+
+            <TextView style="@style/Widget.Dsha.FieldLabel" android:layout_marginTop="14dp" android:text="沙箱权限模式" />
+            <Spinner
+                android:id="@+id/config_mode"
+                android:layout_width="match_parent"
+                android:layout_height="46dp"
+                android:background="@drawable/bg_input"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="DeepSeek API Key" />
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="18dp">
 
-        <EditText
-            android:id="@+id/config_api_key"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="sk-..."
-            android:inputType="textPassword" />
+            <TextView
+                style="@style/Widget.Dsha.CardLabel"
+                android:text="行为选项" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="端口（默认 3080）" />
+            <CheckBox
+                android:id="@+id/config_confirm_shell"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/accent"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:text="危险 Shell 操作需确认（删除/格式化/卸载/重启等）"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
 
-        <EditText
-            android:id="@+id/config_port"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="3080"
-            android:inputType="number" />
+            <CheckBox
+                android:id="@+id/config_check_update"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/accent"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:text="启动时检查更新"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="模型（默认 deepseek-v4-flash）" />
+            <CheckBox
+                android:id="@+id/config_desktop_mode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/accent"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:text="电脑模式（WebUI 预览用桌面浏览器标识）"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
 
-        <EditText
-            android:id="@+id/config_model"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="deepseek-v4-flash" />
+            <CheckBox
+                android:id="@+id/config_gecko_core"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/accent"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:text="内置浏览器内核（系统 WebView 过旧时使用，加载稍慢）"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="沙箱权限模式" />
+            <CheckBox
+                android:id="@+id/config_lan_mode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/accent"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:text="局域网访问（同网段设备可打开 WebUI，注意安全）"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
 
-        <Spinner
-            android:id="@+id/config_mode"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
-
-        <CheckBox
-            android:id="@+id/config_confirm_shell"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="危险 Shell 操作需确认（删除/格式化/卸载/重启等）" />
-
-        <CheckBox
-            android:id="@+id/config_check_update"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="启动时检查更新" />
-
-        <CheckBox
-            android:id="@+id/config_desktop_mode"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="电脑模式（WebUI 预览用桌面浏览器标识）" />
-
-        <CheckBox
-            android:id="@+id/config_gecko_core"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="内置浏览器内核（系统 WebView 过旧时使用，加载稍慢）" />
-
-        <CheckBox
-            android:id="@+id/config_lan_mode"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="局域网访问（同网段设备可打开 WebUI，注意安全）" />
-
-        <CheckBox
-            android:id="@+id/config_rc6"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:visibility="gone"
-            android:text="deepseek-harness：默认最新 RC（@deepseek-ai/dsh@rc）" />
+            <CheckBox
+                android:id="@+id/config_rc6"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="deepseek-harness：默认最新 RC（@deepseek-ai/dsh@rc）"
+                android:visibility="gone" />
+        </LinearLayout>
 
         <Button
             android:id="@+id/config_save"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="12dp"
             android:text="保存配置" />
 
         <TextView
@@ -127,32 +163,36 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:lineSpacingExtra="3dp"
-            android:textSize="13sp"
-            android:text="ADB 设备通道：未检测（需先安装环境）" />
+            android:text="ADB 设备通道：未检测（需先安装环境）"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
 
         <Button
             android:id="@+id/config_adb_pair"
+            style="@style/Widget.Dsha.Button.Secondary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="🔐 ADB 无线配对（免 Shizuku）" />
+            android:text="ADB 无线配对（免 Shizuku）" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:lineSpacingExtra="3dp"
-            android:textSize="12sp"
-            android:text="启用后 agent 可直连设备 adbd（uid=2000）执行命令；也可在常驻通知卡「🔐 输码配对」就地输入。手机：设置→开发者选项→无线调试→「使用配对码配对设备」。" />
+            android:text="启用后 agent 可直连设备 adbd 执行命令。手机：设置→开发者选项→无线调试→「使用配对码配对设备」。"
+            android:textColor="@color/text_muted"
+            android:textSize="12sp" />
 
         <TextView
             android:id="@+id/config_repo_link"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
+            android:fontFamily="monospace"
             android:gravity="center"
             android:text="DSHA"
-            android:textColor="#999999"
-            android:textSize="12sp" />
+            android:textColor="@color/text_muted"
+            android:textSize="11.5sp" />
     </LinearLayout>
 </ScrollView>

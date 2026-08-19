@@ -1,6 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#4D6BFE</color>
-    <color name="primary_dark">#3B55E0</color>
-    <color name="accent">#22C55E</color>
+    <!-- 亮色：由 a.html 暗色稿反推，保证对比度 -->
+    <color name="bg">#F4F6FA</color>
+    <color name="surface">#F7F8FB</color>
+    <color name="card">#FFFFFF</color>
+    <color name="raised">#EEF1F6</color>
+    <color name="inset">#E3E8F0</color>
+    <color name="line">#E2E6EE</color>
+    <color name="line2">#CDD4E0</color>
+    <color name="text">#1A2230</color>
+    <color name="text_secondary">#4A5568</color>
+    <color name="text_muted">#7A8494</color>
+    <color name="accent">#3D6FD4</color>
+    <color name="accent_on">#FFFFFF</color>
+    <color name="accent_dim">#1F3D6FD4</color>
+    <color name="ok">#2F9E64</color>
+    <color name="ok_dim">#1A2F9E64</color>
+    <color name="warn">#C48A1A</color>
+    <color name="warn_dim">#1AC48A1A</color>
+    <color name="err">#C45A5A</color>
+    <color name="err_dim">#1AC45A5A</color>
+    <color name="preview">#F0F3F8</color>
+    <color name="logo_top">#E8EEF8</color>
+    <color name="logo_bot">#D5DFF0</color>
+    <color name="primary">#3D6FD4</color>
+    <color name="primary_dark">#2E5BB8</color>
+    <color name="accent_legacy">#2F9E64</color>
+    <color name="nav_scrim">#E6F7F8FB</color>
 </resources>

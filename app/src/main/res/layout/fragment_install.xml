@@ -1,143 +1,216 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/surface">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="24dp">
+        android:padding="18dp">
 
         <TextView
+            android:id="@+id/sub_back"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="安装模块"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/install_status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:lineSpacingExtra="4dp"
-            android:textSize="16sp" />
-
-        <ProgressBar
-            android:id="@+id/install_progressbar"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:max="100"
+            android:paddingBottom="10dp"
+            android:text="‹ 返回"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp"
             android:visibility="gone" />
 
-        <TextView
-            android:id="@+id/install_progress"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textSize="14sp" />
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="18dp">
 
-        <TextView
-            android:id="@+id/install_error"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:background="#11FF0000"
-            android:padding="12dp"
-            android:textColor="#CC0000"
-            android:textIsSelectable="true"
-            android:textSize="13sp"
-            android:visibility="gone" />
+            <TextView
+                android:id="@+id/install_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:lineSpacingExtra="4dp"
+                android:text="环境未安装"
+                android:textColor="@color/text"
+                android:textSize="15sp"
+                android:textStyle="bold" />
 
-        <Button
-            android:id="@+id/install_copy"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="复制报错内容"
-            android:visibility="gone" />
+            <ProgressBar
+                android:id="@+id/install_progressbar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="6dp"
+                android:layout_marginTop="14dp"
+                android:max="100"
+                android:progressBackgroundTint="@color/raised"
+                android:progressTint="@color/accent"
+                android:visibility="gone" />
 
-        <Button
-            android:id="@+id/install_crash"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="查看崩溃日志"
-            android:visibility="gone" />
+            <TextView
+                android:id="@+id/install_progress"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:fontFamily="monospace"
+                android:textColor="@color/text_muted"
+                android:textSize="11sp" />
 
-        <Button
-            android:id="@+id/install_btn"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="一键安装" />
+            <TextView
+                android:id="@+id/install_error"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_btn_danger"
+                android:padding="12dp"
+                android:textColor="@color/err"
+                android:textIsSelectable="true"
+                android:textSize="13sp"
+                android:visibility="gone" />
 
-        <TextView
-            android:id="@+id/install_steps"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:lineSpacingExtra="4dp"
-            android:textSize="14sp" />
+            <Button
+                android:id="@+id/install_btn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="15dp"
+                android:text="一键安装" />
+        </LinearLayout>
 
-        <Button
-            android:id="@+id/install_step1"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="① Linux 环境（rootfs）" />
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="18dp">
 
-        <Button
-            android:id="@+id/install_step2"
+            <TextView
+                style="@style/Widget.Dsha.CardLabel"
+                android:text="分步安装 · 每步可单独重装 / 更新" />
+
+            <TextView
+                android:id="@+id/install_steps"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:lineSpacingExtra="4dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/install_step1"
+                style="@style/Widget.Dsha.Button.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="① Linux 环境（rootfs）" />
+
+            <Button
+                android:id="@+id/install_step2"
+                style="@style/Widget.Dsha.Button.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="② 基础工具（apt）" />
+
+            <Button
+                android:id="@+id/install_step3"
+                style="@style/Widget.Dsha.Button.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="③ Node.js" />
+
+            <Button
+                android:id="@+id/install_step4"
+                style="@style/Widget.Dsha.Button.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="④ Node 附加工具（pnpm/node-gyp）" />
+
+            <Button
+                android:id="@+id/install_step5"
+                style="@style/Widget.Dsha.Button.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="⑤ deepseek-harness" />
+
+            <Button
+                android:id="@+id/install_step6"
+                style="@style/Widget.Dsha.Button.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="⑥ 安全与补丁" />
+        </LinearLayout>
+
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="② 基础工具（apt）" />
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="18dp">
 
-        <Button
-            android:id="@+id/install_step3"
+            <TextView
+                style="@style/Widget.Dsha.CardLabel"
+                android:text="安装日志" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/install_copy"
+                    style="@style/Widget.Dsha.Button.Secondary"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:text="复制报错内容"
+                    android:visibility="gone" />
+
+                <Button
+                    android:id="@+id/install_crash"
+                    style="@style/Widget.Dsha.Button.Secondary"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="查看崩溃日志"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="③ Node.js" />
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="18dp">
 
-        <Button
-            android:id="@+id/install_step4"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="④ Node 附加工具（pnpm/node-gyp）" />
+            <TextView
+                style="@style/Widget.Dsha.CardLabel"
+                android:text="说明" />
 
-        <Button
-            android:id="@+id/install_step5"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="⑤ deepseek-harness" />
-
-        <Button
-            android:id="@+id/install_step6"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="⑥ 安全与补丁" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:lineSpacingExtra="4dp"
+                android:text="安装流程分 6 步，可单独安装 / 重装 / 更新：\n① Linux 环境：proot + Ubuntu rootfs\n② 基础工具：apt 换国内源 + curl/git/python3/make/xz\n③ Node.js：v24 arm64\n④ Node 附加工具：pnpm / node-gyp\n⑤ deepseek-harness：预构建包或源码\n⑥ 安全与补丁\n\n每个下载源都有多个镜像，自动测速选最快。全程约 5~15 分钟，请保持网络与屏幕常亮。"
+                android:textColor="@color/text_muted"
+                android:textSize="11.5sp" />
+        </LinearLayout>
 
         <Button
             android:id="@+id/install_uninstall"
+            style="@style/Widget.Dsha.Button.Danger"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
+            android:layout_marginTop="12dp"
             android:text="清除环境" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:lineSpacingExtra="4dp"
-            android:text="安装流程（分 6 步，可单独安装/重装/更新）：\n① Linux 环境（rootfs）\n② 基础工具（apt 国内源 + curl/git/python3 等）\n③ Node.js\n④ Node 附加工具（pnpm/node-gyp）\n⑤ deepseek-harness（npm 最新 RC：@deepseek-ai/dsh@rc）\n⑥ 安全与补丁（守卫/危险命令确认）\n\n每个下载源都有多个镜像，自动测速选最快；\n每一步都能单独重装，比如只更新 deepseek-harness 就点第 5 步。\nharness 默认安装 npm 最新 RC 版（@deepseek-ai/dsh@rc），无需手动选择。\n\n全程约 5~15 分钟，请保持网络与屏幕常亮。"
-            android:textSize="13sp" />
     </LinearLayout>
 </ScrollView>

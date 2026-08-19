@@ -1,9 +1,127 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.DeepseekHarness" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="colorPrimary">@color/primary</item>
-        <item name="colorOnPrimary">@android:color/white</item>
-        <item name="colorPrimaryContainer">#E3E8FF</item>
-        <item name="colorSecondary">@color/primary_dark</item>
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">@color/accent_on</item>
+        <item name="colorPrimaryContainer">@color/accent_dim</item>
+        <item name="colorOnPrimaryContainer">@color/accent</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorOnSecondary">@color/accent_on</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorOutline">@color/line</item>
+        <item name="android:colorBackground">@color/surface</item>
+        <item name="android:statusBarColor">@color/surface</item>
+        <item name="android:navigationBarColor">@color/surface</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:textColorHint">@color/text_muted</item>
+        <item name="materialButtonStyle">@style/Widget.Dsha.Button</item>
+        <item name="alertDialogTheme">@style/Theme.Dsha.Dialog</item>
+        <item name="bottomNavigationStyle">@style/Widget.Dsha.BottomNav</item>
+    </style>
+
+    <style name="Theme.Dsha.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurface">@color/raised</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="android:background">@color/raised</item>
+    </style>
+
+    <style name="Widget.Dsha.Button" parent="Widget.Material3.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:minHeight">44dp</item>
+        <item name="cornerRadius">14dp</item>
+        <item name="backgroundTint">@color/accent</item>
+        <item name="android:textColor">@color/accent_on</item>
+        <item name="rippleColor">@color/accent_dim</item>
+    </style>
+
+    <style name="Widget.Dsha.Button.Secondary" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:minHeight">44dp</item>
+        <item name="cornerRadius">14dp</item>
+        <item name="strokeColor">@color/line</item>
+        <item name="backgroundTint">@color/raised</item>
+        <item name="android:textColor">@color/text_secondary</item>
+    </style>
+
+    <style name="Widget.Dsha.Button.Danger" parent="Widget.Material3.Button.TextButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:minHeight">44dp</item>
+        <item name="cornerRadius">14dp</item>
+        <item name="backgroundTint">@color/err_dim</item>
+        <item name="android:textColor">@color/err</item>
+    </style>
+
+    <style name="Widget.Dsha.BottomNav" parent="Widget.Material3.BottomNavigationView">
+        <item name="backgroundTint">@color/nav_scrim</item>
+        <item name="itemIconTint">@color/nav_item_color</item>
+        <item name="itemTextColor">@color/nav_item_color</item>
+        <item name="itemRippleColor">@color/accent_dim</item>
+        <item name="itemActiveIndicatorStyle">@style/Widget.Dsha.NavIndicator</item>
+        <item name="elevation">0dp</item>
+    </style>
+
+    <style name="Widget.Dsha.NavIndicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:color">@color/accent_dim</item>
+    </style>
+
+    <style name="Widget.Dsha.WelcomeItem">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:padding">15dp</item>
+        <item name="android:layout_marginBottom">10dp</item>
+        <item name="android:background">@drawable/bg_card</item>
+    </style>
+
+    <style name="Widget.Dsha.WelcomeIcon">
+        <item name="android:layout_width">36dp</item>
+        <item name="android:layout_height">36dp</item>
+        <item name="android:layout_marginEnd">14dp</item>
+        <item name="android:background">@drawable/bg_icon</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textColor">@color/accent</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="Widget.Dsha.FieldLabel">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginBottom">7dp</item>
+        <item name="android:textColor">@color/text_muted</item>
+        <item name="android:textSize">12.5sp</item>
+    </style>
+
+    <style name="Widget.Dsha.Input">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">46dp</item>
+        <item name="android:background">@drawable/bg_input</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingEnd">14dp</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textColorHint">@color/text_muted</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+
+    <style name="Widget.Dsha.CardLabel">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginBottom">12dp</item>
+        <item name="android:letterSpacing">0.12</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:textColor">@color/text_muted</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
     </style>
 </resources>
