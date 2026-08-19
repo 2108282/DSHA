@@ -1,5 +1,7 @@
 # DSHA
 
+> 🤖 Agent / AI 开发者请先读 [AGENTS.md](AGENTS.md)（英文，概述项目结构、启动契约与约定）。
+
 **DeepSeek Harness 安卓启动器** —— 在手机上跑 deepseek-harness 的一体化方案，无需 Termux、无需 ROOT。
 
 内置 proot + Ubuntu rootfs，一键（或分步）安装 deepseek-harness，内嵌 WebView 直接使用 Web UI。
