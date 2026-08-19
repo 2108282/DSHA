@@ -54,19 +54,6 @@
             android:textSize="12sp" />
 
         <TextView
-            android:id="@+id/btnFilterCompat"
-            android:layout_width="wrap_content"
-            android:layout_height="38dp"
-            android:layout_marginStart="8dp"
-            android:background="@drawable/bg_tab"
-            android:gravity="center"
-            android:paddingStart="13dp"
-            android:paddingEnd="13dp"
-            android:text="仅兼容"
-            android:textColor="@color/text_muted"
-            android:textSize="12sp" />
-
-        <TextView
             android:id="@+id/btnRefresh"
             android:layout_width="38dp"
             android:layout_height="38dp"

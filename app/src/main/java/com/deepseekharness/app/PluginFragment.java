@@ -116,17 +116,6 @@ public class PluginFragment extends Fragment {
         });
         btnSort.setOnClickListener(v -> showSortMenu(btnSort));
 
-        // 仅兼容开关：滤掉 ❌不兼容 条目（⏳待定/未测 保留）
-        final TextView btnFilterCompat = view.findViewById(R.id.btnFilterCompat);
-        btnFilterCompat.setOnClickListener(v -> {
-            filterIncompat = !filterIncompat;
-            btnFilterCompat.setBackgroundResource(filterIncompat ? R.drawable.bg_tab_on : R.drawable.bg_tab);
-            btnFilterCompat.setTextColor(requireContext().getColor(
-                    filterIncompat ? R.color.primary : R.color.text_muted));
-            btnFilterCompat.setText(filterIncompat ? "仅兼容✓" : "仅兼容");
-            if (mode == Mode.MARKET) refreshMarketView();
-        });
-
         // 强制刷新市场缓存（清缓存 → 重新拉网络）
         TextView btnRefresh = view.findViewById(R.id.btnRefresh);
         if (btnRefresh != null) {
@@ -158,14 +147,24 @@ public class PluginFragment extends Fragment {
         tab.setTextColor(requireContext().getColor(on ? R.color.primary : R.color.text_muted));
     }
 
-    /** 排序下拉菜单：点一下展开选择，不用一直点循环 */
+    /** 排序下拉菜单：点一下展开选择，不用一直点循环。
+     *  菜单里同时提供「仅显示兼容」勾选项（过滤 ❌不兼容，⏳待定/未测保留）。 */
     private void showSortMenu(android.view.View anchor) {
         final String[] options = {"⭐ Star 数", "🔤 名称 A-Z"};
         android.widget.PopupMenu pm = new android.widget.PopupMenu(requireContext(), anchor);
         for (int i = 0; i < options.length; i++) {
             pm.getMenu().add(0, i, 0, options[i]);
         }
+        // 分隔线 + 过滤开关（勾选态与 filterIncompat 同步）
+        pm.getMenu().add(0, 100, 0, "仅显示兼容");
+        pm.getMenu().getItem(2).setCheckable(true).setChecked(filterIncompat);
         pm.setOnMenuItemClickListener(item -> {
+            if (item.getItemId() == 100) {
+                filterIncompat = !filterIncompat;
+                item.setChecked(filterIncompat);
+                if (mode == Mode.MARKET) refreshMarketView();
+                return true;
+            }
             sortMode = item.getItemId();
             ((android.widget.TextView) anchor).setText(options[sortMode].replace("排序：", ""));
             if (mode == Mode.MARKET) refreshMarketView();
