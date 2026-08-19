@@ -26,10 +26,6 @@ tasks.configureEach { t ->
     if (t.name == "preBuild" || t.name == "preDebugBuild") {
         t.dependsOn("protectOfflineBundle")
     }
-    // 避免 CI 命中旧资源缓存（曾把 Widget.Dsha 错误残留下来）
-    if (t.name.toLowerCase().contains("resource") || t.name.toLowerCase().contains("aapt")) {
-        t.outputs.upToDateWhen { false }
-    }
 }
 
 android {
