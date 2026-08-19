@@ -71,12 +71,12 @@ public class LaunchFragment extends Fragment {
         }
     };
 
-    /** 初始化预览内核：强制内置 GeckoView（更稳、功能全）；异常回退系统 WebView */
+    /** 初始化预览内核：默认系统 WebView；只有用户打开「内置浏览器内核」才上 Gecko。 */
     @SuppressLint("SetJavaScriptEnabled")
     private void initPreview() {
         android.content.SharedPreferences prefs = requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
-        boolean useGecko = true; // 强制 GeckoView（不读开关）
+        boolean useGecko = prefs.getBoolean("gecko_core", false);
         boolean desktopMode = prefs.getBoolean("desktop_mode", false);
         previewContainer.removeAllViews();
         if (useGecko) {
@@ -247,17 +247,18 @@ public class LaunchFragment extends Fragment {
         stopBtn = view.findViewById(R.id.launch_stop);
         controls = view.findViewById(R.id.launch_controls);
 
-        initPreview();
-        // 未启动 WebUI 时隐藏空预览容器，避免首次进入即白屏
         if (previewContainer != null) previewContainer.setVisibility(View.GONE);
-        // 自动后台预启动：进入启动页后 1.5s 静默拉起 web（环境就绪且用户未手动停止时）→ 点启动秒开
-        mainHandler.postDelayed(() -> c.maybePrewarmWeb(), 1500);
+        mainHandler.postDelayed(() -> new Thread(() -> {
+            try {
+                c.ensureWatchdogFiles();
+            } catch (Throwable ignored) {
+            }
+            try {
+                c.maybePrewarmWeb();
+            } catch (Throwable ignored) {
+            }
+        }, "dsha-prewarm").start(), 1500);
         updateLanAddr();
-        // 刷新看门狗命令文件（覆盖历史坏命令，避免旧 watchdog 用空端口 restart 反复失败）
-        try {
-            c.ensureWatchdogFiles();
-        } catch (Throwable ignored) {
-        }
 
         c.addStateListener(stateListener);
         requireActivity().getOnBackPressedDispatcher().addCallback(getViewLifecycleOwner(), backCallback);
@@ -309,7 +310,7 @@ public class LaunchFragment extends Fragment {
             }
         } else if (goExtractIfNeeded()) {
             statusText.setText("正在打开内置环境解压页…");
-        } else if (c.isHarnessInstalled()) {
+        } else if (c.getProot().isOfflineExtracted()) {
             statusText.setText("环境已就绪，点「启动」即可。");
         } else {
             statusText.setText("环境未就绪。若刚装好 APK，请杀掉进程再打开一次以进入解压页。");
@@ -389,6 +390,7 @@ public class LaunchFragment extends Fragment {
         if (previewBusy) return;
         previewBusy = true;
         try {
+            if (webView == null && geckoSession == null) initPreview();
             if (previewContainer != null) previewContainer.setVisibility(View.VISIBLE);
             String url = "http://127.0.0.1:" + c.getPort() + "/";
             loadPreview(url);

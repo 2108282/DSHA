@@ -30,7 +30,7 @@ public class ConfigFragment extends Fragment {
     private HarnessController c;
     private EditText apiKeyEdit, portEdit, modelEdit;
     private Spinner modeSpinner;
-    private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb;
+    private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb;
     private Button saveBtn;
     private TextView repoLink;
 
@@ -53,6 +53,8 @@ public class ConfigFragment extends Fragment {
         desktopModeCb = view.findViewById(R.id.config_desktop_mode);
         lanModeCb = view.findViewById(R.id.config_lan_mode);
         rc6Cb = view.findViewById(R.id.config_rc6);
+        geckoCb = view.findViewById(R.id.config_gecko_core);
+        adbCb = view.findViewById(R.id.config_adb_enable);
         saveBtn = view.findViewById(R.id.config_save);
         repoLink = view.findViewById(R.id.config_repo_link);
         SubPageBack.bind(this, view);
@@ -67,31 +69,45 @@ public class ConfigFragment extends Fragment {
                             .commit());
         }
 
-        // ===== ADB 无线配对入口（通知卡片输码，免 Shizuku，参考 Shizuku 无线配对） =====
         Button adbPairBtn = view.findViewById(R.id.config_adb_pair);
         if (adbPairBtn != null) {
             adbPairBtn.setOnClickListener(v -> {
+                if (!DeviceBridgeService.isAdbEnabled(requireContext())) {
+                    Toast.makeText(requireContext(), "先勾选「启用 ADB」并保存", Toast.LENGTH_LONG).show();
+                    return;
+                }
                 try {
+                    DeviceBridgeService.apply(requireContext());
                     showAdbPairNotification();
                 } catch (Throwable t) {
                     Toast.makeText(requireContext(), "无法打开 ADB 配对：" + t.getMessage(), Toast.LENGTH_LONG).show();
                 }
             });
         }
-        // ADB 状态显示（后台查询，不卡 UI）
-        TextView adbStatus = view.findViewById(R.id.config_adb_status);
-        if (adbStatus != null) {
-            new Thread(() -> {
-                try {
-                    String s = AdbBridge.status(c.getProot());
-                    final String st = (s == null || s.trim().isEmpty() || s.contains("ERROR"))
-                            ? "ADB 设备通道：未就绪（可点下方按钮无线配对）"
-                            : "ADB 设备通道：" + s.trim().substring(0, Math.min(60, s.trim().length()));
-                    if (isAdded()) requireActivity().runOnUiThread(() -> adbStatus.setText(st));
-                } catch (Throwable ignored) {
-                }
-            }).start();
+        refreshAdbStatus();
+    }
+
+    private void refreshAdbStatus() {
+        TextView adbStatus = getView() != null ? getView().findViewById(R.id.config_adb_status) : null;
+        if (adbStatus == null) return;
+        if (!DeviceBridgeService.isAdbEnabled(requireContext())) {
+            adbStatus.setText("ADB 已关闭。不用无线调试就保持关闭。");
+            return;
         }
+        adbStatus.setText("ADB 已启用，正在查询状态…");
+        new Thread(() -> {
+            try {
+                String s = AdbBridge.status(c.getProot());
+                final String st = (s == null || s.trim().isEmpty() || s.contains("ERROR"))
+                        ? "ADB 已启用：未就绪（可点下方按钮无线配对）"
+                        : "ADB 已启用：" + s.trim().substring(0, Math.min(60, s.trim().length()));
+                if (isAdded()) requireActivity().runOnUiThread(() -> {
+                    TextView tv = getView() != null ? getView().findViewById(R.id.config_adb_status) : null;
+                    if (tv != null) tv.setText(st);
+                });
+            } catch (Throwable ignored) {
+            }
+        }).start();
     }
 
     /** 构建「输入配对码」通知卡（RemoteInput，参考 Shizuku 无线配对交互）：
@@ -154,8 +170,15 @@ public class ConfigFragment extends Fragment {
                     .putBoolean("check_update", checkUpdateCb.isChecked())
                     .putBoolean("desktop_mode", desktopModeCb.isChecked())
                     .putBoolean("lan_mode", lanModeCb.isChecked())
-                    .putBoolean("use_rc6", rc6Cb.isChecked()).apply();
-            Toast.makeText(requireContext(), "配置已保存", Toast.LENGTH_SHORT).show();
+                    .putBoolean("use_rc6", rc6Cb.isChecked())
+                    .putBoolean("gecko_core", geckoCb != null && geckoCb.isChecked())
+                    .putBoolean(DeviceBridgeService.PREF_ADB, adbCb != null && adbCb.isChecked())
+                    .apply();
+            DeviceBridgeService.apply(requireContext());
+            refreshAdbStatus();
+            Toast.makeText(requireContext(),
+                    (adbCb != null && adbCb.isChecked()) ? "配置已保存（ADB 已开）" : "配置已保存（ADB 已关）",
+                    Toast.LENGTH_SHORT).show();
         });
 
         // 关于入口：点版本号弹「关于」对话框（GitHub / QQ 群）
@@ -195,6 +218,14 @@ public class ConfigFragment extends Fragment {
         lanModeCb.setChecked(requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false));
+        if (geckoCb != null) {
+            geckoCb.setChecked(requireContext()
+                    .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .getBoolean("gecko_core", false));
+        }
+        if (adbCb != null) {
+            adbCb.setChecked(DeviceBridgeService.isAdbEnabled(requireContext()));
+        }
         if (repoLink != null) {
             try {
                 String v = requireContext().getPackageManager()

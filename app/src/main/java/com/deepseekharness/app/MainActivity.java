@@ -72,19 +72,13 @@ public class MainActivity extends AppCompatActivity {
         requestBatteryOptimization();
         maybeShowBackupReminder();
         maybeCheckUpdate();
-        // 拉起设备桥服务（普通后台服务，无 FGS 崩溃风险）：
-        // 3090 桥 + Shizuku + ADB 预热 + 配对弹窗监听/通知输码配对
-        ensureDeviceBridge();
+        // ADB 默认关。只有用户在配置里勾选后才会拉设备桥。
+        DeviceBridgeService.apply(this);
 
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
         View about = findViewById(R.id.btn_about);
         if (about != null) {
             about.setOnClickListener(v -> AboutDialog.show(this));
-        }
-
-        if (savedInstanceState == null) {
-            switchFragment(new LaunchFragment());
-            setAppTitle("启动");
         }
 
         nav.setOnItemSelectedListener(item -> {
@@ -108,7 +102,9 @@ public class MainActivity extends AppCompatActivity {
             switchFragment(f);
             return true;
         });
-        nav.setSelectedItemId(R.id.nav_launch);
+        if (savedInstanceState == null) {
+            nav.setSelectedItemId(R.id.nav_launch);
+        }
     }
 
     private void switchFragment(Fragment f) {
@@ -139,18 +135,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /** 拉起设备桥服务（普通后台服务，不 startForeground → 永不触发 FGS 杀进程崩溃） */
-    private void ensureDeviceBridge() {
-        if (isFinishing() || isDestroyed()) return;
-        if (DeviceBridgeService.isRunning()) return;
-        try {
-            startService(new Intent(this, DeviceBridgeService.class));
-            android.util.Log.i("DSHA", "device bridge started");
-        } catch (Throwable e) {
-            android.util.Log.e("DSHA", "start device bridge failed: " + e, e);
-        }
-    }
-
     @Override
     protected void onResume() {
         super.onResume();
@@ -166,10 +150,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void requestBatteryOptimization() {
-        // 电池优化白名单（保活更稳，跳转系统设置让用户一键允许）
         try {
+            SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
+            if (prefs.getBoolean("asked_battery", false)) return;
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                prefs.edit().putBoolean("asked_battery", true).apply();
                 Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
                 i.setData(Uri.parse("package:" + getPackageName()));
                 startActivity(i);
