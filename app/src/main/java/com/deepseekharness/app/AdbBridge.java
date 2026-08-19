@@ -71,9 +71,13 @@ public final class AdbBridge {
         return r != null && r.contains("YES");
     }
 
-    /** 单次配对。pairPort 为空时脚本内尝试 mdns 发现；connectPort 默认 5555 */
-    public static String pair(ProotBootstrap proot, String code, String pairPort, String connectPort) {
+    /** 单次配对。pairPort 为空时脚本内尝试 mdns 发现；connectPort 默认 5555；
+     *  host 为 App mDNS 解析出的真实 IP（部分 ROM 配对服务只监听 WiFi 接口）。 */
+    public static String pair(ProotBootstrap proot, String code, String pairPort, String connectPort, String host) {
         String c = "python3 /root/.dsh/adb-pair.py --code '" + esc(code) + "'";
+        if (host != null && !host.trim().isEmpty()) {
+            c += " --host " + host.trim();
+        }
         if (pairPort != null && !pairPort.trim().isEmpty()) {
             c += " --port " + pairPort.trim();
         }

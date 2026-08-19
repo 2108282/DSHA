@@ -36,6 +36,8 @@ public class DeviceBridgeService extends Service {
 
     /** 最近一次发现的配对端口（供 AdbPairReceiver 秒级直用） */
     public static volatile int pairPort = 0;
+    /** 最近一次发现的配对服务地址（部分 ROM 配对服务只监听 WiFi 接口 IP） */
+    public static volatile String pairHost = "";
 
     public static boolean isAdbEnabled(Context ctx) {
         return ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
@@ -215,7 +217,20 @@ public class DeviceBridgeService extends Service {
                             @Override
                             public void onServiceResolved(NsdServiceInfo serviceInfo) {
                                 int port = serviceInfo.getPort();
-                                if (port > 0) onPairServiceFound(port);
+                                if (port > 0) {
+                                    // 缓存真实 host：部分 ROM 配对服务只监听 WiFi 接口，127.0.0.1 连不上
+                                    try {
+                                        if (serviceInfo.getHost() != null) {
+                                            String h = serviceInfo.getHost().getHostAddress();
+                                            if (h != null) {
+                                                if (h.startsWith("[") && h.endsWith("]")) h = h.substring(1, h.length() - 1);
+                                                pairHost = h;
+                                            }
+                                        }
+                                    } catch (Throwable ignored) {
+                                    }
+                                    onPairServiceFound(port);
+                                }
                             }
                         });
                     } catch (Throwable ignored) {

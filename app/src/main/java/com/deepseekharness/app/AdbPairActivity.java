@@ -168,7 +168,7 @@ public class AdbPairActivity extends Activity {
             }
             String pp = discoveredPairPort > 0 ? String.valueOf(discoveredPairPort) : "";
             String cp = discoveredConnPort > 0 ? String.valueOf(discoveredConnPort) : "";
-            return AdbBridge.pair(c.getProot(), code, pp, cp);
+            return AdbBridge.pair(c.getProot(), code, pp, cp, DeviceBridgeService.pairHost);
         } catch (Throwable e) {
             return "ERROR: " + e;
         }

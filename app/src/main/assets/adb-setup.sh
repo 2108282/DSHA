@@ -9,7 +9,8 @@ echo "== [1/4] 校验 python3"
 python3 --version || { echo "NO_PYTHON: 请先在安装页装好基础工具"; exit 1; }
 
 echo "== [2/4] 安装 Python 依赖 (adb_shell_wifi / spake2-cffi ...)"
-python3 -c "import adb_shell_wifi, spake2_cffi" 2>/dev/null && echo "deps 已就绪" || {
+# 依赖自检：新版 adb_shell_wifi(0.5.0+) 从 spake2.spake2 导入（spake2-cffi 的模块名是 spake2）
+python3 -c "import adb_shell_wifi; from spake2.spake2 import Spake2_Alice, Spake2_Bob" 2>/dev/null && echo "deps 已就绪" || {
   python3 -m pip --version >/dev/null 2>&1 || python3 -m ensurepip >/dev/null 2>&1 || true
   python3 -m pip install --break-system-packages \
       adb_shell_wifi pyopenssl spake2-cffi aiofiles async_timeout zeroconf \
@@ -17,7 +18,7 @@ python3 -c "import adb_shell_wifi, spake2_cffi" 2>/dev/null && echo "deps 已就
     || python3 -m pip install --system \
       adb_shell_wifi pyopenssl spake2-cffi aiofiles async_timeout zeroconf 2>&1 | tail -3
 }
-python3 -c "import adb_shell_wifi, spake2_cffi" 2>/dev/null || {
+python3 -c "import adb_shell_wifi; from spake2.spake2 import Spake2_Alice, Spake2_Bob" 2>/dev/null || {
   echo "DEPS_FAILED: 依赖安装失败，请检查网络/镜像"; exit 1
 }
 
