@@ -81,6 +81,7 @@ public class MainActivity extends AppCompatActivity {
         requestBatteryOptimization();
         maybeShowBackupReminder();
         maybeCheckUpdate();
+        maybeRunUpgradeMigration();
         // ADB 默认关。只有用户在配置里勾选后才会拉设备桥。
         DeviceBridgeService.apply(this);
 
@@ -197,6 +198,119 @@ public class MainActivity extends AppCompatActivity {
                     .setNegativeButton("取消", (d, w) -> prefs.edit()
                             .putString("ignored_version", tag).apply())
                     .show());
+        }).start();
+    }
+
+    // ================= 升级迁移：检测 → 自动备份 → 恢复 =================
+    // 覆盖安装（prefs/rootfs 保留）时：版本一变就自动备份，防止后续误操作丢数据；
+    // 卸载重装 / 数据被清（prefs 没了、rootfs 全新、.dsh 为空）时：只要外部还有历史备份就提示恢复。
+    private String currentVersionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void maybeRunUpgradeMigration() {
+        final SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
+        final String current = currentVersionName();
+        if (current == null) return;
+        final String last = prefs.getString("last_version", "");
+        if (current.equals(last)) {
+            // 版本没变：仍可能是重装后 prefs 恰好同版本，交给恢复检查兜底
+            maybeOfferRestore(prefs);
+            return;
+        }
+        if (last.isEmpty()) {
+            // 首次运行（或卸载重装后被清空）：建立基线
+            prefs.edit().putString("last_version", current).apply();
+            HarnessController c = HarnessController.get(this);
+            boolean hasData = c.getProot().isInstalled()
+                    && new java.io.File(c.getProot().getRootfsDir(), "root/.dsh").isDirectory();
+            if (hasData && !prefs.getBoolean("migration_seeded", false)) {
+                // 老用户在旧版本上没有 last_version，但已有 .dsh 数据：升级到本版时补一次初始备份
+                final String seed = current;
+                new Thread(() -> {
+                    try {
+                        String path = BackupManager.autoBackupForUpgrade(
+                                MainActivity.this, HarnessController.get(MainActivity.this), "old", seed);
+                        if (path != null) {
+                            getSharedPreferences("deepseekharness", MODE_PRIVATE)
+                                    .edit().putBoolean("migration_seeded", true).apply();
+                            runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                                    "检测到升级到 v" + seed + "，已自动备份数据", Toast.LENGTH_SHORT).show());
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }).start();
+                return;
+            }
+            maybeOfferRestore(prefs);
+            return;
+        }
+        // 检测到升级：先记版本，再后台自动备份当前数据
+        prefs.edit().putString("last_version", current).apply();
+        final String from = last;
+        new Thread(() -> {
+            try {
+                HarnessController c = HarnessController.get(MainActivity.this);
+                if (!c.getProot().isInstalled()) return;
+                if (!new java.io.File(c.getProot().getRootfsDir(), "root/.dsh").isDirectory()) return;
+                String path = BackupManager.autoBackupForUpgrade(MainActivity.this, c, from, current);
+                if (path != null) {
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                            "检测到升级 v" + from + " → v" + current + "，已自动备份数据", Toast.LENGTH_SHORT).show());
+                }
+            } catch (Exception ignored) {
+            }
+        }).start();
+    }
+
+    /** rootfs 内没有 .dsh（全新/数据丢失）且外部存在历史备份时，提示恢复 */
+    private void maybeOfferRestore(SharedPreferences prefs) {
+        final String current = currentVersionName();
+        if (current == null || prefs.getBoolean("restore_ignored_" + current, false)) return;
+        HarnessController c = HarnessController.get(this);
+        try {
+            if (c.getProot().isInstalled()
+                    && new java.io.File(c.getProot().getRootfsDir(), "root/.dsh").isDirectory()) {
+                return; // 已有数据，不需要也不应覆盖
+            }
+        } catch (Exception e) {
+            return;
+        }
+        final String ref = BackupManager.findLatestSnapshot(this);
+        if (ref == null) return;
+        new AlertDialog.Builder(this)
+                .setTitle("发现历史数据备份")
+                .setMessage("检测到 Download/DSHA 中存在历史备份。\n"
+                        + "是否在首次使用前恢复配置与对话记录？")
+                .setPositiveButton("恢复", (d, w) -> doRestore(ref))
+                .setNegativeButton("暂不", (d, w) -> prefs.edit()
+                        .putBoolean("restore_ignored_" + current, true).apply())
+                .show();
+    }
+
+    /** 后台把备份解压回 rootfs，完成后刷新 Web UI 配置 */
+    private void doRestore(String ref) {
+        Toast.makeText(this, "正在恢复数据，请稍候…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            boolean ok = BackupManager.restoreSnapshotToRootfs(this, HarnessController.get(this), ref);
+            runOnUiThread(() -> {
+                if (ok) {
+                    HarnessController.get(this).bumpWebEpoch();
+                    // prefs 里 last_version 是新版基线，标记已恢复过，避免再次弹出
+                    String cur = currentVersionName();
+                    if (cur != null) {
+                        getSharedPreferences("deepseekharness", MODE_PRIVATE)
+                                .edit().putBoolean("restore_ignored_" + cur, true).apply();
+                    }
+                    Toast.makeText(this, "数据已恢复", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(this, "恢复失败：备份可能已损坏或环境未就绪", Toast.LENGTH_LONG).show();
+                }
+            });
         }).start();
     }
 
