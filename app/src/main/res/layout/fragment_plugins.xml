@@ -2,67 +2,63 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/surface"
-    android:orientation="vertical">
+    android:orientation="vertical"
+    android:background="#0D1117">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingStart="18dp"
-        android:paddingEnd="18dp"
-        android:paddingTop="4dp"
-        android:paddingBottom="12dp">
+        android:padding="12dp">
 
         <TextView
             android:id="@+id/btnMarket"
             android:layout_width="0dp"
-            android:layout_height="38dp"
+            android:layout_height="40dp"
             android:layout_weight="1"
-            android:background="@drawable/bg_tab_on"
             android:gravity="center"
             android:text="插件市场"
-            android:textColor="@color/accent"
-            android:textSize="13.5sp"
-            android:textStyle="bold" />
+            android:textColor="#E6EDF3"
+            android:textSize="15sp"
+            android:background="@drawable/bg_btn" />
 
         <TextView
             android:id="@+id/btnInstalled"
             android:layout_width="0dp"
-            android:layout_height="38dp"
-            android:layout_marginStart="8dp"
+            android:layout_height="40dp"
             android:layout_weight="1"
-            android:background="@drawable/bg_tab"
+            android:layout_marginStart="8dp"
             android:gravity="center"
             android:text="已装插件"
-            android:textColor="@color/text_muted"
-            android:textSize="13.5sp"
-            android:textStyle="bold" />
+            android:textColor="#E6EDF3"
+            android:textSize="15sp"
+            android:background="@drawable/bg_btn" />
 
         <TextView
             android:id="@+id/btnSort"
             android:layout_width="wrap_content"
-            android:layout_height="38dp"
+            android:layout_height="40dp"
             android:layout_marginStart="8dp"
-            android:background="@drawable/bg_tab"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
             android:gravity="center"
-            android:paddingStart="13dp"
-            android:paddingEnd="13dp"
-            android:text="排序 ⭐"
-            android:textColor="@color/text_muted"
-            android:textSize="12sp" />
+            android:text="排序⭐"
+            android:textColor="#E6EDF3"
+            android:textSize="13sp"
+            android:background="@drawable/bg_btn" />
 
         <TextView
             android:id="@+id/btnRefresh"
-            android:layout_width="38dp"
-            android:layout_height="38dp"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
             android:layout_marginStart="8dp"
-            android:background="@drawable/bg_tab"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
             android:gravity="center"
-            android:text="↻"
-            android:textColor="@color/text_muted"
-            android:textSize="15sp" />
+            android:text="🔄"
+            android:textColor="#E6EDF3"
+            android:textSize="15sp"
+            android:background="@drawable/bg_btn" />
     </LinearLayout>
 
     <LinearLayout
@@ -70,9 +66,9 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:paddingStart="18dp"
-        android:paddingEnd="18dp"
-        android:paddingBottom="10dp"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
         android:visibility="gone">
 
         <TextView
@@ -80,62 +76,66 @@
             android:layout_width="0dp"
             android:layout_height="36dp"
             android:layout_weight="1"
-            android:background="@drawable/bg_btn"
             android:gravity="center"
             android:text="导出插件包"
-            android:textColor="@color/text_secondary"
-            android:textSize="13sp" />
+            android:textColor="#E6EDF3"
+            android:textSize="13sp"
+            android:background="@drawable/bg_btn" />
 
         <TextView
             android:id="@+id/btnImport"
             android:layout_width="0dp"
             android:layout_height="36dp"
-            android:layout_marginStart="8dp"
             android:layout_weight="1"
-            android:background="@drawable/bg_btn"
+            android:layout_marginStart="8dp"
             android:gravity="center"
             android:text="导入插件包"
-            android:textColor="@color/text_secondary"
-            android:textSize="13sp" />
+            android:textColor="#E6EDF3"
+            android:textSize="13sp"
+            android:background="@drawable/bg_btn" />
     </LinearLayout>
 
     <CheckBox
         android:id="@+id/chkHideBuiltin"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginStart="18dp"
-        android:buttonTint="@color/accent"
+        android:layout_marginStart="12dp"
+        android:paddingTop="2dp"
         android:text="隐藏 dsh 自带插件（只看自己装的）"
-        android:textColor="@color/text_secondary"
+        android:textColor="#E6EDF3"
         android:textSize="13sp"
         android:visibility="gone" />
 
     <EditText
         android:id="@+id/pluginSearch"
-       
-        android:layout_marginStart="18dp"
-        android:layout_marginEnd="18dp"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
         android:layout_marginBottom="6dp"
-        android:hint="搜索插件名称…"
-        android:imeOptions="actionSearch"
-        android:singleLine="true" 
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"/>
+        android:hint="🔍 搜索插件名称…"
+        android:textColor="#E6EDF3"
+        android:textColorHint="#8B949E"
+        android:textSize="14sp"
+        android:singleLine="true"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:background="@drawable/bg_btn"
+        android:imeOptions="actionSearch" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/pluginList"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:paddingBottom="8dp" />
+        android:paddingBottom="16dp" />
 
     <TextView
         android:id="@+id/statusText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center"
         android:padding="12dp"
         android:text="加载中…"
-        android:textColor="@color/text_muted"
-        android:textSize="11.5sp" />
+        android:textColor="#8B949E"
+        android:textSize="13sp" />
 </LinearLayout>

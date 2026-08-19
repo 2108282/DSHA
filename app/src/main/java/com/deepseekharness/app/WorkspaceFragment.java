@@ -60,7 +60,6 @@ public class WorkspaceFragment extends Fragment {
         Button backupBtn = view.findViewById(R.id.workspace_backup);
         Button restoreBtn = view.findViewById(R.id.workspace_restore);
         Button resetBtn = view.findViewById(R.id.workspace_reset);
-        SubPageBack.bind(this, view);
 
         workdirEdit.setText(c.getWorkdir());
         refreshInfo();

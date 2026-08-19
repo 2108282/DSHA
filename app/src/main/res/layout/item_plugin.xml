@@ -2,17 +2,16 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginStart="18dp"
-    android:layout_marginEnd="18dp"
-    android:layout_marginBottom="10dp"
-    android:background="@drawable/bg_card"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:background="#161B22"
+    android:padding="12dp"
+    android:layout_marginStart="12dp"
+    android:layout_marginEnd="12dp"
+    android:layout_marginTop="6dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center_vertical"
         android:orientation="horizontal">
 
         <TextView
@@ -20,30 +19,26 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:fontFamily="monospace"
-            android:textColor="@color/text"
-            android:textSize="13.5sp"
+            android:textColor="#E6EDF3"
+            android:textSize="15sp"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/pluginInstall"
             android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:background="@drawable/bg_btn"
+            android:layout_height="30dp"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
             android:gravity="center"
-            android:paddingStart="13dp"
-            android:paddingEnd="13dp"
             android:text="安装"
-            android:textColor="@color/accent"
-            android:textSize="13sp"
-            android:textStyle="bold" />
+            android:textColor="#58A6FF"
+            android:textSize="12sp"
+            android:background="@drawable/bg_btn" />
 
         <android.widget.Switch
             android:id="@+id/pluginSwitch"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:thumbTint="@color/accent"
-            android:trackTint="@color/accent_dim"
             android:visibility="gone" />
     </LinearLayout>
 
@@ -51,17 +46,17 @@
         android:id="@+id/pluginStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:textColor="@color/warn"
-        android:textSize="11sp" />
+        android:layout_marginTop="2dp"
+        android:textColor="#58A6FF"
+        android:textSize="12sp" />
 
     <TextView
         android:id="@+id/pluginDesc"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:ellipsize="end"
+        android:textColor="#8B949E"
+        android:textSize="13sp"
         android:maxLines="3"
-        android:textColor="@color/text_muted"
-        android:textSize="12sp" />
+        android:ellipsize="end" />
 </LinearLayout>

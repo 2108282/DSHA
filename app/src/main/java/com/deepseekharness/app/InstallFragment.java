@@ -56,7 +56,6 @@ public class InstallFragment extends Fragment {
         step4Btn = view.findViewById(R.id.install_step4);
         step5Btn = view.findViewById(R.id.install_step5);
         step6Btn = view.findViewById(R.id.install_step6);
-        SubPageBack.bind(this, view);
 
         c.addStateListener(stateListener);
 

@@ -100,16 +100,12 @@ public class PluginFragment extends Fragment {
 
         btnMarket.setOnClickListener(v -> {
             mode = Mode.MARKET;
-            styleTab(btnMarket, true);
-            styleTab(btnInstalled, false);
             view.findViewById(R.id.actionBar).setVisibility(View.GONE);
             view.findViewById(R.id.chkHideBuiltin).setVisibility(View.GONE);
             showMarket();
         });
         btnInstalled.setOnClickListener(v -> {
             mode = Mode.INSTALLED;
-            styleTab(btnMarket, false);
-            styleTab(btnInstalled, true);
             view.findViewById(R.id.actionBar).setVisibility(View.VISIBLE);
             view.findViewById(R.id.chkHideBuiltin).setVisibility(View.VISIBLE);
             showInstalled();
