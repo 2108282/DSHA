@@ -2086,7 +2086,9 @@ public class HarnessController {
                 java.io.File off = new java.io.File(dir, name + ".disabled");
                 if (enable && off.exists()) {
                     String src = readPluginSrc(name);
-                    if (src == null || src.isEmpty() || "null".equals(src)) return false;
+                    // 原安装源记录缺失（比如禁用时 dependencies 里本来就没有该项）时兜底 "*"：
+                    // 包体还在磁盘上，声明恢复即可加载，绝不能让插件"禁用后再也开不回来"
+                    if (src == null || src.isEmpty() || "null".equals(src)) src = "*";
                     String safe = src.replace("'", "\\'");
                     String r = proot.execAndRead(
                             toggleScript() +
@@ -2134,7 +2136,8 @@ public class HarnessController {
             java.io.File f = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/.dsha-src-" + name);
             if (!f.isFile()) return "";
             try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(new java.io.FileInputStream(f), java.nio.charset.StandardCharsets.UTF_8))) {
-                return br.readLine() == null ? "" : br.readLine(); // 补：读一行
+                String line = br.readLine(); // 只能调一次：readLine 会消费流，连续调两次第二次必是 null
+                return line == null ? "" : line.trim();
             }
         } catch (Exception e) {
             return "";

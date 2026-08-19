@@ -624,16 +624,20 @@ public class PluginFragment extends Fragment {
                 });
                 h.switchView.setOnCheckedChangeListener(null);
                 h.switchView.setChecked(enabled);
+                h.switchView.setEnabled(true);
                 h.switchView.setOnCheckedChangeListener((btn, checked) -> {
-                    boolean ok = c.togglePlugin(it[0], checked);
-                    if (ok) {
-                        it[1] = checked ? "启用" : "禁用";
-                        h.status.setText(checked ? "已启用" : "已禁用");
-                        Toast.makeText(requireContext(), it[0] + (checked ? " 已启用（重启 WebUI 生效）" : " 已禁用"), Toast.LENGTH_SHORT).show();
-                    } else {
-                        btn.setChecked(!checked);
-                        Toast.makeText(requireContext(), "操作失败", Toast.LENGTH_SHORT).show();
-                    }
+                    // togglePlugin 内部会跑 proot 子进程（秒级耗时），不能在主线程执行，否则卡 UI/ANR
+                    btn.setEnabled(false);
+                    new Thread(() -> {
+                        boolean ok = c.togglePlugin(it[0], checked);
+                        runOnUiThreadSafely(() -> {
+                            if (ok) it[1] = checked ? "启用" : "禁用";
+                            adapter.notifyDataSetChanged(); // 重新绑定：成功刷新状态，失败恢复开关原位
+                            Toast.makeText(requireContext(), ok
+                                    ? it[0] + (checked ? " 已启用（重启 WebUI 生效）" : " 已禁用")
+                                    : "操作失败", Toast.LENGTH_SHORT).show();
+                        });
+                    }).start();
                 });
             }
         }
