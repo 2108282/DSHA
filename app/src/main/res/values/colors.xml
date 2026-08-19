@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- cache-bust 2026-08-19c：去掉自定义 style 点号继承 -->
     <!-- 亮色：由 a.html 暗色稿反推，保证对比度 -->
     <color name="bg">#F4F6FA</color>
     <color name="surface">#F7F8FB</color>
