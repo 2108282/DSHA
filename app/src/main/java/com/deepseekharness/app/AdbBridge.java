@@ -29,7 +29,7 @@ public final class AdbBridge {
     }
 
     /** 当前 assets 脚本版本：每次改脚本 +1，旧版 APK 的残留脚本会因版本不符被强制重注入 */
-    private static final String SCRIPT_VERSION = "3";
+    private static final String SCRIPT_VERSION = "4";
 
     /** 幂等注入：把三个 assets 脚本 base64 写入 /root/.dsh/ 并加执行位 + 写版本标记 */
     public static String inject(Context ctx, ProotBootstrap proot) {
@@ -56,11 +56,50 @@ public final class AdbBridge {
         if (!injected(proot)) {
             sb.append(inject(ctx, proot));
         }
+        if (!wheelsPresent(proot)) {
+            sb.append(injectWheels(ctx, proot));
+        }
         if (keyPresent(proot) && depsOk(proot)) {
             return "SETUP_DONE"; // 环境已就绪，跳过安装
         }
         sb.append(setup(proot));
         return sb.toString();
+    }
+
+    /** wheels 离线包是否已就位（≥15 个 whl：13 依赖 + pip + setuptools） */
+    public static boolean wheelsPresent(ProotBootstrap proot) {
+        String r = proot.execAndRead("ls /root/.dsh/wheels/*.whl 2>/dev/null | wc -l");
+        try {
+            return r != null && Integer.parseInt(r.trim()) >= 15;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 注入 wheels 离线包：Java 直接把 assets 的 tar.gz 写进 rootfs（不经 shell 命令行，
+     *  避免 10MB base64 超长），再 shell 解压到 /root/.dsh/wheels/ */
+    public static String injectWheels(Context ctx, ProotBootstrap proot) {
+        try {
+            java.io.File dst = new java.io.File(proot.getRootfsDir(), "root/.dsh/adb-wheels.tar.gz");
+            dst.getParentFile().mkdirs();
+            java.io.InputStream in = ctx.getAssets().open("adb-wheels.tar.gz");
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(dst);
+            byte[] buf = new byte[65536];
+            int n;
+            long total = 0;
+            while ((n = in.read(buf)) != -1) {
+                fos.write(buf, 0, n);
+                total += n;
+            }
+            fos.close();
+            in.close();
+            String r = proot.execAndRead("mkdir -p /root/.dsh/wheels && "
+                    + "tar xzf /root/.dsh/adb-wheels.tar.gz -C /root/.dsh/wheels/ && "
+                    + "ls /root/.dsh/wheels/*.whl | wc -l");
+            return "WHEELS_INJECTED(" + total + "B): " + (r == null ? "?" : r.trim()) + " whl";
+        } catch (Throwable t) {
+            return "WHEELS_INJECT_FAIL: " + t;
+        }
     }
 
     /** 密钥是否已生成 */
