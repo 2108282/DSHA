@@ -154,12 +154,10 @@ public class LaunchFragment extends Fragment {
             statusText.setText("已发送停止命令");
         });
 
-        webBack.setOnClickListener(v -> closeWeb());
-
         if (goExtractIfNeeded()) {
             statusText.setText("正在打开内置环境解压页…");
         } else if (c.getProot().isOfflineExtracted()) {
-            statusText.setText("环境已就绪。起来后点「进入」，在本软件里打开。");
+            statusText.setText("环境已就绪。点「启动」起来后会直接进入。");
         } else {
             statusText.setText("环境未就绪。若刚装好 APK，请杀掉进程再打开一次以进入解压页。");
         }
