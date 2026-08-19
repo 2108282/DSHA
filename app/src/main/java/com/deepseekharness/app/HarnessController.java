@@ -82,19 +82,18 @@ public class HarnessController {
     private volatile boolean busy = false;
     private volatile int currentStep = 0;
     private volatile Process webProcess;
-    /** Web 进程“代际”/硬重启计数：让启动页感知重启并刷新预览（拿到最新 manifest/插件） */
+    /** Web 进程“代际”计数：让启动页感知重启并刷新预览（拿到最新 manifest/插件） */
     private volatile long webEpoch = System.currentTimeMillis();
-    private volatile long hardRestartEpoch = 0;
-    /** 强重启/深停机配套 */
+    /** 重启互斥锁：restartWeb 进行中忽略重复的重启请求 */
     private final java.util.concurrent.atomic.AtomicBoolean webRestartLock = new java.util.concurrent.atomic.AtomicBoolean(false);
     private final Object webStartLock = new Object();
     private boolean webStarting = false;
     private final java.util.Set<Process> webProcesses = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 主动销毁的 web 进程登记：watcher 见到这些进程退出属预期，不谎报「意外退出」 */
+    private final java.util.Set<Process> expectedWebExit = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public long getWebEpoch() { return webEpoch; }
     public void bumpWebEpoch() { webEpoch = System.currentTimeMillis(); }
-    public long getHardRestartEpoch() { return hardRestartEpoch; }
-    public void bumpHardRestart() { hardRestartEpoch = System.currentTimeMillis(); }
     public boolean isWebRestartLocked() { return webRestartLock.get(); }
     public boolean tryAcquireWebRestartLock() { return webRestartLock.compareAndSet(false, true); }
     public void releaseWebRestartLock() { webRestartLock.set(false); }
@@ -126,6 +125,8 @@ public class HarnessController {
 
     private void destroyAllWebProcesses() {
         for (Process p : webProcesses) {
+            try { expectedWebExit.add(p); } catch (Throwable ignored) {
+            }
             try { p.destroy(); } catch (Throwable ignored) {
             }
         }
@@ -150,35 +151,32 @@ public class HarnessController {
         }
     }
 
-    /** 强重启（进程级，杀干净）：先深停 web → 杀 App 进程 → Alarm 拉起全新进程 */
-    public void restartAppProcess(final android.content.Context ctx) {
-        new Thread(() -> {
+    /**
+     * 重启 Web UI（软重启）：深停（含看门狗）→ 等端口关透 → 重新拉起，同一任务内原子完成。
+     * 不再杀 App 进程（旧实现靠 Process.killProcess「闪退」+ Alarm 拉起新进程）。
+     * 与 startWeb/stopWeb 共用 IO 单线程队列：重启期间再点「停止」，stop 排在本任务之后，
+     * 最终停在停止态，语义明确；webRestartLock 防重复点击。
+     */
+    public void restartWeb() {
+        if (!tryAcquireWebRestartLock()) return; // 正在重启，忽略重复点击
+        IO.execute(() -> {
+            synchronized (webStartLock) {
+                webStarting = true;
+            }
             try {
-                destroyAllWebProcesses();
-                proot.execAndRead(stopWebCommand());
-                waitPortClosed(6000);
-            } catch (Throwable ignored) {
-            }
-            try { Thread.sleep(300); } catch (InterruptedException ignored) {
-            }
-            try {
-                android.app.AlarmManager am = (android.app.AlarmManager)
-                        ctx.getSystemService(android.content.Context.ALARM_SERVICE);
-                android.content.Intent i = new android.content.Intent(ctx, MainActivity.class);
-                i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                android.app.PendingIntent pi = android.app.PendingIntent.getActivity(
-                        ctx, 0, i,
-                        android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
-                if (am != null) am.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 350, pi);
-            } catch (Throwable ignored) {
-            }
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-                try {
-                    android.os.Process.killProcess(android.os.Process.myPid());
-                } catch (Throwable ignored) {
+                setProgress("正在重启 Web UI（先停止）", 0);
+                stopWebAndWait(); // 深停：destroy + pkill 看门狗/web + 等端口关透 + 宽杀兜底
+                setProgress("正在重启 Web UI（再启动）", 0);
+                doStartWeb();
+            } catch (Throwable e) {
+                synchronized (webStartLock) {
+                    webStarting = false;
                 }
-            }, 250);
-        }).start();
+                setState("", 0, "", errMsg("重启出错：", e), false);
+            } finally {
+                releaseWebRestartLock();
+            }
+        });
     }
 
     /** 是否正在“自动补构建”（缺 bin.js 时启动触发） */
@@ -1676,6 +1674,7 @@ public class HarnessController {
         }
     }
 
+    /** 启动 Web UI（幂等）：已在运行/启动中则跳过；异步在 IO 线程执行 doStartWeb。 */
     public void startWeb() {
         synchronized (webStartLock) {
             if (webProcess != null && webProcess.isAlive()) {
@@ -1684,47 +1683,83 @@ public class HarnessController {
             if (webStarting) return; // 已有启动在进行（防 keepAlive/手动并发起第二个实例 → EADDRINUSE）
             webStarting = true;
         }
-        IO.execute(() -> {
-            try {
-                // 启动前预检：端口仍被占 → 深杀残留（根治 EADDRINUSE）
-                if (isWebPortUp(400)) {
-                    destroyAllWebProcesses();
-                    proot.execAndRead(stopWebCommand());
-                    if (!waitPortClosed(4000)) {
-                        proot.execAndRead("pkill -9 -f node 2>/dev/null; pkill -9 -f 'bin.js' 2>/dev/null; sleep 1; echo done");
-                        waitPortClosed(4000);
-                    }
+        IO.execute(this::doStartWeb);
+    }
+
+    /** startWeb 的实际工作（须在 IO 线程调用）：预检残留 → 守卫就位 → exec → 起 watcher 保活。 */
+    private void doStartWeb() {
+        final Process p;
+        try {
+            // 启动前预检：端口仍被占 → 深杀残留（根治 EADDRINUSE）
+            if (isWebPortUp(400)) {
+                destroyAllWebProcesses();
+                proot.execAndRead(stopWebCommand());
+                if (!waitPortClosed(4000)) {
+                    proot.execAndRead("pkill -9 -f node 2>/dev/null; pkill -9 -f 'bin.js' 2>/dev/null; sleep 1; echo done");
+                    waitPortClosed(4000);
                 }
-                setProgress("正在启动 Web UI", 0);
-                proot.ensureRuntimeFiles();
-                ensureDangerGuard(); // 安全包装器缺失则自动补装
-                ensureBashGuardPatch(); // bash 工具 lib 强制加载守卫（不依赖重装）
-                Process p = proot.execRootfs(startWebCommand());
-                webProcesses.add(p);
-                synchronized (webStartLock) {
-                    webProcess = p;
-                }
-                // web 已由用户/预启动成功拉起 → 解除 keepAlive 暂停（恢复崩溃自愈）
-                prefs.edit().putBoolean("keepalive_paused", false).apply();
-                bumpWebEpoch(); // 新 web 进程已起：通知预览端刷新
-                // 阻塞读取输出，保持 proot+node 进程存活（后台 nohup 会被 --kill-on-exit 杀掉）
-                String out = proot.drainOutput(p);
-                // 输出已重定向到 ~/dsh-web.log，stdout 为空时抓「Error 块 + 尾部」
-                if (out == null || out.trim().isEmpty()) {
-                    out = proot.execAndRead(
-                            "awk 'NR>=1 && /Error: dsh:/{f=1} f{print; n++} f && n>45{exit}' ~/dsh-web.log | head -45; " +
-                            "echo '[--- 日志头部---]'; head -3 ~/dsh-web.log 2>/dev/null; " +
-                            "echo '[--- 日志尾部 ---]'; " +
-                            "L=$(grep -nm1 'Error: dsh:' ~/dsh-web.log | cut -d: -f1); " +
-                            "if [ -n \"$L\" ] && [ \"$L\" -gt 50 ]; then sed -n \"$((L-8)),$((L))p\" ~/dsh-web.log 2>/dev/null; fi; " +
-                            "tail -c 500 ~/dsh-web.log 2>/dev/null");
-                }
-                String tail = out.length() > 600 ? out.substring(out.length() - 600) : out;
-                setState("", 0, "", "Web UI 意外退出：\n" + tail, false);
-            } catch (Throwable e) {
-                setState("", 0, "", errMsg("启动出错：", e), false);
             }
-        });
+            setProgress("正在启动 Web UI", 0);
+            proot.ensureRuntimeFiles();
+            ensureDangerGuard(); // 安全包装器缺失则自动补装
+            ensureBashGuardPatch(); // bash 工具 lib 强制加载守卫（不依赖重装）
+            p = proot.execRootfs(startWebCommand());
+            webProcesses.add(p);
+            synchronized (webStartLock) {
+                webProcess = p;
+            }
+            // web 已由用户/预启动成功拉起 → 解除 keepAlive 暂停（恢复崩溃自愈）
+            prefs.edit().putBoolean("keepalive_paused", false).apply();
+            bumpWebEpoch(); // 新 web 进程已起：通知预览端刷新
+        } catch (Throwable e) {
+            synchronized (webStartLock) {
+                webStarting = false;
+            }
+            setState("", 0, "", errMsg("启动出错：", e), false);
+            return;
+        }
+        synchronized (webStartLock) {
+            webStarting = false;
+        }
+        // 保活阻塞挪到独立 watcher 线程：drainOutput 期间 IO 单线程必须空闲，
+        // 否则 stop/restart 任务永远排不进队列（旧实现因此只能靠杀 App 进程「重启」）。
+        Thread watcher = new Thread(() -> onWebProcessExit(p), "dsha-web-watcher");
+        watcher.setDaemon(true);
+        watcher.start();
+    }
+
+    /** web 进程保活 + 退出收尾：阻塞读输出保持 proot/node 存活；退出后清状态并按需上报。 */
+    private void onWebProcessExit(Process p) {
+        String out = null;
+        try {
+            // 阻塞读取输出，保持 proot+node 进程存活（后台 nohup 会被 --kill-on-exit 杀掉）
+            out = proot.drainOutput(p);
+        } catch (Throwable ignored) {
+        }
+        webProcesses.remove(p);
+        synchronized (webStartLock) {
+            if (webProcess == p) webProcess = null;
+        }
+        if (expectedWebExit.remove(p)) {
+            return; // 主动停止 / 重启的前半段：预期退出，静默收尾
+        }
+        try {
+            // 输出已重定向到 ~/dsh-web.log，stdout 为空时抓「Error 块 + 尾部」
+            if (out == null || out.trim().isEmpty()) {
+                out = proot.execAndRead(
+                        "awk 'NR>=1 && /Error: dsh:/{f=1} f{print; n++} f && n>45{exit}' ~/dsh-web.log | head -45; " +
+                        "echo '[--- 日志头部---]'; head -3 ~/dsh-web.log 2>/dev/null; " +
+                        "echo '[--- 日志尾部 ---]'; " +
+                        "L=$(grep -nm1 'Error: dsh:' ~/dsh-web.log | cut -d: -f1); " +
+                        "if [ -n \"$L\" ] && [ \"$L\" -gt 50 ]; then sed -n \"$((L-8)),$((L))p\" ~/dsh-web.log 2>/dev/null; fi; " +
+                        "tail -c 500 ~/dsh-web.log 2>/dev/null");
+            }
+        } catch (Throwable ignored) {
+            out = null;
+        }
+        if (out == null) out = "";
+        String tail = out.length() > 600 ? out.substring(out.length() - 600) : out;
+        setState("", 0, "", "Web UI 意外退出：\n" + tail, false);
     }
 
     public void stopWeb() {
@@ -1734,14 +1769,11 @@ public class HarnessController {
         prefs.edit().putBoolean("keepalive_paused", true).apply();
         IO.execute(() -> {
             try {
-                Process p = webProcess;
-                if (p != null) {
-                    p.destroy();
-                    webProcess = null;
-                }
-                proot.execAndRead(stopWebCommand());
+                // 深停：destroy + pkill 看门狗/web + 等端口关透 + 宽杀兜底
+                // （IO 线程已不被保活阻塞占用，本任务能真正执行；旧的浅停杀不净）
+                stopWebAndWait();
                 setState("", 0, "已停止后台服务", "", false);
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
         });
     }
