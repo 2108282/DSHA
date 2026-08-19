@@ -2227,9 +2227,10 @@ public class HarnessController {
                 }
                 conn.disconnect();
                 String j = sb.toString();
-                // 全量列表包含分类折叠；README 兜底含旧表格。两种都够格解析
-                boolean ok = j.indexOf("<summary>") >= 0 && j.indexOf("<b>") >= 0
-                        && (j.indexOf("[") >= 0) && j.length() > 8000;
+                // 兼容两代索引格式：旧版折叠块（<summary><b>）/ 新版分组列表（"- `[状态]` [name](url)"，2026-08 起）
+                boolean ok = j.length() > 8000 && j.indexOf("](http") >= 0
+                        && (j.indexOf("- `[") >= 0
+                            || (j.indexOf("<summary>") >= 0 && j.indexOf("<b>") >= 0));
                 if (ok) {
                     writeMarketCache(j); // 拉成功即缓存，网络抽风时也能秒开
                     return j;
@@ -2312,7 +2313,22 @@ public class HarnessController {
                 }
                 continue;
             }
-            // ===== 条目：列表式  - `[可用]` [name](url) ★12 — desc =====
+            // ===== 分类（新版）：## 🎓 技能包（20） =====
+            if (t.startsWith("## ") || t.startsWith("### ")) {
+                String c = t.replaceFirst("^#+\\s*", "").trim();
+                // 只认带条目计数（N）的标题，跳过"统一度量衡/汇总"等说明性标题
+                if (c.matches(".*（\\s*\\d+\\s*）$") || c.matches(".*\\(\\s*\\d+\\s*\\)$")) {
+                    c = c.replaceAll("（\\s*\\d+\\s*）$", "").replaceAll("\\(\\s*\\d+\\s*\\)$", "").trim();
+                    int k = 0;
+                    while (k < c.length()) {
+                        int cp = c.codePointAt(k);
+                        if (cp > 0x2E80) k += Character.charCount(cp); else break;
+                    }
+                    category = c.substring(k).trim();
+                }
+                continue;
+            }
+            // ===== 条目：列表式  - `[可用]` [name](url) ★12 — desc（新版 star 无★前缀：… url) 67 — desc）=====
             if (t.startsWith("- `[")) {
                 int c1 = t.indexOf('`'), c2 = t.indexOf('`', c1 + 1);
                 if (c1 < 0 || c2 < 0) continue;
@@ -2330,6 +2346,12 @@ public class HarnessController {
                 int st = rest.indexOf("★");
                 if (st >= 0) {
                     String sx = rest.substring(st + 1).trim();
+                    int d = 0;
+                    while (d < sx.length() && Character.isDigit(sx.charAt(d))) d++;
+                    if (d > 0) star = sx.substring(0, d);
+                } else {
+                    // 新版格式：url 后直接跟裸数字 star（"…) 67 — desc"）
+                    String sx = rest.trim();
                     int d = 0;
                     while (d < sx.length() && Character.isDigit(sx.charAt(d))) d++;
                     if (d > 0) star = sx.substring(0, d);
