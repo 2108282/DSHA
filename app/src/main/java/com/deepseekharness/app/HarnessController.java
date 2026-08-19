@@ -2119,7 +2119,7 @@ public class HarnessController {
                 "const p=JSON.parse(fs.readFileSync(pkg,'utf-8'));\n" +
                 "if(!p.dependencies)p.dependencies={};\n" +
                 "if(mode==='on'){\n" +
-                "  p.dependencies[pn]=src;\n" +
+                "  if(src&&src!=='null'&&src!=='*')p.dependencies[pn]=src;\n" +
                 "  if(p.dsh&&p.dsh.profile&&Array.isArray(p.dsh.profile.bundles)&&p.dsh.profile.bundles.indexOf(pn)<0)p.dsh.profile.bundles.push(pn);\n" +
                 "}else{\n" +
                 "  if(p.dependencies[pn])fs.writeFileSync('/root/.dsh/profiles/web/.dsha-src-'+pn,String(p.dependencies[pn]));\n" +
