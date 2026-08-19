@@ -2291,6 +2291,29 @@ public class HarnessController {
     }
 
     /** 解析市场索引（PLUGINS-ALL.md 列表式 / README 旧表格式）为 [name, star, owner, 兼容, 分类, 说明, url] */
+    /** 非插件黑名单：客户端壳/桌面端/TUI/Docker/合集/启动器 等不是 dsh 插件的东西。
+     * 上游 awesome-dsh-plugins 的 PLUGINS-ALL.md 是全量清单，混入了大量
+     * Desktop/TUI/Docker/awesome 合集条目，不滤掉市场页会"乱拉"。
+     * 只匹配条目名（desc/url 不参与，避免"支持 macOS"这类描述误伤真插件）。 */
+    private static final String[] NON_PLUGIN_NAME_KEYS = {
+            "desktop", "tui", "docker", "electron", "launcher",
+            "windows", "macos", "swiftui"
+    };
+
+    /** 判断条目是否像"非插件"（客户端壳/合集）。只查名字，命中即从市场隐藏。 */
+    private static boolean isLikelyNonPlugin(String name, String url, String desc) {
+        String n = name.toLowerCase();
+        // 例外：atuin（shell 历史工具插件）名字含 tui 子串，放行
+        if (n.contains("atuin")) return false;
+        for (String k : NON_PLUGIN_NAME_KEYS) {
+            if (n.contains(k)) return true;
+        }
+        // awesome- 合集（任意位置；含 plugin/skill/theme/pack 词干的可能是真插件，放行）
+        if (n.contains("awesome-") && !(n.contains("plugin") || n.contains("skill")
+                || n.contains("theme") || n.contains("pack"))) return true;
+        return false;
+    }
+
     public static java.util.List<String[]> parseMarketTable(String md) {
         java.util.List<String[]> out = new java.util.ArrayList<>();
         if (md == null) return out;
@@ -2369,6 +2392,8 @@ public class HarnessController {
                 compat = compat.replace("可用", "✅可用").replace("不兼容", "❌不兼容")
                         .replace("待定", "⏳待定").replace("未测", "⏳未测");
                 if (compat.length() > 8) compat = compat.substring(0, 8);
+                // 过滤非插件（桌面壳/TUI/合集等），避免市场乱拉
+                if (isLikelyNonPlugin(name, url, desc)) continue;
                 out.add(new String[]{name, star, owner, compat, category, desc, url});
                 continue;
             }
@@ -2397,6 +2422,8 @@ public class HarnessController {
                         .replace("❌ 运行级不兼容", "❌不兼容").replace("✅", "✅可用");
                 if (compat.isEmpty() || compat.equals("插件") || compat.equals("合集")) compat = "⏳未测";
                 if (compat.length() > 8) compat = compat.substring(0, 8);
+                // 过滤非插件（表格格式同样适用）
+                if (isLikelyNonPlugin(name, url, desc)) continue;
                 out.add(new String[]{name, "0", owner, compat, category, desc, url});
             }
         }
