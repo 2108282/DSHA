@@ -219,7 +219,12 @@ public class InstallFragment extends Fragment {
                 stepCheckRunning.set(false);
                 return;
             }
-            getActivity().runOnUiThread(() -> {
+            final android.app.Activity act = getActivity();
+            if (act == null) { // 极端情况：isAdded 与 getActivity 间 Activity 被回收
+                stepCheckRunning.set(false);
+                return;
+            }
+            act.runOnUiThread(() -> {
                 stepCheckRunning.set(false);
                 if (!isAdded()) return;
                 refreshSteps(done);

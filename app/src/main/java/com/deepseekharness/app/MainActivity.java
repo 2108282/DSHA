@@ -16,6 +16,7 @@ import android.view.View;
 import android.widget.CheckBox;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.fragment.app.Fragment;
@@ -146,6 +147,19 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 100 && grantResults.length > 0
+                && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
+            // 用户拒绝通知权限：ADB 配对卡/任务完成提醒无法显示，给一次引导提示
+            android.widget.Toast.makeText(this,
+                    "未授予通知权限：ADB 配对卡片与任务完成提醒将不可用。\n可到系统设置 → 应用 → DSHA → 通知 开启。",
+                    android.widget.Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         current = this;
@@ -157,6 +171,13 @@ public class MainActivity extends AppCompatActivity {
         super.onPause();
         current = null;
         TaskNotifier.appInForeground = false;
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // App 真正销毁：关闭终端持久 shell（防进程泄漏）
+        TerminalFragment.shutdownShell();
     }
 
     private void requestBatteryOptimization() {

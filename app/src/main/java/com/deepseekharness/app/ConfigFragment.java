@@ -157,7 +157,7 @@ public class ConfigFragment extends Fragment {
                     .setOngoing(false)
                     .setAutoCancel(true)
                     .setPriority(NotificationCompat.PRIORITY_HIGH);
-            nm.notify(3003, b.build());
+            nm.notify(Constants.NOTIF_ADB_PAIR_CARD, b.build());
         } catch (Throwable t) {
             Toast.makeText(requireContext(), "通知创建失败（可先到系统设置允许通知权限）：" + t.getMessage(),
                     Toast.LENGTH_LONG).show();

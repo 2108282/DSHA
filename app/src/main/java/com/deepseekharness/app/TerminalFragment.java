@@ -174,6 +174,24 @@ public class TerminalFragment extends Fragment {
         boundOutput = null;
     }
 
+    /** 关闭持久 shell 会话（App 退出时调用，防进程泄漏）。会话跨页保留期间不调用。 */
+    public static void shutdownShell() {
+        Process p = shell;
+        if (p != null) {
+            try {
+                p.getOutputStream().write(("exit\n").getBytes(StandardCharsets.UTF_8));
+                p.getOutputStream().flush();
+            } catch (IOException ignored) {
+            }
+            try {
+                p.destroyForcibly();
+            } catch (Throwable ignored) {
+            }
+        }
+        running = false;
+        shell = null;
+    }
+
     /** 外部注入文本到终端 buffer（ADB 配对失败日志等）。跨线程安全，终端页可见可复制。 */
     public static void inject(String text) {
         if (text == null || text.isEmpty()) return;

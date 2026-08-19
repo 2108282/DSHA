@@ -369,12 +369,16 @@ public class PluginFragment extends Fragment {
         }
     }
 
-    /** 批量异步拉取市场列表 star 数（GitHub search API，一次最多 ~80 仓库；失败则保持 0 显示"—"） */
+    /** 批量异步拉取市场列表 star 数（GitHub search API，一次最多 ~80 仓库）。
+     *  注意匿名 API 限流 10 次/分钟：1700+ 条需 22 批，超过即 403。
+     *  → 降频（每批间 6s 休眠）+ 遇到限流/失败立即停止（不浪费配额），
+     *    已拿到的 star 保留，未拿到的显示 "—"。 */
     private void fetchStars(java.util.List<String[]> items) {
         if (items == null || items.isEmpty()) return;
         final long t0 = System.currentTimeMillis();
         new Thread(() -> {
             int size = items.size();
+            int batch = 0;
             for (int base = 0; base < size; base += 80) {
                 StringBuilder q = new StringBuilder("q=");
                 int n = 0;
@@ -395,13 +399,22 @@ public class PluginFragment extends Fragment {
                         uApi,
                         "https://ghfast.top/" + uApi
                 };
+                boolean ok = false;
                 for (String u : urls) {
                     try {
+                        // 批间限流间隔（匿名 10 req/min，留余量）
+                        if (batch > 0) Thread.sleep(6000);
+                        batch++;
                         java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
                         conn.setConnectTimeout(8000);
                         conn.setReadTimeout(12000);
                         conn.setRequestProperty("User-Agent", "DSHA/1.1.0-mobile");
                         if (conn.getResponseCode() != 200) {
+                            // 403 = 限流，停止所有后续批次（别再浪费配额）
+                            if (conn.getResponseCode() == 403) {
+                                conn.disconnect();
+                                return;
+                            }
                             conn.disconnect();
                             continue;
                         }
@@ -429,10 +442,12 @@ public class PluginFragment extends Fragment {
                                 }
                             }
                         }
+                        ok = true;
                         break; // 成功则跳过一个源
                     } catch (Exception ignored) {
                     }
                 }
+                if (!ok) break; // 所有源失败（多半限流/断网），停止后续批次
             }
             runOnUiThreadSafely(() -> {
                 if (adapter != null) adapter.notifyDataSetChanged();

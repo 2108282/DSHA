@@ -19,6 +19,7 @@ public class ShellService extends IShellService.Stub {
             int n;
             final int MAX = 256 * 1024;
             try (InputStream in = p.getInputStream()) {
+                // 注意：超过 MAX 后必须继续读完（drain），否则管道写满 → 子进程阻塞 → 死锁
                 while ((n = in.read(buf)) != -1) {
                     if (bos.size() < MAX) {
                         int w = Math.min(n, MAX - bos.size());
@@ -26,7 +27,13 @@ public class ShellService extends IShellService.Stub {
                     }
                 }
             }
-            int code = p.waitFor();
+            // 超时强杀（30s），防命令永久挂起
+            if (!p.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return bos.toString(StandardCharsets.UTF_8.name())
+                        + "\n[EXIT=timeout] 命令执行超时(30s)已强杀";
+            }
+            int code = p.exitValue();
             return bos.toString(StandardCharsets.UTF_8.name()) + "\n[EXIT=" + code + "]";
         } catch (Throwable e) {
             return "ERROR: " + e.getClass().getSimpleName() + ": " + e.getMessage();

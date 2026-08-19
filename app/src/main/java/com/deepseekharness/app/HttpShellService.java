@@ -34,7 +34,7 @@ public final class HttpShellService {
 
     public static final int PORT = 3090;
     private static final String CONFIRM_CHANNEL = "dsh_confirm_channel";
-    private static final int CONFIRM_NOTIF_ID = 3003;
+    private static final int CONFIRM_NOTIF_ID = Constants.NOTIF_SHELL_CONFIRM;
     private static final long CONFIRM_TIMEOUT_S = 60;
 
     private static volatile HttpShellService instance;

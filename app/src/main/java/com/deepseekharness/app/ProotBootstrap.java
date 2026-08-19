@@ -291,11 +291,31 @@ public class ProotBootstrap {
     }
 
     /** 同步执行 rootfs 命令并返回输出 */
+    /** 执行 rootfs 命令并读回输出（execRootfs 已 redirectErrorStream 合并 stderr）。带超时防卡死（默认 60s）。 */
     public String execAndRead(String bashCommand) {
+        return execAndRead(bashCommand, 60_000);
+    }
+
+    /** 执行 rootfs 命令并读回输出。timeoutMs 超时强杀防挂起。
+     *  输出读在线程里，避免管道写满（>256KB）死锁 + 超时无法中断。 */
+    public String execAndRead(String bashCommand, long timeoutMs) {
         try {
             Process p = execRootfs(bashCommand);
-            String out = readStream(p.getInputStream());
-            p.waitFor();
+            java.util.concurrent.FutureTask<String> task = new java.util.concurrent.FutureTask<>(
+                    () -> readStream(p.getInputStream()));
+            Thread t = new Thread(task, "exec-read");
+            t.setDaemon(true);
+            t.start();
+            String out;
+            try {
+                out = task.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (Exception te) {
+                p.destroyForcibly();
+                return "ERROR: 命令执行超时(>" + (timeoutMs / 1000) + "s)，已强杀";
+            }
+            if (!p.waitFor(3000, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                p.destroyForcibly();
+            }
             return out;
         } catch (Throwable e) {
             return "ERROR: " + e.getClass().getSimpleName() + ": " + e.getMessage();

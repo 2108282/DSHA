@@ -93,7 +93,7 @@ public class WorkspaceFragment extends Fragment {
             Toast.makeText(requireContext(), "正在备份，请稍候…", Toast.LENGTH_SHORT).show();
             new Thread(() -> {
                 String path = BackupManager.backupToExternal(requireContext(), c);
-                if (getActivity() == null) return;
+                if (!isAdded() || getActivity() == null) return;
                 getActivity().runOnUiThread(() -> {
                     if (path == null) {
                         Toast.makeText(requireContext(), "备份失败：环境可能未安装", Toast.LENGTH_LONG).show();
