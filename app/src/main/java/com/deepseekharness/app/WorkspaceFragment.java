@@ -90,30 +90,27 @@ public class WorkspaceFragment extends Fragment {
         });
 
         backupBtn.setOnClickListener(v -> {
-            Toast.makeText(requireContext(), "正在备份，请稍候…", Toast.LENGTH_SHORT).show();
-            new Thread(() -> {
-                String path = BackupManager.backupToExternal(requireContext(), c);
-                if (!isAdded() || getActivity() == null) return;
-                getActivity().runOnUiThread(() -> {
-                    if (path == null) {
-                        Toast.makeText(requireContext(), "备份失败：环境可能未安装", Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                    new AlertDialog.Builder(requireContext())
-                            .setTitle("备份完成")
-                            .setMessage("已导出到：\n" + path)
-                            .setPositiveButton("复制路径", (d, w) -> {
-                                ClipboardManager cm = (ClipboardManager) requireContext()
-                                        .getSystemService(Context.CLIPBOARD_SERVICE);
-                                if (cm != null) {
-                                    cm.setPrimaryClip(ClipData.newPlainText("backup", path));
-                                    Toast.makeText(requireContext(), "路径已复制", Toast.LENGTH_SHORT).show();
-                                }
-                            })
-                            .setNegativeButton("好", null)
-                            .show();
-                });
-            }).start();
+            // Web UI 正在运行时会实时写对话文件，直接 tar 可能拿到半截数据。
+            // 有运行就先提示用户（选择继续备份则由 tar 容忍；推荐先停止）
+            if (c.isWebRunning()) {
+                new AlertDialog.Builder(requireContext())
+                        .setTitle("Web UI 正在运行")
+                        .setMessage("对话记录可能正在写入。建议先停止 Web UI 再备份，避免备份到半截文件。\n\n仍要继续备份吗？")
+                        .setPositiveButton("停止后备份", (d, w) -> {
+                            c.stopWeb();
+                            Toast.makeText(requireContext(), "正在停止 Web 并备份…", Toast.LENGTH_SHORT).show();
+                            new Thread(() -> doBackup()).start();
+                        })
+                        .setNegativeButton("直接备份", (d, w) -> {
+                            Toast.makeText(requireContext(), "正在备份（可能含写入中的会话）…", Toast.LENGTH_SHORT).show();
+                            new Thread(() -> doBackup()).start();
+                        })
+                        .setNeutralButton("取消", null)
+                        .show();
+            } else {
+                Toast.makeText(requireContext(), "正在备份，请稍候…", Toast.LENGTH_SHORT).show();
+                new Thread(() -> doBackup()).start();
+            }
         });
 
         resetBtn.setOnClickListener(v -> new AlertDialog.Builder(requireContext())
@@ -128,6 +125,31 @@ public class WorkspaceFragment extends Fragment {
 
         restoreBtn.setOnClickListener(v ->
                 pickBackup.launch(new String[]{"*/*"}));
+    }
+
+    /** 执行备份并展示结果（独立方法，供直接备份/停止后备份复用） */
+    private void doBackup() {
+        String path = BackupManager.backupToExternal(requireContext(), c);
+        if (!isAdded() || getActivity() == null) return;
+        getActivity().runOnUiThread(() -> {
+            if (path == null) {
+                Toast.makeText(requireContext(), "备份失败：环境可能未安装", Toast.LENGTH_LONG).show();
+                return;
+            }
+            new AlertDialog.Builder(requireContext())
+                    .setTitle("备份完成")
+                    .setMessage("已导出到：\n" + path)
+                    .setPositiveButton("复制路径", (d, w) -> {
+                        ClipboardManager cm = (ClipboardManager) requireContext()
+                                .getSystemService(Context.CLIPBOARD_SERVICE);
+                        if (cm != null) {
+                            cm.setPrimaryClip(ClipData.newPlainText("backup", path));
+                            Toast.makeText(requireContext(), "路径已复制", Toast.LENGTH_SHORT).show();
+                        }
+                    })
+                    .setNegativeButton("好", null)
+                    .show();
+        });
     }
 
     private void restoreBackup(Uri uri) {

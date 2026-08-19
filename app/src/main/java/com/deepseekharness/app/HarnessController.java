@@ -1821,15 +1821,16 @@ public class HarnessController {
 
     /** 启动计数自动备份：每启动 N 次触发一次自动备份（固定名自动覆盖上一个自动备份）。
      *  N 从配置项 auto_backup_launches 读取（默认 5，0=关闭）。
-     *  与手动备份独立（手动每次保留时间戳文件）。幂等、后台执行、失败静默。 */
+     *  与手动备份独立（手动每次保留时间戳文件）。幂等、后台执行、失败静默。
+     *  计数器独立（backup_launch_count），不与其他启动计数功能（备份提醒）共用。 */
     public void maybeAutoBackupOnLaunch() {
         try {
             final SharedPreferences prefs =
                     appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
             final int interval = prefs.getInt("auto_backup_launches", 5);
             if (interval <= 0) return; // 配置为 0 = 关闭自动备份
-            final int n = prefs.getInt("launch_count", 0) + 1;
-            prefs.edit().putInt("launch_count", n).apply();
+            final int n = prefs.getInt("backup_launch_count", 0) + 1;
+            prefs.edit().putInt("backup_launch_count", n).apply();
             if (n % interval != 0) return; // 每 N 次才备份
             IO.execute(() -> {
                 try {

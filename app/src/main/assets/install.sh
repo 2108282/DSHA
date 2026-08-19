@@ -19,7 +19,14 @@ echo "==> [1/6] 更新 apt 源"
 apt-get update -y >/dev/null
 
 echo "==> [2/6] 安装基础依赖 (curl/git/python3/gcc/xz)"
-apt-get install -y curl git python3 make gcc g++ xz-utils ca-certificates >/dev/null 2>&1
+if ! apt-get install -y curl git python3 make gcc g++ xz-utils ca-certificates; then
+  echo "!! 基础依赖安装失败（可能是网络/源问题），重试："
+  apt-get update -y
+  apt-get install -y curl git python3 make gcc g++ xz-utils ca-certificates || {
+    echo "!! 再次失败，请检查网络后到「安装」页重跑本步骤"
+    exit 1
+  }
+fi
 
 echo "==> [3/6] 下载并安装 Node.js (arm64)"
 NODE_VERSION="24.19.0"

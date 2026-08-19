@@ -28,6 +28,8 @@ public final class BackupManager {
 
     /** 自动备份固定文件名（自动覆盖上一个自动备份；与手动备份独立） */
     public static final String AUTO_BACKUP_NAME = "DSHA-backup-auto.tar.gz";
+    /** 手动备份最多保留份数（超出删最旧，防 Download/DSHA 无限膨胀） */
+    private static final int MAX_MANUAL_KEEP = 10;
 
     /** 执行备份并导出，返回外部存储中的完整路径；失败返回 null */
     public static String backupToExternal(Context ctx, HarnessController c) {
@@ -59,6 +61,8 @@ public final class BackupManager {
                     : writeDirect(tmp, name);
             //noinspection ResultOfMethodCallIgnored
             tmp.delete();
+            // 手动备份保留最近 MAX_MANUAL_KEEP 份，删最旧（防无限膨胀）
+            if (fixedName == null && path != null) pruneOldManual(ctx, name);
             return path;
         } catch (Exception e) {
             return null;
@@ -117,5 +121,77 @@ public final class BackupManager {
             while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
         }
         return dst.getAbsolutePath();
+    }
+
+    /** 清理旧手动备份：保留最近 MAX_MANUAL_KEEP 份（不含自动备份文件），删最旧。 */
+    private static void pruneOldManual(Context ctx, String justCreated) {
+        try {
+            java.util.List<android.net.Uri> all = new java.util.ArrayList<>();
+            // 查 MediaStore（Android 10+）或直接列目录（Android 9-）
+            if (Build.VERSION.SDK_INT >= 29) {
+                Uri collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+                try (android.database.Cursor cur = ctx.getContentResolver().query(collection,
+                        new String[]{MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME,
+                                MediaStore.MediaColumns.DATE_MODIFIED},
+                        MediaStore.MediaColumns.RELATIVE_PATH + "=?",
+                        new String[]{Environment.DIRECTORY_DOWNLOADS + "/DSHA/"}, null)) {
+                    if (cur != null) {
+                        while (cur.moveToNext()) {
+                            String dn = cur.getString(1);
+                            if (dn == null || !dn.startsWith("DSHA-backup-") || !dn.endsWith(".tar.gz")) continue;
+                            if (AUTO_BACKUP_NAME.equals(dn)) continue; // 自动备份不动
+                            all.add(android.content.ContentUris.withAppendedId(collection, cur.getLong(0)));
+                        }
+                    }
+                }
+            } else {
+                File dir = new File(Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS), "DSHA");
+                File[] fs = dir.listFiles((d, n) -> n.startsWith("DSHA-backup-") && n.endsWith(".tar.gz")
+                        && !AUTO_BACKUP_NAME.equals(n));
+                if (fs != null) {
+                    java.util.Arrays.sort(fs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+                    for (int i = MAX_MANUAL_KEEP; i < fs.length; i++) {
+                        //noinspection ResultOfMethodCallIgnored
+                        fs[i].delete();
+                    }
+                }
+                return;
+            }
+            // MediaStore：按 DATE_MODIFIED 降序，超出保留数的删最旧
+            if (all.size() > MAX_MANUAL_KEEP) {
+                java.util.List<Long> times = new java.util.ArrayList<>();
+                try (android.database.Cursor cur = ctx.getContentResolver().query(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        new String[]{MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATE_MODIFIED},
+                        MediaStore.MediaColumns.RELATIVE_PATH + "=?",
+                        new String[]{Environment.DIRECTORY_DOWNLOADS + "/DSHA/"}, null)) {
+                    if (cur != null) {
+                        java.util.Map<Long, Long> id2t = new java.util.HashMap<>();
+                        while (cur.moveToNext()) {
+                            long id = cur.getLong(0);
+                            String dn = null;
+                            try (android.database.Cursor c2 = ctx.getContentResolver().query(
+                                    android.content.ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id),
+                                    new String[]{MediaStore.MediaColumns.DISPLAY_NAME}, null, null, null)) {
+                                if (c2 != null && c2.moveToFirst()) dn = c2.getString(0);
+                            } catch (Throwable ignored) {
+                            }
+                            if (dn == null || AUTO_BACKUP_NAME.equals(dn)) continue;
+                            id2t.put(id, cur.getLong(1));
+                        }
+                        java.util.List<java.util.Map.Entry<Long, Long>> sorted = new java.util.ArrayList<>(id2t.entrySet());
+                        sorted.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
+                        for (int i = MAX_MANUAL_KEEP; i < sorted.size(); i++) {
+                            ctx.getContentResolver().delete(
+                                    android.content.ContentUris.withAppendedId(
+                                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, sorted.get(i).getKey()),
+                                    null, null);
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
     }
 }
