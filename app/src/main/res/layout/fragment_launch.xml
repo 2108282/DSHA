@@ -147,30 +147,16 @@
         </LinearLayout>
     </LinearLayout>
 
-    <LinearLayout
+    <FrameLayout
         android:id="@+id/launch_web"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@color/surface"
-        android:orientation="vertical"
         android:visibility="gone">
-
-        <TextView
-            android:id="@+id/launch_web_back"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingStart="16dp"
-            android:paddingTop="12dp"
-            android:paddingEnd="16dp"
-            android:paddingBottom="8dp"
-            android:text="‹ 返回"
-            android:textColor="@color/text_secondary"
-            android:textSize="14sp" />
 
         <FrameLayout
             android:id="@+id/launch_web_box"
             android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1" />
-    </LinearLayout>
+            android:layout_height="match_parent" />
+    </FrameLayout>
 </FrameLayout>

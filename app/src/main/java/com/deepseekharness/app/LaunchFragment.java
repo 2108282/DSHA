@@ -46,6 +46,7 @@ public class LaunchFragment extends Fragment {
 
     private boolean webReady = false;
     private boolean starting = false;
+    private boolean enterWhenReady = false;
     private boolean insideWeb = false;
     private String lastLog = "";
 
@@ -92,7 +93,6 @@ public class LaunchFragment extends Fragment {
         startBtn = view.findViewById(R.id.launch_start);
         Button restartBtn = view.findViewById(R.id.launch_open);
         Button stopBtn = view.findViewById(R.id.launch_stop);
-        TextView webBack = view.findViewById(R.id.launch_web_back);
 
         updateLanAddr();
         applyRunUi(false);
@@ -122,8 +122,9 @@ public class LaunchFragment extends Fragment {
                 return;
             }
             starting = true;
+            enterWhenReady = true;
             applyRunUi(false);
-            statusText.setText("正在启动…");
+            statusText.setText("正在启动，起来后直接进入…");
             Intent i = new Intent(requireContext(), HarnessService.class);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 requireContext().startForegroundService(i);
@@ -144,6 +145,7 @@ public class LaunchFragment extends Fragment {
         stopBtn.setOnClickListener(v -> {
             closeWeb();
             starting = false;
+            enterWhenReady = false;
             webReady = false;
             applyRunUi(false);
             Intent i = new Intent(requireContext(), HarnessService.class)
@@ -176,6 +178,10 @@ public class LaunchFragment extends Fragment {
                 if (up) starting = false;
                 webReady = up;
                 applyRunUi(up);
+                if (up && enterWhenReady && !insideWeb) {
+                    enterWhenReady = false;
+                    openWeb();
+                }
                 if (!insideWeb && log != null && !log.equals(lastLog)) {
                     lastLog = log;
                     logText.setText(log.isEmpty() ? "还没有日志。" : log);
