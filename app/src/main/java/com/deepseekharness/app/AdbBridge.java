@@ -77,12 +77,22 @@ public final class AdbBridge {
     }
 
     /** 注入 wheels 离线包：Java 直接把 assets 的 tar.gz 写进 rootfs（不经 shell 命令行，
-     *  避免 10MB base64 超长），再 shell 解压到 /root/.dsh/wheels/ */
+     *  避免 10MB base64 超长），再 shell 解压到 /root/.dsh/wheels/。
+     *  注意 aapt 会把 assets 里的 .tar.gz 解包成 .tar，所以两种后缀都试。 */
     public static String injectWheels(Context ctx, ProotBootstrap proot) {
         try {
             java.io.File dst = new java.io.File(proot.getRootfsDir(), "root/.dsh/adb-wheels.tar.gz");
             dst.getParentFile().mkdirs();
-            java.io.InputStream in = ctx.getAssets().open("adb-wheels.tar.gz");
+            java.io.InputStream in = null;
+            try {
+                in = ctx.getAssets().open("adb-wheels.tar.gz");
+            } catch (java.io.IOException e1) {
+                try {
+                    in = ctx.getAssets().open("adb-wheels.tar");
+                } catch (java.io.IOException e2) {
+                    return "WHEELS_INJECT_FAIL: assets 里找不到 adb-wheels.tar.gz/.tar（APK 可能没打进去）";
+                }
+            }
             java.io.FileOutputStream fos = new java.io.FileOutputStream(dst);
             byte[] buf = new byte[65536];
             int n;
@@ -93,6 +103,7 @@ public final class AdbBridge {
             }
             fos.close();
             in.close();
+            // 若 aapt 已把 .tar.gz 变 .tar，这里拿到的是裸 tar；tar xzf 对裸 tar 也兼容（gzip 魔数自动判断）
             String r = proot.execAndRead("mkdir -p /root/.dsh/wheels && "
                     + "tar xzf /root/.dsh/adb-wheels.tar.gz -C /root/.dsh/wheels/ && "
                     + "ls /root/.dsh/wheels/*.whl | wc -l");
