@@ -62,7 +62,6 @@
         android:layout_height="wrap_content"
         android:background="@color/nav_scrim"
         app:elevation="0dp"
-        app:itemActiveIndicatorStyle="@style/Widget.Dsha.NavIndicator"
         app:itemIconTint="@color/nav_item_color"
         app:itemRippleColor="@color/accent_dim"
         app:itemTextColor="@color/nav_item_color"
