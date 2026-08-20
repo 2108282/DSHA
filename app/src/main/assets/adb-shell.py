@@ -11,6 +11,7 @@ DSHA 设备 shell 工具（ADB 无线通道，免 Shizuku）。
 """
 import sys
 import os
+import time
 
 KEYDIR = '/root/.dsh/adbkeys'
 KEY = KEYDIR + '/adbkey'
@@ -37,7 +38,12 @@ def main():
         try:
             port = int(open(KEYDIR + '/connect_port').read().strip())
         except Exception:
-            port = 5555
+            port = 0
+    if not port:
+        # 自愈：connect_port 缺失/失效时，mDNS 自动发现无线调试连接端口（无需重新配对）
+        port = discover_conn_port()
+    if not port:
+        port = 5555
 
     from adb_shell_wifi.adb_device import AdbDeviceTcp
     from adb_shell_wifi.auth.sign_pythonrsa import PythonRSASigner
@@ -52,6 +58,38 @@ def main():
 
     sys.stdout.write(out if out.endswith('\n') else out + '\n')
     print('[EXIT=0]')
+
+
+def discover_conn_port(timeout_s=5):
+    """mDNS 自动发现无线调试连接端口（_adb-tls-connect）。找到返回端口，失败返回 0。"""
+    try:
+        from zeroconf import Zeroconf, ServiceBrowser, ServiceListener
+        found = {}
+        class L(ServiceListener):
+            def add_service(self, zc, type_, name):
+                info = zc.get_service_info(type_, name)
+                if info:
+                    found[info.port] = name
+            def update_service(self, zc, type_, name):
+                pass
+            def remove_service(self, zc, type_, name):
+                pass
+        zc = Zeroconf()
+        ServiceBrowser(zc, '_adb-tls-connect._tcp.local.', L())
+        time.sleep(timeout_s)
+        zc.close()
+        if found:
+            p = sorted(found)[0]
+            # 顺手回写 connect_port，下次秒连
+            try:
+                with open(KEYDIR + '/connect_port', 'w') as f:
+                    f.write(str(p))
+            except Exception:
+                pass
+            return p
+    except Exception:
+        pass
+    return 0
 
 
 if __name__ == '__main__':

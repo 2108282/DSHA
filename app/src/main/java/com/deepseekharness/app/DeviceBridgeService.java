@@ -70,6 +70,8 @@ public class DeviceBridgeService extends Service {
     private NsdManager nsd;
     private NsdManager.DiscoveryListener pairListener;
     private long lastNotifiedAt = 0;
+    /** 手动开启无线调试提醒节流 */
+    private volatile long lastManualNotifyAt = 0;
 
     public static boolean isRunning() {
         return running;
@@ -94,6 +96,7 @@ public class DeviceBridgeService extends Service {
         prewarmAdb();
         postCard();
         startPairWatcher();
+        startConnWatcher(); // ADB 连接看门狗：掉线自动重连（参考 Shizuku 生态看门狗）
     }
 
     @Override
@@ -182,6 +185,129 @@ public class DeviceBridgeService extends Service {
             nm.notify(CARD_NOTIF_ID, b.build());
         } catch (Throwable ignored) {
         }
+    }
+
+    /**
+     * ADB 连接看门狗：周期探测 adb-shell 是否可用（参考 Shizuku 生态看门狗思路）。
+     * 掉线自动重连：Nsd 重新发现 _adb-tls-connect 连接端口 → 用已有 adbkey 直连（无需重新配对）。
+     * 无线调试被系统关闭（_adb-tls-connect 找不到）→ 尝试 Shizuku 自动重开 → 失败通知用户。
+     */
+    private void startConnWatcher() {
+        final android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+        final Runnable check = new Runnable() {
+            @Override
+            public void run() {
+                if (!running || !isAdbEnabled(DeviceBridgeService.this)) return;
+                new Thread(() -> {
+                    try {
+                        HarnessController c = HarnessController.get(DeviceBridgeService.this);
+                        if (c == null || !c.getProot().isInstalled()) return;
+                        // 1. 探测当前连接是否可用
+                        String r = c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py id 2>&1 | head -3");
+                        if (r != null && r.contains("uid=")) return; // 连接正常
+                        // 2. 掉线：重新发现 _adb-tls-connect 连接端口
+                        int connPort = discoverConnPortSync();
+                        if (connPort > 0) {
+                            saveConnectPort(connPort);
+                            // 3. 用新端口再测一次
+                            String r2 = c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py --port " + connPort + " id 2>&1 | head -3");
+                            if (r2 != null && r2.contains("uid=")) {
+                                android.util.Log.i("DSHA-ADB", "看门狗：已自动重连端口 " + connPort);
+                                return;
+                            }
+                        }
+                        // 4. 无线调试可能被关：尝试 Shizuku 自动重开
+                        if (ShizukuShell.isAvailable()) {
+                            String out = ShizukuShell.exec("settings put global adb_wifi_enabled 1 2>&1; adb tcpip 5555 2>&1");
+                            android.util.Log.i("DSHA-ADB", "看门狗：Shizuku 尝试重开无线调试 → " + out);
+                            if (out != null && !out.contains("[NO_") && !out.contains("ERROR")) {
+                                // 等 5s 让 adbd 起来，再重试一次
+                                try { Thread.sleep(5000); } catch (InterruptedException ignored) { }
+                                int p2 = discoverConnPortSync();
+                                if (p2 > 0) {
+                                    saveConnectPort(p2);
+                                    c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py --port " + p2 + " id 2>&1 | head -1");
+                                }
+                                return;
+                            }
+                        }
+                        // 5. 都失败：低频通知用户手动开（45s 冷却已有）
+                        notifyNeedManual(this);
+                    } catch (Throwable ignored) {
+                    }
+                }, "dsha-adb-watchdog").start();
+                h.postDelayed(this, 30000); // 30s 周期
+            }
+        };
+        h.postDelayed(check, 15000); // 启动 15s 后首查
+    }
+
+    /** 同步发现 _adb-tls-connect 连接端口（0=没发现） */
+    private int discoverConnPortSync() {
+        final int[] port = new int[1];
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        try {
+            NsdManager nm = (NsdManager) getSystemService(Context.NSD_SERVICE);
+            if (nm == null) return 0;
+            final NsdManager.DiscoveryListener[] holder = new NsdManager.DiscoveryListener[1];
+            holder[0] = new NsdManager.DiscoveryListener() {
+                @Override public void onDiscoveryStarted(String t) { }
+                @Override public void onDiscoveryStopped(String t) { }
+                @Override public void onStartDiscoveryFailed(String t, int e) { done.countDown(); }
+                @Override public void onStopDiscoveryFailed(String t, int e) { }
+                @Override public void onServiceFound(NsdServiceInfo info) {
+                    nm.resolveService(info, new NsdManager.ResolveListener() {
+                        @Override public void onResolveFailed(NsdServiceInfo s, int e) { done.countDown(); }
+                        @Override public void onServiceResolved(NsdServiceInfo s) {
+                            port[0] = s.getPort();
+                            try { nm.stopServiceDiscovery(holder[0]); } catch (Throwable ignored) { }
+                            done.countDown();
+                        }
+                    });
+                }
+                @Override public void onServiceLost(NsdServiceInfo info) { }
+            };
+            nm.discoverServices("_adb-tls-connect._tcp.", NsdManager.PROTOCOL_DNS_SD, holder[0]);
+            done.await(4000, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (Throwable ignored) { }
+        return port[0];
+    }
+
+    /** 写连接端口到 rootfs（adb-shell.py 默认读取） */
+    private void saveConnectPort(int port) {
+        try {
+            HarnessController c = HarnessController.get(this);
+            if (c == null || c.getProot() == null) return;
+            c.getProot().execAndRead("mkdir -p /root/.dsh/adbkeys && echo " + port + " > /root/.dsh/adbkeys/connect_port");
+        } catch (Throwable ignored) { }
+    }
+
+    /** 通知用户需要手动开无线调试（低频） */
+    private void notifyNeedManual(Runnable self) {
+        try {
+            long now = System.currentTimeMillis();
+            if (now - lastManualNotifyAt < 600000) return; // 10 分钟一次
+            lastManualNotifyAt = now;
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            if (Build.VERSION.SDK_INT >= 26) {
+                NotificationChannel ch = new NotificationChannel(
+                        WATCH_CHANNEL, "ADB 连接提醒", NotificationManager.IMPORTANCE_DEFAULT);
+                nm.createNotificationChannel(ch);
+            }
+            Intent app = new Intent(this, MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            PendingIntent pi = PendingIntent.getActivity(this, 25, app,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            NotificationCompat.Builder b = new NotificationCompat.Builder(this, WATCH_CHANNEL)
+                    .setSmallIcon(R.drawable.ic_launch)
+                    .setContentTitle("🔌 ADB 连接已断开")
+                    .setContentText("已尝试自动重连失败。请打开手机「无线调试」（开发者选项），将自动恢复连接")
+                    .setContentIntent(pi)
+                    .setAutoCancel(true)
+                    .setPriority(NotificationCompat.PRIORITY_DEFAULT);
+            nm.notify(WATCH_NOTIF_ID, b.build());
+        } catch (Throwable ignored) { }
     }
 
     /** 持续监听无线调试配对服务（弹窗打开时 adbd 会广播 _adb-tls-pairing） */
