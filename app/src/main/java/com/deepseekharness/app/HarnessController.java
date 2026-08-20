@@ -799,6 +799,11 @@ public class HarnessController {
             ensureNativeMobileAdapt();
         } catch (Throwable ignored) {
         }
+        // 设备 Shell 引导插件（rc.8 bundle 模式）：让 agent 系统提示里知道可用 ADB
+        try {
+            ensureDeviceShellGuide();
+        } catch (Throwable ignored) {
+        }
         // 内置插件快照：只录实体目录（排除符号链接=用户安装插件），安装完成时最干净基线
         // 快照缺失时才生成（后续沿用；想重扫可删 /root/dsha-builtin.txt）
         runStep("生成内置插件快照", 98,
@@ -1587,6 +1592,46 @@ public class HarnessController {
     }
 
     /** 把 assets 内文本资源写入 rootfs 指定文件（目录自动建） */
+    /** 确保「设备 Shell 引导」插件已注入 rootfs 并注册为 web profile bundle。
+     *  让 agent 在系统提示里知道可用 /root/dsh-bin/adb-shell 干预手机。
+     *  rc.8 全局 npm 模式适配（不走 packages/host，直接 file: bundle 挂载）。
+     *  幂等：已注册跳过；失败不影响安装。 */
+    private void ensureDeviceShellGuide() {
+        try {
+            final String NAME = "dsh-device-shell-guide";
+            java.io.File dir = new java.io.File(proot.getRootfsDir(), "root/dsha-device-shell-guide");
+            // 1) 注入插件包（assets 三件套）
+            writeAssetTo("device-shell-guide/package.json", new java.io.File(dir, "package.json"));
+            writeAssetTo("device-shell-guide/cordis.patch.yml", new java.io.File(dir, "cordis.patch.yml"));
+            writeAssetTo("device-shell-guide/lib/index.js", new java.io.File(dir, "lib/index.js"));
+            java.io.File marker = new java.io.File(proot.getRootfsDir(), "root/dsha-device-shell-guide-installed");
+            if (marker.exists()) return;
+            // 2) 注册到 web profile：dependencies(file:) + bundles（幂等）
+            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+            if (pf.isFile()) {
+                String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
+                org.json.JSONObject root = new org.json.JSONObject(txt);
+                org.json.JSONObject deps = root.optJSONObject("dependencies");
+                if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
+                if (!deps.has(NAME)) deps.put(NAME, "file:/root/dsha-device-shell-guide");
+                org.json.JSONObject profile = root.optJSONObject("dsh").optJSONObject("profile");
+                if (profile != null) {
+                    org.json.JSONArray bundles = profile.optJSONArray("bundles");
+                    if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
+                    boolean found = false;
+                    for (int i = 0; i < bundles.length(); i++) {
+                        if (NAME.equals(bundles.optString(i, ""))) { found = true; break; }
+                    }
+                    if (!found) bundles.put(NAME);
+                }
+                java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
+                java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
+                android.util.Log.i("DSHA", "设备 Shell 引导插件已注册（rc.8 bundle 模式）");
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     private void writeAssetTo(String assetName, java.io.File dst) {
         try {
             String s = readAsset(assetName);
