@@ -556,6 +556,92 @@ public class HarnessController {
         }
     }
 
+
+    /** 极简模式 ADB 引导：官方 minimal preset 的 persona 是 complete:true（固定 prompt），
+     *  设备引导 section 永远不显示。用用户自定义 preset（$DSH_HOME/.agent-presets/minimal/）
+     *  同名覆盖官方，persona text 加入设备操作引导，保留双工具。
+     *  幂等：已存在且含标记跳过；失败不影响安装。 */
+    private void ensureMinimalPresetGuide() {
+        try {
+            java.io.File presetDir = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/.agent-presets/minimal");
+            java.io.File meta = new java.io.File(presetDir, "preset.yml");
+            java.io.File comp = new java.io.File(presetDir, "agent.cordis.yml");
+            if (meta.exists() && comp.exists()) {
+                String c = new String(java.nio.file.Files.readAllBytes(comp.toPath()), StandardCharsets.UTF_8);
+                if (c.contains("dsha-device-guide")) return;
+            }
+            presetDir.mkdirs();
+            java.nio.file.Files.write(meta.toPath(), (
+                    "name: 极简模式（DSHA 设备增强）\n" +
+                    "description: 仅提供持久 bash 与 str_replace_editor 的双工具编码 Agent，附设备操作能力。\n" +
+                    "order: 3\n").getBytes(StandardCharsets.UTF_8));
+            String guide = "你正运行在用户 Android 手机的容器里，可以直接干预这台实体手机：\n"
+                    + "- 设备 shell（uid=2000，已配对、无需 root）：/root/dsh-bin/adb-shell \"命令\"\n"
+                    + "- 备选通道（Shizuku 桥）：curl -s \"http://127.0.0.1:3090/exec?cmd=...\"\n"
+                    + "- 常用操作：查设备信息(getprop)、启动应用(am start -n 包名/Activity)、查进程、读写 /sdcard 共享目录、抓日志(dumpsys/logcat)。\n"
+                    + "- 权限边界：shell 级（非 root），失败就如实告诉用户。\n"
+                    + "- 安全：涉及删除/格式化/重启/卸载等破坏性命令，动手前先向用户说明后果。";
+            String compContent =
+                    "# DSHA minimal preset（覆盖官方，persona 含设备操作引导） dsha-device-guide\n"
+                    + "- id: persona\n"
+                    + "  name: '@deepseek-ai/dsh-persona'\n"
+                    + "  config:\n"
+                    + "    text: |-\n"
+                    + "      You are a helpful software engineer assistant.\n"
+                    + "      \n"
+                    + "      【设备操作能力 · DSHA】" + guide.replace("\n", "\n      ") + "\n"
+                    + "    complete: true\n"
+                    + "    includeRuntimeContext: false\n"
+                    + "\n"
+                    + "- id: persistent-shell\n"
+                    + "  name: cordis:group\n"
+                    + "  group: true\n"
+                    + "  isolate:\n"
+                    + "    terminals: true\n"
+                    + "  config:\n"
+                    + "    - id: pty\n"
+                    + "      name: '@deepseek-ai/dsh-terminal'\n"
+                    + "    - id: terminal-bash\n"
+                    + "      name: '@deepseek-ai/dsh-terminal-bash'\n"
+                    + "      disabled: !!js process.platform === 'win32'\n"
+                    + "    - id: persistent-bash\n"
+                    + "      name: '@deepseek-ai/dsh-tool-bash-persistent'\n"
+                    + "      disabled: !!js process.platform === 'win32'\n"
+                    + "      config:\n"
+                    + "        timeoutMs: 300000\n"
+                    + "    - id: terminal-pwsh\n"
+                    + "      name: '@deepseek-ai/dsh-terminal-bash'\n"
+                    + "      disabled: !!js process.platform !== 'win32'\n"
+                    + "      config:\n"
+                    + "        shellDialect: pwsh\n"
+                    + "        timeoutMs: 300000\n"
+                    + "    - id: persistent-pwsh\n"
+                    + "      name: '@deepseek-ai/dsh-tool-pwsh-persistent'\n"
+                    + "      disabled: !!js process.platform !== 'win32'\n"
+                    + "      config:\n"
+                    + "        timeoutMs: 300000\n"
+                    + "\n"
+                    + "- id: filesystem\n"
+                    + "  name: cordis:group\n"
+                    + "  group: true\n"
+                    + "  isolate:\n"
+                    + "    fs: true\n"
+                    + "  config:\n"
+                    + "    - id: fs-local\n"
+                    + "      name: '@deepseek-ai/dsh-fs-local'\n"
+                    + "      config:\n"
+                    + "        cwd: !!js process.env.DSH_CWD ?? process.cwd()\n"
+                    + "    - id: str-replace-editor\n"
+                    + "      name: '@deepseek-ai/dsh-tool-str-replace-editor'\n"
+                    + "      config:\n"
+                    + "        maxOutputChars: 16000\n";
+            java.nio.file.Files.write(comp.toPath(), compContent.getBytes(StandardCharsets.UTF_8));
+            android.util.Log.i("DSHA", "极简模式设备引导 preset 已写入");
+        } catch (Throwable ignored) {
+        }
+    }
+
     private void ensureConfigFixAsset() {
         try {
             String js = readAsset("config-fix.js");
@@ -849,6 +935,12 @@ public class HarnessController {
         // 设备 Shell 引导插件（rc.8 bundle 模式）：让 agent 系统提示里知道可用 ADB
         try {
             ensureDeviceShellGuide();
+        } catch (Throwable ignored) {
+        }
+        // 极简模式设备引导：minimal preset 的 persona 是 complete:true，
+        // 覆盖官方 preset 让极简模式 agent 也能用 ADB 设备操作
+        try {
+            ensureMinimalPresetGuide();
         } catch (Throwable ignored) {
         }
         // 内置插件快照：只录实体目录（排除符号链接=用户安装插件），安装完成时最干净基线
