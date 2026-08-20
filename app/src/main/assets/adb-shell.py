@@ -45,11 +45,12 @@ def main():
     if not port:
         port = 5555
 
-    from adb_shell_wifi.adb_device import AdbDeviceTcp
+    from adb_shell_wifi.adb_device import AdbDeviceTls  # Android 11+ Wi-Fi 调试必须用 TLS 传输
     from adb_shell_wifi.auth.sign_pythonrsa import PythonRSASigner
 
     signer = PythonRSASigner(open(KEYPUB, 'rb').read().strip(), open(KEY, 'rb').read())
-    dev = AdbDeviceTcp('127.0.0.1', port)
+    priv_pem = open(KEY, 'rb').read()  # PKCS#8 PEM，作为 TLS 客户端私钥（官方文档要求）
+    dev = AdbDeviceTls('127.0.0.1', port, tls_priv_pem=priv_pem)
     dev.connect(rsa_keys=[signer], auth_timeout_s=15)
     try:
         out = dev.shell(cmd)
