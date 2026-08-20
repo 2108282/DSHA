@@ -518,7 +518,10 @@ public class HarnessController {
             if (!pf.isFile()) return;
             String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
             org.json.JSONObject root = new org.json.JSONObject(txt);
-            org.json.JSONArray bundles = root.optJSONObject("dsh").optJSONObject("profile").optJSONArray("bundles");
+            if (root.optJSONObject("dsh") == null) return;
+            org.json.JSONObject profObj = root.optJSONObject("dsh").optJSONObject("profile");
+            if (profObj == null) return;
+            org.json.JSONArray bundles = profObj.optJSONArray("bundles");
             if (bundles == null) return;
             String[][] builtins = {
                     {"dsh-client-ui-mobile-adapt", "/root/dsha-mobile-adapt"},
@@ -1738,16 +1741,18 @@ public class HarnessController {
                     org.json.JSONObject deps = root.optJSONObject("dependencies");
                     if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
                     if (!deps.has(NAME)) deps.put(NAME, "link:" + REAL);
-                    org.json.JSONObject profile = root.optJSONObject("dsh").optJSONObject("profile");
-                    if (profile != null) {
-                        org.json.JSONArray bundles = profile.optJSONArray("bundles");
-                        if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
-                        boolean found = false;
-                        for (int i = 0; i < bundles.length(); i++) {
-                            if (NAME.equals(bundles.optString(i, ""))) { found = true; break; }
-                        }
-                        if (!found) bundles.put(NAME);
+                    // 空安全：dsh/profile 可能不存在（全新 profile 或被 reconcile 清空）→ 需创建
+                    org.json.JSONObject dshObj = root.optJSONObject("dsh");
+                    if (dshObj == null) { dshObj = new org.json.JSONObject(); root.put("dsh", dshObj); }
+                    org.json.JSONObject profile = dshObj.optJSONObject("profile");
+                    if (profile == null) { profile = new org.json.JSONObject(); dshObj.put("profile", profile); }
+                    org.json.JSONArray bundles = profile.optJSONArray("bundles");
+                    if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
+                    boolean found = false;
+                    for (int i = 0; i < bundles.length(); i++) {
+                        if (NAME.equals(bundles.optString(i, ""))) { found = true; break; }
                     }
+                    if (!found) bundles.put(NAME);
                     java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
                 }
                 // 确保 node_modules 有可解析链接（link: 语义 = 符号链接）
@@ -2295,8 +2300,12 @@ public class HarnessController {
             if (!pf.isFile()) return set;
             String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()),
                     java.nio.charset.StandardCharsets.UTF_8);
-            org.json.JSONArray bundles = new org.json.JSONObject(txt)
-                    .optJSONObject("dsh").optJSONObject("profile").optJSONArray("bundles");
+            org.json.JSONObject root = new org.json.JSONObject(txt);
+            org.json.JSONObject dshObj = root.optJSONObject("dsh");
+            if (dshObj == null) return set;
+            org.json.JSONObject profObj = dshObj.optJSONObject("profile");
+            if (profObj == null) return set;
+            org.json.JSONArray bundles = profObj.optJSONArray("bundles");
             if (bundles != null) for (int i = 0; i < bundles.length(); i++) {
                 String v = bundles.optString(i, "").trim();
                 if (!v.isEmpty()) set.add(v);
@@ -2362,8 +2371,9 @@ public class HarnessController {
             org.json.JSONObject root = new org.json.JSONObject(txt);
             // dsh.profile.bundles（官方插件层列表，最权威）
             try {
-                org.json.JSONArray bundles = root.optJSONObject("dsh")
-                        .optJSONObject("profile").optJSONArray("bundles");
+                org.json.JSONObject dshObj2 = root.optJSONObject("dsh");
+                org.json.JSONObject profObj2 = dshObj2 == null ? null : dshObj2.optJSONObject("profile");
+                org.json.JSONArray bundles = profObj2 == null ? null : profObj2.optJSONArray("bundles");
                 if (bundles != null) for (int i = 0; i < bundles.length(); i++) {
                     String v = bundles.optString(i, "").trim();
                     if (!v.isEmpty()) set.add(v);
