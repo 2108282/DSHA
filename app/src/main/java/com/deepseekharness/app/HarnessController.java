@@ -2278,6 +2278,10 @@ public class HarnessController {
                 return;
             }
             if (installedRc.equals(last)) return; // 已处理过这个版本
+            // 升级前快照：记录旧版本（回滚/诊断用）
+            if (!last.isEmpty()) {
+                prefs.edit().putString("prev_dsh_rc", last).apply();
+            }
             prefs.edit().putString("last_dsh_rc", installedRc).apply();
             // 版本变化：后台【先⑤装最新 rc → 再⑥适配】
             android.util.Log.i("DSHA", "检测到 dsh 版本变化 " + last + " → " + installedRc + "，自动重装⑤+⑥");

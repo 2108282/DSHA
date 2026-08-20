@@ -50,6 +50,10 @@ for F in $TARGETS; do
 done
 
 # ===== 4) /api trust fence 兜底（IP 字面量 Host 放行；修复局域网 403） =====
+# rc.8 有 4 处 isTrustedApiRequest 拦截（loopback interceptor/route/PRIVILEGED/route2），
+# 只改一处 !isTrustedAuthority 不够。直接让 isTrustedApiRequest 恒真（LAN 全放行）：
+#   function isTrustedApiRequest(...) { return true }
+# 兼容旧版（只有 !isTrustedAuthority 一处）：两套 sed 都打。
 # RC6/npm 路径含 dsh-client-connection；源码构建路径是 packages/client/connection（无 dsh- 前缀）
 TF_LIST=$(find /usr/local/lib/node_modules /root* -maxdepth 16 \
   \( -path '*dsh-client-connection/lib/index.js' -o -path '*/packages/client/connection/lib/index.js' \) 2>/dev/null | head -6)
@@ -58,20 +62,23 @@ TF_LIST=$(find /usr/local/lib/node_modules /root* -maxdepth 16 \
 for TF in $TF_LIST; do
   [ -f "$TF" ] || continue
   grep -q 'dsha-lan-ip' "$TF" && { ALREADY=1; continue; }
-  if grep -q 'isTrustedAuthority' "$TF"; then
-    # 兼容旧版（isTrustedAuthority(hostUrl)）与 rc.8（isTrustedAuthority(hostUrl, trustedHosts) 嵌套括号）。
-    # sed 的 [^)]* 在嵌套括号处截断会漏替换 → 优先用 perl 平衡括号匹配（rootfs 有 perl 时），
-    # 无 perl 回退 sed 双模式（先试带嵌套的，再试单参数）。
-    if command -v perl >/dev/null 2>&1; then
-      perl -pi -e 's/&& !isTrustedAuthority\((?:(?:[^()]|\([^()]*\))*)\)/&& 0 \/\* dsha-lan-ip \*\//g' "$TF"
-    else
-      sed -i -E \
-        -e "s|&& !isTrustedAuthority\([^()]*\([^()]*\)[^()]*\)|&& 0 /* dsha-lan-ip */|g" \
-        -e "s|&& !isTrustedAuthority\([^()]*\)|&& 0 /* dsha-lan-ip */|g" \
-        "$TF"
-    fi
-    grep -q 'dsha-lan-ip' "$TF" && PATCHED=$((PATCHED + 1))
+  # 方案A（rc.8）：整个 isTrustedApiRequest 函数体替换为恒真
+  if grep -q 'function isTrustedApiRequest' "$TF"; then
+    sed -i -E \
+      -e 's|function isTrustedApiRequest\(request, trustedHosts\) \{\n\tconst host = header\(request\.headers, "host"\);|function isTrustedApiRequest(request, trustedHosts) { return true /* dsha-lan-ip */; const host = header(request.headers, "host");|' \
+      -e 's|function isTrustedApiRequest\(request, trustedHosts\) \{|function isTrustedApiRequest(request, trustedHosts) { return true /* dsha-lan-ip */;|' \
+      "$TF"
   fi
+  # 方案B（旧版）：!isTrustedAuthority(...) 调用点置 0
+  if command -v perl >/dev/null 2>&1; then
+    perl -pi -e 's/&& !isTrustedAuthority\((?:(?:[^()]|\([^()]*\))*)\)/&& 0 \/\* dsha-lan-ip \*\//g' "$TF"
+  else
+    sed -i -E \
+      -e "s|&& !isTrustedAuthority\([^()]*\([^()]*\)[^()]*\)|&& 0 /* dsha-lan-ip */|g" \
+      -e "s|&& !isTrustedAuthority\([^()]*\)|&& 0 /* dsha-lan-ip */|g" \
+      "$TF"
+  fi
+  grep -q 'dsha-lan-ip' "$TF" && PATCHED=$((PATCHED + 1))
 done
 
 if [ "$PATCHED" -gt 0 ]; then echo "LAN_PATCHED:${PATCHED}files"; exit 0; fi
