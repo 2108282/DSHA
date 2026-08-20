@@ -564,7 +564,7 @@ public class HarnessController {
     private void ensureMinimalPresetGuide() {
         try {
             java.io.File presetDir = new java.io.File(proot.getRootfsDir(),
-                    "root/.dsh/.agent-presets/minimal");
+                    "root/.dsh/.agent-presets/dsha-minimal");
             java.io.File meta = new java.io.File(presetDir, "preset.yml");
             java.io.File comp = new java.io.File(presetDir, "agent.cordis.yml");
             if (meta.exists() && comp.exists()) {
@@ -639,6 +639,30 @@ public class HarnessController {
                     + "      config:\n"
                     + "        maxOutputChars: 16000\n";
             java.nio.file.Files.write(comp.toPath(), compContent.getBytes(StandardCharsets.UTF_8));
+            // 双保险：home 级 cordis.patch.yml 覆盖【官方极简】的 bash 工具描述，
+            // 让选官方极简的用户也能看到 ADB 提示（patch 按 id 覆盖 persistent-bash）
+            try {
+                java.io.File hp = new java.io.File(proot.getRootfsDir(), "root/.dsh/cordis.patch.yml");
+                String hpText = hp.isFile()
+                        ? new String(java.nio.file.Files.readAllBytes(hp.toPath()), StandardCharsets.UTF_8) : "";
+                if (!hpText.contains("dsha-device-guide-bash")) {
+                    String patchBlock =
+                            "\n# DSHA device guide (dsha-device-guide-bash) - 官方极简模式 bash 工具描述注入\n"
+                            + "- update:\n"
+                            + "  - id: persistent-bash\n"
+                            + "    name: '@deepseek-ai/dsh-tool-bash-persistent'\n"
+                            + "    config:\n"
+                            + "      description: |+\n"
+                            + "        Run commands in a bash shell\n"
+                            + "        * 设备操作：/root/dsh-bin/adb-shell \"命令\"（唯一可用通道，uid=2000，已配对）\n"
+                            + "        * 不要用裸 adb（守卫脚本，会失败）；Shizuku 桥备用 curl 127.0.0.1:3090/exec\n"
+                            + "        * 与用户交流请用中文回复\n";
+                    hpText += patchBlock;
+                    java.nio.file.Files.write(hp.toPath(), hpText.getBytes(StandardCharsets.UTF_8));
+                    android.util.Log.i("DSHA", "home patch 已注入官方极简 bash 描述");
+                }
+            } catch (Throwable ignored) {
+            }
             android.util.Log.i("DSHA", "极简模式设备引导 preset 已写入");
         } catch (Throwable ignored) {
         }
