@@ -103,9 +103,13 @@ public final class AdbBridge {
             }
             fos.close();
             in.close();
-            // 若 aapt 已把 .tar.gz 变 .tar，这里拿到的是裸 tar；tar xzf 对裸 tar 也兼容（gzip 魔数自动判断）
+            // 关键：aapt 打包时可能把 .tar.gz 解包成裸 .tar（HANDOFF 坑F）。
+            // 不能固定 tar xzf（强制 gzip，裸 tar 会报 'not in gzip format'）：
+            // 先看魔数，1f 8b = gzip → xzf，否则 = 裸 tar → xf
             String r = proot.execAndRead("mkdir -p /root/.dsh/wheels && "
-                    + "tar xzf /root/.dsh/adb-wheels.tar.gz -C /root/.dsh/wheels/ && "
+                    + "M=$(head -c2 /root/.dsh/adb-wheels.tar.gz | od -An -tx1 | tr -d ' \\n'); "
+                    + "if [ \"$M\" = \"1f8b\" ]; then tar xzf /root/.dsh/adb-wheels.tar.gz -C /root/.dsh/wheels/; "
+                    + "else tar xf /root/.dsh/adb-wheels.tar.gz -C /root/.dsh/wheels/; fi && "
                     + "ls /root/.dsh/wheels/*.whl | wc -l");
             return "WHEELS_INJECTED(" + total + "B): " + (r == null ? "?" : r.trim()) + " whl";
         } catch (Throwable t) {
