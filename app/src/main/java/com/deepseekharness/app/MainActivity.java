@@ -75,6 +75,8 @@ public class MainActivity extends AppCompatActivity {
         HarnessController.get(this).maybeAutoBackupOnLaunch();
         // 检测 dsh 新版本 → 自动重跑⑥（安全守卫/补丁/内置插件适配新版本）
         HarnessController.get(this).maybeAutoReinstallGuardOnDshUpdate();
+        // ADB 链路自动体检+自愈（打开即用：脚本/依赖/包装命令/连接，缺啥修啥）
+        HarnessController.get(this).maybeAdbSelfHeal();
         // 崩溃自愈提示：上次异常退出时读 crash.log 告知原因（不阻塞使用）
         showCrashRecoveryNotice();
         // 解压完成后进入主界面（skip_extract=true）才检测"全新环境可恢复"，

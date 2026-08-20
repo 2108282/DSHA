@@ -2263,6 +2263,45 @@ public class HarnessController {
         }
     }
 
+    /** 启动时全链路自动体检+自愈（打开即用，用户无感）：
+     *  脚本注入→依赖→包装命令→连接，缺啥修啥；ADB 开关没开则跳过。 */
+    public void maybeAdbSelfHeal() {
+        try {
+            if (!DeviceBridgeService.isAdbEnabled(appContext)) return; // 尊重开关
+            if (!proot.isInstalled()) return;
+            IO.execute(() -> {
+                try {
+                    // 1) 脚本版本不符 → 重注入
+                    if (!AdbBridge.injected(proot)) {
+                        AdbBridge.inject(appContext, proot);
+                    }
+                    // 2) wheels 缺失 → 注入
+                    if (!AdbBridge.wheelsPresent(proot)) {
+                        AdbBridge.injectWheels(appContext, proot);
+                    }
+                    // 3) 依赖/密钥/包装命令 任一缺失 → 完整 setup
+                    if (!AdbBridge.keyPresent(proot) || !AdbBridge.depsOk(proot)
+                            || !AdbBridge.wrapperPresent(proot)) {
+                        String setup = AdbBridge.setup(proot);
+                        android.util.Log.i("DSHA-ADB", "启动自愈 setup: " + setup);
+                    }
+                    // 4) 有密钥有依赖 → 探一次连接（失败交给看门狗周期重连）
+                    if (AdbBridge.keyPresent(proot) && AdbBridge.depsOk(proot)) {
+                        String r = proot.execAndRead("python3 /root/.dsh/adb-shell.py id 2>&1 | head -2");
+                        if (r != null && r.contains("uid=")) {
+                            android.util.Log.i("DSHA-ADB", "启动体检：ADB 连接正常");
+                        } else {
+                            android.util.Log.i("DSHA-ADB", "启动体检：未连接（看门狗将自动重连）" + r);
+                        }
+                    }
+                } catch (Throwable e) {
+                    android.util.Log.w("DSHA-ADB", "启动自愈异常（忽略）: " + e);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** 启动计数自动备份：每启动 N 次触发一次自动备份（固定名自动覆盖上一个自动备份）。
      *  N 从配置项 auto_backup_launches 读取（默认 5，0=关闭）。
      *  与手动备份独立（手动每次保留时间戳文件）。幂等、后台执行、失败静默。
