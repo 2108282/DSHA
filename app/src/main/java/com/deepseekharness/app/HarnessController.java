@@ -509,6 +509,50 @@ public class HarnessController {
      * 让用户点「启动」时基本秒开。幂等：web 已在跑/启动中自动跳过。
      */
     /** 确保配置自愈脚本已写入 rootfs（启动前把超限 timeoutMs 钳回合法值，防 ValidationError 崩溃 WebUI） */
+    /** 每次启动前校验内置 bundle（mobile-adapt / device-shell-guide）：
+     *  若被 dsh plugin reconcile 清掉/链接丢失，自动补回注册（幂等，秒级）。
+     *  防止"插件莫名其妙消失导致没效果"。 */
+    private void ensureBuiltinBundles() {
+        try {
+            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+            if (!pf.isFile()) return;
+            String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
+            org.json.JSONObject root = new org.json.JSONObject(txt);
+            org.json.JSONArray bundles = root.optJSONObject("dsh").optJSONObject("profile").optJSONArray("bundles");
+            if (bundles == null) return;
+            String[][] builtins = {
+                    {"dsh-client-ui-mobile-adapt", "/root/dsha-mobile-adapt"},
+                    {"dsh-device-shell-guide", "/root/dsha-device-shell-guide"},
+            };
+            boolean changed = false;
+            for (String[] b : builtins) {
+                String name = b[0], real = b[1];
+                boolean inBundles = false;
+                for (int i = 0; i < bundles.length(); i++) {
+                    if (name.equals(bundles.optString(i, "").trim())) { inBundles = true; break; }
+                }
+                boolean dirOk = new java.io.File(proot.getRootfsDir(), "root" + real.substring(4)).isDirectory();
+                if (dirOk && !inBundles) {
+                    bundles.put(name);
+                    changed = true;
+                    android.util.Log.w("DSHA", "内置插件 " + name + " 被清掉，已自动补回");
+                }
+                java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
+                        "root/.dsh/profiles/web/node_modules/" + name);
+                if (dirOk && !nmLink.exists()) {
+                    try {
+                        java.nio.file.Files.createSymbolicLink(nmLink.toPath(), java.nio.file.Paths.get(real));
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+            if (changed) {
+                java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     private void ensureConfigFixAsset() {
         try {
             String js = readAsset("config-fix.js");
@@ -1364,6 +1408,12 @@ public class HarnessController {
     public String startWebCommand() {
         // 启动前自愈：确保配置修复脚本已就位（钳制超限 timeoutMs）
         ensureConfigFixAsset();
+        // 启动前自愈：内置插件（mobile-adapt/device-shell-guide）注册校验，
+        // 被 dsh plugin reconcile 清掉/丢失时自动补回（幂等）
+        try {
+            ensureBuiltinBundles();
+        } catch (Throwable ignored) {
+        }
         // 启动前自愈：清理无法解析的 stale bundle（防 cannot resolve profile bundle 启动崩溃）
         try {
             String fix = readAsset("fix-stale-bundles.sh");
