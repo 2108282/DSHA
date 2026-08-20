@@ -1554,8 +1554,29 @@ public class HarnessController {
         }
     }
 
-    /** profile 注册移动端适配 bundle：dependencies + dsh.profile.bundles（幂等） */
+    /** profile 注册移动端适配 bundle：走官方 dsh plugin add link:（自动 reconcile + pnpm 链接 + bundles 追加）。
+     *  幂等：已在 bundles 则跳过；失败回退手写 manifest（兼容旧逻辑）。 */
     private void registerMobileAdaptBundle() {
+        try {
+            final String NAME = "dsh-client-ui-mobile-adapt";
+            final String REAL = "/root/dsha-mobile-adapt";
+            // 官方机制：dsh plugin add link: 会自动 pnpm 链接 + bundles 追加 + reconcile
+            String r = proot.execAndRead(
+                    "cd /root/.dsh/profiles/web && "
+                    + "(command -v dsh >/dev/null 2>&1 && "
+                    + "dsh plugin --profile web add link:" + REAL + " 2>&1 || "
+                    + "echo DSH_PLUGIN_UNAVAILABLE) | tail -5");
+            android.util.Log.i("DSHA", "mobile-adapt dsh plugin add → " + r);
+            // 兜底：dsh plugin 不可用时手写 manifest（与旧逻辑一致）
+            if (r != null && r.contains("DSH_PLUGIN_UNAVAILABLE")) {
+                registerMobileAdaptBundleManually();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 手写 manifest 兜底（dsh plugin 不可用时）：dependencies(file:) + bundles（幂等） */
+    private void registerMobileAdaptBundleManually() {
         try {
             final String NAME = "dsh-client-ui-mobile-adapt";
             java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
@@ -1587,6 +1608,8 @@ public class HarnessController {
             String s;
             try { s = root.toString(2); } catch (Throwable e) { s = root.toString(); }
             java.nio.file.Files.write(pf.toPath(), s.getBytes(StandardCharsets.UTF_8));
+            // 兜底后仍需 pnpm 安装让依赖真正可解析
+            proot.execAndRead("cd /root/.dsh/profiles/web && pnpm install --no-frozen-lockfile 2>&1 | tail -3");
         } catch (Throwable ignored) {
         }
     }
@@ -1629,37 +1652,62 @@ public class HarnessController {
             writeAssetTo("device-shell-guide/package.json", new java.io.File(realDir, "package.json"));
             writeAssetTo("device-shell-guide/cordis.patch.yml", new java.io.File(realDir, "cordis.patch.yml"));
             writeAssetTo("device-shell-guide/lib/index.js", new java.io.File(realDir, "lib/index.js"));
+            // 1.5) 清理旧痕迹（旧版 file: 依赖/手建链接会干扰 dsh plugin add）：
+            //      移除旧依赖声明 + 删旧符号链接，让 dsh plugin 走干净状态
+            try {
+                java.io.File pf0 = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+                if (pf0.isFile()) {
+                    String t0 = new String(java.nio.file.Files.readAllBytes(pf0.toPath()), StandardCharsets.UTF_8);
+                    org.json.JSONObject r0 = new org.json.JSONObject(t0);
+                    org.json.JSONObject d0 = r0.optJSONObject("dependencies");
+                    if (d0 != null && d0.has(NAME)) d0.remove(NAME);
+                    java.nio.file.Files.write(pf0.toPath(), r0.toString(2).getBytes(StandardCharsets.UTF_8));
+                }
+            } catch (Throwable ignored) {
+            }
+            try {
+                if (nmLink.exists()) nmLink.delete();
+            } catch (Throwable ignored) {
+            }
             // 2) node_modules 符号链接 → 实体目录（togglePlugin 靠改链接名开关）
             if (nmLink.getParentFile() != null) nmLink.getParentFile().mkdirs();
             if (!nmLink.exists()) {
                 java.nio.file.Files.createSymbolicLink(nmLink.toPath(),
                         java.nio.file.Paths.get(REAL));
             }
-            // 3) 注册到 web profile：dependencies(file:) + bundles（幂等）
-            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
-            if (pf.isFile()) {
-                String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
-                org.json.JSONObject root = new org.json.JSONObject(txt);
-                org.json.JSONObject deps = root.optJSONObject("dependencies");
-                if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
-                if (!deps.has(NAME)) deps.put(NAME, "file:" + REAL);
-                org.json.JSONObject profile = root.optJSONObject("dsh").optJSONObject("profile");
-                if (profile != null) {
-                    org.json.JSONArray bundles = profile.optJSONArray("bundles");
-                    if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
-                    boolean found = false;
-                    for (int i = 0; i < bundles.length(); i++) {
-                        if (NAME.equals(bundles.optString(i, ""))) { found = true; break; }
+            // 3) 注册到 web profile：走官方 dsh plugin add link:（自动 reconcile + pnpm 链接）
+            //    确保 bundles 条目与已装依赖一致，避免 rc.8 "cannot resolve profile bundle"
+            String rAdd = proot.execAndRead(
+                    "cd /root/.dsh/profiles/web && "
+                    + "(command -v dsh >/dev/null 2>&1 && "
+                    + "dsh plugin --profile web add link:" + REAL + " 2>&1 || "
+                    + "echo DSH_PLUGIN_UNAVAILABLE) | tail -5");
+            android.util.Log.i("DSHA", "device-shell-guide dsh plugin add → " + rAdd);
+            // dsh plugin 不可用时兜底：手写 manifest（dependencies link: + bundles）+ pnpm install
+            if (rAdd != null && rAdd.contains("DSH_PLUGIN_UNAVAILABLE")) {
+                java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+                if (pf.isFile()) {
+                    String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
+                    org.json.JSONObject root = new org.json.JSONObject(txt);
+                    org.json.JSONObject deps = root.optJSONObject("dependencies");
+                    if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
+                    if (!deps.has(NAME)) deps.put(NAME, "link:" + REAL);
+                    org.json.JSONObject profile = root.optJSONObject("dsh").optJSONObject("profile");
+                    if (profile != null) {
+                        org.json.JSONArray bundles = profile.optJSONArray("bundles");
+                        if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
+                        boolean found = false;
+                        for (int i = 0; i < bundles.length(); i++) {
+                            if (NAME.equals(bundles.optString(i, ""))) { found = true; break; }
+                        }
+                        if (!found) bundles.put(NAME);
                     }
-                    if (!found) bundles.put(NAME);
+                    java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
+                    proot.execAndRead("cd /root/.dsh/profiles/web && pnpm install --no-frozen-lockfile 2>&1 | tail -3");
                 }
-                java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
-                // 4) 关键：走 pnpm 正式安装（rc.8 的 bundle 解析依赖 pnpm 生成的
-                //    node_modules 结构，手建符号链接不被 cordis loader 识别）
-                proot.execAndRead("cd /root/.dsh/profiles/web && pnpm install --no-frozen-lockfile 2>&1 | tail -5");
-                java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
-                android.util.Log.i("DSHA", "设备 Shell 引导插件已注册（pnpm 正式安装）");
             }
+            java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
+            android.util.Log.i("DSHA", "设备 Shell 引导插件已注册（dsh plugin add link）");
         } catch (Throwable ignored) {
         }
     }
