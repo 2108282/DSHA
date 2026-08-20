@@ -495,6 +495,25 @@ public class HarnessController {
         return webProcess != null && webProcess.isAlive();
     }
 
+
+    /** 重启 Web UI：原子完成 深停→等端口关透→拉起（复用 stopWebAndWait + startWeb）。
+     *  webRestartLock 防重复点击；与 stop 排队语义确定。 */
+    public void restartWeb() {
+        if (!tryAcquireWebRestartLock()) return; // 正在重启，忽略重复
+        IO.execute(() -> {
+            try {
+                setProgress("正在重启 Web UI（先停止）", 0);
+                stopWebAndWait(); // 深停：destroy + pkill 看门狗/web + 等端口关透 + 宽杀兜底
+                setProgress("正在重启 Web UI（再启动）", 0);
+                startWeb();
+            } catch (Throwable e) {
+                setState("", 0, "", errMsg("重启出错：", e), false);
+            } finally {
+                releaseWebRestartLock();
+            }
+        });
+    }
+
     /** 用户手动停止后，keepAlive 是否应暂停自动拉起（直到再次 startWeb） */
     public boolean isKeepAlivePaused() {
         return prefs.getBoolean("keepalive_paused", false);
