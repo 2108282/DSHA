@@ -11,6 +11,7 @@ import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
+import android.provider.Settings;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.RemoteInput;
@@ -216,20 +217,40 @@ public class DeviceBridgeService extends Service {
                                 return;
                             }
                         }
-                        // 4. 无线调试可能被关：尝试 Shizuku 自动重开
-                        if (ShizukuShell.isAvailable()) {
+                        // 4. 无线调试可能被关：优先用 WRITE_SECURE_SETTINGS 权限直接开
+                        //    （thedjchi/Shizuku 机制，无需 Shizuku）；无权限再试 Shizuku
+                        boolean opened = false;
+                        try {
+                            boolean hasSecure = checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS)
+                                    == android.content.pm.PackageManager.PERMISSION_GRANTED;
+                            if (hasSecure) {
+                                int cur = Settings.Global.getInt(getContentResolver(), "adb_wifi_enabled", 0);
+                                if (cur != 1) {
+                                    Settings.Global.putInt(getContentResolver(), "adb_wifi_enabled", 1);
+                                    android.util.Log.i("DSHA-ADB", "看门狗：WRITE_SECURE_SETTINGS 自动开启无线调试");
+                                    opened = true;
+                                } else {
+                                    opened = true; // 本来就开着
+                                }
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                        if (!opened && ShizukuShell.isAvailable()) {
                             String out = ShizukuShell.exec("settings put global adb_wifi_enabled 1 2>&1; adb tcpip 5555 2>&1");
                             android.util.Log.i("DSHA-ADB", "看门狗：Shizuku 尝试重开无线调试 → " + out);
                             if (out != null && !out.contains("[NO_") && !out.contains("ERROR")) {
-                                // 等 5s 让 adbd 起来，再重试一次
-                                try { Thread.sleep(5000); } catch (InterruptedException ignored) { }
-                                int p2 = discoverConnPortSync();
-                                if (p2 > 0) {
-                                    saveConnectPort(p2);
-                                    c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py --port " + p2 + " id 2>&1 | head -1");
-                                }
-                                return;
+                                opened = true;
                             }
+                        }
+                        if (opened) {
+                            // 等 5s 让 adbd 起来，再重试一次
+                            try { Thread.sleep(5000); } catch (InterruptedException ignored) { }
+                            int p2 = discoverConnPortSync();
+                            if (p2 > 0) {
+                                saveConnectPort(p2);
+                                c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py --port " + p2 + " id 2>&1 | head -1");
+                            }
+                            return;
                         }
                         // 5. 都失败：低频通知用户手动开（45s 冷却已有）
                         notifyNeedManual(this);

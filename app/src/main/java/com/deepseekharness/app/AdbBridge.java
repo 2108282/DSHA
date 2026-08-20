@@ -142,7 +142,28 @@ public final class AdbBridge {
         if (connectPort != null && !connectPort.trim().isEmpty()) {
             c += " --connect-port " + connectPort.trim();
         }
-        return proot.execAndRead(c);
+        String out = proot.execAndRead(c);
+        // 配对成功 → 通过刚建立的 adb 通道（uid=2000 shell）给 App 授予
+        // WRITE_SECURE_SETTINGS（thedjchi/Shizuku 开机自启机制的前提）：
+        // 之后开机广播可直接自动开启无线调试，无需 Shizuku/手动操作
+        if (out != null && out.contains("PAIR_OK")) {
+            grantSecureSettings(proot);
+        }
+        return out;
+    }
+
+    /** 通过 adb shell（uid=2000）给本 App 授予 WRITE_SECURE_SETTINGS 权限。
+     *  shell 身份可授予该 signature 权限；授予后 BootReceiver 可在开机时自动
+     *  开启无线调试（Settings.Global.adb_wifi_enabled=1），实现"永不掉"。 */
+    public static void grantSecureSettings(ProotBootstrap proot) {
+        try {
+            String pkg = "com.dsh.client";
+            // 先查是否已授权，避免每次配对都重复 grant
+            String r = proot.execAndRead("python3 /root/.dsh/adb-shell.py pm grant " + pkg
+                    + " android.permission.WRITE_SECURE_SETTINGS 2>&1 | head -2");
+            android.util.Log.i("DSHA-ADB", "WRITE_SECURE_SETTINGS 授权结果: " + r);
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 状态快照：key/deps/connect_port（供 UI 展示） */

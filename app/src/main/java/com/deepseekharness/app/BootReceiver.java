@@ -3,12 +3,15 @@ package com.deepseekharness.app;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
+import android.provider.Settings;
 
 /**
- * 开机自启（参考 Shizuku 生态 pixincreate/Shizuku 等项目的无 Root 自启思路）：
- * 监听 BOOT_COMPLETED / MY_PACKAGE_REPLACED（覆盖安装），
- * 若用户开启了「启用 ADB 设备通道」，自动拉起 DeviceBridgeService →
- * 连接看门狗（startConnWatcher）会自动重连已配对的设备，实现 ADB 永不掉。
+ * 开机自启（参考 thedjchi/Shizuku 增强版的核心机制）：
+ * 1. 若已获得 WRITE_SECURE_SETTINGS 权限（首次 ADB 配对成功后自动 pm grant）：
+ *    → 开机广播直接 Settings.Global.adb_wifi_enabled=1 自动开启无线调试
+ *      （无需用户手动去开发者选项开！这正是 thedjchi fork 的卖点）
+ * 2. 拉起 DeviceBridgeService → 连接看门狗自动发现端口并重连已配对设备
  */
 public class BootReceiver extends BroadcastReceiver {
 
@@ -23,7 +26,30 @@ public class BootReceiver extends BroadcastReceiver {
             }
             // 用户没开 ADB 就不拉起（尊重开关）
             if (!DeviceBridgeService.isAdbEnabled(context)) return;
-            android.util.Log.i("DSHA-ADB", "开机/升级自启：拉起 ADB 设备桥（看门狗将自动重连）");
+            android.util.Log.i("DSHA-ADB", "开机/升级自启：尝试自动开启无线调试 + 拉起设备桥");
+
+            // 关键（thedjchi/Shizuku 机制）：有 WRITE_SECURE_SETTINGS 权限 → 直接开无线调试
+            boolean hasSecure = false;
+            try {
+                hasSecure = context.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS)
+                        == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            } catch (Throwable ignored) {
+            }
+            if (hasSecure) {
+                try {
+                    int cur = Settings.Global.getInt(context.getContentResolver(), "adb_wifi_enabled", 0);
+                    if (cur != 1) {
+                        Settings.Global.putInt(context.getContentResolver(), "adb_wifi_enabled", 1);
+                        android.util.Log.i("DSHA-ADB", "已自动开启无线调试（WRITE_SECURE_SETTINGS）");
+                    }
+                } catch (Throwable e) {
+                    android.util.Log.w("DSHA-ADB", "自动开无线调试失败: " + e);
+                }
+            } else {
+                android.util.Log.i("DSHA-ADB", "无 WRITE_SECURE_SETTINGS 权限，靠 Shizuku/看门狗兜底");
+            }
+
+            // 拉起设备桥（看门狗会自动发现端口重连）
             DeviceBridgeService.apply(context);
         } catch (Throwable ignored) {
         }
