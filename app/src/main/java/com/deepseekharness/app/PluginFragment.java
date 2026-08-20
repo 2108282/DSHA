@@ -173,13 +173,23 @@ public class PluginFragment extends Fragment {
         pm.show();
     }
 
+    /** 安全解析 star 数（外部数据源格式变化不崩溃） */
+    private static int safeStar(String s) {
+        if (s == null || s.isEmpty()) return 0;
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
     private void applySort() {
         final int sm = sortMode;
         Collections.sort(items, (a, b) -> {
             switch (sm) {
                 case 0: // star 降序
-                    int sa = Integer.parseInt(a[1].isEmpty() ? "0" : a[1]);
-                    int sb = Integer.parseInt(b[1].isEmpty() ? "0" : b[1]);
+                    int sa = safeStar(a[1]);
+                    int sb = safeStar(b[1]);
                     return sb - sa;
                 default: // 名称
                     return a[0].toLowerCase().compareTo(b[0].toLowerCase());
@@ -435,7 +445,7 @@ public class PluginFragment extends Fragment {
                             String full = o.optString("full_name", "");
                             long star = o.optLong("stargazers_count", 0);
                             for (int idx : idxs) {
-                                String fu = items.get(idx)[6].replace("https://github.com/", "").replace("http://github.com/", "").replace("/", "/");
+                                String fu = items.get(idx)[6].replace("https://github.com/", "").replace("http://github.com/", "");
                                 if (full.equalsIgnoreCase(fu)) {
                                     items.get(idx)[1] = String.valueOf(star);
                                     break;

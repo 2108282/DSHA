@@ -111,7 +111,8 @@ public class AdbPairReceiver extends BroadcastReceiver {
      *  （部分 ROM 配对服务只监听 WiFi 接口，127.0.0.1 连不上，必须传真实 IP）。 */
     private static String[] discoverPortsSync(Context ctx, long timeoutMs) {
         final String[] result = new String[3];
-        final CountDownLatch done = new CountDownLatch(2);
+        // 配对只需要 pair 端口：发现即放行（不必等两个都超时）
+        final CountDownLatch done = new CountDownLatch(1);
         try {
             NsdManager nm = (NsdManager) ctx.getSystemService(Context.NSD_SERVICE);
             if (nm != null) {
@@ -122,6 +123,7 @@ public class AdbPairReceiver extends BroadcastReceiver {
                 });
                 discoverAsync(nm, "_adb-tls-connect._tcp.", (host, p) -> {
                     result[2] = String.valueOf(p);
+                    // 若 pair 已找到则不重复放行；connect 先到也先放行（脚本能自发现）
                     done.countDown();
                 });
             }

@@ -108,7 +108,9 @@ public final class LanProxyService {
                 int headLen = readHeader(cin, reqHead);
                 if (headLen <= 0) break; // EOF / 超时
                 String head = new String(reqHead, 0, headLen, java.nio.charset.StandardCharsets.ISO_8859_1);
-                String reqLine = head.substring(0, head.indexOf('\n')).trim();
+                int nl = head.indexOf('\n');
+                if (nl < 0) break; // 畸形请求头：无换行直接断开，防 substring 越界
+                String reqLine = head.substring(0, nl).trim();
                 if (reqLine.isEmpty()) break;
                 boolean upgrade = containsIgnoreCase(head, "Upgrade: websocket")
                         || reqLine.contains("HTTP/1.1") && containsIgnoreCase(head, "Connection: Upgrade");
@@ -219,9 +221,10 @@ public final class LanProxyService {
             if (size == 0) { out.flush(); break; }
             if (size > 0) {
                 pipeBytes(in, out, size);
-                // 块尾 CRLF
+                // 块尾 CRLF（EOF 时 -1 不写入，防脏字节 0xff）
                 int c1 = in.read(); int c2 = in.read();
-                out.write(c1); out.write(c2);
+                if (c1 >= 0) out.write(c1);
+                if (c2 >= 0) out.write(c2);
             }
         }
         out.flush();

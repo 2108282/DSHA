@@ -1478,7 +1478,12 @@ public class HarnessController {
             if (pendingUrls[i].equals(saved)) return i;
         }
         int best = 0;
-        for (int i = 1; pendingLat != null && i < pendingLat.length; i++) {
+        // 防御：pendingLat 必须与 pendingUrls 等长（否则越界/选错）
+        if (pendingLat == null || pendingUrls == null
+                || pendingLat.length != pendingUrls.length) {
+            return 0;
+        }
+        for (int i = 1; i < pendingLat.length; i++) {
             if (pendingLat[i] >= 0 && (pendingLat[best] < 0 || pendingLat[i] < pendingLat[best])) best = i;
         }
         return best;
@@ -1725,8 +1730,12 @@ public class HarnessController {
                     "DST=$(find /usr/local/lib/node_modules /root -maxdepth 14 " +
                     "  \\( -path '*dsh-client-connection/lib/client' -o -path '*dsh-web-app/dist*/client' -o -path '*dsh-web-app/lib/client' \\) " +
                     "  -type d 2>/dev/null | head -1); " +
+                    "if [ -z \"$DST\" ]; then " +
+                    "echo 'NOT_FOUND: 未找到 web-app client 目录 '$(date) >> /root/dsha-mobile-adapt.log; " +
+                    "echo '[DSHA] 未找到 web-app client 目录，跳过移动端适配'; exit 0; fi; " +
                     "if [ -n \"$DST\" ] && [ -f \"$DST/dsh-client-ui-mobile-adapt.js\" ]; then " +
                     "rm -f \"$DST/dsh-client-ui-mobile-adapt.js\" && echo '[DSHA] 已清理旧手动注入（改用 bundle 注册）'; fi; " +
+                    "echo 'CLEANED: '$(date) >> /root/dsha-mobile-adapt.log; " +
                     "touch /root/dsha-mobile-adapt-installed && echo OK";
             java.io.File sF = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-inject.sh");
             java.io.File aDir = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-adapt");

@@ -208,11 +208,18 @@ public final class TarGzipExtractor {
         return s.length() > 60 ? s.substring(0, 60) + "…" : s;
     }
 
+    /**
+     * 读满 len 字节。返回 false = 干净 EOF（一字节都没读到，用于判断 tar 正常结束）；
+     * 读到一半 EOF = 数据损坏，抛 IOException（不能静默当成功，否则解出半截 rootfs）。
+     */
     private static boolean readFull(InputStream in, byte[] b, int len) throws IOException {
         int off = 0;
         while (off < len) {
             int n = in.read(b, off, len - off);
-            if (n < 0) return off == 0 ? false : (off == len);
+            if (n < 0) {
+                if (off == 0) return false; // 干净 EOF
+                throw new IOException("tar 数据意外结束（需要 " + len + " 字节，只读到 " + off + "）");
+            }
             off += n;
         }
         return true;
