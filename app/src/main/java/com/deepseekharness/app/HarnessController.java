@@ -1102,11 +1102,11 @@ public class HarnessController {
                 "npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user 2>/dev/null; " +
                 "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc");
         runStep("安装 @deepseek-ai/dsh 最新 RC", 95,
-                // 显式 pin rc.8（不依赖 @rc dist-tag：npmmirror 镜像的 tag 可能同步滞后，
-                // 实测出现装到旧 rc.6 的情况）；失败回退 @rc 跟随最新，再回退官方源
-                "(npm install -g @deepseek-ai/dsh@0.1.0-rc.8 --force --registry=https://registry.npmmirror.com 2>&1 || " +
+                // 优先 @next（官方最新 rc）；npmmirror 镜像同步滞后时回退 pin rc.8，再回退官方源
+                "(npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmmirror.com 2>&1 || " +
+                "npm install -g @deepseek-ai/dsh@0.1.0-rc.8 --force --registry=https://registry.npmmirror.com 2>&1 || " +
                 "npm install -g @deepseek-ai/dsh@rc --force --registry=https://registry.npmmirror.com 2>&1 || " +
-                "npm install -g @deepseek-ai/dsh@rc --force --registry=https://registry.npmjs.org 2>&1) | tail -25; " +
+                "npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmjs.org 2>&1) | tail -25; " +
                 "echo \">> npm 退出码: ${PIPESTATUS[0]}\"; " +
                 "if [ \"${PIPESTATUS[0]}\" != 0 ]; then echo 'npm 安装失败，请重试或检查网络'; fi");
         // 预下载 Node headers（node-gyp 编译 node-pty 必需；否则 node-gyp 默认访问
@@ -2218,30 +2218,36 @@ public class HarnessController {
     }
 
 
-    /** 启动时检测 dsh 新版本：rc 号变化 → 自动重跑⑥（安全守卫+补丁+内置插件注册）。
-     *  幂等、后台静默；失败不影响启动。 */
+    /** 启动时检测 dsh 新版本：rc 号变化 → 自动【重装⑤（安装新版 dsh）+ 重跑⑥（守卫/补丁适配）】。
+     *  先装新版再适配，一气呵成；幂等、后台静默；失败不影响启动。 */
     public void maybeAutoReinstallGuardOnDshUpdate() {
         try {
             if (!proot.isInstalled()) return;
-            String r = proot.execAndRead(
+            // 对比【已安装版本】与【npm 最新 rc】：
+            // 已装版本（dsh --version）记录在 last_dsh_rc；
+            // 最新 rc 从 npm @next 解析（npmmirror 镜像），失败则跳过本次检查
+            String installed = proot.execAndRead(
                     "command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 || echo NONE");
-            if (r == null || r.contains("NONE") || r.startsWith("ERROR")) return;
-            String rc = r.trim();
+            if (installed == null || installed.contains("NONE") || installed.startsWith("ERROR")) return;
+            String installedRc = installed.trim();
             final SharedPreferences prefs =
                     appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
             String last = prefs.getString("last_dsh_rc", "");
-            if (rc.equals(last)) return; // 版本没变
-            prefs.edit().putString("last_dsh_rc", rc).apply();
-            // rc 变了：后台重跑⑥（安装守卫/补丁/内置插件/极简preset 全部重新应用）
-            android.util.Log.i("DSHA", "检测到 dsh 版本变化 " + last + " → " + rc + "，自动重跑⑥");
+            if (installedRc.equals(last)) return; // 已处理过这个版本
+            prefs.edit().putString("last_dsh_rc", installedRc).apply();
+            // 版本变化：后台【先⑤装最新 rc → 再⑥适配】
+            android.util.Log.i("DSHA", "检测到 dsh 版本变化 " + last + " → " + installedRc + "，自动重装⑤+⑥");
             IO.execute(() -> {
                 try {
                     if (tryBeginBusy()) {
+                        // ⑤：重装最新 RC（npm @next 跟随官方，npmmirror 同步滞后时回退官方源）
+                        runInstallStep(STEP_HARNESS);
+                        // ⑥：守卫/补丁/内置插件/极简preset 适配新版
                         runInstallStep(STEP_GUARD);
-                        setState("", 100, "已自动适配 dsh " + rc + "（⑥安全守卫已更新）", "", false);
+                        setState("", 100, "已自动升级 dsh 并完成适配（⑤+⑥）", "", false);
                     }
                 } catch (Throwable e) {
-                    android.util.Log.w("DSHA", "自动重跑⑥失败（不影响使用）: " + e);
+                    android.util.Log.w("DSHA", "自动升级⑤+⑥失败（不影响使用）: " + e);
                     setState("", 0, "", "", false);
                 }
             });
