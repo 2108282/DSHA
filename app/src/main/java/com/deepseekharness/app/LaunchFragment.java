@@ -140,9 +140,16 @@ public class LaunchFragment extends Fragment {
             if (goExtractIfNeeded()) return;
             closeWeb();
             starting = true;
+            enterWhenReady = true; // 重启完成后自动回到预览页
             applyRunUi(false);
-            statusText.setText("正在强重启…");
-            c.restartAppProcess(requireContext());
+            statusText.setText("正在重启…");
+            Intent i = new Intent(requireContext(), HarnessService.class)
+                    .setAction(HarnessService.ACTION_RESTART);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                requireContext().startForegroundService(i);
+            } else {
+                requireContext().startService(i);
+            }
         });
 
         stopBtn.setOnClickListener(v -> {
@@ -154,7 +161,7 @@ public class LaunchFragment extends Fragment {
             Intent i = new Intent(requireContext(), HarnessService.class)
                     .setAction(HarnessService.ACTION_STOP);
             requireContext().startService(i);
-            statusText.setText("已发送停止命令");
+            statusText.setText("正在停止…");
         });
 
         if (goExtractIfNeeded()) {
