@@ -76,4 +76,5 @@ cp -r agent-skills/screen-ocr-operator ~/.agents/skills/
 - 环境存储在 App 私有空间，卸载即清除（可先用「备份配置」）
 - 设备 Shell 能力需要安装并授权 [Shizuku](https://shizuku.rikka.app/)
 - QQ交流群960636357🐧可实时跟进体验最新测试版
-- 强烈推荐搭配https://github.com/Hotsteel2901/dsh-client-ui-mobile-adapt此插件食用(deepseekharness移动端UI优化)
+- 强烈推荐搭配https://github.com/Hotsteel2901/dsh-client-ui-mobile-adapt
+此插件食用(deepseekharness移动端UI优化)
