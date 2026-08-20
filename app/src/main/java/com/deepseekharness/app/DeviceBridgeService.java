@@ -206,6 +206,11 @@ public class DeviceBridgeService extends Service {
                         // 1. 探测当前连接是否可用
                         String r = c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py id 2>&1 | head -3");
                         if (r != null && r.contains("uid=")) return; // 连接正常
+                        // 库缺失（setup 未完成）→ 触发 setup 自愈（注入脚本+装依赖+装包装命令）
+                        if (r != null && r.contains("DEPS_MISSING")) {
+                            AdbBridge.ensureReady(DeviceBridgeService.this, c.getProot());
+                            return;
+                        }
                         // 2. 掉线：重新发现 _adb-tls-connect 连接端口
                         int connPort = discoverConnPortSync();
                         if (connPort > 0) {

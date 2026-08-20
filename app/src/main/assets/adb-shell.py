@@ -45,17 +45,29 @@ def main():
     if not port:
         port = 5555
 
-    from adb_shell_wifi.adb_device import AdbDeviceTls  # Android 11+ Wi-Fi 调试必须用 TLS 传输
-    from adb_shell_wifi.auth.sign_pythonrsa import PythonRSASigner
-
-    signer = PythonRSASigner(open(KEYPUB, 'rb').read().strip(), open(KEY, 'rb').read())
-    priv_pem = open(KEY, 'rb').read()  # PKCS#8 PEM，作为 TLS 客户端私钥（0.5.0 库：传给 connect()）
-    dev = AdbDeviceTls('127.0.0.1', port)
-    dev.connect(rsa_keys=[signer], auth_timeout_s=15, tls_priv_pem=priv_pem)
     try:
-        out = dev.shell(cmd)
-    finally:
-        dev.close()
+        from adb_shell_wifi.adb_device import AdbDeviceTls  # Android 11+ Wi-Fi 调试必须用 TLS 传输
+        from adb_shell_wifi.auth.sign_pythonrsa import PythonRSASigner
+    except ImportError as e:
+        print('DEPS_MISSING: 缺少 adb_shell_wifi 库（%s）' % e)
+        print('请重开 App 配置页的 ADB 开关，或重跑安装步骤⑥（会自动安装依赖）')
+        print('[EXIT=1]')
+        sys.exit(1)
+
+    try:
+        signer = PythonRSASigner(open(KEYPUB, 'rb').read().strip(), open(KEY, 'rb').read())
+        priv_pem = open(KEY, 'rb').read()  # PKCS#8 PEM，作为 TLS 客户端私钥（0.5.0 库：传给 connect()）
+        dev = AdbDeviceTls('127.0.0.1', port)
+        dev.connect(rsa_keys=[signer], auth_timeout_s=20, tls_priv_pem=priv_pem)
+        try:
+            out = dev.shell(cmd)
+        finally:
+            dev.close()
+    except Exception as e:
+        print('CONNECT_FAIL: %s (%s)' % (e, type(e).__name__))
+        print('请确认手机「开发者选项→无线调试」已开启，且已配对（App 工作区→ADB 无线配对）')
+        print('[EXIT=1]')
+        sys.exit(1)
 
     sys.stdout.write(out if out.endswith('\n') else out + '\n')
     print('[EXIT=0]')

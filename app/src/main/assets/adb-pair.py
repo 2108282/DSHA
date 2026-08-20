@@ -188,7 +188,7 @@ def adb_shell(port, cmds):
     signer = PythonRSASigner(open(KEYPUB, 'rb').read().strip(), open(KEY, 'rb').read())
     priv_pem = open(KEY, 'rb').read()
     dev = AdbDeviceTls('127.0.0.1', port)
-    dev.connect(rsa_keys=[signer], auth_timeout_s=15, tls_priv_pem=priv_pem)
+    dev.connect(rsa_keys=[signer], auth_timeout_s=20, tls_priv_pem=priv_pem)
     try:
         return dev.shell(' && '.join(cmds))
     finally:
