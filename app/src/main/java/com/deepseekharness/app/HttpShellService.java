@@ -48,6 +48,10 @@ public final class HttpShellService {
 
     private ServerSocket server;
     private volatile boolean running;
+    /** 鉴权 token（随机生成，rootfs 内 agent 通过它访问；外部网络无法到达 127.0.0.1） */
+    private static volatile String authToken = "";
+    /** token 持久化位置（rootfs 内 agent 可读） */
+    private static final String TOKEN_FILE = "/root/.dsh/.bridge_token";
 
     public HttpShellService(Context ctx) {
         this.ctx = ctx;
@@ -57,13 +61,45 @@ public final class HttpShellService {
         return instance;
     }
 
+    /** 生成/读取鉴权 token，并写入 rootfs（agent 读取用）。
+     *  注意：路径是 rootfs 内的 /root/.dsh/.bridge_token，App 写的是
+     *  rootfs 实际目录（files/linux/ubuntu/root/.dsh/）。 */
+    private static String ensureToken() {
+        if (!authToken.isEmpty()) return authToken;
+        try {
+            String t = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32);
+            authToken = t;
+            // 写入 rootfs（通过 HarnessController 拿 rootfs 路径；失败不影响运行）
+            try {
+                HarnessController hc = HarnessController.get(instance().ctx);
+                if (hc != null && hc.getProot() != null) {
+                    java.io.File tf = new java.io.File(hc.getProot().getRootfsDir(),
+                            "root/.dsh/.bridge_token");
+                    if (tf.getParentFile() != null) tf.getParentFile().mkdirs();
+                    try (java.io.FileOutputStream fo = new java.io.FileOutputStream(tf)) {
+                        fo.write(t.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        } catch (Throwable ignored) {
+        }
+        return authToken;
+    }
+
     public void start() {
         if (running) return;
         running = true;
         instance = this;
+        ensureToken();
         Thread t = new Thread(() -> {
             try {
-                server = new ServerSocket(PORT);
+                // 安全：仅绑定 127.0.0.1（loopback），外部网络无法访问！
+                // （原来 new ServerSocket(PORT) 默认绑 0.0.0.0 = 局域网可访问 → 严重漏洞）
+                server = new ServerSocket();
+                server.setReuseAddress(true);
+                server.bind(new java.net.InetSocketAddress(
+                        java.net.InetAddress.getLoopbackAddress(), PORT));
                 while (running) {
                     try {
                         Socket client = server.accept();
@@ -106,8 +142,36 @@ public final class HttpShellService {
                     cmd = URLDecoder.decode(path.substring(q + 4), "UTF-8");
                 }
             }
+            // 鉴权：token 必须匹配（通过 ?token= 或 X-Token header）
+            boolean authed = false;
+            String t = "";
+            int tq = path.indexOf("token=");
+            if (tq >= 0) {
+                t = path.substring(tq + 6);
+                int amp = t.indexOf('&');
+                if (amp >= 0) t = t.substring(0, amp);
+                try { t = URLDecoder.decode(t, "UTF-8"); } catch (Exception ignored) { }
+            }
+            String token = authToken.isEmpty() ? ensureToken() : authToken;
+            if (!t.isEmpty() && token.equals(t)) authed = true;
+            if (!authed) {
+                // 也支持 header 传 token（agent 引导用 curl -H）
+                try {
+                    String hdr;
+                    while ((hdr = reader.readLine()) != null && !hdr.isEmpty()) {
+                        if (hdr.toLowerCase().startsWith("x-token:")) {
+                            String hv = hdr.substring(8).trim();
+                            if (token.equals(hv)) authed = true;
+                            break;
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
             String result;
-            if (cmd.isEmpty()) {
+            if (!authed) {
+                result = "[UNAUTHORIZED]";
+            } else if (cmd.isEmpty()) {
                 result = "[NO_CMD]";
             } else if (path.startsWith("/confirm")) {
                 // rootfs 内包装器请求的确认：只弹窗，不执行

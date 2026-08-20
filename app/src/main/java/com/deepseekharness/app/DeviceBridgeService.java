@@ -109,6 +109,12 @@ public class DeviceBridgeService extends Service {
     public void onDestroy() {
         running = false;
         try {
+            // 联动关闭 HTTP shell 桥（否则 3090 端口残留监听）
+            HttpShellService hs = HttpShellService.instance();
+            if (hs != null) hs.stop();
+        } catch (Throwable ignored) {
+        }
+        try {
             if (nsd != null && pairListener != null) {
                 nsd.stopServiceDiscovery(pairListener);
             }

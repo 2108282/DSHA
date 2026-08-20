@@ -1826,7 +1826,7 @@ public class HarnessController {
                     }
                 } catch (Throwable ignored) {
                 }
-                if (!"0.1.4".equals(curVer)) {
+                if (!"0.1.5".equals(curVer)) {
                     //noinspection ResultOfMethodCallIgnored
                     marker.delete();
                 } else {

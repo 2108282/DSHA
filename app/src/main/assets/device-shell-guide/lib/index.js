@@ -24,8 +24,8 @@ const PROMPT = [
   '  /root/dsh-bin/adb-shell --su "命令"     # root 级（需手机已 root，Magisk/KernelSU）',
   '  （若包装命令不存在，直接用：python3 /root/.dsh/adb-shell.py "命令"）',
 
-  '■ 备选通道（Shizuku 桥，可能未就绪）：',
-  '  curl -s "http://127.0.0.1:3090/exec?cmd=..."',
+  '■ 备选通道（Shizuku 桥，可能未就绪，需 token）：',
+  '  curl -s "http://127.0.0.1:3090/exec?cmd=...&token=$(cat /root/.dsh/.bridge_token)"',
 
   '■ ⚠️ 注意：不要用 /root/dsh-bin/adb 或裸 adb 命令——那是守卫包装脚本，会失败。',
 
