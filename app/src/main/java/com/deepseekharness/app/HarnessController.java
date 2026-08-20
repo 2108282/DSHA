@@ -657,8 +657,11 @@ public class HarnessController {
             try {
                 String r = proot.execAndRead(
                         "command -v dsh >/dev/null 2>&1 && " +
-                        "(find /usr/local/lib/node_modules -maxdepth 8 \\( -path '*/node-pty/build/Release/pty.node' -o -path '*/node-pty/prebuilds/linux-arm64/pty.node' \\) 2>/dev/null | head -1) || echo MISSING");
-                return r != null && !r.startsWith("ERROR") && !r.contains("MISSING") && !r.trim().isEmpty();
+                        // 版本检查：必须 >= rc.8（npmmirror 镜像 tag 同步滞后会导致
+                        // 旧版 rc.6 残留，旧版满足旧判定 → 重装被跳过 → 永远旧版）
+                        "V=$(dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 | grep -oE '[0-9]+'); " +
+                        "[ -n \"$V\" ] && [ \"$V\" -ge 8 ] && echo OK || echo OLD:$V" );
+                return r != null && !r.startsWith("ERROR") && r.contains("OK");
             } catch (Exception e) {
                 return false;
             }
@@ -955,7 +958,11 @@ public class HarnessController {
                 "npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user 2>/dev/null; " +
                 "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc");
         runStep("安装 @deepseek-ai/dsh 最新 RC", 95,
-                "npm install -g @deepseek-ai/dsh@rc --force --registry=https://registry.npmmirror.com 2>&1 | tail -25; " +
+                // 显式 pin rc.8（不依赖 @rc dist-tag：npmmirror 镜像的 tag 可能同步滞后，
+                // 实测出现装到旧 rc.6 的情况）；失败回退 @rc 跟随最新，再回退官方源
+                "(npm install -g @deepseek-ai/dsh@0.1.0-rc.8 --force --registry=https://registry.npmmirror.com 2>&1 || " +
+                "npm install -g @deepseek-ai/dsh@rc --force --registry=https://registry.npmmirror.com 2>&1 || " +
+                "npm install -g @deepseek-ai/dsh@rc --force --registry=https://registry.npmjs.org 2>&1) | tail -25; " +
                 "echo \">> npm 退出码: ${PIPESTATUS[0]}\"; " +
                 "if [ \"${PIPESTATUS[0]}\" != 0 ]; then echo 'npm 安装失败，请重试或检查网络'; fi");
         // 预下载 Node headers（node-gyp 编译 node-pty 必需；否则 node-gyp 默认访问
