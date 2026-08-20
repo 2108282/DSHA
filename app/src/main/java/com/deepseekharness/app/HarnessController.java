@@ -1364,6 +1364,16 @@ public class HarnessController {
     public String startWebCommand() {
         // 启动前自愈：确保配置修复脚本已就位（钳制超限 timeoutMs）
         ensureConfigFixAsset();
+        // 启动前自愈：清理无法解析的 stale bundle（防 cannot resolve profile bundle 启动崩溃）
+        try {
+            String fix = readAsset("fix-stale-bundles.sh");
+            if (!fix.isEmpty()) {
+                java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-fix-stale-bundles.sh");
+                java.nio.file.Files.write(f.toPath(), fix.getBytes(StandardCharsets.UTF_8));
+                proot.execAndRead("bash /root/dsha-fix-stale-bundles.sh; rm -f /root/dsha-fix-stale-bundles.sh");
+            }
+        } catch (Throwable ignored) {
+        }
         // 局域网访问：deepseek-harness 官方 CLI 默认拒绝 --host 0.0.0.0，
         // 需先打 lan-bind-patch.sh 放行（失败则回落到 127.0.0.1，服务保证能起）。
         boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
@@ -1535,10 +1545,11 @@ public class HarnessController {
             java.io.File sF = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-inject.sh");
             java.io.File aDir = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-adapt");
             aDir.mkdirs();
-            // 2) 把 assets 里的 client.js / index.js / cordis.patch.yml 写进 rootfs
+            // 2) 把 assets 里的 client.js / index.js / cordis.patch.yml / package.json 写进 rootfs
             writeAssetTo("mobile-adapt/client.js", new java.io.File(aDir, "client.js"));
             writeAssetTo("mobile-adapt/index.js", new java.io.File(aDir, "index.js"));
             writeAssetTo("mobile-adapt/cordis.patch.yml", new java.io.File(aDir, "cordis.patch.yml"));
+            writeAssetTo("mobile-adapt/package.json", new java.io.File(aDir, "package.json"));
             java.nio.file.Files.write(sF.toPath(), script.getBytes(StandardCharsets.UTF_8));
             // 3) 执行注入（幂等标记存在则跳过）
             String r = proot.execAndRead(

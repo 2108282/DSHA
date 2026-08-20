@@ -1,0 +1,10 @@
+{
+  "name": "dsh-client-ui-mobile-adapt",
+  "description": "DSHA builtin bundle: mobile UI adaptation (single column / drawer / hamburger / fullscreen settings) for the dsh web client",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "license": "MIT"
+}
