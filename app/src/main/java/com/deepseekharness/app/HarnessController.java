@@ -1595,25 +1595,36 @@ public class HarnessController {
     /** 确保「设备 Shell 引导」插件已注入 rootfs 并注册为 web profile bundle。
      *  让 agent 在系统提示里知道可用 /root/dsh-bin/adb-shell 干预手机。
      *  rc.8 全局 npm 模式适配（不走 packages/host，直接 file: bundle 挂载）。
+     *  装到 node_modules/dsh-device-shell-guide（符号链接→实体目录），
+     *  这样「已装插件」列表可见、togglePlugin 开关可生效（改名链接）。
      *  幂等：已注册跳过；失败不影响安装。 */
     private void ensureDeviceShellGuide() {
         try {
             final String NAME = "dsh-device-shell-guide";
-            java.io.File dir = new java.io.File(proot.getRootfsDir(), "root/dsha-device-shell-guide");
-            // 1) 注入插件包（assets 三件套）
-            writeAssetTo("device-shell-guide/package.json", new java.io.File(dir, "package.json"));
-            writeAssetTo("device-shell-guide/cordis.patch.yml", new java.io.File(dir, "cordis.patch.yml"));
-            writeAssetTo("device-shell-guide/lib/index.js", new java.io.File(dir, "lib/index.js"));
+            final String REAL = "/root/dsha-device-shell-guide";
+            java.io.File realDir = new java.io.File(proot.getRootfsDir(), "root/dsha-device-shell-guide");
+            java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/node_modules/" + NAME);
             java.io.File marker = new java.io.File(proot.getRootfsDir(), "root/dsha-device-shell-guide-installed");
             if (marker.exists()) return;
-            // 2) 注册到 web profile：dependencies(file:) + bundles（幂等）
+            // 1) 注入插件包实体（assets 三件套）
+            writeAssetTo("device-shell-guide/package.json", new java.io.File(realDir, "package.json"));
+            writeAssetTo("device-shell-guide/cordis.patch.yml", new java.io.File(realDir, "cordis.patch.yml"));
+            writeAssetTo("device-shell-guide/lib/index.js", new java.io.File(realDir, "lib/index.js"));
+            // 2) node_modules 符号链接 → 实体目录（togglePlugin 靠改链接名开关）
+            if (nmLink.getParentFile() != null) nmLink.getParentFile().mkdirs();
+            if (!nmLink.exists()) {
+                java.nio.file.Files.createSymbolicLink(nmLink.toPath(),
+                        java.nio.file.Paths.get(REAL));
+            }
+            // 3) 注册到 web profile：dependencies(file:) + bundles（幂等）
             java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
             if (pf.isFile()) {
                 String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
                 org.json.JSONObject root = new org.json.JSONObject(txt);
                 org.json.JSONObject deps = root.optJSONObject("dependencies");
                 if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
-                if (!deps.has(NAME)) deps.put(NAME, "file:/root/dsha-device-shell-guide");
+                if (!deps.has(NAME)) deps.put(NAME, "file:" + REAL);
                 org.json.JSONObject profile = root.optJSONObject("dsh").optJSONObject("profile");
                 if (profile != null) {
                     org.json.JSONArray bundles = profile.optJSONArray("bundles");
@@ -1626,7 +1637,7 @@ public class HarnessController {
                 }
                 java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
                 java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
-                android.util.Log.i("DSHA", "设备 Shell 引导插件已注册（rc.8 bundle 模式）");
+                android.util.Log.i("DSHA", "设备 Shell 引导插件已注册（已装插件可管理）");
             }
         } catch (Throwable ignored) {
         }
@@ -2345,7 +2356,13 @@ public class HarnessController {
                 java.io.File off = new java.io.File(dir, name + ".disabled");
                 if (enable && off.exists()) {
                     String src = readPluginSrc(name);
-                    if (src == null || src.isEmpty() || "null".equals(src)) return false;
+                    // 源记录缺失：内置插件（dsha- 前缀，file: 挂载）兜底回 file: 路径，
+                    // 普通插件兜底 "*"（包体在磁盘即可加载）
+                    if (src == null || src.isEmpty() || "null".equals(src)) {
+                        src = name.startsWith("dsha-")
+                                ? "file:/root/dsha-" + name
+                                : "*";
+                    }
                     String safe = src.replace("'", "\\'");
                     String r = proot.execAndRead(
                             toggleScript() +
