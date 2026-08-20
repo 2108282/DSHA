@@ -187,8 +187,8 @@ def adb_shell(port, cmds):
     from adb_shell_wifi.auth.sign_pythonrsa import PythonRSASigner
     signer = PythonRSASigner(open(KEYPUB, 'rb').read().strip(), open(KEY, 'rb').read())
     priv_pem = open(KEY, 'rb').read()
-    dev = AdbDeviceTls('127.0.0.1', port, tls_priv_pem=priv_pem)
-    dev.connect(rsa_keys=[signer], auth_timeout_s=15)
+    dev = AdbDeviceTls('127.0.0.1', port)
+    dev.connect(rsa_keys=[signer], auth_timeout_s=15, tls_priv_pem=priv_pem)
     try:
         return dev.shell(' && '.join(cmds))
     finally:

@@ -49,9 +49,9 @@ def main():
     from adb_shell_wifi.auth.sign_pythonrsa import PythonRSASigner
 
     signer = PythonRSASigner(open(KEYPUB, 'rb').read().strip(), open(KEY, 'rb').read())
-    priv_pem = open(KEY, 'rb').read()  # PKCS#8 PEM，作为 TLS 客户端私钥（官方文档要求）
-    dev = AdbDeviceTls('127.0.0.1', port, tls_priv_pem=priv_pem)
-    dev.connect(rsa_keys=[signer], auth_timeout_s=15)
+    priv_pem = open(KEY, 'rb').read()  # PKCS#8 PEM，作为 TLS 客户端私钥（0.5.0 库：传给 connect()）
+    dev = AdbDeviceTls('127.0.0.1', port)
+    dev.connect(rsa_keys=[signer], auth_timeout_s=15, tls_priv_pem=priv_pem)
     try:
         out = dev.shell(cmd)
     finally:

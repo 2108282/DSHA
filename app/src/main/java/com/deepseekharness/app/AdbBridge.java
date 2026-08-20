@@ -29,7 +29,7 @@ public final class AdbBridge {
     }
 
     /** 当前 assets 脚本版本：每次改脚本 +1，旧版 APK 的残留脚本会因版本不符被强制重注入 */
-    private static final String SCRIPT_VERSION = "5";
+    private static final String SCRIPT_VERSION = "6";
 
     /** 幂等注入：把三个 assets 脚本 base64 写入 /root/.dsh/ 并加执行位 + 写版本标记 */
     public static String inject(Context ctx, ProotBootstrap proot) {
@@ -59,11 +59,17 @@ public final class AdbBridge {
         if (!wheelsPresent(proot)) {
             sb.append(injectWheels(ctx, proot));
         }
-        if (keyPresent(proot) && depsOk(proot)) {
+        if (keyPresent(proot) && depsOk(proot) && wrapperPresent(proot)) {
             return "SETUP_DONE"; // 环境已就绪，跳过安装
         }
         sb.append(setup(proot));
         return sb.toString();
+    }
+
+    /** /root/dsh-bin/adb-shell 包装命令是否已装（agent/引导提示依赖它） */
+    public static boolean wrapperPresent(ProotBootstrap proot) {
+        String r = proot.execAndRead("test -x /root/dsh-bin/adb-shell && echo YES || echo NO");
+        return r != null && r.contains("YES");
     }
 
     /** wheels 离线包是否已就位（≥15 个 whl：13 依赖 + pip + setuptools） */
