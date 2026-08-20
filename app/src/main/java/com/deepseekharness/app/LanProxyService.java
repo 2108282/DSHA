@@ -27,6 +27,8 @@ public final class LanProxyService {
     private static ServerSocket server;
     private static Thread acceptThread;
     private static volatile boolean running;
+    /** 连接处理线程池（限制并发，防线程耗尽） */
+    private static java.util.concurrent.ExecutorService pool;
     /** 供 Location 重写用的局域网 IP（可随时刷新） */
     private static volatile String lanIp = "";
     /** rootfs 日志路径（终端可 tail /root/dsh-lan.log 查看桥状态） */
@@ -38,6 +40,12 @@ public final class LanProxyService {
         if (running) return;
         logPath = rootfsDir + "/root/dsh-lan.log";
         running = true;
+        // 连接线程池：固定 8 线程（防局域网扫描/大量连接耗尽），daemon 线程
+        pool = java.util.concurrent.Executors.newFixedThreadPool(8, r -> {
+            Thread t = new Thread(r, "lanproxy");
+            t.setDaemon(true);
+            return t;
+        });
         lanIp = HarnessController.getLanAddress();
         log("LAN 桥启动中: 0.0.0.0:" + LAN_PORT + " → 127.0.0.1:" + BACKEND_PORT + " (LAN IP=" + lanIp + ")");
         acceptThread = new Thread(() -> {
@@ -50,9 +58,8 @@ public final class LanProxyService {
                     try {
                         Socket client = server.accept();
                         client.setSoTimeout(120000);
-                        Thread h = new Thread(() -> handle(client), "lanproxy");
-                        h.setDaemon(true);
-                        h.start();
+                        // 固定线程池：限制并发连接线程数（防局域网扫描/大量连接耗尽线程）
+                        pool.execute(() -> handle(client));
                     } catch (IOException e) {
                         if (running) log("accept 异常: " + e.getMessage());
                     }
@@ -75,6 +82,10 @@ public final class LanProxyService {
         }
         running = false;
         if (acceptThread != null) acceptThread.interrupt();
+        if (pool != null) {
+            pool.shutdownNow();
+            pool = null;
+        }
         closeQuietly(server);
         server = null;
     }

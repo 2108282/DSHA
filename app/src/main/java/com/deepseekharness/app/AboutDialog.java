@@ -17,7 +17,7 @@ public final class AboutDialog {
     }
 
     public static void show(Context ctx) {
-        String version = "1.0.6";
+        String version = "unknown";
         try {
             version = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
         } catch (Exception ignored) {

@@ -24,6 +24,7 @@ import androidx.fragment.app.Fragment;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 
 /** 工作区管理模块：工作目录配置、环境信息、无 ROOT 文件共享（MT 注入文件提供器） */
@@ -167,11 +168,16 @@ public class WorkspaceFragment extends Fragment {
             try {
                 File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-restore.tar.gz");
                 if (tmp.getParentFile() != null) tmp.getParentFile().mkdirs();
-                try (InputStream in = requireContext().getContentResolver().openInputStream(uri);
+                // 显式判空：openInputStream 返回 null（权限/文件损坏）时给友好提示
+                InputStream in = requireContext().getContentResolver().openInputStream(uri);
+                if (in == null) {
+                    throw new IOException("无法打开所选文件（可能权限不足或文件已损坏）");
+                }
+                try (InputStream ins = in;
                      FileOutputStream out = new FileOutputStream(tmp)) {
                     byte[] buf = new byte[8192];
                     int n;
-                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                    while ((n = ins.read(buf)) != -1) out.write(buf, 0, n);
                 }
                 // 解压到 /root（备份包内含 .dsh、<wd>/.env、dsh-web.log）
                 c.getProot().execChecked("cd /root && tar -xzf .dsha-restore.tar.gz 2>/dev/null; "

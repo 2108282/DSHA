@@ -105,12 +105,14 @@ public class TerminalFragment extends Fragment {
             try {
                 shell = c.getProot().execRootfsInteractive();
                 running = true;
-                byte[] buf = new byte[8192];
-                InputStream in = shell.getInputStream();
-                while (running) {
-                    int n = in.read(buf);
-                    if (n < 0) break;
-                    final String chunk = stripAnsi(new String(buf, 0, n, StandardCharsets.UTF_8));
+                // 用 InputStreamReader 流式解码：固定 8192 字节块按 UTF-8 硬解会切断
+                // 多字节字符（中文 3 字节）产生乱码 �；Reader 内部缓冲正确处理跨边界
+                java.io.Reader reader = new java.io.InputStreamReader(
+                        shell.getInputStream(), StandardCharsets.UTF_8);
+                char[] cbuf = new char[4096];
+                int n;
+                while (running && (n = reader.read(cbuf)) != -1) {
+                    final String chunk = stripAnsi(new String(cbuf, 0, n));
                     mainHandler.post(() -> appendRaw(chunk));
                 }
                 mainHandler.post(() -> appendLine("\n[会话已退出]"));
@@ -147,7 +149,10 @@ public class TerminalFragment extends Fragment {
     private void appendRaw(String s) {
         if (s == null || s.isEmpty()) return;
         buffer.append(s);
-        if (buffer.length() > 300000) buffer.setLength(0); // 过长截断，仍可手动清理
+        if (buffer.length() > 300000) {
+            // 保留最近 10 万字符（不能整体清空，否则历史全丢）
+            buffer.delete(0, buffer.length() - 100000);
+        }
         TextView out = boundOutput;
         if (out == null) return;
         String show = buffer.length() > 100000
