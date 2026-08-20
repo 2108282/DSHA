@@ -87,29 +87,84 @@ public class ConfigFragment extends Fragment {
             });
         }
         refreshAdbStatus();
+        startAdbStatusPolling(); // 设置页在前台时每秒检测 ADB 运行状态
     }
 
-    private void refreshAdbStatus() {
-        TextView adbStatus = getView() != null ? getView().findViewById(R.id.config_adb_status) : null;
-        if (adbStatus == null) return;
-        if (!DeviceBridgeService.isAdbEnabled(requireContext())) {
-            adbStatus.setText("ADB 已关闭。不用无线调试就保持关闭。");
+    // ================= ADB 运行状态实时检测（每秒；仅本页前台时） =================
+    private final android.os.Handler adbStatusHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable adbStatusTick = this::pollAdbStatus;
+    private boolean adbPolling = false;
+
+    /** 启动每秒轮询（Fragment 可见时） */
+    private void startAdbStatusPolling() {
+        if (adbPolling) return;
+        adbPolling = true;
+        adbStatusHandler.postDelayed(adbStatusTick, 1000);
+    }
+
+    /** 停止轮询（Fragment 不可见时，省电） */
+    private void stopAdbStatusPolling() {
+        adbPolling = false;
+        adbStatusHandler.removeCallbacks(adbStatusTick);
+    }
+
+    /** 每秒执行：查询 ADB 实际运行状态并刷新 UI */
+    private void pollAdbStatus() {
+        if (!adbPolling) return;
+        if (!isAdded() || getView() == null) {
+            stopAdbStatusPolling();
             return;
         }
-        adbStatus.setText("ADB 已启用，正在查询状态…");
+        final TextView adbStatus = getView().findViewById(R.id.config_adb_status);
+        if (adbStatus == null) { stopAdbStatusPolling(); return; }
+        if (!DeviceBridgeService.isAdbEnabled(requireContext())) {
+            adbStatus.setText("ADB 已关闭。不用无线调试就保持关闭。");
+            adbStatusHandler.postDelayed(adbStatusTick, 1000);
+            return;
+        }
         new Thread(() -> {
             try {
-                String s = AdbBridge.status(c.getProot());
-                final String st = (s == null || s.trim().isEmpty() || s.contains("ERROR"))
-                        ? "ADB 已启用：未就绪（可点下方按钮无线配对）"
-                        : "ADB 已启用：" + s.trim().substring(0, Math.min(60, s.trim().length()));
+                // 探测 adb 是否真实可用（用 rootfs 里的 adb-shell 实际跑一下，最准）
+                String r = c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py id 2>&1 | head -2");
+                final boolean connected = r != null && r.contains("uid=");
+                final String detail = r == null ? "" : r.replace("\n", " ").trim();
                 if (isAdded()) requireActivity().runOnUiThread(() -> {
                     TextView tv = getView() != null ? getView().findViewById(R.id.config_adb_status) : null;
-                    if (tv != null) tv.setText(st);
+                    if (tv == null) return;
+                    if (connected) {
+                        tv.setTextColor(requireContext().getColor(R.color.ok));
+                        tv.setText("● ADB 运行中（已连接，uid=2000 shell）\n" + (detail.length() > 80 ? detail.substring(0, 80) : detail));
+                    } else {
+                        tv.setTextColor(requireContext().getColor(R.color.warn));
+                        tv.setText("○ ADB 未连接（无线调试可能未开启）\n点下方「无线配对」或查看手机「开发者选项→无线调试」");
+                    }
                 });
             } catch (Throwable ignored) {
             }
-        }).start();
+            if (adbPolling) adbStatusHandler.postDelayed(adbStatusTick, 1000);
+        }, "adb-status-poll").start();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        startAdbStatusPolling();
+    }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+        stopAdbStatusPolling();
+    }
+
+    @Override
+    public void onDestroyView() {
+        super.onDestroyView();
+        stopAdbStatusPolling();
+    }
+
+    private void refreshAdbStatus() {
+        // 已由 pollAdbStatus 每秒轮询替代（保留空方法避免调用点改动）
     }
 
     /** 构建「输入配对码」通知卡（RemoteInput，参考 Shizuku 无线配对交互）：
