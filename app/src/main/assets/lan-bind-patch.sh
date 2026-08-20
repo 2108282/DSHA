@@ -37,11 +37,14 @@ for F in $TARGETS; do
   [ -n "$F" ] && [ -f "$F" ] || continue
   if grep -q 'dsha-lan' "$F"; then ALREADY=1; continue; fi
   grep -q '0\.0\.0\.0' "$F" || continue
+  # 兼容两代语法：
+  #   rc.6:  if (options.host === '0.0.0.0') { program.error(...) }
+  #   rc.8:  if (options.host === "0.0.0.0") program.error(...)
   sed -i \
     -e "s|if (options.host === '0.0.0.0') {|if (false) { /* dsha-lan */|" \
     -e "s|if (options.host === \"0.0.0.0\")|if (false) /* dsha-lan */|" \
-    -e "s|\.host[[:space:]]*===?[[:space:]]*['\"]0\.0\.0\.0['\"]|.host === \"dsha-lan-enabled\"|g" \
-    -e "s|['\"]0\.0\.0\.0['\"]|\"dsha-lan-enabled\"|g" \
+    -e "s|\\.host[[:space:]]*===?[[:space:]]*['\\\"]0\\.0\\.0\\.0['\\\"]|.host === \"dsha-lan-enabled\"|g" \
+    -e "s|['\\\"]0\\.0\\.0\\.0['\\\"]|\"dsha-lan-enabled\"|g" \
     "$F"
   grep -q 'dsha-lan' "$F" && PATCHED=$((PATCHED + 1))
 done
@@ -56,7 +59,17 @@ for TF in $TF_LIST; do
   [ -f "$TF" ] || continue
   grep -q 'dsha-lan-ip' "$TF" && { ALREADY=1; continue; }
   if grep -q 'isTrustedAuthority' "$TF"; then
-    sed -i -E "s|\&\& !isTrustedAuthority\([^)]*\)|\&\& 0 /* dsha-lan-ip */|g" "$TF"
+    # 兼容旧版（isTrustedAuthority(hostUrl)）与 rc.8（isTrustedAuthority(hostUrl, trustedHosts) 嵌套括号）。
+    # sed 的 [^)]* 在嵌套括号处截断会漏替换 → 优先用 perl 平衡括号匹配（rootfs 有 perl 时），
+    # 无 perl 回退 sed 双模式（先试带嵌套的，再试单参数）。
+    if command -v perl >/dev/null 2>&1; then
+      perl -pi -e 's/&& !isTrustedAuthority\((?:(?:[^()]|\([^()]*\))*)\)/&& 0 \/\* dsha-lan-ip \*\//g' "$TF"
+    else
+      sed -i -E \
+        -e "s|&& !isTrustedAuthority\([^()]*\([^()]*\)[^()]*\)|&& 0 /* dsha-lan-ip */|g" \
+        -e "s|&& !isTrustedAuthority\([^()]*\)|&& 0 /* dsha-lan-ip */|g" \
+        "$TF"
+    fi
     grep -q 'dsha-lan-ip' "$TF" && PATCHED=$((PATCHED + 1))
   fi
 done
