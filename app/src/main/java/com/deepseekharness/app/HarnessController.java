@@ -1606,7 +1606,25 @@ public class HarnessController {
             java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
                     "root/.dsh/profiles/web/node_modules/" + NAME);
             java.io.File marker = new java.io.File(proot.getRootfsDir(), "root/dsha-device-shell-guide-installed");
-            if (marker.exists()) return;
+            // 版本自愈：marker 存在但插件版本旧（缺 cordis.entry 等修复）→ 删除 marker 强制重注入
+            if (marker.exists()) {
+                String curVer = "";
+                try {
+                    java.io.File pf2 = new java.io.File(realDir, "package.json");
+                    if (pf2.isFile()) {
+                        curVer = new org.json.JSONObject(
+                                new String(java.nio.file.Files.readAllBytes(pf2.toPath()), StandardCharsets.UTF_8))
+                                .optString("version", "");
+                    }
+                } catch (Throwable ignored) {
+                }
+                if (!"0.1.1".equals(curVer)) {
+                    //noinspection ResultOfMethodCallIgnored
+                    marker.delete();
+                } else {
+                    return;
+                }
+            }
             // 1) 注入插件包实体（assets 三件套）
             writeAssetTo("device-shell-guide/package.json", new java.io.File(realDir, "package.json"));
             writeAssetTo("device-shell-guide/cordis.patch.yml", new java.io.File(realDir, "cordis.patch.yml"));
@@ -1636,8 +1654,11 @@ public class HarnessController {
                     if (!found) bundles.put(NAME);
                 }
                 java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
+                // 4) 关键：走 pnpm 正式安装（rc.8 的 bundle 解析依赖 pnpm 生成的
+                //    node_modules 结构，手建符号链接不被 cordis loader 识别）
+                proot.execAndRead("cd /root/.dsh/profiles/web && pnpm install --no-frozen-lockfile 2>&1 | tail -5");
                 java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
-                android.util.Log.i("DSHA", "设备 Shell 引导插件已注册（已装插件可管理）");
+                android.util.Log.i("DSHA", "设备 Shell 引导插件已注册（pnpm 正式安装）");
             }
         } catch (Throwable ignored) {
         }

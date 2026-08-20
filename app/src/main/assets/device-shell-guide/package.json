@@ -1,10 +1,13 @@
 {
   "name": "dsh-device-shell-guide",
   "description": "DSHA builtin plugin: inject device-shell (ADB/Shizuku) steering into each new conversation's system prompt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "lib/index.js",
   "exports": { ".": "./lib/index.js" },
+  "cordis": {
+    "entry": "lib/index.js"
+  },
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
