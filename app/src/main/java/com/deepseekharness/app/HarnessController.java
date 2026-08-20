@@ -2217,6 +2217,38 @@ public class HarnessController {
         return true;
     }
 
+
+    /** 启动时检测 dsh 新版本：rc 号变化 → 自动重跑⑥（安全守卫+补丁+内置插件注册）。
+     *  幂等、后台静默；失败不影响启动。 */
+    public void maybeAutoReinstallGuardOnDshUpdate() {
+        try {
+            if (!proot.isInstalled()) return;
+            String r = proot.execAndRead(
+                    "command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 || echo NONE");
+            if (r == null || r.contains("NONE") || r.startsWith("ERROR")) return;
+            String rc = r.trim();
+            final SharedPreferences prefs =
+                    appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
+            String last = prefs.getString("last_dsh_rc", "");
+            if (rc.equals(last)) return; // 版本没变
+            prefs.edit().putString("last_dsh_rc", rc).apply();
+            // rc 变了：后台重跑⑥（安装守卫/补丁/内置插件/极简preset 全部重新应用）
+            android.util.Log.i("DSHA", "检测到 dsh 版本变化 " + last + " → " + rc + "，自动重跑⑥");
+            IO.execute(() -> {
+                try {
+                    if (tryBeginBusy()) {
+                        runInstallStep(STEP_GUARD);
+                        setState("", 100, "已自动适配 dsh " + rc + "（⑥安全守卫已更新）", "", false);
+                    }
+                } catch (Throwable e) {
+                    android.util.Log.w("DSHA", "自动重跑⑥失败（不影响使用）: " + e);
+                    setState("", 0, "", "", false);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** 启动计数自动备份：每启动 N 次触发一次自动备份（固定名自动覆盖上一个自动备份）。
      *  N 从配置项 auto_backup_launches 读取（默认 5，0=关闭）。
      *  与手动备份独立（手动每次保留时间戳文件）。幂等、后台执行、失败静默。

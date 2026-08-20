@@ -73,6 +73,8 @@ public class MainActivity extends AppCompatActivity {
         HarnessController.get(this).upgradeGuard();
         // 每启动 5 次自动备份一次（固定名覆盖；与手动备份独立）
         HarnessController.get(this).maybeAutoBackupOnLaunch();
+        // 检测 dsh 新版本 → 自动重跑⑥（安全守卫/补丁/内置插件适配新版本）
+        HarnessController.get(this).maybeAutoReinstallGuardOnDshUpdate();
         // 崩溃自愈提示：上次异常退出时读 crash.log 告知原因（不阻塞使用）
         showCrashRecoveryNotice();
         // 解压完成后进入主界面（skip_extract=true）才检测"全新环境可恢复"，
