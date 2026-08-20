@@ -1125,8 +1125,10 @@ public class HarnessController {
         requireTools();
         setProgress("安装 deepseek-harness 最新 RC（npm 全局）", 91);
         runStep("RC 安装环境准备", 92,
+                // 先写 registry 再追加 allow-scripts：顺序反了会把前者 printf 覆盖掉
+                "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc; " +
                 "npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user 2>/dev/null; " +
-                "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc");
+                "echo '--- /root/.npmrc ---'; cat /root/.npmrc");
         runStep("安装 @deepseek-ai/dsh 最新 RC", 95,
                 // 优先 @next（官方最新 rc）；npmmirror 镜像同步滞后时回退 pin rc.8，再回退官方源
                 "(npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmmirror.com 2>&1 || " +
@@ -1215,12 +1217,12 @@ public class HarnessController {
                 "git clone --depth 1 https://ghproxy.net/https://github.com/deepseek-ai/deepseek-harness.git " + wd + " || " +
                 "git clone --depth 1 https://gitcode.com/gh_mirrors/de/deepseek-harness.git " + wd + " ) || " +
                 "(echo 'git 克隆失败，改用源码包下载…'; rm -rf " + wd + " && " +
-                "(curl -kfsSL --retry 3 -m 300 " + gitHubProxy("https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main") + " -o dsh-src.tar.gz || " +
-                "curl -kfsSL --retry 3 -m 300 https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
-                "curl -kfsSL --retry 3 -m 300 https://ghfast.top/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
-                "curl -kfsSL --retry 3 -m 300 https://gh-proxy.com/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz || " +
-                "curl -kfsSL --retry 3 -m 300 https://ghproxy.net/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz) && " +
-                "tar -xzf dsh-src.tar.gz && mv deepseek-harness-main " + wd + " && rm -f dsh-src.tar.gz); fi");
+                "(curl -kfsSL --retry 3 -m 300 " + gitHubProxy("https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/master") + " -o dsh-src.tar.gz || " +
+                "curl -kfsSL --retry 3 -m 300 https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/master -o dsh-src.tar.gz || " +
+                "curl -kfsSL --retry 3 -m 300 https://ghfast.top/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/master -o dsh-src.tar.gz || " +
+                "curl -kfsSL --retry 3 -m 300 https://gh-proxy.com/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/master -o dsh-src.tar.gz || " +
+                "curl -kfsSL --retry 3 -m 300 https://ghproxy.net/https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/master -o dsh-src.tar.gz) && " +
+                "tar -xzf dsh-src.tar.gz && (mv deepseek-harness-master 2>/dev/null || mv deepseek-harness-main " + wd + " ) && rm -f dsh-src.tar.gz); fi");
 
         // 应用 WebUI 移动端补丁（移除“打开/收起侧边栏”按钮）；失败不阻塞安装
         try {
@@ -1596,10 +1598,16 @@ public class HarnessController {
         if (lanReady) opts += " --host 0.0.0.0" + lanTrustArgs(); // 0.0.0.0 + 信任本机所有 IP（Host 头校验放行）
         String wd = detectWorkdir();
         return "node /root/dsh-config-fix.js 2>/dev/null || true; "
-                + "if [ -d /root/" + wd + " ]; then cd /root/" + wd + "; " + depsSelfHeal()
+                // 判定源码模式必须认启动入口 bin.js：RC6 模式下工作区目录也存在（只是没有源码），
+                // 只认 -d 会把空工作区误判成源码树 → 启动失败
+                + "if [ -f /root/" + wd + "/apps/cli/lib/bin.js ]; then cd /root/" + wd + "; " + depsSelfHeal()
                 + "exec node apps/cli/lib/bin.js web" + opts + " > ~/dsh-web.log 2>&1; "
-                + "else echo '[DSHA] 源码目录缺失，尝试全局 dsh'; "
+                + "else "
                 + "if command -v dsh >/dev/null 2>&1 && test -f \"$(command -v dsh)\"; then "
+                // RC6 模式没有源码树，但工作区目录必须存在并作为运行目录：
+                // 1) 否则用户在 MT/工作区页看不到 deepseek-harness 文件夹（"下载完没有工作区"）
+                // 2) agent 产物/上传文件有固定落点，备份功能才能带上
+                + "mkdir -p /root/" + wd + " && cd /root/" + wd + " && "
                 + "exec dsh web" + opts + " > ~/dsh-web.log 2>&1; "
                 + "else echo '[DSHA] 全局 dsh 不可用（悬空链接或未安装），请到分步安装页重装 ⑤ deepseek-harness'; exit 1; fi; fi";
     }
@@ -1647,8 +1655,10 @@ public class HarnessController {
                     "export DEEPSEEK_API_KEY='" + effectiveApiKey() + "'\n" +
                     "export DSH_PERMISSION_MODE=" + getPermissionMode() + "\n" +
                     "export DSH_CONFIRM=1\n" +
+                    // 工作区目录先于 cd 创建：RC6 模式没有源码树，不建目录的话
+                    // 看门狗重启第一步 cd || exit 1 必失败 → 自动重启形同虚设
+                    "mkdir -p /root/" + getWorkdir() + " /root/.codex/pets /root/.dsh/plugins 2>/dev/null\n" +
                     "cd /root/" + getWorkdir() + " || exit 1\n" +
-                    "mkdir -p /root/.codex/pets /root/.dsh/plugins 2>/dev/null\n" +
                     restartCmd + "\n";
             String watchdog =
                     "#!/bin/bash\n" +
