@@ -577,7 +577,7 @@ public class HarnessController {
                     "description: 仅提供持久 bash 与 str_replace_editor 的双工具编码 Agent，附设备操作能力。\n" +
                     "order: 3\n").getBytes(StandardCharsets.UTF_8));
             String guide = "你正运行在用户 Android 手机的容器里，可以直接干预这台实体手机：\n"
-                    + "- 主通道（ADB 无线，已配对、无需 root）：/root/dsh-bin/adb-shell \"命令\"；若不存在则用 python3 /root/.dsh/adb-shell.py \"命令\"\n"
+                    + "- 主通道（ADB 无线，已配对）：/root/dsh-bin/adb-shell \"命令\"（shell级）；--su 提权（需root）：/root/dsh-bin/adb-shell --su \"命令\"；若不存在则用 python3 /root/.dsh/adb-shell.py \"命令\"\n"
                     + "- 备选通道（Shizuku 桥，可能未就绪）：curl -s \"http://127.0.0.1:3090/exec?cmd=...\"\n"
                     + "- ⚠️ 不要用 /root/dsh-bin/adb 或裸 adb 命令——那是守卫包装脚本，会失败\n"
                     + "- 常用操作：查设备信息 getprop；查前台 dumpsys window | grep mCurrentFocus；启动应用 am start -n 包名/Activity；抓日志 dumpsys/logcat；读写 /sdcard\n"
@@ -1826,7 +1826,7 @@ public class HarnessController {
                     }
                 } catch (Throwable ignored) {
                 }
-                if (!"0.1.3".equals(curVer)) {
+                if (!"0.1.4".equals(curVer)) {
                     //noinspection ResultOfMethodCallIgnored
                     marker.delete();
                 } else {

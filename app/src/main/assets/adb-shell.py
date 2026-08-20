@@ -21,13 +21,21 @@ KEYPUB = KEY + '.pub'
 def main():
     args = sys.argv[1:]
     port = 0
+    use_su = False
     if args and args[0] == '--port':
         if len(args) >= 2:
             port = int(args[1])
         args = args[2:]
+    # --su：以 root 身份执行（需手机已 root；未 root 会提示）
+    if args and args[0] == '--su':
+        use_su = True
+        args = args[1:]
     if not args:
         args = ['id']
     cmd = ' '.join(args)
+    # su 模式：shell 下用 su -c 提升到 root
+    if use_su:
+        cmd = "su -c '" + cmd.replace("'", "'\\''") + "'"
 
     if not (os.path.exists(KEY) and os.path.exists(KEYPUB)):
         print('NO_KEY: 请先在 App「工作区 → ADB 无线配对」完成配对')
