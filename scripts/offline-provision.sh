@@ -106,7 +106,7 @@ build_pty() {
   [ -f "$dir/build/Release/pty.node" ] || [ -f "$dir/prebuilds/linux-arm64/pty.node" ]
 }
 
-echo "==> [5/8] 安装 @deepseek-ai/dsh@${DSH_VERSION}（App 默认 dsh 版本）"
+echo "==> [5/8] 安装 @deepseek-ai/dsh@${DSH_VERSION}（App 默认 dsh 版本，失败即停不 clone）"
 install_headers
 RC_OK=0
 npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user 2>/dev/null || true
@@ -116,39 +116,18 @@ if npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" --force; then
     RC_OK=1
     echo "dsh ${DSH_VERSION} + node-pty 就绪"
   else
-    echo "WARN: dsh ${DSH_VERSION} 已装但 node-pty 编译失败，尝试源码回退"
+    # node-pty 编译失败不再 fallback clone（手机/clone 易留空源码）：
+    # 尝试 prebuilds 或直接失败
+    echo "ERROR: dsh ${DSH_VERSION} 已装但 node-pty 编译失败，请检查工具链后重试"
+    exit 1
   fi
 else
-  echo "WARN: npm 安装 dsh ${DSH_VERSION} 失败，回退源码构建"
+  echo "ERROR: npm 安装 dsh ${DSH_VERSION} 失败（网络/镜像），请检查后重试"
+  exit 1
 fi
 
-if [ "$RC_OK" != 1 ]; then
-  echo "==> [5b/8] 回退：克隆 deepseek-harness 源码并构建"
-  cd /root
-  rm -rf "${WORKDIR}"
-  git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git "${WORKDIR}" \
-    || git clone --depth 1 https://gitclone.com/github.com/deepseek-ai/deepseek-harness.git "${WORKDIR}" \
-    || {
-      curl -fSL --retry 3 -m 300 https://codeload.github.com/deepseek-ai/deepseek-harness/tar.gz/refs/heads/main -o dsh-src.tar.gz
-      tar -xzf dsh-src.tar.gz
-      mv deepseek-harness-main "${WORKDIR}"
-      rm -f dsh-src.tar.gz
-    }
-  cd /root/"${WORKDIR}"
-  grep -q 'onlyBuiltDependencies' pnpm-workspace.yaml 2>/dev/null || \
-    printf '\nonlyBuiltDependencies:\n  - node-pty\n' >> pnpm-workspace.yaml
-  pnpm install
-  if [ -f package.json ] && grep -q '"build"' package.json; then
-    pnpm run build || echo "WARN: pnpm run build 失败，若 lib/bin.js 已存在仍可继续"
-  fi
-  NP=$(ls -d node_modules/.pnpm/node-pty@*/node_modules/node-pty 2>/dev/null | head -1 || true)
-  build_pty "$NP" || echo "WARN: 源码树 node-pty 编译失败"
-  if [ -f /root/"${WORKDIR}"/apps/cli/lib/bin.js ]; then
-    ln -sf /root/"${WORKDIR}"/apps/cli/lib/bin.js /usr/local/bin/dsh
-    chmod +x /usr/local/bin/dsh 2>/dev/null || true
-  fi
-fi
-
+# （源码回退已移除：npm 失败即 exit 1，避免手机 clone 失败留下空源码目录。
+#   如需源码模式请直接 clone 仓库自行构建。）
 echo "==> [6/8] 应用补丁"
 cd /root
 if [ -d /root/"${WORKDIR}"/.git ]; then

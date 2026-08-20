@@ -1136,7 +1136,9 @@ public class HarnessController {
                 "npm install -g @deepseek-ai/dsh@rc --force --registry=https://registry.npmmirror.com 2>&1 || " +
                 "npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmjs.org 2>&1) | tail -25; " +
                 "echo \">> npm 退出码: ${PIPESTATUS[0]}\"; " +
-                "if [ \"${PIPESTATUS[0]}\" != 0 ]; then echo 'npm 安装失败，请重试或检查网络'; fi");
+                // 强制 RC8/npm 路线：失败直接退出（不 fallback clone——手机 clone GitHub
+                // 几乎必失败且会留下空源码目录，用户看到"源码是空的"）
+                "if [ \"${PIPESTATUS[0]}\" != 0 ]; then echo 'RC 安装失败：npm 三个源都不通，请检查网络后重试'; exit 1; fi");
         // 预下载 Node headers（node-gyp 编译 node-pty 必需；否则 node-gyp 默认访问
         // nodejs.org 下载，国内手机网络不通 → undici 报错 → 退出码 1）
         runStep("准备 Node headers（node-gyp 编译依赖）", 96,
