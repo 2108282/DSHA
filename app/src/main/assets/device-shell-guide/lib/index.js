@@ -18,11 +18,13 @@ export const inject = ['systemPrompt']
 /** 注入到系统提示的引导段（针对 DSHA 手机端环境）。 */
 const PROMPT = [
   '【设备操作能力 · DSHA】你正运行在用户 Android 手机的容器里，可以直接干预这台实体手机：',
-  '- 设备 shell（Android shell，uid=2000，已配对、无需 root）：/root/dsh-bin/adb-shell "命令"',
-  '- 备选通道（Shizuku 桥）：curl -s "http://127.0.0.1:3090/exec?cmd=..."',
+  '- 唯一可用的设备通道：/root/dsh-bin/adb-shell "命令"（Python TLS 直连 adbd，uid=2000，已配对、无需 root）',
+  '- ⚠️ 不要用 /root/dsh-bin/adb 或裸 adb 命令——那是守卫包装脚本，不是真实 adb，会报"找不到真实 adb"失败！',
+  '- 备选通道（Shizuku 桥，可能未就绪）：curl -s "http://127.0.0.1:3090/exec?cmd=..."',
   '- 常用操作：查设备信息(getprop)、启动应用(am start -n 包名/Activity)、查进程、读写 /sdcard 共享目录、抓日志(dumpsys/logcat)。',
   '- 权限边界：shell 级（非 root），改系统分区/卸载等需提权的操作会失败，失败就如实告诉用户。',
   '- 安全：涉及删除/格式化/重启/卸载等破坏性命令，动手前先向用户说明后果；操作要可解释（做了什么、为何、影响），并在最终回复里简要总结。',
+  '- 语言要求：与用户交流请一律使用中文回复。',
 ].join('\n')
 
 /**

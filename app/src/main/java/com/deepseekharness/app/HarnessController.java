@@ -577,11 +577,13 @@ public class HarnessController {
                     "description: 仅提供持久 bash 与 str_replace_editor 的双工具编码 Agent，附设备操作能力。\n" +
                     "order: 3\n").getBytes(StandardCharsets.UTF_8));
             String guide = "你正运行在用户 Android 手机的容器里，可以直接干预这台实体手机：\n"
-                    + "- 设备 shell（uid=2000，已配对、无需 root）：/root/dsh-bin/adb-shell \"命令\"\n"
-                    + "- 备选通道（Shizuku 桥）：curl -s \"http://127.0.0.1:3090/exec?cmd=...\"\n"
+                    + "- 唯一可用的设备通道：/root/dsh-bin/adb-shell \"命令\"（Python TLS 直连 adbd，uid=2000，已配对、无需 root）\n"
+                    + "- ⚠️ 不要用 /root/dsh-bin/adb 或裸 adb 命令——那是守卫包装脚本，不是真实 adb，会报失败！\n"
+                    + "- 备选通道（Shizuku 桥，可能未就绪）：curl -s \"http://127.0.0.1:3090/exec?cmd=...\"\n"
                     + "- 常用操作：查设备信息(getprop)、启动应用(am start -n 包名/Activity)、查进程、读写 /sdcard 共享目录、抓日志(dumpsys/logcat)。\n"
                     + "- 权限边界：shell 级（非 root），失败就如实告诉用户。\n"
-                    + "- 安全：涉及删除/格式化/重启/卸载等破坏性命令，动手前先向用户说明后果。";
+                    + "- 安全：涉及删除/格式化/重启/卸载等破坏性命令，动手前先向用户说明后果。\n"
+                    + "- 语言要求：与用户交流请一律使用中文回复。";
             String compContent =
                     "# DSHA minimal preset（覆盖官方，persona 含设备操作引导） dsha-device-guide\n"
                     + "- id: persona\n"
@@ -1788,7 +1790,7 @@ public class HarnessController {
                     }
                 } catch (Throwable ignored) {
                 }
-                if (!"0.1.1".equals(curVer)) {
+                if (!"0.1.2".equals(curVer)) {
                     //noinspection ResultOfMethodCallIgnored
                     marker.delete();
                 } else {
