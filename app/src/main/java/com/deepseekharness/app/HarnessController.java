@@ -1700,7 +1700,30 @@ public class HarnessController {
                     //noinspection ResultOfMethodCallIgnored
                     marker.delete();
                 } else {
-                    return;
+                    // 版本对但可能之前注册失败（NPE 旧版）：校验注册是否真生效，
+                    // 没生效（bundles 缺/链接缺）→ 删 marker 重做
+                    boolean registered = false;
+                    try {
+                        java.io.File pfV = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+                        if (pfV.isFile()) {
+                            String tv = new String(java.nio.file.Files.readAllBytes(pfV.toPath()), StandardCharsets.UTF_8);
+                            org.json.JSONObject rv = new org.json.JSONObject(tv);
+                            org.json.JSONArray bs = rv.optJSONObject("dsh") == null ? null
+                                    : rv.optJSONObject("dsh").optJSONObject("profile") == null ? null
+                                    : rv.optJSONObject("dsh").optJSONObject("profile").optJSONArray("bundles");
+                            if (bs != null) {
+                                for (int i = 0; i < bs.length(); i++) {
+                                    if (NAME.equals(bs.optString(i, "").trim())) { registered = true; break; }
+                                }
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    if (registered && nmLink.exists()) {
+                        return; // 真的注册好了
+                    }
+                    //noinspection ResultOfMethodCallIgnored
+                    marker.delete(); // 注册缺失 → 重做
                 }
             }
             // 1) 注入插件包实体（assets 三件套）
