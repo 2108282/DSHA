@@ -1,4 +1,4 @@
-# DSHA
+3# DSHA
 
 > 下一个 AI / 开发者请先读 **[HANDOFF.md](HANDOFF.md)**，不要先全库扫描。
 
@@ -126,3 +126,5 @@ AI 会通过 `/root/dsh-bin/adb-shell` 操作你的手机（uid=2000，非 root�
 - 遇到问题（安装失败/ADB 配对/插件异常）优先进群，附上日志更快解决
 
 > 提示：插件安装路径 `dsh plugin --profile web add <插件名>`，或 App「插件市场」直接搜。
+
+- https://github.com/Hotsteel2901/dsh-client-ui-mobile-adapt 推荐插件 移动端UI优化
