@@ -112,6 +112,9 @@ public class LaunchFragment extends Fragment {
         }, "dsha-prewarm").start(), 1500);
 
         startBtn.setOnClickListener(v -> {
+            // 用户主动启动：清除"手动停止"标记（否则 keepAlive/预启动会一直不拉起）
+            requireContext().getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .edit().putBoolean("keepalive_paused", false).apply();
             if (webReady) {
                 openWeb();
                 return;

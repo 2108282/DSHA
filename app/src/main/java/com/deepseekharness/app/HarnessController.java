@@ -128,6 +128,16 @@ public class HarnessController {
         return false;
     }
 
+    /** 轮询等待 Web 端口就绪；maxMs 内仍不可达返回 false（启动超时） */
+    private boolean waitWebPortUp(long maxMs) {
+        long deadline = System.currentTimeMillis() + maxMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (isWebPortUp(300)) return true;
+            try { Thread.sleep(500); } catch (InterruptedException ignored) { }
+        }
+        return false;
+    }
+
     private void destroyAllWebProcesses() {
         for (Process p : webProcesses) {
             try { p.destroy(); } catch (Throwable ignored) {
@@ -533,6 +543,8 @@ public class HarnessController {
         try {
             if (!proot.isInstalled() || !isHarnessInstalled()) return; // 环境/harness 未装
             if (webProcess != null && webProcess.isAlive()) return;    // 已在运行
+            // 用户主动停止过（keepalive_paused=true）→ 不自动拉起，尊重用户（除非再次点启动）
+            if (isKeepAlivePaused()) return;
             // 尊重用户：90s 内手动停止过 → 不自动拉起
             long lastStop = prefs.getLong("last_web_stop", 0);
             if (System.currentTimeMillis() - lastStop < PREWARM_STOP_GUARD_MS) return;
@@ -1754,34 +1766,43 @@ public class HarnessController {
                 // web 已由用户/预启动成功拉起 → 解除 keepAlive 暂停（恢复崩溃自愈）
                 prefs.edit().putBoolean("keepalive_paused", false).apply();
                 bumpWebEpoch(); // 新 web 进程已起：通知预览端刷新
-                // 阻塞读取输出，保持 proot+node 进程存活（后台 nohup 会被 --kill-on-exit 杀掉）
-                String out = proot.drainOutput(p);
-                // 输出已重定向到 ~/dsh-web.log，stdout 为空时抓「Error 块 + 尾部」
-                if (out == null || out.trim().isEmpty()) {
-                    out = proot.execAndRead(
-                            "awk 'NR>=1 && /Error: dsh:/{f=1} f{print; n++} f && n>45{exit}' ~/dsh-web.log | head -45; " +
-                            "echo '[--- 日志头部---]'; head -3 ~/dsh-web.log 2>/dev/null; " +
-                            "echo '[--- 日志尾部 ---]'; " +
-                            "L=$(grep -nm1 'Error: dsh:' ~/dsh-web.log | cut -d: -f1); " +
-                            "if [ -n \"$L\" ] && [ \"$L\" -gt 50 ]; then sed -n \"$((L-8)),$((L))p\" ~/dsh-web.log 2>/dev/null; fi; " +
-                            "tail -c 500 ~/dsh-web.log 2>/dev/null");
-                }
-                // 自愈：进程退出且非用户主动停止 → 自动重试 1 次（排除配置错误/API key 缺失）
-                if (!isKeepAlivePaused()) {
-                    String low = out == null ? "" : out.toLowerCase();
-                    boolean configErr = low.contains("invalid api key") || low.contains("validationerror")
-                            || low.contains("api key") && low.contains("missing");
-                    if (!configErr && autoRetryWebOnce()) {
-                        return; // 已自动重试，状态由重试流程管理
+                // 关键：Web 启动中 busy=true 会让安装/重装按钮全灰。
+                // 端口就绪即视为启动完成 → 释放 busy（不能等 drainOutput 阻塞返回，
+                // 否则 Web 运行期间 busy 永远 true → 重装按钮永远灰色）。
+                // 用独立线程阻塞 drain（保持 proot+node 进程存活，后台 nohup 会被 --kill-on-exit 杀掉），
+                // 本线程继续等待端口就绪后释放 busy 并处理退出诊断。
+                Thread drainer = new Thread(() -> {
+                    try {
+                        String out = proot.drainOutput(p);
+                        // 进程退出：非用户主动停止 → 交给 keepAlive/自动重试
+                        if (!isKeepAlivePaused()) {
+                            String low = out == null ? "" : out.toLowerCase();
+                            boolean configErr = low.contains("invalid api key") || low.contains("validationerror")
+                                    || low.contains("api key") && low.contains("missing");
+                            if (!configErr && autoRetryWebOnce()) return;
+                            String tail = out.length() > 600 ? out.substring(out.length() - 600) : out;
+                            setState("", 0, "", "Web UI 意外退出：\n" + tail, false);
+                        } else {
+                            setState("", 0, "已停止后台服务", "", false);
+                        }
+                    } catch (Throwable ignored) {
+                    } finally {
+                        synchronized (webStartLock) {
+                            webStarting = false;
+                        }
                     }
+                }, "dsha-web-drain");
+                drainer.setDaemon(true);
+                drainer.start();
+                // 等待端口就绪（最多 60s），就绪即释放 busy（安装页按钮恢复）
+                if (waitWebPortUp(60_000)) {
+                    setState("", 100, "Web UI 已启动", "", false);
                 }
-                String tail = out.length() > 600 ? out.substring(out.length() - 600) : out;
-                setState("", 0, "", "Web UI 意外退出：\n" + tail, false);
             } catch (Throwable e) {
                 setState("", 0, "", errMsg("启动出错：", e), false);
             } finally {
                 synchronized (webStartLock) {
-                    webStarting = false; // 关键：无论成功失败都要释放，否则后续启动全被挡
+                    webStarting = false; // 无论成功失败都要释放，否则后续启动全被挡
                 }
             }
         });
