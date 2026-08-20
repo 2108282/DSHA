@@ -494,17 +494,20 @@ public class PluginFragment extends Fragment {
                 .setTitle((ok ? "✅ 安装成功：" : "❌ 安装失败：") + display)
                 .setMessage(out == null ? "无输出" : out)
                 .setPositiveButton("重启 WebUI", (d, w) -> {
-                    android.content.Intent stop = new android.content.Intent(requireContext(), HarnessService.class)
+                    // 1.5s 延迟回调期间用户可能已离开本页：全程用 applicationContext，
+                    // 不能在回调里再 requireContext()（fragment detach 后必抛异常闪退）
+                    final android.content.Context app = requireContext().getApplicationContext();
+                    android.content.Intent stop = new android.content.Intent(app, HarnessService.class)
                             .setAction(HarnessService.ACTION_STOP);
-                    requireContext().startService(stop);
+                    app.startService(stop);
                     new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-                        android.content.Intent i = new android.content.Intent(requireContext(), HarnessService.class);
+                        android.content.Intent i = new android.content.Intent(app, HarnessService.class);
                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                            requireContext().startForegroundService(i);
+                            app.startForegroundService(i);
                         } else {
-                            requireContext().startService(i);
+                            app.startService(i);
                         }
-                        status.setText("WebUI 已重启");
+                        if (isAdded()) status.setText("WebUI 已重启");
                     }, 1500);
                 })
                 .setNegativeButton("关闭", null)
@@ -522,17 +525,19 @@ public class PluginFragment extends Fragment {
                         .setTitle("安装完成")
                         .setMessage(out == null ? "无输出" : out)
                         .setPositiveButton("重启 WebUI", (d, w) -> {
-                            android.content.Intent stop = new android.content.Intent(requireContext(), HarnessService.class)
+                            // 同 showInstallResult：延迟回调用 applicationContext，防 detach 后闪退
+                            final android.content.Context app = requireContext().getApplicationContext();
+                            android.content.Intent stop = new android.content.Intent(app, HarnessService.class)
                                     .setAction(HarnessService.ACTION_STOP);
-                            requireContext().startService(stop);
+                            app.startService(stop);
                             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-                                android.content.Intent i = new android.content.Intent(requireContext(), HarnessService.class);
+                                android.content.Intent i = new android.content.Intent(app, HarnessService.class);
                                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                    requireContext().startForegroundService(i);
+                                    app.startForegroundService(i);
                                 } else {
-                                    requireContext().startService(i);
+                                    app.startService(i);
                                 }
-                                Toast.makeText(requireContext(), "正在重启 Web UI…", Toast.LENGTH_SHORT).show();
+                                android.widget.Toast.makeText(app, "正在重启 Web UI…", android.widget.Toast.LENGTH_SHORT).show();
                             }, 1500);
                         })
                         .setNegativeButton("关闭", null)
