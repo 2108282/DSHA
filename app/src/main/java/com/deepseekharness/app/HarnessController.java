@@ -977,6 +977,10 @@ public class HarnessController {
                 "| sed 's|.*/||' | grep -v '^\\.' | grep -v '\\.disabled$' > /root/dsha-builtin.txt; " +
                 "echo '内置快照：'$(wc -l < /root/dsha-builtin.txt 2>/dev/null)' 项'; " +
                 "else echo '内置插件快照已存在，沿用'; fi");
+        // 写入步骤⑥版本标记（启动时对比，不符自动重跑⑥）
+        runStep("写入⑥版本标记", 99,
+                "printf '%s' '" + STEP6_VERSION + "' > /root/.dsh/step6.version; " +
+                "echo '⑥版本: " + STEP6_VERSION + "'");
         setProgress("安全守卫与补丁就绪", 100);
     }
 
@@ -2036,6 +2040,9 @@ public class HarnessController {
 
     // ================= 启动 / 停止 =================
     private static final String GUARD_VERSION = "8";
+    /** 步骤⑥整体版本号：内置插件/补丁/极简 preset 任一变更时 +1，
+     *  启动时对比 rootfs 标记，不符则自动重跑⑥（防"改了不生效"）。 */
+    private static final String STEP6_VERSION = "1";
 
     /** 确保 rootfs 内危险命令确认包装器已部署（版本不匹配则强制重装，幂等） */
     public void ensureDangerGuard() {
@@ -2254,6 +2261,32 @@ public class HarnessController {
         return true;
     }
 
+
+
+    /** 启动时对比步骤⑥版本标记：rootfs 的 step6.version 与当前 STEP6_VERSION 不符
+     *  → 自动重跑⑥（内置插件/补丁/极简 preset 有更新时自动适配，无需用户手动）。
+     *  幂等、后台静默。 */
+    public void maybeRefreshStep6() {
+        try {
+            if (!proot.isInstalled()) return;
+            String r = proot.execAndRead("cat /root/.dsh/step6.version 2>/dev/null || echo NONE");
+            if (r != null && r.trim().equals(STEP6_VERSION)) return; // 版本一致
+            android.util.Log.i("DSHA", "步骤⑥版本变化（rootfs=" + (r == null ? "?" : r.trim())
+                    + " 期望=" + STEP6_VERSION + "），自动重跑⑥");
+            IO.execute(() -> {
+                try {
+                    if (tryBeginBusy()) {
+                        runInstallStep(STEP_GUARD);
+                        setState("", 100, "已自动更新安全守卫与内置插件（⑥）", "", false);
+                    }
+                } catch (Throwable e) {
+                    android.util.Log.w("DSHA", "自动重跑⑥失败（不影响使用）: " + e);
+                    setState("", 0, "", "", false);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+    }
 
     /** 启动时检测 dsh 新版本：rc 号变化 → 自动【重装⑤（安装新版 dsh）+ 重跑⑥（守卫/补丁适配）】。
      *  先装新版再适配，一气呵成；幂等、后台静默；失败不影响启动。 */
