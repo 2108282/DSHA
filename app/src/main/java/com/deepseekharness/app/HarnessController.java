@@ -946,8 +946,25 @@ public class HarnessController {
                 "npm install -g @deepseek-ai/dsh@rc --force --registry=https://registry.npmmirror.com 2>&1 | tail -25; " +
                 "echo \">> npm 退出码: ${PIPESTATUS[0]}\"; " +
                 "if [ \"${PIPESTATUS[0]}\" != 0 ]; then echo 'npm 安装失败，请重试或检查网络'; fi");
+        // 预下载 Node headers（node-gyp 编译 node-pty 必需；否则 node-gyp 默认访问
+        // nodejs.org 下载，国内手机网络不通 → undici 报错 → 退出码 1）
+        runStep("准备 Node headers（node-gyp 编译依赖）", 96,
+                "NGV=$(node -v | sed 's/^v//'); " +
+                "if [ ! -f /root/.cache/node-gyp/$NGV/include/node/node.h ]; then " +
+                "mkdir -p /root/.cache/node-gyp/$NGV; cd /root/.cache/node-gyp/$NGV; " +
+                "(curl -kfsSL --retry 3 https://npmmirror.com/mirrors/node/v$NGV/node-v$NGV-headers.tar.gz -o headers.tar.gz || " +
+                "curl -kfsSL --retry 3 https://mirrors.huaweicloud.com/nodejs/v$NGV/node-v$NGV-headers.tar.gz -o headers.tar.gz || " +
+                "curl -kfsSL --retry 3 https://nodejs.org/dist/v$NGV/node-v$NGV-headers.tar.gz -o headers.tar.gz) && " +
+                "tar -xzf headers.tar.gz --strip-components=1 && rm -f headers.tar.gz && echo 'Node headers 已准备' || " +
+                "{ echo 'Node headers 下载失败（node-gyp 编译将无法进行）'; exit 1; }; " +
+                "else echo 'Node headers 已缓存'; fi; " +
+                "export npm_config_nodedir=/root/.cache/node-gyp/$NGV; " +
+                "export npm_config_disturl=https://npmmirror.com/mirrors/node");
         runStep("编译 node-pty 原生模块", 98,
                 "node-gyp --version >/dev/null 2>&1 || npm install -g node-gyp --registry=https://registry.npmmirror.com 2>&1 | tail -2; " +
+                "NGV=$(node -v | sed 's/^v//'); " +
+                "export npm_config_nodedir=/root/.cache/node-gyp/$NGV; " +
+                "export npm_config_disturl=https://npmmirror.com/mirrors/node; " +
                 "npty_dir=$(find /usr/local/lib/node_modules -maxdepth 6 -path '*/node-pty' -type d 2>/dev/null | head -1); " +
                 "if [ -z \"$npty_dir\" ]; then " +
                 "echo '未找到 node-pty（说明 dsh 包没装上）'; " +
