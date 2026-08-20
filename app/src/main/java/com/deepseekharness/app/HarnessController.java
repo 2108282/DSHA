@@ -1713,17 +1713,16 @@ public class HarnessController {
      */
     private void ensureNativeMobileAdapt() {
         try {
-            // 1) 往 rootfs 写注入脚本（heredoc 防引号问题）
+            // 1) 注入脚本（保留幂等标记；手动 cp 已废弃——双通道加载会冲突导致
+            //    "facade is missing"。加载统一走 registerMobileAdaptBundle（link: bundle）。
+            //    老用户残留的手动注入文件在这里清理。
             String script =
                     "set -e; " +
-                    // rc.8：client bundle 在 @deepseek-ai/dsh-client-connection/lib（全局 npm 包内）；
-                    // 兼容旧版：dsh-web-app/dist|lib/client
                     "DST=$(find /usr/local/lib/node_modules /root -maxdepth 14 " +
                     "  \\( -path '*dsh-client-connection/lib/client' -o -path '*dsh-web-app/dist*/client' -o -path '*dsh-web-app/lib/client' \\) " +
                     "  -type d 2>/dev/null | head -1); " +
-                    "if [ -z \"$DST\" ]; then echo '[DSHA] 未找到 web-app client 目录，跳过移动端适配'; exit 0; fi; " +
-                    "echo \"[DSHA] 注入移动端适配 -> $DST\"; " +
-                    "cp -f /root/dsha-mobile-adapt/client.js \"$DST/dsh-client-ui-mobile-adapt.js\" && " +
+                    "if [ -n \"$DST\" ] && [ -f \"$DST/dsh-client-ui-mobile-adapt.js\" ]; then " +
+                    "rm -f \"$DST/dsh-client-ui-mobile-adapt.js\" && echo '[DSHA] 已清理旧手动注入（改用 bundle 注册）'; fi; " +
                     "touch /root/dsha-mobile-adapt-installed && echo OK";
             java.io.File sF = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-inject.sh");
             java.io.File aDir = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-adapt");
