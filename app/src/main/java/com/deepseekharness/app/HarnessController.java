@@ -577,27 +577,6 @@ public class HarnessController {
 
 
     /** 清理极简模式自定义预设（dsha-minimal 已废弃，删除残留文件） */
-        private void ensureMinimalPresetGuide() {
-            try {
-                java.io.File presetDir = new java.io.File(proot.getRootfsDir(),
-                        "root/.dsh/.agent-presets/dsha-minimal");
-                if (presetDir.exists()) {
-                    deleteRecursively(presetDir);
-                    android.util.Log.i("DSHA", "已清理废弃预设 dsha-minimal");
-                }
-                // 清理 home patch 里 dsha-device-guide-bash 相关块
-                java.io.File hp = new java.io.File(proot.getRootfsDir(), "root/.dsh/cordis.patch.yml");
-                if (hp.isFile()) {
-                    String hpText = new String(java.nio.file.Files.readAllBytes(hp.toPath()), StandardCharsets.UTF_8);
-                    if (hpText.contains("dsha-device-guide-bash")) {
-                        hpText = hpText.replaceAll("(?s)\\n# DSHA device guide \\(dsha-device-guide-bash\\).*?(?=\\n#|\\Z)", "");
-                        java.nio.file.Files.write(hp.toPath(), hpText.getBytes(StandardCharsets.UTF_8));
-                        android.util.Log.i("DSHA", "已清理 home patch 中 dsha-device-guide-bash");
-                    }
-                }
-            } catch (Throwable ignored) {
-            }
-        }
 
     private void ensureConfigFixAsset() {
         try {
@@ -897,7 +876,6 @@ public class HarnessController {
         // 极简模式设备引导：minimal preset 的 persona 是 complete:true，
         // 覆盖官方 preset 让极简模式 agent 也能用 ADB 设备操作
         try {
-            ensureMinimalPresetGuide();
         } catch (Throwable ignored) {
         }
         // 内置插件快照：只录实体目录（排除符号链接=用户安装插件），安装完成时最干净基线
@@ -1862,6 +1840,40 @@ public class HarnessController {
             }
             java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
             android.util.Log.i("DSHA", "设备 Shell 引导插件已注册（link: 依赖 + 符号链接）");
+            // 双保险：home 级 cordis.patch.yml 覆盖【官方极简】的 bash 工具描述，
+            // 让极简模式下 agent 也能看到 ADB 提示（和本插件联动的开关控制）
+            try {
+                java.io.File hp = new java.io.File(proot.getRootfsDir(), "root/.dsh/cordis.patch.yml");
+                String hpText = hp.isFile()
+                        ? new String(java.nio.file.Files.readAllBytes(hp.toPath()), StandardCharsets.UTF_8) : "";
+                if (!hpText.contains("dsha-device-guide-bash")) {
+                    String patchBlock =
+                            "\n# DSHA device guide (dsha-device-guide-bash) - 官方极简模式 bash 工具描述注入\n"
+                            + "- update:\n"
+                            + "  - id: persistent-bash\n"
+                            + "    name: '@deepseek-ai/dsh-tool-bash-persistent'\n"
+                            + "    config:\n"
+                            + "      description: |+\n"
+                            + "        Run commands in a bash shell\n"
+                            + "        * 设备操作：/root/dsh-bin/adb-shell \"命令\"（唯一可用通道，uid=2000，已配对）\n"
+                            + "        * 不要用裸 adb（守卫脚本，会失败）；Shizuku 桥备用 curl 127.0.0.1:3090/exec\n"
+                            + "        * 与用户交流请用中文回复\n";
+                    hpText += patchBlock;
+                    java.nio.file.Files.write(hp.toPath(), hpText.getBytes(StandardCharsets.UTF_8));
+                    android.util.Log.i("DSHA", "home patch 已注入官方极简 bash 描述");
+                }
+            } catch (Throwable ignored) {
+            }
+            // 清理旧版 dsha-minimal 独立预设（已合并到本插件）
+            try {
+                java.io.File oldPreset = new java.io.File(proot.getRootfsDir(),
+                        "root/.dsh/.agent-presets/dsha-minimal");
+                if (oldPreset.exists()) {
+                    deleteRecursively(oldPreset);
+                    android.util.Log.i("DSHA", "已清理旧版 dsha-minimal 预设");
+                }
+            } catch (Throwable ignored) {
+            }
         } catch (Throwable ignored) {
         }
     }
