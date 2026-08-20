@@ -2233,6 +2233,12 @@ public class HarnessController {
             final SharedPreferences prefs =
                     appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
             String last = prefs.getString("last_dsh_rc", "");
+            // 首次检测（last 为空）只记录不触发：用户当前已是某 rc 不代表"刚升级"，
+            // 避免刚装好就莫名重装⑤
+            if (last.isEmpty()) {
+                prefs.edit().putString("last_dsh_rc", installedRc).apply();
+                return;
+            }
             if (installedRc.equals(last)) return; // 已处理过这个版本
             prefs.edit().putString("last_dsh_rc", installedRc).apply();
             // 版本变化：后台【先⑤装最新 rc → 再⑥适配】
