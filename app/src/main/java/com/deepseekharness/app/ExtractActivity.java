@@ -60,15 +60,23 @@ public class ExtractActivity extends AppCompatActivity {
                     return;
                 }
                 runOnUiThread(() -> statusText.setText("正在解压内置环境…"));
-                proot.extractOfflineBundle((done, total) -> runOnUiThread(() -> {
-                    if (total > 0) {
-                        int pct = (int) (done * 100 / total);
-                        statusText.setText("正在解压环境… " + pct + "%");
-                    } else {
-                        statusText.setText("正在解压环境… "
-                                + (done / (1024 * 1024)) + " MB");
-                    }
-                }));
+                // 进度回调节流：每 1% 或 500ms 才刷新一次 UI（解压 306MB 每秒几十次
+                // 回调全刷 setText 会卡 UI 线程，用户看到进度条卡顿/掉帧）
+                final long[] lastUi = {0};
+                proot.extractOfflineBundle((done, total) -> {
+                    long now = System.currentTimeMillis();
+                    if (now - lastUi[0] < 500) return;
+                    lastUi[0] = now;
+                    runOnUiThread(() -> {
+                        if (total > 0) {
+                            int pct = (int) (done * 100 / total);
+                            statusText.setText("正在解压环境… " + pct + "%");
+                        } else {
+                            statusText.setText("正在解压环境… "
+                                    + (done / (1024 * 1024)) + " MB");
+                        }
+                    });
+                });
                 runOnUiThread(() -> statusText.setText("环境准备完成"));
                 Thread.sleep(300);
                 proceed();

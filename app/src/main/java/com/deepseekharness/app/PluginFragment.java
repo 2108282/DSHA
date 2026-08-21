@@ -379,67 +379,54 @@ public class PluginFragment extends Fragment {
         }
     }
 
-    /** 批量异步拉取市场列表 star 数（GitHub search API，一次最多 ~80 仓库）。
-     *  注意匿名 API 限流 10 次/分钟：1700+ 条需 22 批，超过即 403。
-     *  → 降频（每批间 6s 休眠）+ 遇到限流/失败立即停止（不浪费配额），
-     *    已拿到的 star 保留，未拿到的显示 "—"。 */
+    /** 批量异步拉取市场列表 star 数（GitHub search API，每批 ~80 仓库）。
+     *  注意匿名 API 限流 10 次/分钟 + 1700+ 条全拉需要 22 批 × 6s ≈ 2 分钟，且几乎必然 403。
+     *  → 只刷新【前 1 批】（当前页可见的 80 条，1 个请求，限流内轻松完成）；
+     *    其余条目保留索引自带 star。遇 403/失败立即停止（不浪费配额）。 */
     private void fetchStars(java.util.List<String[]> items) {
         if (items == null || items.isEmpty()) return;
-        final long t0 = System.currentTimeMillis();
         new Thread(() -> {
-            int size = items.size();
-            int batch = 0;
-            for (int base = 0; base < size; base += 80) {
-                StringBuilder q = new StringBuilder("q=");
-                int n = 0;
-                java.util.List<Integer> idxs = new java.util.ArrayList<>();
-                for (int i = base; i < Math.min(size, base + 80); i++) {
-                    String u = items.get(i)[6].replace("https://github.com/", "").replace("http://github.com/", "");
-                    if (u.contains("/") && !u.startsWith("http")) {
-                        if (n > 0) q.append("+");
-                        q.append("repo:").append(u);
-                        idxs.add(i);
-                        n++;
-                    }
+            StringBuilder q = new StringBuilder("q=");
+            int n = 0;
+            java.util.List<Integer> idxs = new java.util.ArrayList<>();
+            for (int i = 0; i < Math.min(items.size(), 80); i++) {
+                String u = items.get(i)[6].replace("https://github.com/", "").replace("http://github.com/", "");
+                if (u.contains("/") && !u.startsWith("http")) {
+                    if (n > 0) q.append("+");
+                    q.append("repo:").append(u);
+                    idxs.add(i);
+                    n++;
                 }
-                if (n == 0) continue;
-                String uApi = "https://api.github.com/search/repositories?" + q + "&per_page=100";
-                String[] urls = {
-                        HarnessController.gitHubProxy(uApi),
-                        uApi,
-                        "https://ghfast.top/" + uApi
-                };
-                boolean ok = false;
-                for (String u : urls) {
-                    try {
-                        // 批间限流间隔（匿名 10 req/min，留余量）
-                        if (batch > 0) Thread.sleep(6000);
-                        batch++;
-                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
-                        conn.setConnectTimeout(8000);
-                        conn.setReadTimeout(12000);
-                        conn.setRequestProperty("User-Agent", "DSHA/1.1.0-mobile");
-                        if (conn.getResponseCode() != 200) {
-                            // 403 = 限流，停止所有后续批次（别再浪费配额）
-                            if (conn.getResponseCode() == 403) {
-                                conn.disconnect();
-                                return;
-                            }
-                            conn.disconnect();
-                            continue;
-                        }
-                        StringBuilder sb = new StringBuilder();
-                        String l;
-                        java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(
-                                conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
-                        while ((l = br.readLine()) != null) {
-                            sb.append(l);
-                            if (sb.length() > 400000) break;
-                        }
+            }
+            if (n == 0) return;
+            String uApi = "https://api.github.com/search/repositories?" + q + "&per_page=100";
+            String[] urls = {
+                    HarnessController.gitHubProxy(uApi),
+                    uApi,
+                    "https://ghfast.top/" + uApi
+            };
+            for (String u : urls) {
+                try {
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
+                    conn.setConnectTimeout(8000);
+                    conn.setReadTimeout(12000);
+                    conn.setRequestProperty("User-Agent", "DSHA/" + c.getVersionNameForUa());
+                    if (conn.getResponseCode() != 200) {
                         conn.disconnect();
-                        org.json.JSONObject j = new org.json.JSONObject(sb.toString());
-                        org.json.JSONArray arr = j.optJSONArray("items");
-                        if (arr == null) continue;
+                        continue; // 403 = 限流 → 直接放弃，不再重试其他源
+                    }
+                    StringBuilder sb = new StringBuilder();
+                    String l;
+                    java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(
+                            conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+                    while ((l = br.readLine()) != null) {
+                        sb.append(l);
+                        if (sb.length() > 400000) break;
+                    }
+                    conn.disconnect();
+                    org.json.JSONObject j = new org.json.JSONObject(sb.toString());
+                    org.json.JSONArray arr = j.optJSONArray("items");
+                    if (arr != null) {
                         for (int k = 0; k < arr.length(); k++) {
                             org.json.JSONObject o = arr.optJSONObject(k);
                             String full = o.optString("full_name", "");
@@ -452,12 +439,10 @@ public class PluginFragment extends Fragment {
                                 }
                             }
                         }
-                        ok = true;
-                        break; // 成功则跳过一个源
-                    } catch (Exception ignored) {
                     }
+                    break; // 成功即止
+                } catch (Exception ignored) {
                 }
-                if (!ok) break; // 所有源失败（多半限流/断网），停止后续批次
             }
             runOnUiThreadSafely(() -> {
                 if (adapter != null) adapter.notifyDataSetChanged();

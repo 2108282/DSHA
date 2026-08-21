@@ -77,6 +77,8 @@ public class MainActivity extends AppCompatActivity {
         HarnessController.get(this).maybeAutoReinstallGuardOnDshUpdate();
         // ADB 链路自动体检+自愈（打开即用：脚本/依赖/包装命令/连接，缺啥修啥）
         HarnessController.get(this).maybeAdbSelfHeal();
+        // dsh 子包依赖完整性自愈（npmmirror 镜像元数据不一致导致 Cannot find module）
+        HarnessController.get(this).maybeHealDshDeps();
         // 步骤⑥版本对比：内置插件/补丁有更新时自动重跑（无需手动重装⑥）
         HarnessController.get(this).maybeRefreshStep6();
         // 崩溃自愈提示：上次异常退出时读 crash.log 告知原因（不阻塞使用）
@@ -217,8 +219,11 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        // App 真正销毁：关闭终端持久 shell（防进程泄漏）
-        TerminalFragment.shutdownShell();
+        // 只在「真正退出」（finishing）时关闭终端持久 shell（防进程泄漏）；
+        // 旋转屏幕/配置变化触发 onDestroy 时 isFinishing()=false，保留会话（否则转屏即丢终端）
+        if (isFinishing()) {
+            TerminalFragment.shutdownShell();
+        }
     }
 
     private void requestBatteryOptimization() {

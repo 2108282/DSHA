@@ -82,6 +82,8 @@ public class InstallFragment extends Fragment {
             statusText.setText("正在清除环境…");
             new Thread(() -> {
                 c.getProot().uninstall();
+                // 环境已删：步骤缓存强制失效（否则 5s 内 UI 仍显示"已安装"）
+                c.invalidateSteps();
                 requireActivity().runOnUiThread(() -> {
                     installBtn.setEnabled(true);
                     uninstallBtn.setEnabled(true);
@@ -168,7 +170,7 @@ public class InstallFragment extends Fragment {
     }
 
     private void refreshFromState() {
-    if (!isAdded()) return;
+        if (!isAdded()) return;
         // 先快速刷新不依赖步骤状态的部分（err 展示 / 进度显示 / 按钮可用性）
         String err = c.getError();
         if (err != null && !err.isEmpty()) {

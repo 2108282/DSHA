@@ -98,9 +98,15 @@ public class WorkspaceFragment extends Fragment {
                         .setTitle("Web UI 正在运行")
                         .setMessage("对话记录可能正在写入。建议先停止 Web UI 再备份，避免备份到半截文件。\n\n仍要继续备份吗？")
                         .setPositiveButton("停止后备份", (d, w) -> {
-                            c.stopWeb();
+                            // 用同步深停（等端口关透）再备份，避免异步 stopWeb 期间 tar 到写入中的文件
                             Toast.makeText(requireContext(), "正在停止 Web 并备份…", Toast.LENGTH_SHORT).show();
-                            new Thread(() -> doBackup()).start();
+                            new Thread(() -> {
+                                try {
+                                    c.stopWebAndWait();
+                                } catch (Throwable ignored) {
+                                }
+                                doBackup();
+                            }).start();
                         })
                         .setNegativeButton("直接备份", (d, w) -> {
                             Toast.makeText(requireContext(), "正在备份（可能含写入中的会话）…", Toast.LENGTH_SHORT).show();
@@ -179,9 +185,10 @@ public class WorkspaceFragment extends Fragment {
                     int n;
                     while ((n = ins.read(buf)) != -1) out.write(buf, 0, n);
                 }
-                // 解压到 /root（备份包内含 .dsh、<wd>/.env、dsh-web.log）
-                c.getProot().execChecked("cd /root && tar -xzf .dsha-restore.tar.gz 2>/dev/null; "
-                        + "test -d .dsh && echo OK || echo EMPTY");
+                // 统一走 Java 宽松解压器（与 HarnessController.restoreFromBackup 一致）：
+                // GNU tar 会把文件名含逗号/引号的正常备份误判损坏（issue#9），
+                // extractLenient 只拦真正的路径穿越
+                TarGzipExtractor.extractLenient(tmp, new File(c.getProot().getRootfsDir(), "root"));
                 //noinspection ResultOfMethodCallIgnored
                 tmp.delete();
                 // 同步 API key：恢复的 .env 写回 App 配置，避免下次启动被覆盖

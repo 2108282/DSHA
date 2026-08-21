@@ -35,6 +35,8 @@ public class TerminalFragment extends Fragment {
     private static volatile Process shell;
     private static volatile boolean running = false;
     private static volatile Thread readerThread;
+    /** 防止后台启动期间重复起 proot 交互进程（快速切页+输入触发并发 startShell） */
+    private static volatile boolean shellStarting = false;
     private static final StringBuilder buffer = new StringBuilder();
     private static volatile TextView boundOutput; // 当前绑定的输出视图；null=无界面（会话继续后台跑）
 
@@ -88,20 +90,33 @@ public class TerminalFragment extends Fragment {
         outputText.setText(show.isEmpty() ? "Ubuntu 24.04 · 回车执行 · 中止 · exit 退出" : show);
         scrollView.post(() -> scrollView.fullScroll(View.FOCUS_DOWN));
 
-        if (!c.isHarnessInstalled()) {
-            appendLine("环境未安装，请先到「安装」页完成安装");
-            return;
-        }
+        // 环境检查 + 起 shell 全部丢后台线程：isHarnessInstalled() / ensureDangerGuard()
+        // 都可能起 proot 子进程（1~3 秒），在 UI 线程同步跑会卡住页面打开
         startShell();
     }
 
     private void startShell() {
-        c.ensureDangerGuard(); // 危险确认包装器缺失则自动补装（装新 APK 后无需重装第 4 步）
         Process p = shell;
         if (p != null && p.isAlive() && readerThread != null && readerThread.isAlive()) {
             return; // 会话已在后台跑，本页只是重新绑定输出视图
         }
+        // 防并发：已有启动线程则直接返回（否则快速操作会起多个 proot 进程）
+        if (shellStarting) return;
+        shellStarting = true;
+        // 后台线程：环境检查 + 守卫 + 起 proot 交互进程（都较慢），不卡 UI 线程
         new Thread(() -> {
+            try {
+                if (!c.isHarnessInstalled()) {
+                    mainHandler.post(() -> appendLine("环境未安装，请先到「安装」页完成安装"));
+                    return;
+                }
+            } catch (Throwable ignored) {
+            }
+            // 危险确认包装器缺失则自动补装（后台静默，不阻塞终端打开）
+            try {
+                c.ensureDangerGuard();
+            } catch (Throwable ignored) {
+            }
             try {
                 shell = c.getProot().execRootfsInteractive();
                 running = true;
@@ -118,6 +133,8 @@ public class TerminalFragment extends Fragment {
                 mainHandler.post(() -> appendLine("\n[会话已退出]"));
             } catch (Exception e) {
                 mainHandler.post(() -> appendLine("终端启动失败：" + e.getMessage()));
+            } finally {
+                shellStarting = false;
             }
         }, "term-read").start();
     }
@@ -195,6 +212,7 @@ public class TerminalFragment extends Fragment {
         }
         running = false;
         shell = null;
+        shellStarting = false; // 重置启动锁（防止启动中被销毁导致下次永远无法启动）
     }
 
     /** 外部注入文本到终端 buffer（ADB 配对失败日志等）。跨线程安全，终端页可见可复制。 */
@@ -205,7 +223,10 @@ public class TerminalFragment extends Fragment {
             synchronized (TerminalFragment.class) {
                 buffer.append(text);
                 if (!text.endsWith("\n")) buffer.append('\n');
-                if (buffer.length() > 300000) buffer.setLength(0);
+                // 与 appendRaw 保持一致：超限保留尾部 10 万字符（不能整体清空，否则历史全丢）
+                if (buffer.length() > 300000) {
+                    buffer.delete(0, buffer.length() - 100000);
+                }
                 TextView out = boundOutput;
                 if (out == null) return;
                 String show = buffer.length() > 100000

@@ -49,6 +49,9 @@ public class LaunchFragment extends Fragment {
     private boolean enterWhenReady = false;
     private boolean insideWeb = false;
     private String lastLog = "";
+    /** 日志文件指纹（size+mtime），未变化则跳过重读（每 1.5s 轮询时省一次文件 IO） */
+    private long lastLogSize = -1;
+    private long lastLogMtime = -1;
 
     private ValueCallback<Uri[]> filePathCallback;
 
@@ -296,7 +299,9 @@ public class LaunchFragment extends Fragment {
             lanAddrText.setVisibility(View.GONE);
             return;
         }
-        final String copyAddr = "http://" + ip + ":" + c.getPort() + "/";
+        // 注意：局域网访问走 App 侧 LanProxyService 桥（端口 3081 → 后端 3080），
+        // 不是直连 3080（直连需要 lan-bind 补丁成功且 CLI 放行 0.0.0.0，不可靠）
+        final String copyAddr = "http://" + ip + ":" + LanProxyService.LAN_PORT + "/";
         lanAddrText.setText("局域网访问: " + copyAddr + "  （同 WiFi 设备可打开）");
         lanAddrText.setVisibility(View.VISIBLE);
         lanAddrText.setOnClickListener(v -> {
@@ -336,13 +341,23 @@ public class LaunchFragment extends Fragment {
         try {
             File f = new File(c.getProot().getRootfsDir(), "root/dsh-web.log");
             if (!f.isFile() || f.length() == 0) return "";
+            // 指纹未变：跳过重读（省 IO；日志不写时每 1.5s 轮询零成本）
+            if (f.lastModified() == lastLogMtime && f.length() == lastLogSize) return lastLog;
+            lastLogMtime = f.lastModified();
+            lastLogSize = f.length();
             long len = f.length();
             long start = Math.max(0, len - 24000);
             try (RandomAccessFile raf = new RandomAccessFile(f, "r")) {
                 raf.seek(start);
                 byte[] buf = new byte[(int) (len - start)];
-                raf.readFully(buf);
-                String s = new String(buf, java.nio.charset.StandardCharsets.UTF_8);
+                // readFully 可能因日志被截断抛 EOF：改用尽力读
+                int off = 0;
+                while (off < buf.length) {
+                    int n = raf.read(buf, off, buf.length - off);
+                    if (n < 0) break;
+                    off += n;
+                }
+                String s = new String(buf, 0, off, java.nio.charset.StandardCharsets.UTF_8);
                 if (start > 0) {
                     int nl = s.indexOf('\n');
                     if (nl >= 0 && nl + 1 < s.length()) s = s.substring(nl + 1);

@@ -95,7 +95,11 @@ public class ConfigFragment extends Fragment {
     private final Runnable adbStatusTick = this::pollAdbStatus;
     private boolean adbPolling = false;
 
-    /** 启动每秒轮询（Fragment 可见时） */
+    /** 启动每秒轮询（Fragment 可见时）。实际探测一次要起 proot 子进程（1~3s），
+     *  1s 太频繁 → 5s 一次（线程异步不卡 UI，但降低 CPU/电量消耗） */
+    private static final long ADB_POLL_MS = 5000;
+
+    /** 启动 ADB 状态轮询（Fragment 可见时） */
     private void startAdbStatusPolling() {
         if (adbPolling) return;
         adbPolling = true;
@@ -108,7 +112,7 @@ public class ConfigFragment extends Fragment {
         adbStatusHandler.removeCallbacks(adbStatusTick);
     }
 
-    /** 每秒执行：查询 ADB 实际运行状态并刷新 UI */
+    /** 每 5 秒执行：查询 ADB 实际运行状态并刷新 UI */
     private void pollAdbStatus() {
         if (!adbPolling) return;
         if (!isAdded() || getView() == null) {
@@ -119,7 +123,7 @@ public class ConfigFragment extends Fragment {
         if (adbStatus == null) { stopAdbStatusPolling(); return; }
         if (!DeviceBridgeService.isAdbEnabled(requireContext())) {
             adbStatus.setText("ADB 已关闭。不用无线调试就保持关闭。");
-            adbStatusHandler.postDelayed(adbStatusTick, 1000);
+            adbStatusHandler.postDelayed(adbStatusTick, ADB_POLL_MS);
             return;
         }
         new Thread(() -> {
@@ -141,7 +145,7 @@ public class ConfigFragment extends Fragment {
                 });
             } catch (Throwable ignored) {
             }
-            if (adbPolling) adbStatusHandler.postDelayed(adbStatusTick, 1000);
+            if (adbPolling) adbStatusHandler.postDelayed(adbStatusTick, ADB_POLL_MS);
         }, "adb-status-poll").start();
     }
 
