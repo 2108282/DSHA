@@ -161,6 +161,8 @@ public class HarnessController {
                         + "pkill -9 -f 'bin.js' 2>/dev/null; sleep 1; echo done");
                 waitPortClosed(5000);
             }
+            // Web 停了桥也没用：停桥（幂等，HarnessService.onDestroy 也会停）
+            LanProxyService.stop();
         } catch (Throwable ignored) {
         }
     }
@@ -2220,6 +2222,14 @@ public class HarnessController {
             if (webStarting) return; // 已有启动在进行（防 keepAlive/手动并发起第二个实例 → EADDRINUSE）
             webStarting = true;
         }
+        // 局域网模式：桥跟随 WebUI 启动（不依赖 HarnessService——预启动/
+        // 保活重启路径不经过 HarnessService，之前桥没起导致局域网访问不了）
+        if (isLanMode()) {
+            try {
+                LanProxyService.start(getRootfsDirPath());
+            } catch (Throwable ignored) {
+            }
+        }
         IO.execute(() -> {
             boolean started = false;
             try {
@@ -2323,6 +2333,8 @@ public class HarnessController {
                     webProcess = null;
                 }
                 proot.execAndRead(stopWebCommand());
+                // Web 停了桥也没用：停桥（幂等）
+                LanProxyService.stop();
                 setState("", 0, "已停止后台服务", "", false);
             } catch (Exception ignored) {
             }
