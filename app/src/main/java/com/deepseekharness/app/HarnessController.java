@@ -966,7 +966,8 @@ public class HarnessController {
         // 写入步骤⑥版本标记（启动时对比，不符自动重跑⑥）
         runStep("写入⑥版本标记", 99,
                 "printf '%s' '" + STEP6_VERSION + "' > /root/.dsh/step6.version; " +
-                "echo '⑥版本: " + STEP6_VERSION + "'");
+                "printf '%s' '" + BUILTIN_ASSET_VERSION + "' > /root/.dsh/builtin-assets.version; " +
+                "echo '⑥版本: " + STEP6_VERSION + " 资产版本: " + BUILTIN_ASSET_VERSION + "'");
         setProgress("安全守卫与补丁就绪", 100);
     }
 
@@ -1724,6 +1725,23 @@ public class HarnessController {
      */
     private void ensureNativeMobileAdapt() {
         try {
+            final String NAME = "dsh-client-ui-mobile-adapt";
+            // 用户主动禁用（.disabled 存在）→ 只更新实体文件（assets 新版本写到
+            // 实体目录，重新启用时拿到的是新版），不 touch marker / 不注册 bundle /
+            // 不建链接（否则资产版本变化删 marker 后会把禁用的插件强制重新启用）。
+            boolean userDisabled = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/node_modules/" + NAME + ".disabled").exists();
+            java.io.File aDir = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-adapt");
+            aDir.mkdirs();
+            // 实体始终更新（幂等，秒级）
+            writeAssetTo("mobile-adapt/lib/client.js", new java.io.File(aDir, "lib/client.js"));
+            writeAssetTo("mobile-adapt/lib/index.js", new java.io.File(aDir, "lib/index.js"));
+            writeAssetTo("mobile-adapt/cordis.patch.yml", new java.io.File(aDir, "cordis.patch.yml"));
+            writeAssetTo("mobile-adapt/package.json", new java.io.File(aDir, "package.json"));
+            if (userDisabled) {
+                android.util.Log.i("DSHA", "mobile-adapt 已被用户禁用：仅更新实体，跳过注册/注入");
+                return;
+            }
             // 1) 注入脚本（保留幂等标记；手动 cp 已废弃——双通道加载会冲突导致
             //    "facade is missing"。加载统一走 registerMobileAdaptBundle（link: bundle）。
             //    老用户残留的手动注入文件在这里清理。
@@ -1740,14 +1758,6 @@ public class HarnessController {
                     "echo 'CLEANED: '$(date) >> /root/dsha-mobile-adapt.log; " +
                     "touch /root/dsha-mobile-adapt-installed && echo OK";
             java.io.File sF = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-inject.sh");
-            java.io.File aDir = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-adapt");
-            aDir.mkdirs();
-            // 2) 把 assets 里的 client.js / index.js / cordis.patch.yml / package.json 写进 rootfs
-            //    （官方仓库布局：lib/index.js + lib/client.js，保持与上游一致方便更新）
-            writeAssetTo("mobile-adapt/lib/client.js", new java.io.File(aDir, "lib/client.js"));
-            writeAssetTo("mobile-adapt/lib/index.js", new java.io.File(aDir, "lib/index.js"));
-            writeAssetTo("mobile-adapt/cordis.patch.yml", new java.io.File(aDir, "cordis.patch.yml"));
-            writeAssetTo("mobile-adapt/package.json", new java.io.File(aDir, "package.json"));
             java.nio.file.Files.write(sF.toPath(), script.getBytes(StandardCharsets.UTF_8));
             // 3) 执行注入（幂等标记存在则跳过）
             String r = proot.execAndRead(
@@ -1833,7 +1843,12 @@ public class HarnessController {
             //   表现就是"内置插件不能禁用"）
             if (new java.io.File(proot.getRootfsDir(),
                     "root/.dsh/profiles/web/node_modules/" + NAME + ".disabled").exists()) {
-                android.util.Log.i("DSHA", "device-shell-guide 已被用户禁用，跳过自动补回");
+                // 仅更新实体文件（assets 新版本写到实体目录，重新启用时拿到新版），
+                // 不 touch marker / 不注册 / 不建链接
+                writeAssetTo("device-shell-guide/package.json", new java.io.File(realDir, "package.json"));
+                writeAssetTo("device-shell-guide/cordis.patch.yml", new java.io.File(realDir, "cordis.patch.yml"));
+                writeAssetTo("device-shell-guide/lib/index.js", new java.io.File(realDir, "lib/index.js"));
+                android.util.Log.i("DSHA", "device-shell-guide 已被用户禁用：仅更新实体，跳过注册");
                 return;
             }
             java.io.File marker = new java.io.File(proot.getRootfsDir(), "root/dsha-device-shell-guide-installed");
@@ -2107,8 +2122,9 @@ public class HarnessController {
      *  必须靠版本标记强制删 marker 重注入，老用户才能拿到新资产）。 */
     private static final String BUILTIN_ASSET_VERSION = "1";
 
-    /** 内置插件资产版本自愈：rootfs 标记与当前版本不符 → 删两个内置插件
-     *  marker，强制下一次 ensureNativeMobileAdapt/ensureDeviceShellGuide 重注入新资产。
+    /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
+     *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，
+     *  保证自愈闭环不因"先删后写"断裂）。
      *  幂等：版本一致秒回。 */
     private void refreshBuiltinAssetMarkers() {
         try {
@@ -2118,9 +2134,8 @@ public class HarnessController {
             if (r != null && r.trim().equals(BUILTIN_ASSET_VERSION)) return;
             proot.execAndRead(
                     "rm -f /root/dsha-mobile-adapt-installed /root/dsha-device-shell-guide-installed; "
-                    + "mkdir -p /root/.dsh && printf '%s' '" + BUILTIN_ASSET_VERSION
-                    + "' > /root/.dsh/builtin-assets.version; echo refreshed");
-            android.util.Log.i("DSHA", "内置插件资产版本变化 → 已删 marker，下次注入新资产");
+                    + "echo refreshed");
+            android.util.Log.i("DSHA", "内置插件资产版本变化 → 已删 marker，本次⑥将重注入新资产");
         } catch (Throwable ignored) {
         }
     }
@@ -2437,8 +2452,9 @@ public class HarnessController {
                 if (latest != null && rcNewer(latest, installedRc)) {
                     target = latest;
                 }
-                // 2) 被动：已装版本 != 上次记录（离线包带新版/用户手动重装）→ 适配已装版本
-                if (target == null && !last.isEmpty() && !installedRc.equals(last)) {
+                // 2) 被动：已装版本比上次记录**更新**（离线包带新版/手动升级）→ 适配已装版本。
+                //    只升不降：防离线包回退旧版触发降级重装（重装 @next 又升回去 → 反复重装）
+                if (target == null && !last.isEmpty() && rcNewer(installedRc, last)) {
                     target = installedRc;
                 }
                 if (target == null) {
@@ -2937,8 +2953,9 @@ public class HarnessController {
                     // 注意名字不带 dsha- 前缀！旧判断 name.startsWith("dsha-") 永远不命中）
                     // 兜底回 file: 路径；普通插件兜底 "*"（包体在磁盘即可加载）
                     if (src == null || src.isEmpty() || "null".equals(src)) {
+                        // 内置插件（link: 指向实体目录，与 registerMobileAdaptBundle 语义一致）
                         src = isBuiltinPlugin(name)
-                                ? "file:/root/dsha-" + name
+                                ? "link:" + builtinRealPath(name)
                                 : "*";
                     }
                     String safe = src.replace("'", "\\'");
@@ -2986,6 +3003,15 @@ public class HarnessController {
     private boolean isBuiltinPlugin(String name) {
         return "dsh-client-ui-mobile-adapt".equals(name)
                 || "dsh-device-shell-guide".equals(name);
+    }
+
+    /** 内置插件实体目录真实路径（name ≠ 目录名：
+     *  dsh-client-ui-mobile-adapt → /root/dsha-mobile-adapt；
+     *  旧实现 "dsha-"+name 会拼成不存在的路径）。 */
+    private String builtinRealPath(String name) {
+        if ("dsh-client-ui-mobile-adapt".equals(name)) return "/root/dsha-mobile-adapt";
+        if ("dsh-device-shell-guide".equals(name)) return "/root/dsha-device-shell-guide";
+        return "/root/dsha-" + name;
     }
 
     /** 读取曾禁用的插件原安装源（启用时还原到 package.json） */

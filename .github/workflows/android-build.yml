@@ -36,7 +36,9 @@ jobs:
           ls -lh bundle/offline-rootfs.tar.gz
 
       # 离线包版本标记：与 App 内置包同步 bump（可用 OFFLINE_VERSION env 覆盖）。
-      # 缓存命中时也要生成（缓存只存 tar.gz，version 需每次生成）。
+      # 默认 1 = 首次 CI 重建离线包（含预置内置插件）→ 老用户（rootfs 无标记=0）
+      # 会收到一次升级提示；之后内容再变时 bump 2、3… 才再次提示。
+      # 注意：本地 build.sh 不重建离线包，assets 里默认 version=0 保证不误弹。
       - name: Write offline version
         run: |
           set -euo pipefail

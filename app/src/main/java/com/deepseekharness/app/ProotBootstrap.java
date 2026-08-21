@@ -704,21 +704,29 @@ public class ProotBootstrap {
         };
 
         try {
-            // ===== 数据保护：重解压前备份用户数据（.dsh 配置/对话 + .env），解压后自动还原 =====
+            // ===== 数据保护：重解压前备份用户数据（.dsh 配置/对话 + 所有工作目录 .env），解压后自动还原 =====
             // 旧 rootfs 存在但 isOfflineExtracted() 判定失败（标记丢失/bash 路径变化）会走到这里，
             // 直接删整个 rootfs 会连对话记录一起丢掉（issue#9 第1条）——必须先备份再删。
+            // .env 遍历 /root 下所有子目录（兼容用户自定义 workdir，不只默认 deepseek-harness）。
             java.io.File dataBak = null;
             if (rootfsDir.exists()) {
                 java.io.File dshDir = new java.io.File(rootfsDir, "root/.dsh");
-                java.io.File envFile = new java.io.File(rootfsDir, "root/" + getWorkdirDefault() + "/.env");
-                if (dshDir.isDirectory() || envFile.isFile()) {
+                java.io.File rootHome = new java.io.File(rootfsDir, "root");
+                java.io.File[] workDirs = rootHome.isDirectory() ? rootHome.listFiles(java.io.File::isDirectory) : null;
+                boolean hasData = dshDir.isDirectory() || (workDirs != null && workDirs.length > 0);
+                if (hasData) {
                     dataBak = new java.io.File(baseDir, ".data-preserve-" + System.currentTimeMillis());
                     dataBak.mkdirs();
                     if (dshDir.isDirectory()) {
                         copyRecursively(dshDir, new java.io.File(dataBak, "dsh"));
                     }
-                    if (envFile.isFile()) {
-                        copyFile(envFile, new java.io.File(dataBak, "env"));
+                    if (workDirs != null) {
+                        for (java.io.File d : workDirs) {
+                            java.io.File e = new java.io.File(d, ".env");
+                            if (e.isFile()) {
+                                copyFile(e, new java.io.File(dataBak, "env-" + d.getName()));
+                            }
+                        }
                     }
                 }
             }
@@ -729,7 +737,7 @@ public class ProotBootstrap {
                 throw new IOException("解压后 rootfs 不完整（缺少 bash）\n" + diagnoseRootfs());
             }
             setupResolvConf();
-            // 解压完成后还原用户数据
+            // 解压完成后还原用户数据（.dsh + 所有工作目录 .env）
             if (dataBak != null) {
                 try {
                     java.io.File dshDst = new java.io.File(rootfsDir, "root/.dsh");
@@ -738,13 +746,17 @@ public class ProotBootstrap {
                         if (!dshDst.exists()) dshDst.mkdirs();
                         copyRecursively(dshBak, dshDst);
                     }
-                    java.io.File envBak = new java.io.File(dataBak, "env");
-                    if (envBak.isFile()) {
-                        java.io.File envDst = new java.io.File(rootfsDir, "root/" + getWorkdirDefault() + "/.env");
-                        if (envDst.getParentFile() != null) envDst.getParentFile().mkdirs();
-                        copyFile(envBak, envDst);
+                    // 还原各工作目录 .env（env-<dir> 命名，还原到 root/<dir>/.env）
+                    java.io.File[] envBaks = dataBak.listFiles((d, n) -> n.startsWith("env-"));
+                    if (envBaks != null) {
+                        for (java.io.File eb : envBaks) {
+                            String dirName = eb.getName().substring("env-".length());
+                            java.io.File envDst = new java.io.File(rootfsDir, "root/" + dirName + "/.env");
+                            if (envDst.getParentFile() != null) envDst.getParentFile().mkdirs();
+                            copyFile(eb, envDst);
+                        }
                     }
-                    android.util.Log.i("DSHA", "重解压已还原用户数据 (.dsh + .env)");
+                    android.util.Log.i("DSHA", "重解压已还原用户数据 (.dsh + 工作区 .env)");
                 } catch (Throwable e) {
                     android.util.Log.w("DSHA", "还原用户数据失败: " + e);
                 }
@@ -824,7 +836,7 @@ public class ProotBootstrap {
         }
     }
 
-    /** 默认工作目录名（deepseek-harness 源码树）；重解压数据保护用 */
+    /** 默认工作目录名（deepseek-harness 源码树）；历史遗留，现数据保护遍历 /root 所有工作目录 */
     private String getWorkdirDefault() {
         return "deepseek-harness";
     }
