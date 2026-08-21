@@ -69,6 +69,34 @@ public class PluginFragment extends Fragment {
         TextView btnInstalled = view.findViewById(R.id.btnInstalled);
         TextView btnSort = view.findViewById(R.id.btnSort);
         android.widget.EditText searchBox = view.findViewById(R.id.pluginSearch);
+        // ===== GitHub 仓库链接安装（市场顶部）=====
+        final android.widget.EditText githubInput = view.findViewById(R.id.githubInstallInput);
+        TextView btnGithubInstall = view.findViewById(R.id.btnGithubInstall);
+        if (githubInput != null && btnGithubInstall != null) {
+            java.util.function.Consumer<String> doGithubInstall = (link) -> {
+                String u = link == null ? "" : link.trim();
+                if (u.isEmpty()) {
+                    Toast.makeText(requireContext(), "请粘贴 GitHub 仓库链接", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                status.setText("正在解析并安装 " + u + " …");
+                new Thread(() -> {
+                    String out = c.installFromGithubUrl(u);
+                    runOnUiThreadSafely(() -> showInstallResult(u, u, out));
+                }).start();
+            };
+            btnGithubInstall.setOnClickListener(v -> doGithubInstall.accept(githubInput.getText().toString()));
+            // 输入框回车触发
+            githubInput.setOnEditorActionListener((v, actionId, event) -> {
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_GO
+                        || actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                        || actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+                    doGithubInstall.accept(githubInput.getText().toString());
+                    return true;
+                }
+                return false;
+            });
+        }
         view.findViewById(R.id.actionBar).setVisibility(View.GONE);
 
         // 搜索：按名称过滤（忽略大小写）

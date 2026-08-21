@@ -3775,6 +3775,42 @@ public class HarnessController {
         return r == null ? "无输出" : r;
     }
 
+    /** 从 GitHub 仓库链接安装插件（插件市场顶部入口）：
+     *  解析 URL → owner/repo → 拉 package.json 拿 npm 名 → 安装（npm 名找不到回退 github: 方式）。
+     *  返回执行输出。链接格式支持：https://github.com/owner/repo、owner/repo、带 .git 后缀等。 */
+    public String installFromGithubUrl(String url) {
+        try {
+            String u = url == null ? "" : url.trim();
+            String core = u;
+            int g = core.indexOf("github.com/");
+            if (g >= 0) core = core.substring(g + "github.com/".length());
+            // 去掉 git 后缀 / 尾部斜杠 / 多余路径 / 查询参数 / 锚点
+            core = core.replaceFirst("\\\\.git$", "");
+            int q = core.indexOf('?'); if (q >= 0) core = core.substring(0, q);
+            int h = core.indexOf('#'); if (h >= 0) core = core.substring(0, h);
+            while (core.endsWith("/")) core = core.substring(0, core.length() - 1);
+            int slash = core.indexOf('/');
+            if (slash <= 0) return "无法解析仓库链接：" + url + "\n格式应为 https://github.com/owner/repo";
+            String owner = core.substring(0, slash).trim();
+            String repo = core.substring(slash + 1).trim();
+            // 去掉 repo 后的路径（如 /tree/main）
+            int r2 = repo.indexOf('/');
+            if (r2 >= 0) repo = repo.substring(0, r2);
+            if (owner.isEmpty() || repo.isEmpty()) return "无法解析仓库链接：" + url;
+            // 拉 npm 包名
+            String npmName = fetchNpmName(owner, repo);
+            if (npmName == null) {
+                return "未在该仓库找到 package.json / npm 包名，可能未发布 npm。\n"
+                        + "仓库：" + owner + "/" + repo + "\n"
+                        + "只能源码安装：dsh plugin --profile web add github:" + owner + "/" + repo;
+            }
+            // 安装（npm 名 + github 兜底）
+            return installPlugin(npmName, "github:" + owner + "/" + repo);
+        } catch (Throwable e) {
+            return "安装失败: " + e.getMessage();
+        }
+    }
+
     /** 判定安装输出是否为"包在 registry 找不到"（npm 404 类） */
     private boolean isPkgNotFound(String out) {
         return out.contains("ERR_PNPM_FETCH") || out.contains("not in the npm registry")
