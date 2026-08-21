@@ -192,13 +192,21 @@ public class WorkspaceFragment extends Fragment {
     }
 
     private void doRestore(Uri uri) {
-        Toast.makeText(requireContext(), "正在恢复，请稍候…", Toast.LENGTH_SHORT).show();
+        // 开头 Toast 必须主线程（doRestoreWithStop 从后台线程调本方法会 NPE！
+        // 崩溃报告：Can't toast on a thread that has not called Looper.prepare()）
+        if (getActivity() != null) {
+            getActivity().runOnUiThread(() -> {
+                if (isAdded()) Toast.makeText(requireContext(), "正在恢复，请稍候…", Toast.LENGTH_SHORT).show();
+            });
+        }
+        // 提前取 context（后台线程用 requireContext() 在 Fragment detach 后会抛异常）
+        final android.content.Context appCtx = requireContext().getApplicationContext();
         new Thread(() -> {
             try {
                 File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-restore.tar.gz");
                 if (tmp.getParentFile() != null) tmp.getParentFile().mkdirs();
                 // 显式判空：openInputStream 返回 null（权限/文件损坏）时给友好提示
-                InputStream in = requireContext().getContentResolver().openInputStream(uri);
+                InputStream in = appCtx.getContentResolver().openInputStream(uri);
                 if (in == null) {
                     throw new IOException("无法打开所选文件（可能权限不足或文件已损坏）");
                 }
@@ -227,12 +235,14 @@ public class WorkspaceFragment extends Fragment {
                     }
                 }
                 if (getActivity() == null) return;
-                getActivity().runOnUiThread(() ->
-                        Toast.makeText(requireContext(), "恢复完成（API key 已同步）",
-                                Toast.LENGTH_LONG).show());
+                getActivity().runOnUiThread(() -> {
+                    // 用 appCtx（Fragment 可能已 detach，requireContext 会抛）
+                    Toast.makeText(appCtx, "恢复完成（API key 已同步）",
+                            Toast.LENGTH_LONG).show();
+                });
             } catch (Exception e) {
                 if (getActivity() != null) {
-                    getActivity().runOnUiThread(() -> Toast.makeText(requireContext(),
+                    getActivity().runOnUiThread(() -> Toast.makeText(appCtx,
                             "恢复失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
                 }
             }
