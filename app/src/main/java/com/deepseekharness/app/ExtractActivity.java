@@ -50,6 +50,25 @@ public class ExtractActivity extends AppCompatActivity {
                     proceed();
                     return;
                 }
+                // ===== 高危：重解压（force）前必须先深停 Web UI + 停掉保活服务 =====
+                // rootfs 将被整体删除，node 进程还在跑会：
+                //  1) 删到一半 node 崩溃，看门狗可能尝试重启（碰半删的 rootfs）
+                //  2) 写对话/日志时文件被删 → 数据保护备份的 .dsh 可能不完整
+                // 必须先 stopWebAndWait（等端口关透）+ 停 HarnessService（否则其
+                // keepAlive 线程 15s 发现端口挂了会自动拉起 startWeb，干扰重解压）。
+                if (force) {
+                    HarnessController c = HarnessController.get(this);
+                    if (c.isWebRunning()) {
+                        runOnUiThread(() -> statusText.setText("正在停止 Web UI…"));
+                        c.stopWebAndWait();
+                    }
+                    try {
+                        Intent stopSvc = new Intent(this, HarnessService.class)
+                                .setAction(HarnessService.ACTION_STOP);
+                        startService(stopSvc); // ACTION_STOP → stopKeepAlive + stopSelf
+                    } catch (Throwable ignored) {
+                    }
+                }
                 if (!proot.hasOfflineBundle()) {
                     final String diag = proot.diagnoseBundle();
                     runOnUiThread(() -> {

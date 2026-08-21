@@ -44,9 +44,9 @@ public final class BackupManager {
     /** 内部实现。name=null 表示手动备份（时间戳命名，每次独立保留）；否则固定名覆盖。 */
     private static String backup(Context ctx, HarnessController c, String fixedName) {
         try {
-            // 1. rootfs 内打包（wd 加引号防特殊字符注入；.dsh 缺失时 tar 会报错，
-            //    但 test -s 兜底：有部分内容就算成功）
-            String wd = c.getWorkdir();
+            // 1. rootfs 内打包（wd 单引号包裹 + 内部 ' 转义防注入；.dsh 缺失时
+            //    tar 会报错，但 test -s 兜底：有部分内容就算成功）
+            String wd = c.getWorkdir().replace("'", "'\\''");
             c.getProot().execChecked("cd /root && rm -f .dsha-backup.tar.gz && "
                     + "tar -czf .dsha-backup.tar.gz .dsh '" + wd + "'/.env dsh-web.log 2>/dev/null; "
                     + "test -s .dsha-backup.tar.gz && echo OK || echo EMPTY");

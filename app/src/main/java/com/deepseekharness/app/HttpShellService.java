@@ -68,25 +68,30 @@ public final class HttpShellService {
      *  rootfs 实际目录（files/linux/ubuntu/root/.dsh/）。 */
     private static String ensureToken() {
         if (!authToken.isEmpty()) return authToken;
-        try {
-            String t = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32);
-            authToken = t;
-            // 写入 rootfs（通过 HarnessController 拿 rootfs 路径；失败不影响运行）
+        synchronized (HttpShellService.class) {
+            // 双检：并发请求可能同时进 ensureToken，不加锁会生成两个 token，
+            // 一个覆盖另一个 → 内存 token 与 rootfs 文件不一致 → agent 认证失败
+            if (!authToken.isEmpty()) return authToken;
             try {
-                HarnessController hc = HarnessController.get(instance().ctx);
-                if (hc != null && hc.getProot() != null) {
-                    java.io.File tf = new java.io.File(hc.getProot().getRootfsDir(),
-                            "root/.dsh/.bridge_token");
-                    if (tf.getParentFile() != null) tf.getParentFile().mkdirs();
-                    try (java.io.FileOutputStream fo = new java.io.FileOutputStream(tf)) {
-                        fo.write(t.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                String t = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32);
+                authToken = t;
+                // 写入 rootfs（通过 HarnessController 拿 rootfs 路径；失败不影响运行）
+                try {
+                    HarnessController hc = HarnessController.get(instance().ctx);
+                    if (hc != null && hc.getProot() != null) {
+                        java.io.File tf = new java.io.File(hc.getProot().getRootfsDir(),
+                                "root/.dsh/.bridge_token");
+                        if (tf.getParentFile() != null) tf.getParentFile().mkdirs();
+                        try (java.io.FileOutputStream fo = new java.io.FileOutputStream(tf)) {
+                            fo.write(t.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        }
                     }
+                } catch (Throwable ignored) {
                 }
             } catch (Throwable ignored) {
             }
-        } catch (Throwable ignored) {
+            return authToken;
         }
-        return authToken;
     }
 
     public void start() {

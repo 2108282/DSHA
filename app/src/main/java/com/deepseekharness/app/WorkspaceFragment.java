@@ -160,12 +160,35 @@ public class WorkspaceFragment extends Fragment {
     }
 
     private void restoreBackup(Uri uri) {
+        // Web 在跑时恢复会覆盖正在写入的 .dsh（对话可能损坏/丢失）：
+        // 先深停再恢复，比"建议"更可靠（弹窗文案已说明）
+        if (c.isWebRunning()) {
+            new AlertDialog.Builder(requireContext())
+                    .setTitle("Web UI 正在运行")
+                    .setMessage("恢复备份会覆盖对话记录，建议先停止 Web UI 再恢复。\n\n是否停止 Web 并恢复？")
+                    .setPositiveButton("停止并恢复", (d, w) -> doRestoreWithStop(uri))
+                    .setNegativeButton("取消", null)
+                    .show();
+            return;
+        }
         new AlertDialog.Builder(requireContext())
                 .setTitle("恢复备份？")
-                .setMessage("将用备份文件覆盖当前的配置和对话记录。\n建议先停止 Web UI 再恢复。")
+                .setMessage("将用备份文件覆盖当前的配置和对话记录。\n\n确认恢复？")
                 .setPositiveButton("恢复", (d, w) -> doRestore(uri))
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    /** 停止 Web 后恢复（后台线程深停 → 恢复） */
+    private void doRestoreWithStop(final Uri uri) {
+        Toast.makeText(requireContext(), "正在停止 Web 并恢复，请稍候…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                c.stopWebAndWait();
+            } catch (Throwable ignored) {
+            }
+            doRestore(uri);
+        }).start();
     }
 
     private void doRestore(Uri uri) {
