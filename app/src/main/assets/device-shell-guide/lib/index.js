@@ -1,18 +1,21 @@
 /**
  * dsh-device-shell-guide — DSHA builtin server plugin（rc.8 全局 npm 模式版）。
  *
- * 启用后，为每个新对话（亦是每次请求组装）的系统提示追加一段「设备操作能力」
- * 引导：让 agent 知道它运行在用户 Android 手机上、并可通过 ADB 无线通道
+ * 启用后，为每个新对话（亦是每次请求组装）注入「设备操作能力」引导：
+ * 让 agent 知道它运行在用户 Android 手机上、并可通过 ADB 无线通道
  * （/root/dsh-bin/adb-shell，uid=2000 免 root）或 Shizuku 桥真实干预实体机。
  *
- * 实现：注册一个 system-prompt section（order 150，落在 tool-guidance 带
- * 100–199），位于 persona(0) 之后、工具描述附近，随每次汇编生效。
+ * 实现（双通道，确保极简模式也生效）：
+ *  1) systemPrompt.section（order 150）：标准模式在系统提示注入
+ *  2) agent/pre-step 监听：在用户消息后插入一条 user-role 引导消息
+ *     ——极简模式（minimal）不加载 systemPrompt 注入，但 pre-step 是
+ *     agent 核心链路必经，注入用户消息前=用户提示词前，绕开限制
  *
  * 挂载方式（rc.8 全局模式）：作为 bundle 注册进 web profile 的
  * dsh.profile.bundles + dependencies（file: 指向本机目录，零网络）。
  */
 
-/** 依赖的服务，确保先于 apply 就绪（systemPrompt 注册点）。 */
+/** 依赖的服务：systemPrompt（标准模式）+ agent 核心（极简模式走 pre-step） */
 export const inject = ['systemPrompt']
 
 /** 注入到系统提示的引导段（针对 DSHA 手机端环境）。 */
@@ -53,9 +56,41 @@ const PROMPT = [
  * @param {import('@deepseek-ai/cordis').Context} ctx
  */
 export function apply(ctx) {
+  // 通道 1：标准模式 systemPrompt 注入
   ctx.systemPrompt.section({
     name: 'dsh:device-shell-guide',
     order: 150,
     text: PROMPT,
+  })
+
+  // 通道 2：极简模式（minimal 不加载 systemPrompt）→ 在用户消息后插入引导
+  // agent/pre-step 是 agent 核心链路必经事件（官方 dsh-agent-instructions/
+  // dsh-compaction-basic 同款用法）。next() 返回 decision，decision.messages
+  // 是「本轮」消息（claimed），不含历史 → 不能用 messages 判幂等！
+  // 用会话级 WeakSet：同一 session 只注入一次（新对话=新 session 再注入）。
+  const guided = /* @__PURE__ */ new WeakSet()
+  ctx.on('agent/pre-step', async ({ agent, messages }, next) => {
+    const decision = await next()
+    if (decision.kind !== 'enter' || !Array.isArray(decision.messages)) return decision
+    // 幂等：本会话已注入过 → 跳过（新对话是新 session，WeakSet 自动不含）
+    if (agent?.session != null && guided.has(agent.session)) return decision
+    // 找到本轮最后一条用户消息的索引（claimed 里 role=user）
+    let lastUser = -1
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i]
+      if (m && (m.role === 'user' || (m.content && m.source?.kind === 'user'))) lastUser = i
+    }
+    if (lastUser < 0) return decision
+    const guide = {
+      role: 'user',
+      content: [{ type: 'text', text: PROMPT }],
+      source: { kind: 'dsh-device-guide', plugin: 'dsh-device-shell-guide' },
+    }
+    // 注入到本轮最后用户消息之后（= 用户提示词前的位置语义）
+    const claimedCount = messages.length
+    const out = decision.messages.toSpliced(lastUser + 1, 0, guide)
+    // 标记本会话已注入（防多轮重复）
+    if (agent?.session != null) guided.add(agent.session)
+    return { ...decision, messages: out }
   })
 }
