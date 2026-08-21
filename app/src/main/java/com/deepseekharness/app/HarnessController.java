@@ -3242,26 +3242,82 @@ public class HarnessController {
         return null;
     }
 
-    /** 导入插件包：解压到插件目录（rootfs 内中转） */
+    /** 导入插件包：解压到插件目录（rootfs 内中转）+ 注册到 profile（dependencies+bundles）。
+     *  只解压不注册的旧行为会导致插件「列表可见但不生效」（cordis 只加载 bundles 声明的）。 */
     public boolean importPlugins(java.io.File tarGz) {
         try {
             java.io.File tmpHost = new java.io.File(proot.getRootfsDir(), "root/plugins-import.tar.gz");
             copyFile(tarGz, tmpHost);
             final String TMP_GUEST = "/root/plugins-import.tar.gz";
+            boolean imported = false;
+            java.util.Set<String> importedNames = new java.util.LinkedHashSet<>();
             for (String d : PLUGIN_DIRS) {
                 java.io.File dir = new java.io.File(proot.getRootfsDir(), d.substring(1));
                 if (!dir.isDirectory()) dir.mkdirs();
                 String r = proot.execAndRead(
                         "cd '" + d + "' && tar -xzf '" + TMP_GUEST + "' 2>/dev/null && echo OK");
                 if (r != null && r.contains("OK")) {
-                    //noinspection ResultOfMethodCallIgnored
-                    tmpHost.delete();
-                    return true;
+                    imported = true;
+                    // 收集导入的插件名（顶层目录，排除 .disabled/隐藏）
+                    java.io.File[] top = dir.listFiles();
+                    if (top != null) for (java.io.File f : top) {
+                        String n = f.getName();
+                        if (n.startsWith(".") || n.endsWith(".disabled")) continue;
+                        // 是包目录且有 package.json 才注册
+                        if (f.isDirectory() && new java.io.File(f, "package.json").isFile()) {
+                            importedNames.add(n);
+                        }
+                    }
                 }
             }
+            //noinspection ResultOfMethodCallIgnored
+            tmpHost.delete();
+            if (imported && !importedNames.isEmpty()) {
+                for (String name : importedNames) {
+                    registerImportedPlugin(name);
+                }
+                android.util.Log.i("DSHA", "插件导入完成并注册: " + importedNames);
+            }
+            return imported;
         } catch (Exception ignored) {
         }
         return false;
+    }
+
+    /** 把导入的插件注册进 web profile（dependencies + bundles + node_modules 链接/实体）。
+     *  幂等：已在 bundles 则跳过。与 registerMobileAdaptBundle 思路一致（不跑 pnpm，
+     *  避免破坏 profile node_modules）。 */
+    private void registerImportedPlugin(String name) {
+        try {
+            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+            if (!pf.isFile()) return;
+            String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
+            org.json.JSONObject root = new org.json.JSONObject(txt);
+            org.json.JSONObject deps = root.optJSONObject("dependencies");
+            if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
+            if (!deps.has(name)) {
+                // 实体已在 node_modules，用本地引用（零网络）；scoped 包名原样保留
+                deps.put(name, "file:./node_modules/" + name);
+            }
+            // dsh.profile.bundles 追加
+            org.json.JSONObject dsh = root.optJSONObject("dsh");
+            org.json.JSONObject profile = dsh == null ? null : dsh.optJSONObject("profile");
+            if (profile == null) {
+                profile = new org.json.JSONObject();
+                if (dsh == null) dsh = new org.json.JSONObject();
+                dsh.put("profile", profile);
+                root.put("dsh", dsh);
+            }
+            org.json.JSONArray bundles = profile.optJSONArray("bundles");
+            if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
+            boolean has = false;
+            for (int i = 0; i < bundles.length(); i++) {
+                if (name.equals(bundles.optString(i, "").trim())) { has = true; break; }
+            }
+            if (!has) bundles.put(name);
+            java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 拉取插件市场快照 JSON（GitHub API 列最新快照 → jsdelivr/raw 下载），返回 JSON 文本 */
