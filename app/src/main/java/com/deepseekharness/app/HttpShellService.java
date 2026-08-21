@@ -236,6 +236,8 @@ public final class HttpShellService {
     /** /app/notify?title=&text= ：发通知栏提醒 */
     private String appNotify(String path) {
         try {
+            // App 前台时不发通知（用户正看着页面，不打扰）——与 TaskNotifier 抑制一致
+            if (TaskNotifier.appInForeground) return "FOREGROUND_SKIP";
             String title = getParam(path, "title", "DSHA 通知");
             String text = getParam(path, "text", "");
             if (text.isEmpty()) return "NO_TEXT";

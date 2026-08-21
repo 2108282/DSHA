@@ -575,6 +575,7 @@ public class HarnessController {
             String[][] builtins = {
                     {"dsh-client-ui-mobile-adapt", "/root/dsha-mobile-adapt"},
                     {"dsh-device-shell-guide", "/root/dsha-device-shell-guide"},
+                    {"dsh-task-notifier", "/root/dsha-task-notifier"},
             };
             boolean changed = false;
             for (String[] b : builtins) {
@@ -1018,6 +1019,11 @@ public class HarnessController {
         // 设备 Shell 引导插件（rc.8 bundle 模式）：让 agent 系统提示里知道可用 ADB
         try {
             ensureDeviceShellGuide();
+        } catch (Throwable ignored) {
+        }
+        // 任务完成通知插件：turn/end → 3090 桥发 App 通知（替代轮询）
+        try {
+            ensureTaskNotifier();
         } catch (Throwable ignored) {
         }
         // 极简模式设备引导已并入 device-shell-guide 插件（home patch 覆盖官方极简 bash 描述）
@@ -1909,6 +1915,63 @@ public class HarnessController {
      *  装到 node_modules/dsh-device-shell-guide（符号链接→实体目录），
      *  这样「已装插件」列表可见、togglePlugin 开关可生效（改名链接）。
      *  幂等：已注册跳过；失败不影响安装。 */
+    /** 确保「任务完成通知」插件已注入 rootfs 并注册为 web profile bundle：
+     *  监听 turn/end → 3090 桥发 App 通知（替代轮询会话文件，更准）。
+     *  幂等：marker 存在跳过；失败不影响安装。 */
+    private void ensureTaskNotifier() {
+        try {
+            final String NAME = "dsh-task-notifier";
+            final String REAL = "/root/dsha-task-notifier";
+            java.io.File realDir = new java.io.File(proot.getRootfsDir(), "root/dsha-task-notifier");
+            java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/node_modules/" + NAME);
+            java.io.File marker = new java.io.File(proot.getRootfsDir(), "root/dsha-task-notifier-installed");
+            // 用户禁用 → 仅更新实体不注册
+            if (new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/node_modules/" + NAME + ".disabled").exists()) {
+                writeAssetTo("task-notifier/package.json", new java.io.File(realDir, "package.json"));
+                writeAssetTo("task-notifier/cordis.patch.yml", new java.io.File(realDir, "cordis.patch.yml"));
+                writeAssetTo("task-notifier/lib/index.js", new java.io.File(realDir, "lib/index.js"));
+                return;
+            }
+            if (marker.exists() && nmLink.exists()) return; // 已注入
+            // 1) 注入实体
+            writeAssetTo("task-notifier/package.json", new java.io.File(realDir, "package.json"));
+            writeAssetTo("task-notifier/cordis.patch.yml", new java.io.File(realDir, "cordis.patch.yml"));
+            writeAssetTo("task-notifier/lib/index.js", new java.io.File(realDir, "lib/index.js"));
+            // 2) node_modules 符号链接
+            if (nmLink.getParentFile() != null) nmLink.getParentFile().mkdirs();
+            if (!nmLink.exists()) {
+                java.nio.file.Files.createSymbolicLink(nmLink.toPath(),
+                        java.nio.file.Paths.get(REAL));
+            }
+            // 3) 注册 profile（dependencies + bundles）
+            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+            if (pf.isFile()) {
+                String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
+                org.json.JSONObject root = new org.json.JSONObject(txt);
+                org.json.JSONObject deps = root.optJSONObject("dependencies");
+                if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
+                if (!deps.has(NAME)) deps.put(NAME, "link:" + REAL);
+                org.json.JSONObject dshObj = root.optJSONObject("dsh");
+                if (dshObj == null) { dshObj = new org.json.JSONObject(); root.put("dsh", dshObj); }
+                org.json.JSONObject profile = dshObj.optJSONObject("profile");
+                if (profile == null) { profile = new org.json.JSONObject(); dshObj.put("profile", profile); }
+                org.json.JSONArray bundles = profile.optJSONArray("bundles");
+                if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
+                boolean found = false;
+                for (int i = 0; i < bundles.length(); i++) {
+                    if (NAME.equals(bundles.optString(i, ""))) { found = true; break; }
+                }
+                if (!found) bundles.put(NAME);
+                java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
+            }
+            java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
+            android.util.Log.i("DSHA", "任务通知插件已注册");
+        } catch (Throwable ignored) {
+        }
+    }
+
     private void ensureDeviceShellGuide() {
         try {
             final String NAME = "dsh-device-shell-guide";
@@ -2218,7 +2281,7 @@ public class HarnessController {
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
      *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
      *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
-    private static final String BUILTIN_ASSET_VERSION = "4";
+    private static final String BUILTIN_ASSET_VERSION = "5";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
      *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，
