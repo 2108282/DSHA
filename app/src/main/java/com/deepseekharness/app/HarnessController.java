@@ -2411,7 +2411,8 @@ public class HarnessController {
         final int last = prefs.getInt("last_version_code", 0);
         if (cur <= last) return false; // 版本未变，幂等返回
         prefs.edit().putInt("last_version_code", cur).apply();
-        if (last > 0) { // 真升级（非全新安装）：后台自动备份旧环境
+        final int from = last; // 迁移起点（0=全新安装）
+        if (last > 0) { // 真升级（非全新安装）：后台自动备份旧环境 + 版本迁移
             IO.execute(() -> {
                 try {
                     // rootfs 已就绪（有 bash）才备份；未解压/未安装时跳过
@@ -2420,6 +2421,39 @@ public class HarnessController {
                         if (p != null) android.util.Log.i("DSHA", "升级自动备份完成: " + p);
                     }
                 } catch (Throwable ignored) {
+                }
+                // ===== 低版本安装适配：老 rootfs 结构差异集中迁移 =====
+                // 按来源版本分层，逐层升级（幂等，每层只做该层需要的事）：
+                // 老版本（versionCode<=21，即 v1.1.1 及更早）需要补适配。
+                try {
+                    if (from <= 21 && proot.isInstalled()) {
+                        // 1) 老版本无 builtin-assets.version → 删旧 marker 强制重注入官方版
+                        //    （老 rootfs 的 mobile-adapt 是旧布局/旧内容，靠 STEP6 版本变化
+                        //    重跑⑥时 refreshBuiltinAssetMarkers 已处理；这里兜底删 marker）
+                        String r = proot.execAndRead(
+                                "cat /root/.dsh/builtin-assets.version 2>/dev/null || echo NONE");
+                        if (r == null || !r.trim().equals(BUILTIN_ASSET_VERSION)) {
+                            proot.execAndRead(
+                                    "rm -f /root/dsha-mobile-adapt-installed /root/dsha-device-shell-guide-installed; echo cleaned");
+                            android.util.Log.i("DSHA", "迁移(≤v1.1.1)：已删内置插件 marker，等待重注入");
+                        }
+                        // 2) 老版本无离线包版本标记 → 写当前（避免误弹升级提示）
+                        //    installedOfflineVersion()=="0" 且 bundled>"0" 时
+                        //    用户会收到一次升级提示（合理）；这里不主动写，保持提示语义。
+                        // 3) 老版本工作区 .env 若在默认目录 → 已由数据保护覆盖
+                        android.util.Log.i("DSHA", "迁移(≤v1.1.1)完成");
+                    }
+                    // 更早版本（v1.0.x，versionCode<=19）可能有旧 profile 结构
+                    if (from <= 19 && proot.isInstalled()) {
+                        // 旧版 profile 可能缺 dependencies 字段 / 用 file: 依赖，
+                        // 触发一次 fix-stale-bundles 自愈（App 启动时会跑，这里显式跑一次）
+                        proot.execAndRead(
+                                "rm -f /root/dsha-mobile-adapt-installed /root/dsha-device-shell-guide-installed; "
+                                + "echo 'v1.0.x 迁移：删 marker 强制重注入'");
+                        android.util.Log.i("DSHA", "迁移(v1.0.x)完成");
+                    }
+                } catch (Throwable ignored) {
+                    // 迁移失败不影响使用（幂等，下次启动 STEP6 变化仍会自愈）
                 }
             });
         }
