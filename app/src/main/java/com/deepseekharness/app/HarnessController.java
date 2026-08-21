@@ -776,7 +776,13 @@ public class HarnessController {
                 "E=$(command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | head -1 || echo NONE); " +
                 "F=$(test -f /root/dsh-bin/.version && V2=$(cat /root/dsh-bin/.version 2>/dev/null) " +
                 "&& [ -n \"$V2\" ] && [ \"$V2\" != \"" + GUARD_VERSION + "\" ] && echo 1 || echo 0); " +
-                "echo R=$A$B$C$D U=$E$F");
+                // C/E 是完整版本号（如 0.1.1-rc.2），不能拼进 R/U（会破坏位解析）！
+                // 转为 0/1 位：C_OK=dsh 存在（具体版本判定在 Java 侧），
+                // R 用 A/B/C_OK/D，U 用 E_OK/F
+                "C_OK=$(command -v dsh >/dev/null 2>&1 && echo 1 || echo 0); " +
+                "E_OK=$(command -v dsh >/dev/null 2>&1 && echo 1 || echo 0); " +
+                "echo V=$C|$E; " +
+                "echo R=$A$B$C_OK$D U=$E_OK$F");
         // 解析 R=ABCD：不用 matches() 正则（全匹配会被 echo 末尾换行坑到，之前
         // 因此②④⑤⑥全显示未安装）——直接用 indexOf + substring 取 4 位
         boolean[] bits = new boolean[4];
@@ -793,22 +799,25 @@ public class HarnessController {
             upd[0] = b.charAt(0) == '1';
             upd[1] = b.charAt(1) == '1';
         }
-        // C/E 位输出 dsh 完整版本（如 0.1.1-rc.2），Java 侧比较：
-        // C=已就绪（>=0.1.0-rc.8），E=装了旧版（<0.1.0-rc.8 → 可更新）
+        // 版本号从 V= 行提取（C/E 是完整版本如 0.1.1-rc.2，命令里单独 echo V=$C|$E；
+        // 之前 C 直接拼进 R 导致 R=110.1.1-rc.21 位解析错乱 → 步骤⑤永远未安装）
         String dshVer = "";
-        int ci = merged == null ? -1 : merged.indexOf("C=");
-        if (ci >= 0) {
-            String cv = merged.substring(ci + 2);
-            int nl2 = cv.indexOf('\n');
-            if (nl2 >= 0) cv = cv.substring(0, nl2);
-            dshVer = cv.trim();
+        int vi = merged == null ? -1 : merged.indexOf("V=");
+        if (vi >= 0) {
+            String vv = merged.substring(vi + 2);
+            int amp = vv.indexOf('|');
+            if (amp >= 0) vv = vv.substring(0, amp); // 取 $C（| 前）
+            int nl2 = vv.indexOf('\n');
+            if (nl2 >= 0) vv = vv.substring(0, nl2);
+            dshVer = vv.trim();
         }
         boolean dshReady = dshVersionScore(dshVer) >= dshVersionScore("0.1.0-rc.8");
         boolean dshOld = !dshVer.isEmpty() && !"NONE".equals(dshVer)
                 && dshVersionScore(dshVer) < dshVersionScore("0.1.0-rc.8");
         boolean r2 = bits[0];
         boolean r4 = bits[1];
-        boolean r5 = bits[2];
+        // r5 由 dshReady 决定（不再用 bits[2]——那是 C_OK=dsh 存在位）
+        boolean r5;
         boolean r6 = bits[3];
         r5 = dshReady; // ⑤ dsh 已就绪（完整版本判定）
         updatableCache[STEP_HARNESS] = dshOld; // ⑤ 装了旧版 → 可更新
@@ -2601,6 +2610,12 @@ public class HarnessController {
     private static long dshVersionScore(String v) {
         if (v == null) return 0;
         String t = v.trim().toLowerCase();
+        // 剥离 ANSI 颜色码（[...m）——部分 dsh 版本 --version 带颜色输出
+        t = t.replaceAll("\\x1B\\[[0-9;]*[a-zA-Z]", "");
+        // 只取首个形如 X.Y.Z-rc.N 的完整版本段（防输出带前缀/后缀文字）
+        java.util.regex.Matcher full = java.util.regex.Pattern.compile(
+                "(\\d+\\.\\d+\\.\\d+-rc\\.\\d+)").matcher(t);
+        if (full.find()) t = full.group(1);
         java.util.regex.Matcher m = java.util.regex.Pattern.compile(
                 "(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?.*?rc\\.(\\d+)").matcher(t);
         if (m.find()) {
