@@ -932,6 +932,17 @@ public class HarnessController {
         // 把 dsh-client-ui-mobile-adapt 的 client 产物直接注入 web-app 前端，
         // 手机端单栏/抽屉/汉堡/全屏设置开箱即用。幂等，失败不阻塞安装。
         try {
+            // 布局迁移：官方版改 lib/ 子目录布局。旧 rootfs（根目录布局）marker 存在
+            // 会跳过重注入 → 检测 lib/client.js 不存在（旧布局/缺失）时删 marker 强制重注入；
+            // 新布局（含离线预置）存在则保留 marker，维持「解压即用」零注入。
+            java.io.File mobileNew = new java.io.File(proot.getRootfsDir(),
+                    "root/dsha-mobile-adapt/lib/client.js");
+            if (!mobileNew.isFile()) {
+                java.io.File mobileMarker = new java.io.File(proot.getRootfsDir(),
+                        "root/dsha-mobile-adapt-installed");
+                if (mobileMarker.exists()) mobileMarker.delete();
+                android.util.Log.i("DSHA", "mobile-adapt 布局升级：删 marker 强制重注入官方版");
+            }
             ensureNativeMobileAdapt();
         } catch (Throwable ignored) {
         }
@@ -1729,8 +1740,9 @@ public class HarnessController {
             java.io.File aDir = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-adapt");
             aDir.mkdirs();
             // 2) 把 assets 里的 client.js / index.js / cordis.patch.yml / package.json 写进 rootfs
-            writeAssetTo("mobile-adapt/client.js", new java.io.File(aDir, "client.js"));
-            writeAssetTo("mobile-adapt/index.js", new java.io.File(aDir, "index.js"));
+            //    （官方仓库布局：lib/index.js + lib/client.js，保持与上游一致方便更新）
+            writeAssetTo("mobile-adapt/lib/client.js", new java.io.File(aDir, "lib/client.js"));
+            writeAssetTo("mobile-adapt/lib/index.js", new java.io.File(aDir, "lib/index.js"));
             writeAssetTo("mobile-adapt/cordis.patch.yml", new java.io.File(aDir, "cordis.patch.yml"));
             writeAssetTo("mobile-adapt/package.json", new java.io.File(aDir, "package.json"));
             java.nio.file.Files.write(sF.toPath(), script.getBytes(StandardCharsets.UTF_8));
@@ -2086,7 +2098,7 @@ public class HarnessController {
     private static final String GUARD_VERSION = "9";
     /** 步骤⑥整体版本号：内置插件/补丁/极简 preset 任一变更时 +1，
      *  启动时对比 rootfs 标记，不符则自动重跑⑥（防"改了不生效"）。 */
-    private static final String STEP6_VERSION = "2";
+    private static final String STEP6_VERSION = "3";
 
     /** 确保 rootfs 内危险命令确认包装器已部署（版本不匹配则强制重装，幂等） */
     public void ensureDangerGuard() {
