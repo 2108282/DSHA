@@ -32,16 +32,19 @@ public class ExtractActivity extends AppCompatActivity {
             ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
         } catch (Exception ignored) {
         }
-        statusText.setText("DSHA v" + ver + "\n正在检查内置环境…");
+        // force_extract = 离线包升级重解压（跳过"已解压"短路，强制重新解压新内置包；
+        // extractOfflineBundle 内部带 .dsh/.env 数据保护自动还原）
+        boolean force = getIntent().getBooleanExtra("force_extract", false);
+        statusText.setText("DSHA v" + ver + (force ? "\n正在升级内置环境…" : "\n正在检查内置环境…"));
 
-        startExtraction();
+        startExtraction(force);
     }
 
-    private void startExtraction() {
+    private void startExtraction(final boolean force) {
         ProotBootstrap proot = new ProotBootstrap(this);
         new Thread(() -> {
             try {
-                if (proot.isOfflineExtracted()) {
+                if (!force && proot.isOfflineExtracted()) {
                     runOnUiThread(() -> statusText.setText("内置环境已就绪"));
                     Thread.sleep(400);
                     proceed();

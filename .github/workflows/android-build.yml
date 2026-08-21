@@ -24,7 +24,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bundle/offline-rootfs.tar.gz
-          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/*.patch') }}
+          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'scripts/provision-builtin-plugins.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/*.patch', 'app/src/main/assets/mobile-adapt/**', 'app/src/main/assets/device-shell-guide/**') }}
 
       - name: Build offline rootfs bundle
         if: steps.cache.outputs.cache-hit != 'true'
@@ -35,11 +35,22 @@ jobs:
           test -s bundle/offline-rootfs.tar.gz
           ls -lh bundle/offline-rootfs.tar.gz
 
+      # 离线包版本标记：与 App 内置包同步 bump（可用 OFFLINE_VERSION env 覆盖）。
+      # 缓存命中时也要生成（缓存只存 tar.gz，version 需每次生成）。
+      - name: Write offline version
+        run: |
+          set -euo pipefail
+          VER="${OFFLINE_VERSION:-1}"
+          printf '%s\n' "$VER" > bundle/offline-rootfs.version
+          echo "offline-rootfs.version=$VER"
+
       - name: Upload offline bundle
         uses: actions/upload-artifact@v4
         with:
           name: offline-rootfs-bundle
-          path: bundle/offline-rootfs.tar.gz
+          path: |
+            bundle/offline-rootfs.tar.gz
+            bundle/offline-rootfs.version
           if-no-files-found: error
           retention-days: 14
 
@@ -64,7 +75,11 @@ jobs:
           test -s bundle/offline-rootfs.tar.gz
           mkdir -p app/src/main/assets
           cp bundle/offline-rootfs.tar.gz app/src/main/assets/offline-rootfs.tar.gz
-          ls -lh app/src/main/assets/offline-rootfs.tar.gz
+          # 离线包版本标记（App 启动时对比 rootfs 已解压版本，发现新版提示升级）
+          if [ -f bundle/offline-rootfs.version ]; then
+            cp bundle/offline-rootfs.version app/src/main/assets/offline-rootfs.version
+          fi
+          ls -lh app/src/main/assets/offline-rootfs.tar.gz app/src/main/assets/offline-rootfs.version
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

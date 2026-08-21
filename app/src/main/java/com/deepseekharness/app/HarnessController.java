@@ -1,6 +1,7 @@
 package com.deepseekharness.app;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
@@ -921,6 +922,8 @@ public class HarnessController {
     private void installGuard() throws Exception {
         requireRootfs();
         setProgress("安装安全守卫与补丁", 91);
+        // 内置插件资产版本自愈：资产变更时删 marker 强制重注入（老用户拿到新 UI/引导）
+        refreshBuiltinAssetMarkers();
         ensureDangerGuard();   // PATH 包装器（rm/adb 等 15 命令）
         ensureBashGuardPatch(); // bash 工具 lib 强制加载 dsh-guard
         try {
@@ -2099,6 +2102,28 @@ public class HarnessController {
     /** 步骤⑥整体版本号：内置插件/补丁/极简 preset 任一变更时 +1，
      *  启动时对比 rootfs 标记，不符则自动重跑⑥（防"改了不生效"）。 */
     private static final String STEP6_VERSION = "3";
+    /** 内置插件资产版本：mobile-adapt / device-shell-guide 的 client.js 等
+     *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
+     *  必须靠版本标记强制删 marker 重注入，老用户才能拿到新资产）。 */
+    private static final String BUILTIN_ASSET_VERSION = "1";
+
+    /** 内置插件资产版本自愈：rootfs 标记与当前版本不符 → 删两个内置插件
+     *  marker，强制下一次 ensureNativeMobileAdapt/ensureDeviceShellGuide 重注入新资产。
+     *  幂等：版本一致秒回。 */
+    private void refreshBuiltinAssetMarkers() {
+        try {
+            if (!proot.isInstalled()) return;
+            String r = proot.execAndRead(
+                    "cat /root/.dsh/builtin-assets.version 2>/dev/null || echo NONE");
+            if (r != null && r.trim().equals(BUILTIN_ASSET_VERSION)) return;
+            proot.execAndRead(
+                    "rm -f /root/dsha-mobile-adapt-installed /root/dsha-device-shell-guide-installed; "
+                    + "mkdir -p /root/.dsh && printf '%s' '" + BUILTIN_ASSET_VERSION
+                    + "' > /root/.dsh/builtin-assets.version; echo refreshed");
+            android.util.Log.i("DSHA", "内置插件资产版本变化 → 已删 marker，下次注入新资产");
+        } catch (Throwable ignored) {
+        }
+    }
 
     /** 确保 rootfs 内危险命令确认包装器已部署（版本不匹配则强制重装，幂等） */
     public void ensureDangerGuard() {
@@ -2331,17 +2356,21 @@ public class HarnessController {
 
 
 
-    /** 启动时对比步骤⑥版本标记：rootfs 的 step6.version 与当前 STEP6_VERSION 不符
-     *  → 自动重跑⑥（内置插件/补丁/极简 preset 有更新时自动适配，无需用户手动）。
+    /** 启动时对比步骤⑥版本标记（step6.version + builtin-assets.version）：
+     *  任一与当前不符 → 自动重跑⑥（守卫/补丁/内置插件资产更新自动适配）。
      *  幂等、后台静默。注意：版本检查（execAndRead 起 proot）丢 IO 线程，不能在主线程跑。 */
     public void maybeRefreshStep6() {
         IO.execute(() -> {
             try {
                 if (!proot.isInstalled()) return;
-                String r = proot.execAndRead("cat /root/.dsh/step6.version 2>/dev/null || echo NONE");
-                if (r != null && r.trim().equals(STEP6_VERSION)) return; // 版本一致
-                android.util.Log.i("DSHA", "步骤⑥版本变化（rootfs=" + (r == null ? "?" : r.trim())
-                        + " 期望=" + STEP6_VERSION + "），自动重跑⑥");
+                String r = proot.execAndRead(
+                        "S=$(cat /root/.dsh/step6.version 2>/dev/null || echo NONE); "
+                        + "A=$(cat /root/.dsh/builtin-assets.version 2>/dev/null || echo NONE); "
+                        + "echo \"$S|$A\"");
+                String want = STEP6_VERSION + "|" + BUILTIN_ASSET_VERSION;
+                if (r != null && r.trim().equals(want)) return; // 版本一致
+                android.util.Log.i("DSHA", "步骤⑥/资产版本变化（rootfs=" + (r == null ? "?" : r.trim())
+                        + " 期望=" + want + "），自动重跑⑥");
                 if (tryBeginBusy()) {
                     runInstallStep(STEP_GUARD);
                     setState("", 100, "已自动更新安全守卫与内置插件（⑥）", "", false);
@@ -2353,37 +2382,74 @@ public class HarnessController {
         });
     }
 
-    /** 启动时检测 dsh 新版本：rc 号变化 → 自动【重装⑤（安装新版 dsh）+ 重跑⑥（守卫/补丁适配）】。
-     *  先装新版再适配，一气呵成；幂等、后台静默；失败不影响启动。
-     *  版本检查（execAndRead）丢 IO 线程，避免主线程卡顿（起 proot 子进程 1~3s）。 */
+    /** 主动检测 dsh 新版本：已装版本 vs npm 最新 rc（dist-tags.next，24h 节流），
+     *  npm 查询失败静默跳过（网络/镜像问题），版本比较只升不降。 */
+    private String queryLatestDshRc() {
+        try {
+            // 节流：24h 内不重复查（避免每次启动都打 registry）
+            final SharedPreferences prefs =
+                    appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
+            long last = prefs.getLong("last_dsh_rc_check_ts", 0);
+            if (System.currentTimeMillis() - last < 24L * 3600 * 1000) return null;
+            prefs.edit().putLong("last_dsh_rc_check_ts", System.currentTimeMillis()).apply();
+            // npmmirror 优先（国内快），失败回退官方源；只取 dist-tags.next（最新 rc）
+            String r = proot.execAndRead(
+                    "timeout 20 npm view @deepseek-ai/dsh dist-tags.next --registry=https://registry.npmmirror.com 2>/dev/null "
+                    + "|| timeout 20 npm view @deepseek-ai/dsh dist-tags.next --registry=https://registry.npmjs.org 2>/dev/null");
+            if (r == null || r.startsWith("ERROR") || r.contains("NONE")) return null;
+            String v = r.trim();
+            // 只认 rc.X 格式（0.1.0-rc.8 / rc.9 等），防 dist-tags 是 stable 版本号
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("rc\\.(\\d+)").matcher(v);
+            return m.find() ? "rc." + m.group(1) : null;
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /** rc 号比较：a > b 返回 true（只升不降，防镜像回退触发重装） */
+    private static boolean rcNewer(String a, String b) {
+        try {
+            int x = Integer.parseInt(a.replaceAll("[^0-9]", ""));
+            int y = Integer.parseInt(b.replaceAll("[^0-9]", ""));
+            return x > y;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 启动时检测 dsh 新版本：主动查 npm 最新 rc，比已装新 → 自动【重装⑤+⑥】；
+     *  兼容被动场景（离线包/手动重装导致已装版本变化 → 同样适配）。
+     *  先装新版再适配，一气呵成；幂等、后台静默；失败不影响启动。 */
     public void maybeAutoReinstallGuardOnDshUpdate() {
         IO.execute(() -> {
             try {
                 if (!proot.isInstalled()) return;
-                // 对比【已安装版本】与【npm 最新 rc】：
-                // 已装版本（dsh --version）记录在 last_dsh_rc；
-                // 最新 rc 从 npm @next 解析（npmmirror 镜像），失败则跳过本次检查
+                final SharedPreferences prefs =
+                        appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
                 String installed = proot.execAndRead(
                         "command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 || echo NONE");
                 if (installed == null || installed.contains("NONE") || installed.startsWith("ERROR")) return;
                 String installedRc = installed.trim();
-                final SharedPreferences prefs =
-                        appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
                 String last = prefs.getString("last_dsh_rc", "");
-                // 首次检测（last 为空）只记录不触发：用户当前已是某 rc 不代表"刚升级"，
-                // 避免刚装好就莫名重装⑤
-                if (last.isEmpty()) {
-                    prefs.edit().putString("last_dsh_rc", installedRc).apply();
+                String target = null;
+                // 1) 主动：npm 最新 rc > 已装 → 目标 = 最新（真正"检测到新版自动升级"）
+                String latest = queryLatestDshRc();
+                if (latest != null && rcNewer(latest, installedRc)) {
+                    target = latest;
+                }
+                // 2) 被动：已装版本 != 上次记录（离线包带新版/用户手动重装）→ 适配已装版本
+                if (target == null && !last.isEmpty() && !installedRc.equals(last)) {
+                    target = installedRc;
+                }
+                if (target == null) {
+                    // 首次检测只记录基线
+                    if (last.isEmpty()) prefs.edit().putString("last_dsh_rc", installedRc).apply();
                     return;
                 }
-                if (installedRc.equals(last)) return; // 已处理过这个版本
-                // 升级前快照：记录旧版本（回滚/诊断用）
-                if (!last.isEmpty()) {
-                    prefs.edit().putString("prev_dsh_rc", last).apply();
-                }
-                prefs.edit().putString("last_dsh_rc", installedRc).apply();
-                // 版本变化：后台【先⑤装最新 rc → 再⑥适配】
-                android.util.Log.i("DSHA", "检测到 dsh 版本变化 " + last + " → " + installedRc + "，自动重装⑤+⑥");
+                // 升级前快照 + 记录目标版本
+                if (!last.isEmpty()) prefs.edit().putString("prev_dsh_rc", last).apply();
+                prefs.edit().putString("last_dsh_rc", target).apply();
+                android.util.Log.i("DSHA", "检测到 dsh 新版本 " + installedRc + " → " + target + "，自动重装⑤+⑥");
                 if (tryBeginBusy()) {
                     // ⑤：重装最新 RC（npm @next 跟随官方，npmmirror 同步滞后时回退官方源）
                     runInstallStep(STEP_HARNESS);
@@ -2518,6 +2584,45 @@ public class HarnessController {
                                 android.widget.Toast.makeText(act, r, android.widget.Toast.LENGTH_LONG).show();
                             })
                             .setNegativeButton("忽略", null)
+                            .show();
+                });
+            } catch (Throwable ignored) {
+            }
+        });
+    }
+
+    /** 离线包升级感知：APK 内置离线包版本 > rootfs 已解压版本 → 弹窗提示升级
+     * （重解压自带数据保护：.dsh/.env 自动备份还原，用户确认后跳转强制解压页）。
+     * 用户点"忽略"记录版本，下次不弹。rootfs 未解压/无内置包/版本相同 → 静默。 */
+    public void maybeOfferOfflineUpgrade(final android.app.Activity act) {
+        IO.execute(() -> {
+            try {
+                if (!proot.isOfflineExtracted()) return; // 首启未解压：走正常解压流程，不提示
+                final String bundled = proot.bundledOfflineVersion();
+                final String installed = proot.installedOfflineVersion();
+                if ("0".equals(bundled) || bundled.equals(installed)) return; // 无内置包/无更新
+                final SharedPreferences prefs =
+                        appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
+                if (bundled.equals(prefs.getString("ignored_offline_version", ""))) return; // 已忽略
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    new android.app.AlertDialog.Builder(act)
+                            .setTitle("发现新版内置环境 v" + bundled)
+                            .setMessage("当前已解压环境：v" + installed + "\n\n"
+                                    + "新版包含：预置内置插件 / 组件更新 / 修复。\n"
+                                    + "升级将重新解压（约数分钟），配置、API Key 与对话记录会自动保留。\n\n"
+                                    + "是否现在升级？")
+                            .setPositiveButton("升级", (d, w) -> {
+                                try {
+                                    Intent i = new Intent(act, ExtractActivity.class);
+                                    i.putExtra("force_extract", true);
+                                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                                    act.startActivity(i);
+                                } catch (Throwable ignored) {
+                                }
+                            })
+                            .setNegativeButton("忽略", (d, w) ->
+                                    prefs.edit().putString("ignored_offline_version", bundled).apply())
+                            .setNeutralButton("稍后", null)
                             .show();
                 });
             } catch (Throwable ignored) {

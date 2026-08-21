@@ -88,6 +88,10 @@ public class MainActivity extends AppCompatActivity {
         if (getIntent().getBooleanExtra("skip_extract", false)) {
             HarnessController.get(this).maybePromptRestore(this);
         }
+        // 离线包升级感知：APK 内置新离线包 → 提示重解压（数据自动保留）。
+        // 放外面：正常启动（rootfs 已解压）也要检测，方法内部自带
+        // isOfflineExtracted() 保护（首启未解压时静默）。
+        HarnessController.get(this).maybeOfferOfflineUpgrade(this);
 
         requestPermissions();
         requestBatteryOptimization();

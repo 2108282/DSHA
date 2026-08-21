@@ -564,6 +564,46 @@ public class ProotBootstrap {
     /** 内置离线包 asset 名称（GitHub Actions 构建时预置的预装 rootfs 整包） */
     public static final String OFFLINE_BUNDLE_ASSET = "offline-rootfs.tar.gz";
 
+    /** 离线包版本标记 asset（与离线包同步 bump；App 对比 rootfs 里的已解压版本，
+     *  发现新版 → 提示用户可升级重解压。缺失=老包，按 0 处理不提示）。 */
+    public static final String OFFLINE_VERSION_ASSET = "offline-rootfs.version";
+
+    /** APK 内置离线包版本（读 asset；失败/缺失返回 "0"） */
+    public String bundledOfflineVersion() {
+        try (java.io.InputStream in = ctx.getAssets().open(OFFLINE_VERSION_ASSET)) {
+            byte[] buf = new byte[32];
+            int n = in.read(buf);
+            String s = n > 0 ? new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8).trim() : "";
+            return s.isEmpty() ? "0" : s;
+        } catch (Exception e) {
+            return "0";
+        }
+    }
+
+    /** rootfs 已解压的离线包版本（写于解压完成；缺失返回 "0"） */
+    public String installedOfflineVersion() {
+        try {
+            java.io.File f = new java.io.File(rootfsDir, "root/.dsh/offline-rootfs.version");
+            if (!f.isFile()) return "0";
+            String s = new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8).trim();
+            return s.isEmpty() ? "0" : s;
+        } catch (Exception e) {
+            return "0";
+        }
+    }
+
+    /** 解压完成后记录离线包版本标记（供启动时对比，发现新包可提示升级） */
+    private void writeOfflineVersion() {
+        try {
+            java.io.File f = new java.io.File(rootfsDir, "root/.dsh/offline-rootfs.version");
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), bundledOfflineVersion().getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** aapt 会把 .tar.gz 自动解成 .tar，所以这些名字都算内置包。 */
     private static final String[] BUNDLE_NAMES = {
             "offline-rootfs.tar.gz",
@@ -711,6 +751,8 @@ public class ProotBootstrap {
                 deleteRecursively(dataBak);
             }
             markOfflineExtracted();
+            // 记录离线包版本（启动时对比，发现新版可提示升级）
+            writeOfflineVersion();
         } finally {
             try { counted.close(); } catch (Exception ignored) {}
             if (apk != null) {
