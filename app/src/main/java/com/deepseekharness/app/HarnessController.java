@@ -3002,11 +3002,13 @@ public class HarnessController {
         return set;
     }
 
-    /** 判断插件当前启用/禁用：存在 <name>.disabled 则禁用（顶层或 .pnpm 内精确匹配） */
+    /** 判断插件当前启用/禁用：存在 <name>.disabled 则禁用（顶层或 .pnpm 内精确匹配）。
+     *  注意：必须用 existsOrBrokenLink（悬空链接的 File.exists() 返回 false，
+     *  会把禁用误判成启用——用户反馈"切页回来按钮显示启用"）。 */
     private boolean isPluginDisabled(String name) {
         for (String d : PLUGIN_DIRS) {
             java.io.File base = new java.io.File(proot.getRootfsDir(), d.substring(1));
-            if (new java.io.File(base, name + ".disabled").exists()) return true;
+            if (existsOrBrokenLink(new java.io.File(base, name + ".disabled"))) return true;
             java.io.File pnpm = new java.io.File(base, ".pnpm");
             if (!pnpm.isDirectory()) continue;
             java.io.File[] es = pnpm.listFiles(java.io.File::isDirectory);
@@ -3014,7 +3016,7 @@ public class HarnessController {
             for (java.io.File e : es) {
                 java.io.File nm = new java.io.File(e, "node_modules");
                 if (!nm.isDirectory()) continue;
-                if (new java.io.File(nm, name + ".disabled").exists()) return true;
+                if (existsOrBrokenLink(new java.io.File(nm, name + ".disabled"))) return true;
             }
         }
         return false;
