@@ -242,6 +242,8 @@ public class ProotBootstrap {
                 "-b", "/proc",
                 "-b", "/sys",
                 "-b", "/proc/self/fd:/dev/fd",
+                "-b", "/storage/emulated/0:/sdcard",
+                "-b", "/storage/emulated/0:/storage/emulated/0",
                 "/bin/bash", "-c", bashCommand
         };
         ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
@@ -273,6 +275,8 @@ public class ProotBootstrap {
                 "-b", "/proc",
                 "-b", "/sys",
                 "-b", "/proc/self/fd:/dev/fd",
+                "-b", "/storage/emulated/0:/sdcard",
+                "-b", "/storage/emulated/0:/storage/emulated/0",
                 "/bin/bash"
         };
         ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);

@@ -27,6 +27,13 @@ const PROMPT = [
   '■ 备选通道（Shizuku 桥，可能未就绪，需 token）：',
   '  curl -s "http://127.0.0.1:3090/exec?cmd=...&token=$(cat /root/.dsh/.bridge_token)"',
 
+  '■ App 层交互（通过 3090 桥，DSHA 专属能力）：',
+  '  T=$(cat /root/.dsh/.bridge_token)',
+  '  发通知：curl -s "http://127.0.0.1:3090/app/notify?title=任务完成&text=内容&token=$T"',
+  '  弹提示：curl -s "http://127.0.0.1:3090/app/toast?text=内容&token=$T"',
+  '  读外部文件：curl -s "http://127.0.0.1:3090/app/readfile?path=/sdcard/Download/x.txt&token=$T"',
+  '  外部存储已挂载：/sdcard（Download/DCIM 等公共目录可直接读写）',
+
   '■ ⚠️ 注意：不要用 /root/dsh-bin/adb 或裸 adb 命令——那是守卫包装脚本，会失败。',
 
   '■ 常用操作：',

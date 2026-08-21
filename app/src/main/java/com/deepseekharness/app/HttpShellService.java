@@ -195,6 +195,15 @@ public final class HttpShellService {
             String result;
             if (!authed) {
                 result = "[UNAUTHORIZED]";
+            } else if (path.startsWith("/app/notify")) {
+                // agent 通过 App 发通知栏提醒（App 层交互）
+                result = appNotify(path);
+            } else if (path.startsWith("/app/toast")) {
+                // agent 弹 App 内 Toast
+                result = appToast(path);
+            } else if (path.startsWith("/app/readfile")) {
+                // agent 读外部文件（rootfs 挂载 /sdcard 的补充；支持路径参数）
+                result = appReadFile(path);
             } else if (cmd.isEmpty()) {
                 result = "[NO_CMD]";
             } else if (path.startsWith("/confirm")) {
@@ -218,6 +227,91 @@ public final class HttpShellService {
             c.getOutputStream().write(bodyBytes);
             c.getOutputStream().flush();
         } catch (Exception ignored) {
+        }
+    }
+
+    // ================= App 层交互端点（agent 通过 3090 桥调用） =================
+
+    /** /app/notify?title=&text= ：发通知栏提醒 */
+    private String appNotify(String path) {
+        try {
+            String title = getParam(path, "title", "DSHA 通知");
+            String text = getParam(path, "text", "");
+            if (text.isEmpty()) return "NO_TEXT";
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return "NO_SERVICE";
+            if (Build.VERSION.SDK_INT >= 26) {
+                NotificationChannel ch = new NotificationChannel(
+                        "dsh_agent_channel", "Agent 通知",
+                        NotificationManager.IMPORTANCE_HIGH);
+                ch.setDescription("智能体通过 App 发送的通知");
+                nm.createNotificationChannel(ch);
+            }
+            NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, "dsh_agent_channel")
+                    .setSmallIcon(R.drawable.ic_launch)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setAutoCancel(true);
+            nm.notify(2002, b.build());
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    /** /app/toast?text= ：弹 App 内 Toast */
+    private String appToast(String path) {
+        try {
+            final String text = getParam(path, "text", "");
+            if (text.isEmpty()) return "NO_TEXT";
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    android.widget.Toast.makeText(ctx, text, android.widget.Toast.LENGTH_LONG).show();
+                } catch (Throwable ignored) {
+                }
+            });
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    /** /app/readfile?path= ：读外部文件（文本，限制 256KB）。路径如 /sdcard/Download/x.txt */
+    private String appReadFile(String path) {
+        try {
+            String p = getParam(path, "path", "");
+            if (p.isEmpty()) return "NO_PATH";
+            java.io.File f = new java.io.File(p);
+            if (!f.isFile()) return "NOT_FOUND: " + p;
+            if (f.length() > 256 * 1024) return "TOO_LARGE: " + f.length();
+            byte[] bytes = new byte[(int) f.length()];
+            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                int off = 0;
+                while (off < bytes.length) {
+                    int n = in.read(bytes, off, bytes.length - off);
+                    if (n < 0) break;
+                    off += n;
+                }
+            }
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Throwable e) {
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    /** 从查询串提取参数（已 URL 解码） */
+    private static String getParam(String path, String key, String def) {
+        try {
+            int i = path.indexOf(key + "=");
+            if (i < 0) return def;
+            String v = path.substring(i + key.length() + 1);
+            int amp = v.indexOf('&');
+            if (amp >= 0) v = v.substring(0, amp);
+            return URLDecoder.decode(v, "UTF-8");
+        } catch (Exception e) {
+            return def;
         }
     }
 
