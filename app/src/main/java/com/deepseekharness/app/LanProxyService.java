@@ -124,6 +124,26 @@ public final class LanProxyService {
                 if (nl < 0) break; // 畸形请求头：无换行直接断开，防 substring 越界
                 String reqLine = head.substring(0, nl).trim();
                 if (reqLine.isEmpty()) break;
+
+                // ===== CORS：局域网设备浏览器跨域访问（http://<手机IP>:3081 前端
+                // JS 请求 /api/... → Origin 不同）。后端（Host 已重写为 127.0.0.1）
+                // 看到 loopback 但 Origin 是局域网 IP → 被 dsh 的 Origin 校验拒绝
+                // → 浏览器 ERR_HTTP_RESPONSE_CODE_FAILURE。桥负责放行：
+                // 1) OPTIONS 预检直接回 204 + CORS 头（不转发后端）
+                // 2) 普通请求转发时附加 CORS 响应头（见 rewriteLocation 处）
+                if (reqLine.toUpperCase(java.util.Locale.ROOT).startsWith("OPTIONS ")) {
+                    String cors = "HTTP/1.1 204 No Content\r\n"
+                            + "Access-Control-Allow-Origin: *\r\n"
+                            + "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
+                            + "Access-Control-Allow-Headers: *\r\n"
+                            + "Access-Control-Max-Age: 86400\r\n"
+                            + "Content-Length: 0\r\n"
+                            + "Connection: close\r\n\r\n";
+                    cout.write(cors.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+                    cout.flush();
+                    break; // 预检结束，关连接
+                }
+
                 boolean upgrade = containsIgnoreCase(head, "Upgrade: websocket")
                         || reqLine.contains("HTTP/1.1") && containsIgnoreCase(head, "Connection: Upgrade");
 
@@ -154,8 +174,13 @@ public final class LanProxyService {
                     String rHead = new String(respHead, 0, rhLen, java.nio.charset.StandardCharsets.ISO_8859_1);
                     boolean upgraded = rHead.startsWith("HTTP/1.1 101") || containsIgnoreCase(rHead, "Upgrade: websocket");
 
-                    // 响应头转发（Location 重写防跳回 127.0.0.1）
+                    // 响应头转发（Location 重写防跳回 127.0.0.1 + 附加 CORS 头）
                     String outHead = rewriteLocation(rHead);
+                    // 附加 CORS 响应头（局域网跨域放行；没有则浏览器拦截 → ERR_HTTP_RESPONSE_CODE_FAILURE）
+                    if (!containsIgnoreCase(outHead, "Access-Control-Allow-Origin")) {
+                        outHead = outHead.replace("\r\n\r\n",
+                                "\r\nAccess-Control-Allow-Origin: *\r\n\r\n");
+                    }
                     cout.write(outHead.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
                     cout.flush();
 
