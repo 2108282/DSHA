@@ -2838,7 +2838,10 @@ public class HarnessController {
         return set;
     }
 
-    /** 扫描所有已装包（node_modules 顶层 + .pnpm），返回 package.json 声明了 dsh 字段的包名（dsh 插件的判定标准） */
+    /** 扫描所有已装包（node_modules 顶层 + .pnpm），返回 package.json 声明了 dsh 字段的包名（dsh 插件的判定标准）。
+     *  注意：禁用 = 改名 .disabled，其 package.json 读不到（实体改名后路径没了 / 链接悬空）。
+     *  所以 .disabled 条目用「.dsha-src 源记录 或 实体目录仍存在」判定为已装插件，
+     *  否则禁用后插件从列表消失（用户反馈：禁用就原地消失）。 */
     private java.util.Set<String> scanDshDeclaredPlugins() {
         java.util.Set<String> set = new java.util.LinkedHashSet<>();
         for (String d : PLUGIN_DIRS) {
@@ -2849,7 +2852,16 @@ public class HarnessController {
                 String n = f.getName();
                 String plain = n.endsWith(".disabled") ? n.substring(0, n.length() - 9) : n;
                 if (plain.startsWith(".")) continue;
-                if (hasDshField(f)) set.add(plain);
+                if (hasDshField(f)) {
+                    set.add(plain);
+                } else if (n.endsWith(".disabled")) {
+                    // 禁用条目：实体 package.json 读不到，但只要有 .dsha-src 源记录
+                    // （togglePlugin 禁用时保存）或实体目录仍在 → 仍算已装（禁用态）
+                    java.io.File srcRec = new java.io.File(proot.getRootfsDir(),
+                            "root/.dsh/profiles/web/.dsha-src-" + plain);
+                    java.io.File onDir = new java.io.File(base, plain);
+                    if (srcRec.isFile() || onDir.exists()) set.add(plain);
+                }
             }
             // .pnpm 虚拟目录
             java.io.File pnpm = new java.io.File(base, ".pnpm");
