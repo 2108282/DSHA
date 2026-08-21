@@ -2040,7 +2040,23 @@ public class HarnessController {
     }
 
     private boolean tryEnableLanBind() {
-        if (lanBindReady) return true;
+        // 缓存只在进程内有效：dsh 重装⑤/文件被覆盖后补丁可能丢失，
+        // 不能永久信任 lanBindReady —— 每次调用重新校验补丁是否还在（幂等）。
+        // 优化：上次成功且文件仍带 dsha-lan 标记 → 快速返回 true（秒级）。
+        if (lanBindReady) {
+            try {
+                // 快速校验：补丁文件是否仍被改过（找 startup.js 带 dsha-lan 标记）
+                String check = proot.execAndRead(
+                        "grep -rl 'dsha-lan' /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-app/lib/startup.js "
+                        + "2>/dev/null | head -1 || grep -rl 'dsha-lan' "
+                        + "/usr/local/lib/node_modules/@deepseek-ai/dsh-web-app/lib/startup.js 2>/dev/null | head -1");
+                if (check != null && !check.trim().isEmpty()) return true;
+                // 补丁丢了 → 重置缓存，重新打
+                lanBindReady = false;
+            } catch (Throwable ignored) {
+                return lanBindReady; // 校验失败保守放行
+            }
+        }
         try {
             String script = readAsset("lan-bind-patch.sh");
             if (script.isEmpty()) return false;
