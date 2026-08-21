@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# DSHA_ADB_SCRIPT_VERSION=7
+# DSHA_ADB_SCRIPT_VERSION=8
 """
 DSHA 设备 shell 工具（ADB 无线通道，免 Shizuku）。
 用法：
