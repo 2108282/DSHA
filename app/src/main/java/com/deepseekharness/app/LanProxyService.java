@@ -311,9 +311,19 @@ public final class LanProxyService {
         for (String l : head.split("\r?\n")) {
             if (l.isEmpty()) { sb.append("\r\n"); continue; }
             int i = l.indexOf(':');
-            if (i > 0 && l.substring(0, i).trim().equalsIgnoreCase("Host")) {
+            String key = i > 0 ? l.substring(0, i).trim() : "";
+            if (key.equalsIgnoreCase("Host")) {
                 sb.append("Host: 127.0.0.1:").append(BACKEND_PORT).append("\r\n");
                 hostDone = true;
+            } else if (key.equalsIgnoreCase("Origin")) {
+                // 关键：dsh /api trust fence 要求 Origin.host === Host（严格含端口）。
+                // 桥把 Host 重写成 loopback，但局域网浏览器的 Origin 是
+                // http://<手机IP>:3081 → 不匹配 → 403 → ERR_HTTP_RESPONSE_CODE_FAILURE。
+                // 把 Origin 也重写成 loopback 同源，让后端 trust fence 放行。
+                sb.append("Origin: http://127.0.0.1:").append(BACKEND_PORT).append("\r\n");
+            } else if (key.equalsIgnoreCase("sec-fetch-site")) {
+                // cross-site 标记被 trust fence 直接拒绝 → 改 same-origin
+                sb.append("Sec-Fetch-Site: same-origin\r\n");
             } else {
                 sb.append(l).append("\r\n");
             }
