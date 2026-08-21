@@ -30,6 +30,11 @@ def resolvable(name):
             return True
     if os.path.isfile(os.path.join(nm, name, 'package.json')):
         return True
+    # DSHA 内置插件实体（/root/dsha-mobile-adapt 等）——不在 @deepseek-ai 全局，
+    # 也不是 nm 下实体（是符号链接）。不认这里会把正常内置插件当 stale 清掉。
+    for real in ('/root/dsha-mobile-adapt', '/root/dsha-device-shell-guide'):
+        if name in ('dsh-client-ui-mobile-adapt', 'dsh-device-shell-guide') and os.path.isfile(os.path.join(real, 'package.json')):
+            return True
     pnpm = os.path.join(nm, '.pnpm')
     if os.path.isdir(pnpm):
         key = name.replace('@', '').replace('/', '+')

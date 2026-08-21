@@ -157,7 +157,13 @@ public final class HttpShellService {
             if (path.startsWith("/exec") || path.startsWith("/confirm")) {
                 int q = path.indexOf("cmd=");
                 if (q >= 0) {
-                    cmd = URLDecoder.decode(path.substring(q + 4), "UTF-8");
+                    // 关键：cmd= 值要截断到 &（查询串可能有多个参数，如
+                    // /exec?cmd=ls&token=xxx）。旧实现 substring(q+4) 取到末尾，
+                    // cmd 会变成 "ls&token=xxx" → 执行错命令！
+                    String cv = path.substring(q + 4);
+                    int amp = cv.indexOf('&');
+                    if (amp >= 0) cv = cv.substring(0, amp);
+                    cmd = URLDecoder.decode(cv, "UTF-8");
                 }
             }
             // 鉴权：token 必须匹配（通过 ?token= 或 X-Token header）

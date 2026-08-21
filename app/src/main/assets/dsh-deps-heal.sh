@@ -21,7 +21,11 @@ DSH_DIR="$(npm root -g 2>/dev/null)/@deepseek-ai/dsh"
 [ -d "$DSH_DIR" ] || { echo "NO_DSH: 未找到全局 dsh 包（环境可能未装⑤）"; exit 0; }
 
 NM="$DSH_DIR/node_modules/@deepseek-ai"
-MAIN_VER=$(python3 - "$DSH_DIR" "$NM" <<'PY' 2>/dev/null | tail -1
+# 注意：python 读的是 package.json 文件（不是目录！）——传 $DSH_DIR/package.json，
+# 否则 json.load(open(目录)) 抛 IsADirectoryError，被 2>/dev/null 吞掉 →
+# 永远输出 HEAL_OK 假成功、从不补装缺失子包。
+DSH_PKG="$DSH_DIR/package.json"
+MAIN_VER=$(python3 - "$DSH_PKG" "$NM" <<'PY' 2>/dev/null | tail -1
 import json, os, sys
 pkg = json.load(open(sys.argv[1]))
 print(pkg.get('version', ''))
@@ -41,7 +45,7 @@ while IFS= read -r line; do
     MISSING_SPEC="$MISSING_SPEC $name@$spec"
     MISSING_LIST="$MISSING_LIST $name"
   fi
-done < <(python3 - "$DSH_DIR" "$NM" <<'PY' 2>/dev/null
+done < <(python3 - "$DSH_PKG" "$NM" <<'PY' 2>/dev/null
 import json, os, sys
 pkg = json.load(open(sys.argv[1]))
 nm = sys.argv[2]
