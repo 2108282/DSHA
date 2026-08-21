@@ -3832,6 +3832,33 @@ public class HarnessController {
         return r == null ? "无输出" : r;
     }
 
+    /** 解析 GitHub 仓库链接为插件信息（不安装，供市场列表展示）：
+     *  返回 String[3] {npm名, owner/repo, 仓库URL}；无法解析返回 null。
+     *  链接格式：https://github.com/owner/repo、owner/repo、带 .git 后缀等。 */
+    public String[] parseGithubUrl(String url) {
+        try {
+            String u = url == null ? "" : url.trim();
+            if (u.isEmpty()) return null;
+            String core = u;
+            int g = core.indexOf("github.com/");
+            if (g >= 0) core = core.substring(g + "github.com/".length());
+            int q = core.indexOf('?'); if (q >= 0) core = core.substring(0, q);
+            int h = core.indexOf('#'); if (h >= 0) core = core.substring(0, h);
+            while (core.endsWith("/")) core = core.substring(0, core.length() - 1);
+            core = core.replaceFirst("\\.git$", "");
+            int slash = core.indexOf('/');
+            if (slash <= 0) return null;
+            String owner = core.substring(0, slash).trim();
+            String repo = core.substring(slash + 1).trim();
+            int r2 = repo.indexOf('/');
+            if (r2 >= 0) repo = repo.substring(0, r2);
+            if (owner.isEmpty() || repo.isEmpty()) return null;
+            return new String[]{null, owner + "/" + repo, "https://github.com/" + owner + "/" + repo};
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
     /** 从 GitHub 仓库链接安装插件（插件市场顶部入口）：
      *  解析 URL → owner/repo → 拉 package.json 拿 npm 名 → 安装（npm 名找不到回退 github: 方式）。
      *  返回执行输出。链接格式支持：https://github.com/owner/repo、owner/repo、带 .git 后缀等。 */
@@ -3841,11 +3868,11 @@ public class HarnessController {
             String core = u;
             int g = core.indexOf("github.com/");
             if (g >= 0) core = core.substring(g + "github.com/".length());
-            // 去掉 git 后缀 / 尾部斜杠 / 多余路径 / 查询参数 / 锚点
-            core = core.replaceFirst("\\\\.git$", "");
+            // 去掉 git 后缀 / 尾部斜杠 / 多余路径 / 查询参数 / 锚点（先去尾部斜杠再 .git）
             int q = core.indexOf('?'); if (q >= 0) core = core.substring(0, q);
             int h = core.indexOf('#'); if (h >= 0) core = core.substring(0, h);
             while (core.endsWith("/")) core = core.substring(0, core.length() - 1);
+            core = core.replaceFirst("\\\\.git$", "");
             int slash = core.indexOf('/');
             if (slash <= 0) return "无法解析仓库链接：" + url + "\n格式应为 https://github.com/owner/repo";
             String owner = core.substring(0, slash).trim();

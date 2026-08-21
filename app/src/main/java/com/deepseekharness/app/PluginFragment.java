@@ -69,29 +69,73 @@ public class PluginFragment extends Fragment {
         TextView btnInstalled = view.findViewById(R.id.btnInstalled);
         TextView btnSort = view.findViewById(R.id.btnSort);
         android.widget.EditText searchBox = view.findViewById(R.id.pluginSearch);
-        // ===== GitHub 仓库链接安装（市场顶部）=====
+        // ===== GitHub 仓库链接解析（市场顶部）：输入链接 → 列表切换为解析结果 =====
         final android.widget.EditText githubInput = view.findViewById(R.id.githubInstallInput);
         TextView btnGithubInstall = view.findViewById(R.id.btnGithubInstall);
         if (githubInput != null && btnGithubInstall != null) {
-            java.util.function.Consumer<String> doGithubInstall = (link) -> {
+            // 当前解析结果缓存（null=非解析模式）
+            final java.util.concurrent.atomic.AtomicReference<String[]> parsedRef =
+                    new java.util.concurrent.atomic.AtomicReference<>(null);
+            // 防抖 handler（输入停顿 600ms 才解析）
+            final android.os.Handler debounceHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+            final Runnable[] debounceTask = new Runnable[1];
+            java.util.function.Consumer<String> doParse = (link) -> {
                 String u = link == null ? "" : link.trim();
                 if (u.isEmpty()) {
-                    Toast.makeText(requireContext(), "请粘贴 GitHub 仓库链接", Toast.LENGTH_SHORT).show();
+                    // 清空 → 恢复市场列表
+                    parsedRef.set(null);
+                    adapter.setData(new ArrayList<>(), true);
+                    if (mode == Mode.MARKET) showMarket();
+                    status.setText("已恢复插件市场");
                     return;
                 }
-                status.setText("正在解析并安装 " + u + " …");
+                String[] info = c.parseGithubUrl(u);
+                if (info == null) {
+                    status.setText("无法解析链接：" + u);
+                    return;
+                }
+                status.setText("正在解析 " + info[1] + " …");
+                // 后台拉 npm 名（fetchNpmName 走网络）
                 new Thread(() -> {
-                    String out = c.installFromGithubUrl(u);
-                    runOnUiThreadSafely(() -> showInstallResult(u, u, out));
+                    String npmName = c.fetchNpmName(
+                            info[1].substring(0, info[1].indexOf('/')),
+                            info[1].substring(info[1].indexOf('/') + 1));
+                    if (npmName != null) info[0] = npmName;
+                    runOnUiThreadSafely(() -> {
+                        if (githubInput.getText().toString().trim().isEmpty()) return; // 已被清空
+                        parsedRef.set(info);
+                        // 列表显示解析结果（单条）。it[2]=owner（startAutoInstall 用它），
+                        // it[6]=完整仓库 URL（详情/复制用）
+                        String owner2 = info[1].substring(0, info[1].indexOf('/'));
+                        String repo2 = info[1].substring(info[1].indexOf('/') + 1);
+                        java.util.List<String[]> one = new java.util.ArrayList<>();
+                        one.add(new String[]{info[1], "0", owner2, "⏳待定",
+                                npmName != null ? npmName : "仅GitHub仓库", "来自仓库链接：\n" + info[2], info[2]});
+                        adapter.setData(one, true);
+                        status.setText(npmName != null
+                                ? "✅ 解析成功：" + npmName + "（点「安装」装到已装插件）"
+                                : "⚠️ 未发布 npm，仅支持 GitHub 仓库方式安装");
+                    });
                 }).start();
             };
-            btnGithubInstall.setOnClickListener(v -> doGithubInstall.accept(githubInput.getText().toString()));
-            // 输入框回车触发
+            // 输入监听（防抖）
+            githubInput.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+                @Override public void afterTextChanged(android.text.Editable s) {
+                    if (debounceTask[0] != null) debounceHandler.removeCallbacks(debounceTask[0]);
+                    debounceTask[0] = () -> doParse.accept(githubInput.getText().toString());
+                    debounceHandler.postDelayed(debounceTask[0], 600);
+                }
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            });
+            // 按钮 = 立即解析
+            btnGithubInstall.setOnClickListener(v -> doParse.accept(githubInput.getText().toString()));
+            // 回车 = 立即解析
             githubInput.setOnEditorActionListener((v, actionId, event) -> {
                 if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_GO
                         || actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE
                         || actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
-                    doGithubInstall.accept(githubInput.getText().toString());
+                    doParse.accept(githubInput.getText().toString());
                     return true;
                 }
                 return false;

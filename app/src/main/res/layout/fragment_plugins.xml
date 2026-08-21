@@ -139,7 +139,7 @@
             android:layout_height="40dp"
             android:layout_weight="1"
             android:background="@drawable/bg_input"
-            android:hint="粘贴 GitHub 仓库链接安装插件（如 https://github.com/owner/repo）"
+            android:hint="复制插件链接自动解析（如 https://github.com/owner/repo）"
             android:imeOptions="actionGo"
             android:inputType="textUri"
             android:paddingStart="12dp"
