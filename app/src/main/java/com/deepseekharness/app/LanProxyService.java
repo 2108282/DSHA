@@ -29,7 +29,8 @@ public final class LanProxyService {
     private static volatile boolean running;
     /** 连接处理线程池（限制并发，防线程耗尽） */
     private static java.util.concurrent.ExecutorService pool;
-    /** 供 Location 重写用的局域网 IP（可随时刷新） */
+    /** 启动时缓存局域网 IP（仅用于日志/就绪提示；Location 重写已改为实时取
+     *  getLanAddress()，WiFi 切换后重定向地址依然正确，不依赖本缓存） */
     private static volatile String lanIp = "";
     /** rootfs 日志路径（终端可 tail /root/dsh-lan.log 查看桥状态） */
     private static volatile String logPath = "";

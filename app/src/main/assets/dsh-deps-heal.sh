@@ -63,23 +63,25 @@ echo "HEAL_MISSING:$MISSING_LIST"
 echo "HEAL_SPEC:$MISSING_SPEC"
 cd "$DSH_DIR" || exit 0
 
-# 2) 逐个补装：优先主包精确版本（镜像缓存坏时最稳），失败回退声明范围
-# 注意 scoped 包名以 @ 开头：用「最后一个 @」切分（%%@* 会把开头的 @ 也切掉，错！）
+# 2) 逐个补装：优先主包精确版本（镜像缓存坏时最稳），失败回退声明范围。
+#    --no-save + --no-package-lock：只补缺失实体，不改主包 package.json / lockfile，
+#    避免 reify 重排现有依赖树（弄坏其他子包）。
+#    注意 scoped 包名以 @ 开头：用「最后一个 @」切分（%%@* 会把开头的 @ 也切掉，错！）
 for line in $MISSING_SPEC; do
   name="${line%@*}"
   spec="${line##*@}"
   echo ">> 补装 $name（精确 $MAIN_VER，回退 $spec）"
   ok=0
   if [ -n "$MAIN_VER" ]; then
-    timeout 180 npm install --no-save --ignore-scripts \
+    timeout 180 npm install --no-save --no-package-lock --ignore-scripts \
       --registry=https://registry.npmmirror.com "$name@$MAIN_VER" >/tmp/dsh-heal.log 2>&1 && ok=1
-    [ "$ok" = "0" ] && timeout 180 npm install --no-save --ignore-scripts \
+    [ "$ok" = "0" ] && timeout 180 npm install --no-save --no-package-lock --ignore-scripts \
       --registry=https://registry.npmjs.org "$name@$MAIN_VER" >>/tmp/dsh-heal.log 2>&1 && ok=1
   fi
   if [ "$ok" = "0" ]; then
-    timeout 180 npm install --no-save --ignore-scripts \
+    timeout 180 npm install --no-save --no-package-lock --ignore-scripts \
       --registry=https://registry.npmmirror.com "$name@$spec" >>/tmp/dsh-heal.log 2>&1 && ok=1
-    [ "$ok" = "0" ] && timeout 180 npm install --no-save --ignore-scripts \
+    [ "$ok" = "0" ] && timeout 180 npm install --no-save --no-package-lock --ignore-scripts \
       --registry=https://registry.npmjs.org "$name@$spec" >>/tmp/dsh-heal.log 2>&1 && ok=1
   fi
   if [ "$ok" = "1" ]; then

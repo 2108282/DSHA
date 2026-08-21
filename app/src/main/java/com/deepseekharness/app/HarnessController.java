@@ -2110,16 +2110,20 @@ public class HarnessController {
     }
 
     // ================= 启动 / 停止 =================
+    // ================= 版本与自愈常量 =================
     // 注意：GUARD_VERSION 必须与 assets/rootfs-confirm-install.sh 末尾写入的
     // /root/dsh-bin/.version 数字一致！曾出现 8 vs 9 不匹配 → 每次启动都强制
     // rm -rf 重装守卫（幂等但白干 + 可能打断进行中的命令）。
     private static final String GUARD_VERSION = "9";
     /** 步骤⑥整体版本号：内置插件/补丁/极简 preset 任一变更时 +1，
-     *  启动时对比 rootfs 标记，不符则自动重跑⑥（防"改了不生效"）。 */
+     *  启动时对比 rootfs 标记（step6.version），不符则自动重跑⑥（防"改了不生效"）。
+     *  由 installGuard 末尾的 runStep 写入（先删 marker 后写版本 → 中途失败
+     *  版本未写，下次启动版本不一致仍会重跑，自愈闭环不中断）。 */
     private static final String STEP6_VERSION = "3";
     /** 内置插件资产版本：mobile-adapt / device-shell-guide 的 client.js 等
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
-     *  必须靠版本标记强制删 marker 重注入，老用户才能拿到新资产）。 */
+     *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
+     *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
     private static final String BUILTIN_ASSET_VERSION = "1";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
@@ -2401,17 +2405,20 @@ public class HarnessController {
      *  npm 查询失败静默跳过（网络/镜像问题），版本比较只升不降。 */
     private String queryLatestDshRc() {
         try {
-            // 节流：24h 内不重复查（避免每次启动都打 registry）
+            // 节流：24h 内不重复查（避免每次启动都打 registry）。
+            // 注意：只在「真正执行了 npm 查询」后更新时间戳——网络故障/命令失败
+            // 时不更新，下次启动仍会重试（否则一次失败会哑 24h）。
             final SharedPreferences prefs =
                     appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
             long last = prefs.getLong("last_dsh_rc_check_ts", 0);
             if (System.currentTimeMillis() - last < 24L * 3600 * 1000) return null;
-            prefs.edit().putLong("last_dsh_rc_check_ts", System.currentTimeMillis()).apply();
             // npmmirror 优先（国内快），失败回退官方源；只取 dist-tags.next（最新 rc）
             String r = proot.execAndRead(
                     "timeout 20 npm view @deepseek-ai/dsh dist-tags.next --registry=https://registry.npmmirror.com 2>/dev/null "
                     + "|| timeout 20 npm view @deepseek-ai/dsh dist-tags.next --registry=https://registry.npmjs.org 2>/dev/null");
             if (r == null || r.startsWith("ERROR") || r.contains("NONE")) return null;
+            // 查询真正执行且有输出（哪怕没解析出 rc）→ 记时间戳
+            prefs.edit().putLong("last_dsh_rc_check_ts", System.currentTimeMillis()).apply();
             String v = r.trim();
             // 只认 rc.X 格式（0.1.0-rc.8 / rc.9 等），防 dist-tags 是 stable 版本号
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("rc\\.(\\d+)").matcher(v);
