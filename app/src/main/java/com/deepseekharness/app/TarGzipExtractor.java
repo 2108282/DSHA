@@ -123,11 +123,18 @@ public final class TarGzipExtractor {
 
             File out = new File(dest, name);
 
-            // 路径安全校验：普通模式拦一切可疑字符；宽松模式（恢复备份）只拦真正的
-            // 路径穿越（绝对路径 / .. / NUL），文件名里的逗号/引号等正常放行
+            // 路径安全校验：
+            // 普通模式（下载包）拦一切可疑（含 .. 子串、引号、逗号）；
+            // 宽松模式（恢复用户备份）只拦【真正的路径穿越】：
+            //   绝对路径 / 开头 ../ 或包含 /../ 的段 / NUL
+            //   文件名里的 ".."（如 v1.2..3.md）不是穿越，必须放行——
+            //   否则用户备份里含双点的正常文件名恢复失败（"非法文件条目"）
+            boolean traversal = name.startsWith("/")
+                    || name.startsWith("../") || name.contains("/../") || name.endsWith("/..")
+                    || name.contains("\u0000");
             if (name == null || name.isEmpty()
-                    || name.startsWith("/") || name.contains("..") || name.contains("\u0000")
-                    || (!lenient && (name.contains("\\\"") || name.contains(",")))) {
+                    || traversal
+                    || (!lenient && (name.contains("..") || name.contains("\\\"") || name.contains(",")))) {
                 throw new IOException("预构建包损坏（非法文件条目: " + safeName(name)
                         + "），请重新下载或改用「直连源码构建」");
             }
