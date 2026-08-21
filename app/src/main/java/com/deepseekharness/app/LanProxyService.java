@@ -138,9 +138,13 @@ public final class LanProxyService {
                     OutputStream bout = back.getOutputStream();
                     bout.write(headBytes);
                     bout.flush();
-                    // 请求体透传（Content-Length 部分）
+                    // 请求体透传（Content-Length 部分；chunked 请求体也按 chunked 转发）
                     long bodyLen = contentLength(rewritten);
-                    if (bodyLen > 0) pipeBytes(cin, bout, bodyLen);
+                    if (bodyLen > 0) {
+                        pipeBytes(cin, bout, bodyLen);
+                    } else if (containsIgnoreCase(head, "Transfer-Encoding: chunked")) {
+                        pipeChunked(cin, bout);
+                    }
 
                     // 4. 读响应头
                     byte[] respHead = new byte[65536];
@@ -292,16 +296,18 @@ public final class LanProxyService {
         return sb.toString();
     }
 
-    /** 响应头里 Location 重写：127.0.0.1:3080 → 局域网IP:3081（防跳回本机） */
+    /** 响应头里 Location 重写：127.0.0.1:3080 → 局域网IP:3081（防跳回本机）。
+     *  每次实时取 IP（WiFi 切换后 IP 变化也能正确重写，不缓存旧值）。 */
     private static String rewriteLocation(String head) {
         if (!containsIgnoreCase(head, "Location:")) return head;
+        String ip = HarnessController.getLanAddress();
+        if (ip == null || ip.isEmpty()) ip = "127.0.0.1";
         StringBuilder sb = new StringBuilder();
         for (String l : head.split("\r?\n")) {
             if (l.isEmpty()) { sb.append("\r\n"); continue; }
             int i = l.indexOf(':');
             if (i > 0 && l.substring(0, i).trim().equalsIgnoreCase("Location")) {
                 String v = l.substring(i + 1).trim();
-                String ip = lanIp.isEmpty() ? "127.0.0.1" : lanIp;
                 v = v.replace("http://127.0.0.1:" + BACKEND_PORT, "http://" + ip + ":" + LAN_PORT);
                 v = v.replace("http://localhost:" + BACKEND_PORT, "http://" + ip + ":" + LAN_PORT);
                 sb.append("Location: ").append(v).append("\r\n");

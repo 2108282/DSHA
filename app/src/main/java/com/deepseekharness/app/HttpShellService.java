@@ -48,6 +48,8 @@ public final class HttpShellService {
 
     private ServerSocket server;
     private volatile boolean running;
+    /** 连接处理线程池（请求可能阻塞等用户确认 60s，必须并发处理，否则一个确认卡死全部请求） */
+    private java.util.concurrent.ExecutorService pool;
     /** 鉴权 token（随机生成，rootfs 内 agent 通过它访问；外部网络无法到达 127.0.0.1） */
     private static volatile String authToken = "";
     /** token 持久化位置（rootfs 内 agent 可读） */
@@ -92,6 +94,12 @@ public final class HttpShellService {
         running = true;
         instance = this;
         ensureToken();
+        // 固定小线程池：请求可能挂起等用户确认（60s），串行处理会互相阻塞
+        pool = java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
+            Thread t = new Thread(r, "http-shell");
+            t.setDaemon(true);
+            return t;
+        });
         Thread t = new Thread(() -> {
             try {
                 // 安全：仅绑定 127.0.0.1（loopback），外部网络无法访问！
@@ -103,14 +111,15 @@ public final class HttpShellService {
                 while (running) {
                     try {
                         Socket client = server.accept();
-                        handle(client);
+                        client.setSoTimeout(120_000);
+                        pool.execute(() -> handle(client));
                     } catch (IOException e) {
                         if (!running) break;
                     }
                 }
             } catch (IOException ignored) {
             }
-        }, "http-shell");
+        }, "http-shell-accept");
         t.setDaemon(true);
         t.start();
     }
@@ -121,6 +130,10 @@ public final class HttpShellService {
         try {
             if (server != null) server.close();
         } catch (IOException ignored) {
+        }
+        if (pool != null) {
+            pool.shutdownNow();
+            pool = null;
         }
         // 释放挂起的确认（默认拒绝）
         CountDownLatch l = pendingLatch;

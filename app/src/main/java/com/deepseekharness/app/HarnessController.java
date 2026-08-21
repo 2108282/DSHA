@@ -265,6 +265,11 @@ public class HarnessController {
         stepCacheTs = -1;
     }
 
+    /** 供 UI 层（如卸载环境后）强制刷新步骤状态 */
+    public void invalidateSteps() {
+        invalidateStepCache();
+    }
+
     // ===== 下载源自选（测速 → 弹窗等待用户选择） =====
     private final Object sourceLock = new Object();
     private volatile boolean awaitingSource = false;
@@ -477,6 +482,19 @@ public class HarnessController {
         return getApiKey();
     }
 
+    /** shell 单引号转义：API key 等用户输入嵌入 shell 命令时防注入/防破坏
+     *  （key 含 ' 时未转义会导致启动命令断裂，Web 起不来） */
+    private static String escShell(String s) {
+        if (s == null) return "";
+        return s.replace("'", "'\\''");
+    }
+
+    /** 写入 .env 时清理非法字符（换行/控制符会破坏 env 文件解析） */
+    private static String cleanEnvValue(String s) {
+        if (s == null) return "";
+        return s.replaceAll("[\\r\\n\\u0000]", "").trim();
+    }
+
     public ProotBootstrap getProot() { return proot; }
 
     /** 是否已安装 deepseek-harness（跟随自定义工作区路径；RC6 模式检查 dsh 命令） */
@@ -604,6 +622,33 @@ public class HarnessController {
         }
     }
 
+    /**
+     * 校验并补装 dsh 全局包缺失的 @deepseek-ai/* 子包依赖。
+     * 背景（dsh-issue-report）：npmmirror 镜像元数据缓存不一致导致 rc.8 部分子包
+     * （dsh-client-ui-slots / dsh-client-ui-primitives 等）声明了依赖但安装时未解析，
+     * 服务端插件 require 时 Cannot find module。幂等：全就绪秒回（只读检查）。
+     * 在 IO 线程执行（起 proot 子进程，不能卡主线程）。
+     */
+    public void maybeHealDshDeps() {
+        IO.execute(() -> {
+            try {
+                if (!proot.isInstalled()) return;
+                String script = readAsset("dsh-deps-heal.sh");
+                if (script == null || script.isEmpty()) return;
+                java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-deps-heal.sh");
+                f.getParentFile().mkdirs();
+                java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
+                String r = proot.execAndRead("bash /root/dsha-deps-heal.sh; rm -f /root/dsha-deps-heal.sh");
+                if (r != null && (r.contains("HEAL_OK") || r.contains("HEAL_DONE"))) {
+                    android.util.Log.i("DSHA", "dsh 子包依赖自愈: " + (r.contains("HEAL_DONE") ? "已补装" : "已就绪"));
+                } else if (r != null && r.contains("HEAL_PARTIAL")) {
+                    android.util.Log.w("DSHA", "dsh 子包依赖部分缺失（构建期包，可忽略）: " + r.trim());
+                }
+            } catch (Throwable ignored) {
+            }
+        });
+    }
+
     public void maybePrewarmWeb() {
         try {
             ensureWebUiDegrade(); // 每次启动前置自愈（幂等秒回，防插件失败卡启动）
@@ -701,12 +746,31 @@ public class HarnessController {
         }
         // 重算：不持锁！proot 子进程很慢（1~3 秒），持锁会把主线程 peek 一起卡死
         boolean r1 = proot.isInstalled();
-        boolean r2 = toolsInstalled();
+        // 优化：②④⑤⑥ 四项 rootfs 检查合并为【单次 proot 进程】执行，
+        // 原来各起一个子进程（串行 4~12s），现在 1~3s 搞定
+        String merged = proot.execAndRead(
+                "A=$(command -v curl >/dev/null 2>&1 && command -v git >/dev/null 2>&1 " +
+                "&& command -v python3 >/dev/null 2>&1 && command -v make >/dev/null 2>&1 " +
+                "&& command -v gcc >/dev/null 2>&1 && command -v xz >/dev/null 2>&1 && echo 1 || echo 0); " +
+                "B=$(command -v pnpm >/dev/null 2>&1 && command -v node-gyp >/dev/null 2>&1 && echo 1 || echo 0); " +
+                "C=$(command -v dsh >/dev/null 2>&1 && V=$(dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 | grep -oE '[0-9]+') " +
+                "&& [ -n \"$V\" ] && [ \"$V\" -ge 8 ] && echo 1 || echo 0); " +
+                "D=$(test -f /root/dsh-guard.sh && test -d /root/dsh-bin && test -f /root/dsh-bin/.version && echo 1 || echo 0); " +
+                "echo R=$A$B$C$D");
+        // 解析 R=ABCD：不用 matches() 正则（全匹配会被 echo 末尾换行坑到，之前
+        // 因此②④⑤⑥全显示未安装）——直接用 indexOf + substring 取 4 位
+        boolean[] bits = new boolean[4];
+        int ri = merged == null ? -1 : merged.indexOf("R=");
+        if (ri >= 0 && ri + 6 <= merged.length()) {
+            String b = merged.substring(ri + 2, ri + 6);
+            for (int i = 0; i < 4; i++) bits[i] = b.charAt(i) == '1';
+        }
+        boolean r2 = bits[0];
+        boolean r4 = bits[1];
+        boolean r5 = bits[2];
+        boolean r6 = bits[3];
         boolean r3 = new File(proot.getRootfsDir(), "usr/local/bin/node").exists()
                 && new File(proot.getRootfsDir(), "usr/local/bin/npm").exists();
-        boolean r4 = pnpmExtrasReady();
-        boolean r5 = isHarnessReady();
-        boolean r6 = guardReady();
         synchronized (stepCache) {
             stepCache[STEP_ROOTFS] = r1;
             stepCache[STEP_TOOLS] = r2;
@@ -873,11 +937,7 @@ public class HarnessController {
             ensureDeviceShellGuide();
         } catch (Throwable ignored) {
         }
-        // 极简模式设备引导：minimal preset 的 persona 是 complete:true，
-        // 覆盖官方 preset 让极简模式 agent 也能用 ADB 设备操作
-        try {
-        } catch (Throwable ignored) {
-        }
+        // 极简模式设备引导已并入 device-shell-guide 插件（home patch 覆盖官方极简 bash 描述）
         // 内置插件快照：只录实体目录（排除符号链接=用户安装插件），安装完成时最干净基线
         // 快照缺失时才生成（后续沿用；想重扫可删 /root/dsha-builtin.txt）
         runStep("生成内置插件快照", 98,
@@ -1036,6 +1096,17 @@ public class HarnessController {
     private void installHarnessRc6() throws Exception {
         requireRootfs();
         requireTools();
+        // 先写入依赖自愈脚本（安装末尾的"校验 dsh 子包依赖完整性"步骤要用；
+        // 若安装中途失败，启动时的 maybeHealDshDeps 也会重写）
+        try {
+            String heal = readAsset("dsh-deps-heal.sh");
+            if (heal != null && !heal.isEmpty()) {
+                java.io.File hf = new java.io.File(proot.getRootfsDir(), "root/dsha-deps-heal.sh");
+                hf.getParentFile().mkdirs();
+                java.nio.file.Files.write(hf.toPath(), heal.getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (Throwable ignored) {
+        }
         setProgress("安装 deepseek-harness 最新 RC（npm 全局）", 91);
         runStep("RC 安装环境准备", 92,
                 // 先写 registry 再追加 allow-scripts：顺序反了会把前者 printf 覆盖掉
@@ -1082,6 +1153,11 @@ public class HarnessController {
                 "(cd \"$npty_dir\" && node-gyp rebuild > /tmp/rc6-gyp.log 2>&1) || " +
                 "{ echo 'node-pty 编译失败：'; tail -10 /tmp/rc6-gyp.log 2>&1; exit 1; }; fi; " +
                 "ls \"$npty_dir/build/Release/pty.node\" >/dev/null 2>&1 && echo 'pty.node 已就绪' && command -v dsh && echo 'RC 安装完成'");
+        // 依赖完整性自愈：npmmirror 元数据不一致可能导致 @deepseek-ai/* 子包
+        // 声明了但没装上（Cannot find module）——安装时强制校验补装一次
+        runStep("校验 dsh 子包依赖完整性", 99,
+                "if [ -f /root/dsha-deps-heal.sh ]; then bash /root/dsha-deps-heal.sh; rm -f /root/dsha-deps-heal.sh; " +
+                "else echo 'dsha-deps-heal.sh 未就位，跳过'; fi; tail -3 /root/dsh-deps-heal.log 2>/dev/null || true");
         setProgress("RC 安装完成", 100);
     }
 
@@ -1275,7 +1351,7 @@ public class HarnessController {
         runStep("构建 pnpm run build", 97, "cd /root/" + wd + " && pnpm run build");
 
         runStep("写入 API key", 99,
-                "cd /root/" + wd + " && printf 'DEEPSEEK_API_KEY=%s\\n' '" + apiKey + "' > .env");
+                "cd /root/" + wd + " && printf 'DEEPSEEK_API_KEY=%s\\n' '" + escShell(apiKey) + "' > .env");
         setProgress("deepseek-harness 构建完成", 99);
     }
 
@@ -1474,7 +1550,7 @@ public class HarnessController {
         boolean lanReady = lan && tryEnableLanBind();
         StringBuilder sb = new StringBuilder();
         sb.append("export DSH_HOME=/root/.dsh && ")
-          .append("export DEEPSEEK_API_KEY='").append(effectiveApiKey()).append("' && ")
+          .append("export DEEPSEEK_API_KEY='").append(escShell(effectiveApiKey())).append("' && ")
           .append("export DSH_PERMISSION_MODE=").append(getPermissionMode()).append(" && ")
           // 危险命令确认：agent 在 rootfs 内的 rm/dd 等操作需用户确认
           // PATH 包装器 + bash 工具 lib 补丁加载守卫（双保险；不设 BASH_ENV——它会污染
@@ -1572,7 +1648,7 @@ public class HarnessController {
             String restart =
                     "#!/bin/bash\n" +
                     "export DSH_HOME=/root/.dsh\n" +
-                    "export DEEPSEEK_API_KEY='" + effectiveApiKey() + "'\n" +
+                    "export DEEPSEEK_API_KEY='" + escShell(effectiveApiKey()) + "'\n" +
                     "export DSH_PERMISSION_MODE=" + getPermissionMode() + "\n" +
                     "export DSH_CONFIRM=1\n" +
                     // 工作区目录先于 cd 创建：RC6 模式没有源码树，不建目录的话
@@ -1962,10 +2038,12 @@ public class HarnessController {
     }
 
     private String startWebTermuxCommand() {
+        // key 嵌在双引号里：转义 \ 和 "（防特殊字符破坏 Termux 命令）
+        String k = effectiveApiKey().replace("\\", "\\\\").replace("\"", "\\\"");
         StringBuilder sb = new StringBuilder();
         sb.append("export PATH=$HOME/dsh-bin:$PATH && ")
           .append("cd ~/").append(getWorkdir()).append(" && ")
-          .append("export DEEPSEEK_API_KEY=\"").append(effectiveApiKey()).append("\" && ")
+          .append("export DEEPSEEK_API_KEY=\"").append(k).append("\" && ")
           .append("export DSH_PERMISSION_MODE=\"").append(getPermissionMode()).append("\" && ")
           .append("nohup node apps/cli/lib/bin.js web > ~/dsh-web.log 2>&1 & echo started");
         return sb.toString();
@@ -1991,10 +2069,13 @@ public class HarnessController {
     }
 
     // ================= 启动 / 停止 =================
-    private static final String GUARD_VERSION = "8";
+    // 注意：GUARD_VERSION 必须与 assets/rootfs-confirm-install.sh 末尾写入的
+    // /root/dsh-bin/.version 数字一致！曾出现 8 vs 9 不匹配 → 每次启动都强制
+    // rm -rf 重装守卫（幂等但白干 + 可能打断进行中的命令）。
+    private static final String GUARD_VERSION = "9";
     /** 步骤⑥整体版本号：内置插件/补丁/极简 preset 任一变更时 +1，
      *  启动时对比 rootfs 标记，不符则自动重跑⑥（防"改了不生效"）。 */
-    private static final String STEP6_VERSION = "1";
+    private static final String STEP6_VERSION = "2";
 
     /** 确保 rootfs 内危险命令确认包装器已部署（版本不匹配则强制重装，幂等） */
     public void ensureDangerGuard() {
@@ -2095,10 +2176,22 @@ public class HarnessController {
                 }, "dsha-web-drain");
                 drainer.setDaemon(true);
                 drainer.start();
-                // 等待端口就绪（最多 60s），就绪即释放 busy（安装页按钮恢复）
-                if (waitWebPortUp(60_000)) {
-                    setState("", 100, "Web UI 已启动", "", false);
-                }
+                // 端口等待放独立线程：IO 是单线程执行器，若在此阻塞 60s，
+                // stopWeb/restartWeb/install 全部排队卡死（用户点停止没反应）
+                Thread waiter = new Thread(() -> {
+                    try {
+                        if (waitWebPortUp(60_000)) {
+                            setState("", 100, "Web UI 已启动", "", false);
+                        } else {
+                            // 超时：释放 busy（否则一直卡灰，靠 10 分钟自愈太慢）
+                            setState("", 0, "", "Web UI 启动超时（60s 端口未就绪）\n"
+                                    + "可稍后点「重启」，或查看启动页日志尾部", false);
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }, "dsha-web-portwait");
+                waiter.setDaemon(true);
+                waiter.start();
             } catch (Throwable e) {
                 setState("", 0, "", errMsg("启动出错：", e), false);
             } finally {
@@ -2217,74 +2310,69 @@ public class HarnessController {
 
     /** 启动时对比步骤⑥版本标记：rootfs 的 step6.version 与当前 STEP6_VERSION 不符
      *  → 自动重跑⑥（内置插件/补丁/极简 preset 有更新时自动适配，无需用户手动）。
-     *  幂等、后台静默。 */
+     *  幂等、后台静默。注意：版本检查（execAndRead 起 proot）丢 IO 线程，不能在主线程跑。 */
     public void maybeRefreshStep6() {
-        try {
-            if (!proot.isInstalled()) return;
-            String r = proot.execAndRead("cat /root/.dsh/step6.version 2>/dev/null || echo NONE");
-            if (r != null && r.trim().equals(STEP6_VERSION)) return; // 版本一致
-            android.util.Log.i("DSHA", "步骤⑥版本变化（rootfs=" + (r == null ? "?" : r.trim())
-                    + " 期望=" + STEP6_VERSION + "），自动重跑⑥");
-            IO.execute(() -> {
-                try {
-                    if (tryBeginBusy()) {
-                        runInstallStep(STEP_GUARD);
-                        setState("", 100, "已自动更新安全守卫与内置插件（⑥）", "", false);
-                    }
-                } catch (Throwable e) {
-                    android.util.Log.w("DSHA", "自动重跑⑥失败（不影响使用）: " + e);
-                    setState("", 0, "", "", false);
+        IO.execute(() -> {
+            try {
+                if (!proot.isInstalled()) return;
+                String r = proot.execAndRead("cat /root/.dsh/step6.version 2>/dev/null || echo NONE");
+                if (r != null && r.trim().equals(STEP6_VERSION)) return; // 版本一致
+                android.util.Log.i("DSHA", "步骤⑥版本变化（rootfs=" + (r == null ? "?" : r.trim())
+                        + " 期望=" + STEP6_VERSION + "），自动重跑⑥");
+                if (tryBeginBusy()) {
+                    runInstallStep(STEP_GUARD);
+                    setState("", 100, "已自动更新安全守卫与内置插件（⑥）", "", false);
                 }
-            });
-        } catch (Throwable ignored) {
-        }
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "自动重跑⑥失败（不影响使用）: " + e);
+                setState("", 0, "", "", false);
+            }
+        });
     }
 
     /** 启动时检测 dsh 新版本：rc 号变化 → 自动【重装⑤（安装新版 dsh）+ 重跑⑥（守卫/补丁适配）】。
-     *  先装新版再适配，一气呵成；幂等、后台静默；失败不影响启动。 */
+     *  先装新版再适配，一气呵成；幂等、后台静默；失败不影响启动。
+     *  版本检查（execAndRead）丢 IO 线程，避免主线程卡顿（起 proot 子进程 1~3s）。 */
     public void maybeAutoReinstallGuardOnDshUpdate() {
-        try {
-            if (!proot.isInstalled()) return;
-            // 对比【已安装版本】与【npm 最新 rc】：
-            // 已装版本（dsh --version）记录在 last_dsh_rc；
-            // 最新 rc 从 npm @next 解析（npmmirror 镜像），失败则跳过本次检查
-            String installed = proot.execAndRead(
-                    "command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 || echo NONE");
-            if (installed == null || installed.contains("NONE") || installed.startsWith("ERROR")) return;
-            String installedRc = installed.trim();
-            final SharedPreferences prefs =
-                    appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
-            String last = prefs.getString("last_dsh_rc", "");
-            // 首次检测（last 为空）只记录不触发：用户当前已是某 rc 不代表"刚升级"，
-            // 避免刚装好就莫名重装⑤
-            if (last.isEmpty()) {
-                prefs.edit().putString("last_dsh_rc", installedRc).apply();
-                return;
-            }
-            if (installedRc.equals(last)) return; // 已处理过这个版本
-            // 升级前快照：记录旧版本（回滚/诊断用）
-            if (!last.isEmpty()) {
-                prefs.edit().putString("prev_dsh_rc", last).apply();
-            }
-            prefs.edit().putString("last_dsh_rc", installedRc).apply();
-            // 版本变化：后台【先⑤装最新 rc → 再⑥适配】
-            android.util.Log.i("DSHA", "检测到 dsh 版本变化 " + last + " → " + installedRc + "，自动重装⑤+⑥");
-            IO.execute(() -> {
-                try {
-                    if (tryBeginBusy()) {
-                        // ⑤：重装最新 RC（npm @next 跟随官方，npmmirror 同步滞后时回退官方源）
-                        runInstallStep(STEP_HARNESS);
-                        // ⑥：守卫/补丁/内置插件/极简preset 适配新版
-                        runInstallStep(STEP_GUARD);
-                        setState("", 100, "已自动升级 dsh 并完成适配（⑤+⑥）", "", false);
-                    }
-                } catch (Throwable e) {
-                    android.util.Log.w("DSHA", "自动升级⑤+⑥失败（不影响使用）: " + e);
-                    setState("", 0, "", "", false);
+        IO.execute(() -> {
+            try {
+                if (!proot.isInstalled()) return;
+                // 对比【已安装版本】与【npm 最新 rc】：
+                // 已装版本（dsh --version）记录在 last_dsh_rc；
+                // 最新 rc 从 npm @next 解析（npmmirror 镜像），失败则跳过本次检查
+                String installed = proot.execAndRead(
+                        "command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 || echo NONE");
+                if (installed == null || installed.contains("NONE") || installed.startsWith("ERROR")) return;
+                String installedRc = installed.trim();
+                final SharedPreferences prefs =
+                        appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
+                String last = prefs.getString("last_dsh_rc", "");
+                // 首次检测（last 为空）只记录不触发：用户当前已是某 rc 不代表"刚升级"，
+                // 避免刚装好就莫名重装⑤
+                if (last.isEmpty()) {
+                    prefs.edit().putString("last_dsh_rc", installedRc).apply();
+                    return;
                 }
-            });
-        } catch (Throwable ignored) {
-        }
+                if (installedRc.equals(last)) return; // 已处理过这个版本
+                // 升级前快照：记录旧版本（回滚/诊断用）
+                if (!last.isEmpty()) {
+                    prefs.edit().putString("prev_dsh_rc", last).apply();
+                }
+                prefs.edit().putString("last_dsh_rc", installedRc).apply();
+                // 版本变化：后台【先⑤装最新 rc → 再⑥适配】
+                android.util.Log.i("DSHA", "检测到 dsh 版本变化 " + last + " → " + installedRc + "，自动重装⑤+⑥");
+                if (tryBeginBusy()) {
+                    // ⑤：重装最新 RC（npm @next 跟随官方，npmmirror 同步滞后时回退官方源）
+                    runInstallStep(STEP_HARNESS);
+                    // ⑥：守卫/补丁/内置插件/极简preset 适配新版
+                    runInstallStep(STEP_GUARD);
+                    setState("", 100, "已自动升级 dsh 并完成适配（⑤+⑥）", "", false);
+                }
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "自动升级⑤+⑥失败（不影响使用）: " + e);
+                setState("", 0, "", "", false);
+            }
+        });
     }
 
     /** 启动时全链路自动体检+自愈（打开即用，用户无感）：
@@ -2444,7 +2532,7 @@ public class HarnessController {
         File env = rootfsFile("root/" + getWorkdir() + "/.env");
         if (env.getParentFile() != null) env.getParentFile().mkdirs();
         try (java.io.FileOutputStream out = new java.io.FileOutputStream(env)) {
-            out.write(("DEEPSEEK_API_KEY=" + effectiveApiKey() + "\n")
+            out.write(("DEEPSEEK_API_KEY=" + cleanEnvValue(effectiveApiKey()) + "\n")
                     .getBytes(StandardCharsets.UTF_8));
         }
     }
@@ -2485,6 +2573,11 @@ public class HarnessController {
         } catch (Exception e) {
             return "1.1.0";
         }
+    }
+
+    /** 供 UI 层组装 User-Agent 用（如插件市场 star 刷新请求） */
+    public String getVersionNameForUa() {
+        return getVersionName();
     }
 
 
@@ -2712,10 +2805,11 @@ public class HarnessController {
                 java.io.File off = new java.io.File(dir, name + ".disabled");
                 if (enable && off.exists()) {
                     String src = readPluginSrc(name);
-                    // 源记录缺失：内置插件（dsha- 前缀，file: 挂载）兜底回 file: 路径，
-                    // 普通插件兜底 "*"（包体在磁盘即可加载）
+                    // 源记录缺失：内置插件（dsh-client-ui-mobile-adapt / dsh-device-shell-guide，
+                    // 注意名字不带 dsha- 前缀！旧判断 name.startsWith("dsha-") 永远不命中）
+                    // 兜底回 file: 路径；普通插件兜底 "*"（包体在磁盘即可加载）
                     if (src == null || src.isEmpty() || "null".equals(src)) {
-                        src = name.startsWith("dsha-")
+                        src = isBuiltinPlugin(name)
                                 ? "file:/root/dsha-" + name
                                 : "*";
                     }
@@ -2760,13 +2854,22 @@ public class HarnessController {
                 "EOF\n";
     }
 
+    /** 判断是否为 App 内置插件（名称不带 dsha- 前缀！）。用于启用时依赖源兜底。 */
+    private boolean isBuiltinPlugin(String name) {
+        return "dsh-client-ui-mobile-adapt".equals(name)
+                || "dsh-device-shell-guide".equals(name);
+    }
+
     /** 读取曾禁用的插件原安装源（启用时还原到 package.json） */
     private String readPluginSrc(String name) {
         try {
             java.io.File f = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/.dsha-src-" + name);
             if (!f.isFile()) return "";
             try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(new java.io.FileInputStream(f), java.nio.charset.StandardCharsets.UTF_8))) {
-                return br.readLine() == null ? "" : br.readLine(); // 补：读一行
+                // 源记录只有一行；旧实现 `readLine()==null ? "" : readLine()` 会读两行
+                // 导致永远返回第二行（通常 null）→ 启用时依赖源恢复失败，只能走 "*" 兜底
+                String line = br.readLine();
+                return line == null ? "" : line.trim();
             }
         } catch (Exception e) {
             return "";

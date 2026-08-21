@@ -13,7 +13,14 @@ public class ShellService extends IShellService.Stub {
     @Override
     public String exec(String cmd) {
         try {
-            Process p = new ProcessBuilder("sh", "-c", cmd).redirectErrorStream(true).start();
+            ProcessBuilder pb = new ProcessBuilder("sh", "-c", cmd).redirectErrorStream(true);
+            // UserService 进程由 Shizuku 托管，env 可能缺失常用 PATH：
+            // 显式兜底（否则 pm/dumpsys 等找不到）
+            java.util.Map<String, String> env = pb.environment();
+            String oldPath = env.get("PATH");
+            env.put("PATH", (oldPath == null || oldPath.isEmpty() ? "" : oldPath + ":")
+                    + "/system/bin:/system/xbin:/sbin:/vendor/bin");
+            Process p = pb.start();
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
             int n;
