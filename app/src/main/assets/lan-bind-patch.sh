@@ -7,9 +7,14 @@ set -u
 TARGETS=""
 FAST_OK=0
 # ===== 1) 快速路径（最常见部署形态直接检查，O(1)） =====
+# 快速路径覆盖两种 npm 布局：
+#   a) 顶层展开（老版/源码）：/usr/local/lib/node_modules/@deepseek-ai/dsh-web-app/...
+#   b) rc.8 全局嵌套（实测）：/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-app/...
 for c in \
   /usr/local/lib/node_modules/@deepseek-ai/dsh-web-app/lib/startup.js \
   /usr/local/lib/node_modules/@deepseek-ai/dsh-web-app/lib/types/startup.js \
+  /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-app/lib/startup.js \
+  /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-app/lib/types/startup.js \
   /root/deepseek-harness/packages/bundle/web-app/lib/startup.js \
   /root/deepseek-harness/packages/bundle/web-app/lib/types/startup.js; do
   if [ -f "$c" ] && grep -q "intentionally not supported" "$c"; then
@@ -21,7 +26,7 @@ done
 # ===== 2) 全盘兜底（仅当快速路径未命中；用拒绝文案精确定位，兼容 RC6/源码） =====
 if [ "$FAST_OK" -eq 0 ]; then
   TARGETS="$TARGETS $(grep -rl "intentionally not supported" \
-    /usr/local/lib/node_modules/@deepseek-ai /usr/local/bin --include='*.js' 2>/dev/null | head -10)"
+    /usr/local/lib/node_modules/@deepseek-ai /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai /usr/local/bin --include='*.js' 2>/dev/null | head -20)"
   for wd in /root/deepseek-harness /root/*/ ; do
     for base in "$wd"packages/bundle/web-app/lib "$wd"apps/cli/lib "$wd"node_modules/@deepseek-ai; do
       [ -d "$base" ] && TARGETS="$TARGETS $(grep -rl "intentionally not supported" "$base" \

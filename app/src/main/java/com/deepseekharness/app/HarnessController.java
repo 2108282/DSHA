@@ -1682,7 +1682,10 @@ public class HarnessController {
     public void ensureWatchdogFiles() {
         boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false);
-        writeWatchdogFiles(runCoreCommand(lan), parsePort());
+        // 与 startWebCommand 一致：只有补丁真的打上（lanReady=true）才用 0.0.0.0，
+        // 否则看门狗重启命令带 --host 0.0.0.0 会被官方拒绝 → 重启失败
+        boolean lanReady = lan && tryEnableLanBind();
+        writeWatchdogFiles(runCoreCommand(lanReady), parsePort());
     }
 
     /**
