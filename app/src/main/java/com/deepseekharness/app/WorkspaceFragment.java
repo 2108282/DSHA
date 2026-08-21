@@ -60,6 +60,7 @@ public class WorkspaceFragment extends Fragment {
         Button clearBtn = view.findViewById(R.id.workspace_clear);
         Button backupBtn = view.findViewById(R.id.workspace_backup);
         Button restoreBtn = view.findViewById(R.id.workspace_restore);
+        Button cleanSessionsBtn = view.findViewById(R.id.workspace_clean_sessions);
         Button resetBtn = view.findViewById(R.id.workspace_reset);
         SubPageBack.bind(this, view);
 
@@ -132,6 +133,27 @@ public class WorkspaceFragment extends Fragment {
 
         restoreBtn.setOnClickListener(v ->
                 pickBackup.launch(new String[]{"*/*"}));
+
+        // 清理损坏会话（dsh 双进程写导致 seq 重复损坏，官方 #420）
+        if (cleanSessionsBtn != null) {
+            cleanSessionsBtn.setOnClickListener(v -> new AlertDialog.Builder(requireContext())
+                    .setTitle("清理损坏会话？")
+                    .setMessage("将把无法解码/极小的会话文件移到 .dsh/corrupt-backup/\n"
+                            + "（不删除，可恢复）。用于修复「历史加载失败 / resume failed」。\n\n"
+                            + "建议先停止 Web UI 再清理。")
+                    .setPositiveButton("清理", (d, w) -> {
+                        Toast.makeText(requireContext(), "正在清理损坏会话…", Toast.LENGTH_SHORT).show();
+                        new Thread(() -> {
+                            String r = c.cleanCorruptSessions();
+                            if (getActivity() != null) {
+                                getActivity().runOnUiThread(() -> Toast.makeText(requireContext(),
+                                        r, Toast.LENGTH_LONG).show());
+                            }
+                        }).start();
+                    })
+                    .setNegativeButton("取消", null)
+                    .show());
+        }
     }
 
     /** 执行备份并展示结果（独立方法，供直接备份/停止后备份复用） */

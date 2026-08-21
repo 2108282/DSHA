@@ -81,6 +81,8 @@ public class MainActivity extends AppCompatActivity {
         HarnessController.get(this).maybeHealDshDeps();
         // 空 pets 目录清理（deepseek-pet 插件空目录会崩插件树）
         HarnessController.get(this).maybeCleanEmptyPets();
+        // 会话损坏自愈（中途强杀导致 SQLite 写一半 → 历史加载失败）
+        HarnessController.get(this).maybeHealSessionCorruption();
         // 步骤⑥版本对比：内置插件/补丁有更新时自动重跑（无需手动重装⑥）
         HarnessController.get(this).maybeRefreshStep6();
         // 崩溃自愈提示：上次异常退出时读 crash.log 告知原因（不阻塞使用）

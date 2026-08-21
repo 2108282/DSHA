@@ -157,7 +157,9 @@ public class HarnessController {
             destroyAllWebProcesses();
             proot.execAndRead(stopWebCommand());
             if (!waitPortClosed(5000)) {
-                proot.execAndRead("pkill -9 -f node 2>/dev/null; pkill -9 -f 'dsh web' 2>/dev/null; "
+                proot.execAndRead("pkill -TERM -f node 2>/dev/null; pkill -TERM -f 'dsh web' 2>/dev/null; "
+                        + "pkill -TERM -f 'bin.js' 2>/dev/null; sleep 3; "
+                        + "pkill -9 -f node 2>/dev/null; pkill -9 -f 'dsh web' 2>/dev/null; "
                         + "pkill -9 -f 'bin.js' 2>/dev/null; sleep 1; echo done");
                 waitPortClosed(5000);
             }
@@ -1774,7 +1776,12 @@ public class HarnessController {
                     "    if [ \"$FAIL\" -ge 3 ]; then\n" +
                     "      echo \"$(date '+%F %T') WebUI 已失联，自动重启\" >> /root/dsh-watchdog.log\n" +
                     "      pkill -f 'bin.js web' 2>/dev/null; pkill -f 'dsh web' 2>/dev/null\n" +
-                    "      sleep 2\n" +
+                    "      # 关键：等端口彻底关闭再重启（旧进程可能还在写 SQLite，\n" +
+                    "      # 立即重启会双进程写同一会话 → seq 重复 → 会话损坏（官方#420）\n" +
+                    "      for i in $(seq 1 20); do\n" +
+                    "        curl -s -m 2 -o /dev/null http://127.0.0.1:$PORT/ 2>/dev/null && sleep 1 || break\n" +
+                    "      done\n" +
+                    "      sleep 1\n" +
                     "      nohup bash /root/dsh-cmd.txt >> /root/dsh-watchdog-restart.log 2>&1 &\n" +
                     "      FAIL=0\n" +
                     "    fi\n" +
@@ -2206,8 +2213,14 @@ public class HarnessController {
     private String stopWebCommand() {
         // 兼容源码模式（bin.js web）与 RC6 模式（dsh web）
         // 先杀看门狗，否则 watchdog 会把 WebUI 又拉起来
+        // 优雅退出：先 SIGTERM（让 dsh 优雅 flush SQLite 会话），等 3s 再 SIGKILL 兜底。
+        // 直接 SIGKILL 会导致 SQLite 写一半 → 会话损坏（用户反馈：
+        // "历史加载失败 SessionPersistenceCorruptionError"）
         return "pkill -f dsh-watchdog.sh 2>/dev/null; "
-             + "pkill -f 'bin.js web' 2>/dev/null; pkill -f 'dsh web' 2>/dev/null; echo stopped";
+             + "pkill -TERM -f 'bin.js web' 2>/dev/null; pkill -TERM -f 'dsh web' 2>/dev/null; "
+             + "sleep 3; "
+             + "pkill -9 -f 'bin.js web' 2>/dev/null; pkill -9 -f 'dsh web' 2>/dev/null; "
+             + "echo stopped";
     }
 
     private String statusCommand() {
@@ -2364,7 +2377,8 @@ public class HarnessController {
                     destroyAllWebProcesses();
                     proot.execAndRead(stopWebCommand());
                     if (!waitPortClosed(4000)) {
-                        proot.execAndRead("pkill -9 -f node 2>/dev/null; pkill -9 -f 'bin.js' 2>/dev/null; sleep 1; echo done");
+                        proot.execAndRead("pkill -TERM -f node 2>/dev/null; pkill -TERM -f 'bin.js' 2>/dev/null; "
+                                + "sleep 3; pkill -9 -f node 2>/dev/null; pkill -9 -f 'bin.js' 2>/dev/null; sleep 1; echo done");
                         waitPortClosed(4000);
                     }
                 }
@@ -2600,6 +2614,26 @@ public class HarnessController {
 
 
 
+    /** 清理损坏会话（供工作区页按钮调用）：
+     *  把「无法解码/极小」的会话移到 .dsh/corrupt-backup/（不删除可恢复）。
+     *  返回处理结果文案。 */
+    public String cleanCorruptSessions() {
+        try {
+            if (!proot.isInstalled()) return "环境未就绪";
+            String out = proot.execAndRead(
+                    "mkdir -p /root/.dsh/corrupt-backup; "
+                    + "find /root/.dsh/sessions -name 'session.jsonl.zstd' -size -100c 2>/dev/null "
+                    + "| while read f; do "
+                    + "d=$(dirname \"$f\"); id=$(basename \"$d\"); "
+                    + "mkdir -p /root/.dsh/corrupt-backup/\"$id\"; "
+                    + "mv \"$f\" /root/.dsh/corrupt-backup/\"$id\"/ 2>/dev/null && echo \"已隔离: $id\"; done");
+            if (out == null || !out.contains("已隔离")) return "未发现损坏会话（<100字节的极小文件）";
+            return out.trim();
+        } catch (Throwable e) {
+            return "清理失败: " + e.getMessage();
+        }
+    }
+
     /** 启动时自愈：删除空的 /root/.codex/pets（deepseek-pet 插件把空目录当错误
      *  → 整个插件树加载失败）。老版本预创建过空目录，需清理。幂等、后台静默。 */
     public void maybeCleanEmptyPets() {
@@ -2609,6 +2643,28 @@ public class HarnessController {
                 proot.execAndRead(
                         "[ -d /root/.codex/pets ] && [ -z \"$(ls -A /root/.codex/pets 2>/dev/null)\" ] "
                         + "&& rmdir /root/.codex/pets 2>/dev/null; echo cleaned");
+            } catch (Throwable ignored) {
+            }
+        });
+    }
+
+    /** 会话损坏自愈：启动时检测 dsh-web.log 里的 SessionPersistenceCorruptionError
+     *  （中途强杀导致 SQLite 写一半损坏，用户反馈"历史加载失败"）。
+     *  检测到 → 备份损坏 .db 并删除（dsh 重建），老会话丢失但 App 可用。
+     *  配合停止命令 SIGTERM 优雅退出（减少写入中断）。幂等、后台静默。 */
+    public void maybeHealSessionCorruption() {
+        IO.execute(() -> {
+            try {
+                if (!proot.isInstalled()) return;
+                String script = readAsset("heal-session.sh");
+                if (script == null || script.isEmpty()) return;
+                java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-heal-session.sh");
+                f.getParentFile().mkdirs();
+                java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
+                String r = proot.execAndRead("bash /root/dsha-heal-session.sh; rm -f /root/dsha-heal-session.sh");
+                if (r != null && r.contains("SESSION_HEALED")) {
+                    android.util.Log.w("DSHA", "会话损坏自愈：已备份并重建会话库（旧对话可能丢失）");
+                }
             } catch (Throwable ignored) {
             }
         });
