@@ -572,14 +572,17 @@ public class HarnessController {
                     if (name.equals(bundles.optString(i, "").trim())) { inBundles = true; break; }
                 }
                 boolean dirOk = new java.io.File(proot.getRootfsDir(), "root" + real.substring(4)).isDirectory();
-                if (dirOk && !inBundles) {
+                // 用户主动禁用（.disabled 存在）→ 跳过补回（尊重用户）
+                boolean userDisabled = new java.io.File(proot.getRootfsDir(),
+                        "root/.dsh/profiles/web/node_modules/" + name + ".disabled").exists();
+                if (dirOk && !userDisabled && !inBundles) {
                     bundles.put(name);
                     changed = true;
                     android.util.Log.w("DSHA", "内置插件 " + name + " 被清掉，已自动补回");
                 }
                 java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
                         "root/.dsh/profiles/web/node_modules/" + name);
-                if (dirOk && !nmLink.exists()) {
+                if (dirOk && !userDisabled && !nmLink.exists()) {
                     try {
                         java.nio.file.Files.createSymbolicLink(nmLink.toPath(), java.nio.file.Paths.get(real));
                     } catch (Throwable ignored) {
@@ -1810,6 +1813,14 @@ public class HarnessController {
             java.io.File realDir = new java.io.File(proot.getRootfsDir(), "root/dsha-device-shell-guide");
             java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
                     "root/.dsh/profiles/web/node_modules/" + NAME);
+            // 用户主动禁用（开关 → .disabled）：尊重用户，不再自动补回！
+            // （否则启动时 ensureDeviceShellGuide 发现"注册缺失"会把禁用覆盖掉，
+            //   表现就是"内置插件不能禁用"）
+            if (new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/node_modules/" + NAME + ".disabled").exists()) {
+                android.util.Log.i("DSHA", "device-shell-guide 已被用户禁用，跳过自动补回");
+                return;
+            }
             java.io.File marker = new java.io.File(proot.getRootfsDir(), "root/dsha-device-shell-guide-installed");
             // 版本自愈：marker 存在但插件版本旧（缺 cordis.entry 等修复）→ 删除 marker 强制重注入
             if (marker.exists()) {
