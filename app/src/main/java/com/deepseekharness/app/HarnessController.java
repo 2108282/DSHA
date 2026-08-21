@@ -2923,6 +2923,17 @@ public class HarnessController {
         return false;
     }
 
+    /** 文件条目是否存在（含悬空符号链接）：
+     *  File.exists() 跟随链接，实体缺失时悬空链接返回 false —— 但禁用/启用
+     *  状态由链接本身（条目）决定，悬空也要识别（否则「操作失败」）。 */
+    private boolean existsOrBrokenLink(java.io.File f) {
+        try {
+            if (java.nio.file.Files.isSymbolicLink(f.toPath())) return true;
+        } catch (Throwable ignored) {
+        }
+        return f.exists();
+    }
+
     /** 读取内置插件快照（rootfs /root/dsha-builtin.txt，安装时生成）；缺失时用内置兜底名单 */
     private java.util.Set<String> readBuiltinSnapshot() {
         java.util.Set<String> set = null;
@@ -2949,7 +2960,9 @@ public class HarnessController {
         return set;
     }
 
-    /** 启用/禁用插件：禁用=从 dependencies+bundles 移除声明并改名；启用=还原（避开引号嵌套：用 heredoc 临时脚本） */
+    /** 启用/禁用插件：禁用=从 dependencies+bundles 移除声明并改名；启用=还原（避开引号嵌套：用 heredoc 临时脚本）。
+     *  注意：禁用/启用状态由链接条目决定（含悬空链接）——实体缺失时 File.exists()
+     *  返回 false 会导致「操作失败」，必须用 existsOrBrokenLink 判断。 */
     public boolean togglePlugin(String name, boolean enable) {
         try {
             final String PKG = "/root/.dsh/profiles/web/package.json";
@@ -2958,7 +2971,7 @@ public class HarnessController {
                 if (!dir.isDirectory()) continue;
                 java.io.File on = new java.io.File(dir, name);
                 java.io.File off = new java.io.File(dir, name + ".disabled");
-                if (enable && off.exists()) {
+                if (enable && existsOrBrokenLink(off)) {
                     String src = readPluginSrc(name);
                     // 源记录缺失：内置插件（dsh-client-ui-mobile-adapt / dsh-device-shell-guide，
                     // 注意名字不带 dsha- 前缀！旧判断 name.startsWith("dsha-") 永远不命中）
@@ -2976,13 +2989,21 @@ public class HarnessController {
                             "rm -f /root/dsha-toggle.js && " +
                             "mv '" + d + "/" + name + ".disabled' '" + d + "/" + name + "' && echo OK");
                     return r != null && r.contains("OK");
-                } else if (!enable && on.exists()) {
+                } else if (!enable) {
+                    // 禁用：不依赖 on 存在（链接缺失/悬空也执行）——
+                    // 移除声明 + 改名；改名失败（链接缺失）则 touch .disabled 占位，
+                    // 让 ensureDeviceShellGuide/ensureBuiltinBundles 识别「用户已禁用」跳过补回。
                     String r = proot.execAndRead(
                             toggleScript() +
                             "node /root/dsha-toggle.js '" + PKG + "' '" + name + "' off && " +
                             "rm -f /root/dsha-toggle.js && " +
-                            "mv '" + d + "/" + name + "' '" + d + "/" + name + ".disabled' && echo OK");
-                    return r != null && r.contains("OK");
+                            "( mv '" + d + "/" + name + "' '" + d + "/" + name + ".disabled' 2>/dev/null " +
+                            "|| touch '" + d + "/" + name + ".disabled' ) && echo OK");
+                    boolean ok = r != null && r.contains("OK");
+                    if (!ok) {
+                        android.util.Log.w("DSHA", "禁用插件失败 " + name + " 输出: " + (r == null ? "null" : r));
+                    }
+                    return ok;
                 }
             }
         } catch (Exception ignored) {
