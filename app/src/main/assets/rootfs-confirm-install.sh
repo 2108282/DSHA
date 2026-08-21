@@ -7,11 +7,16 @@ mkdir -p "$DSH_BIN"
 
 cat > /root/dsh-confirm.sh <<'EOF'
 #!/bin/bash
+# 用法：dsh-confirm.sh [--force] <命令...>
+#   --force：所有命令都弹确认（设备 shell 报备用；守卫开时）
+#   不带：仅危险命令确认（守卫内部行为由 3090 桥 confirmEnabled 决定）
+FORCE=0
+if [ "$1" = "--force" ]; then FORCE=1; shift; fi
 CMD="$*"
 # 3090 桥有 token 鉴权（防其他 App 冒充 agent 弹确认框）：
 # 必须带 X-Token 头（= /root/.dsh/.bridge_token 内容），否则一律 [UNAUTHORIZED] 被拒
 TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
-RES=$(curl -s -m 65 -G "http://127.0.0.1:3090/confirm" --data-urlencode "cmd=$CMD" -H "X-Token: $TOKEN" 2>/dev/null)
+RES=$(curl -s -m 65 -G "http://127.0.0.1:3090/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
 if [ $? -eq 0 ] && [ -n "$RES" ]; then
   echo "$RES" | grep -q YES && exit 0 || exit 1
 fi

@@ -27,7 +27,14 @@ def main():
             port = int(args[1])
         args = args[2:]
     # --su：以 root 身份执行（需手机已 root；未 root 会提示）
+    # 安全：必须用户已在 App「配置」页勾选「允许 root shell」才会生成
+    # /root/.dsh/allow-root-shell 标记；未授权一律拒绝（防止 agent 擅自提权）
     if args and args[0] == '--su':
+        if not os.path.exists('/root/.dsh/allow-root-shell'):
+            print('ROOT_NOT_ALLOWED: 未授权 root shell')
+            print('请在 App「配置」页勾选「允许 root shell」并保存后重试')
+            print('[EXIT=1]')
+            sys.exit(1)
         use_su = True
         args = args[1:]
     if not args:
@@ -62,6 +69,21 @@ def main():
         print('[EXIT=1]')
         sys.exit(1)
 
+    # ===== 执行前报备确认（用户要求：用 shell 必须先说明理由，用户确认后才执行）=====
+    # 通过 3090 桥 /confirm 弹窗（App 前台）或通知（后台）让用户确认；
+    # 命令里 # 后的注释作为「理由」展示。未确认/超时默认拒绝。
+    # 只读命令（getprop/dumpsys 等以只读开头）直接放行，减少打扰。
+    confirm_reason = cmd.split('#', 1)[1].strip() if '#' in cmd else ''
+    is_readonly = cmd.strip().split(' ', 1)[0] in (
+        'getprop', 'dumpsys', 'logcat', 'ls', 'cat', 'id', 'ps', 'df', 'free',
+        'pm', 'settings', 'wm', 'input', 'getevent', 'uptime', 'date', 'echo')
+    if not is_readonly:
+        ok = request_confirm(cmd, confirm_reason)
+        if not ok:
+            print('USER_REJECTED: 用户未确认该命令（报备被拒）')
+            print('[EXIT=1]')
+            sys.exit(1)
+
     try:
         signer = PythonRSASigner(open(KEYPUB, 'rb').read().strip(), open(KEY, 'rb').read())
         priv_pem = open(KEY, 'rb').read()  # PKCS#8 PEM，作为 TLS 客户端私钥（0.5.0 库：传给 connect()）
@@ -80,6 +102,27 @@ def main():
     sys.stdout.write(out if out.endswith('\n') else out + '\n')
     print('[EXIT=0]')
 
+
+def request_confirm(cmd, reason=''):
+    """请求用户确认执行设备命令（3090 桥 /confirm，App 弹窗/通知）。
+    返回 True=允许。失败/超时默认拒绝（安全优先）。"""
+    import urllib.request
+    import urllib.parse
+    token = ''
+    try:
+        with open('/root/.dsh/.bridge_token') as f:
+            token = f.read().strip()
+    except Exception:
+        pass
+    # 命令 + 理由一起发给确认弹窗
+    display = cmd if not reason else cmd + '\n\n[理由] ' + reason
+    try:
+        url = 'http://127.0.0.1:3090/confirm?cmd=' + urllib.parse.quote(display) + '&token=' + urllib.parse.quote(token) + '&force=1'
+        with urllib.request.urlopen(url, timeout=65) as r:
+            body = r.read().decode('utf-8', 'ignore')
+            return '"YES"' in body
+    except Exception:
+        return False
 
 def discover_conn_port(timeout_s=5):
     """mDNS 自动发现无线调试连接端口（_adb-tls-connect）。找到返回端口，失败返回 0。"""

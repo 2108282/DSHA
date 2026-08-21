@@ -95,6 +95,13 @@
             android:text="危险 Shell 操作需确认（删除/格式化/卸载/重启等）" />
 
         <CheckBox
+            android:id="@+id/config_root_shell"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="允许 root shell（agent 可用 --su 提权；默认关，手动授权）"
+            android:textSize="13sp" />
+
+        <CheckBox
             android:id="@+id/config_check_update"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

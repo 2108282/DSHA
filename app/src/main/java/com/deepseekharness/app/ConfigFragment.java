@@ -30,7 +30,7 @@ public class ConfigFragment extends Fragment {
     private HarnessController c;
     private EditText apiKeyEdit, portEdit, modelEdit;
     private Spinner modeSpinner;
-    private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb;
+    private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb, rootShellCb;
     private EditText autoBackupEdit;
     private Button saveBtn;
     private TextView repoLink;
@@ -57,6 +57,7 @@ public class ConfigFragment extends Fragment {
         autoBackupEdit = view.findViewById(R.id.config_auto_backup);
         geckoCb = view.findViewById(R.id.config_gecko_core);
         adbCb = view.findViewById(R.id.config_adb_enable);
+        rootShellCb = view.findViewById(R.id.config_root_shell);
         saveBtn = view.findViewById(R.id.config_save);
         repoLink = view.findViewById(R.id.config_repo_link);
         SubPageBack.bind(this, view);
@@ -171,6 +172,50 @@ public class ConfigFragment extends Fragment {
         // 已由 pollAdbStatus 每秒轮询替代（保留空方法避免调用点改动）
     }
 
+    /** root shell 授权标记：授权 → 写 /root/.dsh/allow-root-shell（adb-shell.py 检查）；
+     *  取消 → 删标记。rootfs 未就绪时静默。 */
+    private void applyRootShellMark() {
+        try {
+            final boolean allow = c.isRootShellAllowed();
+            new Thread(() -> {
+                try {
+                    if (c.getProot().isInstalled()) {
+                        if (allow) {
+                            c.getProot().execAndRead(
+                                    "mkdir -p /root/.dsh && touch /root/.dsh/allow-root-shell && echo ok");
+                        } else {
+                            c.getProot().execAndRead("rm -f /root/.dsh/allow-root-shell && echo ok");
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }, "root-shell-mark").start();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 守卫开关标记：confirm_shell=true → 写 /root/.dsh/confirm-shell-enabled
+     *  （adb-shell 包装据此对设备命令弹确认）；false → 删标记（只口头报备）。 */
+    private void applyConfirmShellMark() {
+        try {
+            final boolean enabled = confirmShellCb != null && confirmShellCb.isChecked();
+            new Thread(() -> {
+                try {
+                    if (c.getProot().isInstalled()) {
+                        if (enabled) {
+                            c.getProot().execAndRead(
+                                    "mkdir -p /root/.dsh && touch /root/.dsh/confirm-shell-enabled && echo ok");
+                        } else {
+                            c.getProot().execAndRead("rm -f /root/.dsh/confirm-shell-enabled && echo ok");
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }, "confirm-shell-mark").start();
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** 构建「输入配对码」通知卡（RemoteInput，参考 Shizuku 无线配对交互）：
      *  通知栏直接输入 6 位码 → 点「输码配对」→ AdbPairReceiver 后台完成配对 → 结果推回。 */
     private void showAdbPairNotification() {
@@ -230,6 +275,7 @@ public class ConfigFragment extends Fragment {
         modeSpinner.setAdapter(adapter);
 
         loadConfig();
+        if (rootShellCb != null) rootShellCb.setChecked(c.isRootShellAllowed());
 
         saveBtn.setOnClickListener(v -> {
             c.setApiKey(apiKeyEdit.getText().toString().trim());
@@ -246,6 +292,9 @@ public class ConfigFragment extends Fragment {
                     .putBoolean(DeviceBridgeService.PREF_ADB, adbCb != null && adbCb.isChecked())
                     .putInt("auto_backup_launches", parseAutoBackup())
                     .apply();
+            c.setRootShellAllowed(rootShellCb != null && rootShellCb.isChecked());
+            applyRootShellMark();
+            applyConfirmShellMark();
             DeviceBridgeService.apply(requireContext());
             refreshAdbStatus();
             Toast.makeText(requireContext(),

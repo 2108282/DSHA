@@ -208,9 +208,10 @@ public final class HttpShellService {
                 result = "[NO_CMD]";
             } else if (path.startsWith("/confirm")) {
                 // rootfs 内包装器请求的确认：只弹窗，不执行
-                result = (confirmEnabled() && DangerShellGuard.isDangerous(cmd))
-                        ? (requestUserConfirm(cmd) ? "YES" : "NO")
-                        : "YES";
+                // force=1（adb-shell 报备）→ 所有命令都确认；否则仅危险命令
+                boolean force = path.contains("force=1");
+                boolean needConfirm = force || (confirmEnabled() && DangerShellGuard.isDangerous(cmd));
+                result = needConfirm ? (requestUserConfirm(cmd) ? "YES" : "NO") : "YES";
             } else if (DangerShellGuard.isDangerous(cmd) && confirmEnabled()) {
                 result = awaitConfirm(cmd);
             } else {
