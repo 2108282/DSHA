@@ -19,6 +19,8 @@ import java.util.function.Supplier;
 
 public class SettingsFragment extends Fragment {
 
+    private HarnessController c;
+
     private static final TabOption[] TAB_OPTIONS = {
             new TabOption("安装", "分步安装 rootfs / 工具 / Node / harness", InstallFragment::new),
             new TabOption("配置", "API key · 端口 · 模型 · 沙箱模式", ConfigFragment::new),
@@ -34,6 +36,7 @@ public class SettingsFragment extends Fragment {
 
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        c = HarnessController.get(requireContext());
         LinearLayout tabs = view.findViewById(R.id.settings_tabs);
         for (int i = 0; i < TAB_OPTIONS.length; i++) {
             if (i > 0) {
@@ -131,6 +134,8 @@ public class SettingsFragment extends Fragment {
                     Toast.makeText(requireContext(), "当前 v" + cur + " 已是最新", Toast.LENGTH_SHORT).show();
                     return;
                 }
+                // 更新前自动存档：检测到新版先静默备份一次（同一版本只备份一次）
+                c.backupBeforeUpdate(tag);
                 new AlertDialog.Builder(requireContext())
                         .setTitle("发现新版本 " + tag)
                         .setMessage("当前版本 v" + cur + "\n是否前往下载？")

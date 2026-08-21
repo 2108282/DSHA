@@ -212,7 +212,8 @@ public class InstallFragment extends Fragment {
         uninstallBtn.setEnabled(!running);
         // 步骤状态：主线程先用缓存立即画（零耗时不卡），后台线程补算最新值再刷
         boolean[] cached = c.peekStepCache();
-        refreshSteps(cached);
+        boolean[] cachedUp = c.peekUpdatableCache();
+        refreshSteps(cached, cachedUp);
         refreshStatus(cached);
         if (stepCheckRunning.getAndSet(true)) return;
         new Thread(() -> {
@@ -229,7 +230,7 @@ public class InstallFragment extends Fragment {
             act.runOnUiThread(() -> {
                 stepCheckRunning.set(false);
                 if (!isAdded()) return;
-                refreshSteps(done);
+                refreshSteps(done, c.peekUpdatableCache());
                 refreshStatus(done);
             });
         }).start();
@@ -262,32 +263,37 @@ public class InstallFragment extends Fragment {
     }
 
     /** 更新 4 个步骤的状态显示（复用批量查询结果，不再逐一查询） */
-    private void refreshSteps(boolean[] done) {
-        step1Btn.setText(stepLabel(done, HarnessController.STEP_ROOTFS));
-        step2Btn.setText(stepLabel(done, HarnessController.STEP_TOOLS));
-        step3Btn.setText(stepLabel(done, HarnessController.STEP_NODE));
+    private void refreshSteps(boolean[] done, boolean[] upd) {
+        step1Btn.setText(stepLabel(done, upd, HarnessController.STEP_ROOTFS));
+        step2Btn.setText(stepLabel(done, upd, HarnessController.STEP_TOOLS));
+        step3Btn.setText(stepLabel(done, upd, HarnessController.STEP_NODE));
         // 修正 123546 bug（对齐 fixed45）：按钮4=④ pnpm，按钮5=⑤ harness
-        step4Btn.setText(stepLabel(done, HarnessController.STEP_PNPM));
-        step5Btn.setText(stepLabel(done, HarnessController.STEP_HARNESS));
-        step6Btn.setText(stepLabel(done, HarnessController.STEP_GUARD));
+        step4Btn.setText(stepLabel(done, upd, HarnessController.STEP_PNPM));
+        step5Btn.setText(stepLabel(done, upd, HarnessController.STEP_HARNESS));
+        step6Btn.setText(stepLabel(done, upd, HarnessController.STEP_GUARD));
         // 修正 123546 bug（对齐 fixed45）：按钮4=④ pnpm，按钮5=⑤ harness，按钮6=⑥ 安全与补丁
         stepStatusText.setText(
-                "① Linux 环境（rootfs）   " + mark(done, HarnessController.STEP_ROOTFS) + "\n" +
-                "② 基础工具（apt）       " + mark(done, HarnessController.STEP_TOOLS) + "\n" +
-                "③ Node.js               " + mark(done, HarnessController.STEP_NODE) + "\n" +
-                "④ Node 附加(pnpm/node-gyp) " + mark(done, HarnessController.STEP_PNPM) + "\n" +
-                "⑤ deepseek-harness      " + mark(done, HarnessController.STEP_HARNESS) + "\n" +
-                "⑥ 安全与补丁            " + mark(done, HarnessController.STEP_GUARD));
+                "① Linux 环境（rootfs）   " + mark(done, upd, HarnessController.STEP_ROOTFS) + "\n" +
+                "② 基础工具（apt）       " + mark(done, upd, HarnessController.STEP_TOOLS) + "\n" +
+                "③ Node.js               " + mark(done, upd, HarnessController.STEP_NODE) + "\n" +
+                "④ Node 附加(pnpm/node-gyp) " + mark(done, upd, HarnessController.STEP_PNPM) + "\n" +
+                "⑤ deepseek-harness      " + mark(done, upd, HarnessController.STEP_HARNESS) + "\n" +
+                "⑥ 安全与补丁            " + mark(done, upd, HarnessController.STEP_GUARD));
     }
 
-    private String mark(boolean[] done, int step) {
+    private String mark(boolean[] done, boolean[] upd, int step) {
         if (c.isBusy() && c.getCurrentStep() == step) return "⏳ 进行中";
-        return step >= 1 && step < done.length && done[step] ? "✅ 已就绪" : "⬜ 未安装";
+        if (step >= 1 && step < done.length && done[step]) return "✅ 已就绪";
+        // 装了旧版但未达标（如 dsh rc.6 < rc.8）→ 提示可更新而非"未安装"
+        if (step >= 1 && step < upd.length && upd[step]) return "⭐ 可更新";
+        return "⬜ 未安装";
     }
 
-    private String stepLabel(boolean[] done, int step) {
+    private String stepLabel(boolean[] done, boolean[] upd, int step) {
         String name = HarnessController.stepName(step);
-        return step >= 1 && step < done.length && done[step] ? "重装 " + name : "安装 " + name;
+        if (step >= 1 && step < done.length && done[step]) return "重装 " + name;
+        if (step >= 1 && step < upd.length && upd[step]) return "⭐ 更新 " + name;
+        return "安装 " + name;
     }
 
     /** 进度文案：stage 已含 %（下载那种）则不重复拼接百分比 */

@@ -261,6 +261,9 @@ public class MainActivity extends AppCompatActivity {
             String tag = UpdateChecker.checkLatestVersion();
             if (tag == null || tag.equals(ignored)) return;
             if (!UpdateChecker.isNewer(tag, current)) return;
+            // 更新前自动存档：检测到新版先静默备份一次（同一版本只备份一次），
+            // 防覆盖安装/下载期间出意外丢数据
+            HarnessController.get(this).backupBeforeUpdate(tag);
             runOnUiThread(() -> new AlertDialog.Builder(this)
                     .setTitle("发现新版本 " + tag)
                     .setMessage("当前版本 v" + current + "\n是否前往下载？")

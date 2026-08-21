@@ -260,6 +260,9 @@ public class HarnessController {
     /** 步骤缓存时间戳，-1 表示无效需重算 */
     private volatile long stepCacheTs = -1;
     private final boolean[] stepCache = new boolean[7];
+    /** 步骤"可更新"缓存（装了旧版但未达标：⑤ dsh 旧版 / ⑥ 守卫版本旧）；
+     *  与 stepCache 同一次 proot 查询算出，同生命周期。 */
+    private final boolean[] updatableCache = new boolean[7];
 
     /** 使步骤缓存失效：安装结束/空闲时调用，让 UI 拿到最新状态 */
     private void invalidateStepCache() {
@@ -725,6 +728,14 @@ public class HarnessController {
         }
     }
 
+    /** 只读当前"可更新"缓存（装了旧版但未达标：⑤ dsh 旧版 / ⑥ 守卫版本旧）。
+     *  与 peekStepCache 同生命周期（同一次 proot 查询算出）。 */
+    public boolean[] peekUpdatableCache() {
+        synchronized (stepCache) {
+            return updatableCache.clone();
+        }
+    }
+
     /**
      * 批量查询 4 个步骤是否完成（下标 1~4 对应 STEP_*；0 恒 false）。
      * 结果带缓存：busy 期间避免重复起 proot 检查（起一次 rootfs 子进程很慢）；
@@ -751,7 +762,8 @@ public class HarnessController {
         // 重算：不持锁！proot 子进程很慢（1~3 秒），持锁会把主线程 peek 一起卡死
         boolean r1 = proot.isInstalled();
         // 优化：②④⑤⑥ 四项 rootfs 检查合并为【单次 proot 进程】执行，
-        // 原来各起一个子进程（串行 4~12s），现在 1~3s 搞定
+        // 原来各起一个子进程（串行 4~12s），现在 1~3s 搞定。
+        // U=EF 附加"可更新"检测：E=装了旧版 dsh（rc<8），F=守卫版本旧（.version≠当前）。
         String merged = proot.execAndRead(
                 "A=$(command -v curl >/dev/null 2>&1 && command -v git >/dev/null 2>&1 " +
                 "&& command -v python3 >/dev/null 2>&1 && command -v make >/dev/null 2>&1 " +
@@ -760,7 +772,11 @@ public class HarnessController {
                 "C=$(command -v dsh >/dev/null 2>&1 && V=$(dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 | grep -oE '[0-9]+') " +
                 "&& [ -n \"$V\" ] && [ \"$V\" -ge 8 ] && echo 1 || echo 0); " +
                 "D=$(test -f /root/dsh-guard.sh && test -d /root/dsh-bin && test -f /root/dsh-bin/.version && echo 1 || echo 0); " +
-                "echo R=$A$B$C$D");
+                "E=$(command -v dsh >/dev/null 2>&1 && V=$(dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 | grep -oE '[0-9]+') " +
+                "&& [ -n \"$V\" ] && [ \"$V\" -lt 8 ] && echo 1 || echo 0); " +
+                "F=$(test -f /root/dsh-bin/.version && V2=$(cat /root/dsh-bin/.version 2>/dev/null) " +
+                "&& [ -n \"$V2\" ] && [ \"$V2\" != \"" + GUARD_VERSION + "\" ] && echo 1 || echo 0); " +
+                "echo R=$A$B$C$D U=$E$F");
         // 解析 R=ABCD：不用 matches() 正则（全匹配会被 echo 末尾换行坑到，之前
         // 因此②④⑤⑥全显示未安装）——直接用 indexOf + substring 取 4 位
         boolean[] bits = new boolean[4];
@@ -768,6 +784,14 @@ public class HarnessController {
         if (ri >= 0 && ri + 6 <= merged.length()) {
             String b = merged.substring(ri + 2, ri + 6);
             for (int i = 0; i < 4; i++) bits[i] = b.charAt(i) == '1';
+        }
+        // 解析 U=EF（可更新标记）
+        boolean[] upd = new boolean[2];
+        int ui = merged == null ? -1 : merged.indexOf("U=");
+        if (ui >= 0 && ui + 4 <= merged.length()) {
+            String b = merged.substring(ui + 2, ui + 4);
+            upd[0] = b.charAt(0) == '1';
+            upd[1] = b.charAt(1) == '1';
         }
         boolean r2 = bits[0];
         boolean r4 = bits[1];
@@ -783,6 +807,9 @@ public class HarnessController {
             stepCache[STEP_HARNESS] = r5;
             stepCache[STEP_GUARD] = r6;
             stepCache[0] = false;
+            // 可更新标记（装旧版但未达标）：⑤ dsh 旧版 / ⑥ 守卫版本旧
+            updatableCache[STEP_HARNESS] = upd[0];
+            updatableCache[STEP_GUARD] = upd[1];
             stepCacheTs = System.currentTimeMillis();
             return stepCache.clone();
         }
@@ -2325,13 +2352,37 @@ public class HarnessController {
      * 备份内容：.env + 整个 .dsh（含 settings.yaml、对话记录等）。
      * 返回备份目录绝对路径；失败返回 null。
      */
-    /** 配置备份：导出到外部 Download/DSHA（卸载重装不丢）。
-     *  统一走 BackupManager（tar.gz 含 .dsh 配置+对话 + .env + 日志）。 */
+    /** 备份到外部存储（手动，时间戳命名）；返回路径或 null */
     public String backupConfig() {
         try {
             return BackupManager.backupToExternal(appContext, this);
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /** 更新前自动存档：检测到新版本时静默备份一次（防覆盖安装丢数据）。
+     *  节流：同一目标版本只备份一次（backup_before_update_tag 记录），
+     *  rootfs 未就绪/备份失败静默跳过，不阻塞更新流程。 */
+    public void backupBeforeUpdate(String targetVersion) {
+        try {
+            if (targetVersion == null || targetVersion.isEmpty()) return;
+            final SharedPreferences prefs =
+                    appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
+            if (targetVersion.equals(prefs.getString("backup_before_update_tag", ""))) return; // 已备份过该版本
+            prefs.edit().putString("backup_before_update_tag", targetVersion).apply();
+            new Thread(() -> {
+                try {
+                    if (proot.isInstalled()) {
+                        String p = BackupManager.backupToExternal(appContext, this);
+                        if (p != null) {
+                            android.util.Log.i("DSHA", "更新前自动存档完成（准备升级 " + targetVersion + "）: " + p);
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }, "dsha-backup-before-update").start();
+        } catch (Throwable ignored) {
         }
     }
 
