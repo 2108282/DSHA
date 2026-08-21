@@ -64,13 +64,10 @@ public class DeviceBridgeService extends Service {
 
     private static final String WATCH_CHANNEL = "dsh_adb_watch_channel";
     private static final int WATCH_NOTIF_ID = 3005;
-    /** 常驻设备桥卡片（普通通知 ongoing —— 非 FGS，永不触发 RemoteServiceException 杀进程） */
-    private static final int CARD_NOTIF_ID = 3006;
-    private static final long NOTIFY_COOLDOWN_MS = 45000;
+    /** 常驻设备桥卡片（3006）已废弃：用户反馈打开 App 不应自动弹配对通知 */
 
     private NsdManager nsd;
     private NsdManager.DiscoveryListener pairListener;
-    private long lastNotifiedAt = 0;
     /** 手动开启无线调试提醒节流 */
     private volatile long lastManualNotifyAt = 0;
 
@@ -95,7 +92,6 @@ public class DeviceBridgeService extends Service {
         } catch (Throwable ignored) {
         }
         prewarmAdb();
-        postCard();
         startPairWatcher();
         startConnWatcher(); // ADB 连接看门狗：掉线自动重连（参考 Shizuku 生态看门狗）
     }
@@ -120,11 +116,6 @@ public class DeviceBridgeService extends Service {
             }
         } catch (Throwable ignored) {
         }
-        try {
-            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) nm.cancel(CARD_NOTIF_ID);
-        } catch (Throwable ignored) {
-        }
         super.onDestroy();
     }
 
@@ -145,51 +136,6 @@ public class DeviceBridgeService extends Service {
                 } catch (Throwable ignored) {
                 }
             }, "dsha-adb-prewarm").start();
-        } catch (Throwable ignored) {
-        }
-    }
-
-    /** 常驻设备桥卡片：卡片上直接输配对码（RemoteInput，普通通知无 FGS 崩溃风险） */
-    private void postCard() {
-        try {
-            if (Build.VERSION.SDK_INT >= 33
-                    && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED) {
-                return; // 无权限静默（App 内工作区仍可配对）
-            }
-            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm == null) return;
-            if (Build.VERSION.SDK_INT >= 26) {
-                NotificationChannel ch = new NotificationChannel(
-                        WATCH_CHANNEL, "ADB 配对",
-                        NotificationManager.IMPORTANCE_DEFAULT);
-                nm.createNotificationChannel(ch);
-            }
-            Intent app = new Intent(this, MainActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            PendingIntent appPi = PendingIntent.getActivity(this, 24, app,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-            RemoteInput ri = new RemoteInput.Builder(AdbPairReceiver.EXTRA_CODE)
-                    .setLabel("6 位配对码")
-                    .build();
-            Intent pairIntent = new Intent(this, AdbPairReceiver.class)
-                    .setAction(AdbPairReceiver.ACTION_PAIR);
-            // RemoteInput 必须 FLAG_MUTABLE：IMMUTABLE 收不到通知里输入的内容
-            PendingIntent pi = PendingIntent.getBroadcast(this, 23, pairIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
-            NotificationCompat.Action action =
-                    new NotificationCompat.Action.Builder(0, "🔐 输码配对", pi)
-                            .addRemoteInput(ri)
-                            .build();
-            NotificationCompat.Builder b = new NotificationCompat.Builder(this, WATCH_CHANNEL)
-                    .setSmallIcon(R.drawable.ic_launch)
-                    .setContentTitle("DSHA 设备桥 · 输码配对")
-                    .setContentText("点「🔐 输码配对」直接在通知里输 6 位码")
-                    .setContentIntent(appPi)
-                    .setOngoing(true)
-                    .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                    .addAction(action);
-            nm.notify(CARD_NOTIF_ID, b.build());
         } catch (Throwable ignored) {
         }
     }
@@ -404,56 +350,10 @@ public class DeviceBridgeService extends Service {
         }
     }
 
-    /** 配对弹窗出现：缓存端口 + 高亮提醒（含 RemoteInput 就地输入） */
+    /** 配对弹窗出现：只缓存端口/主机供配对时秒级直用（不弹通知——
+     *  用户反馈：配对通知只应在点击「ADB 无线配对」时出现，打开就弹会打扰）。
+     *  配对入口：配置页按钮 → showAdbPairNotification()（3101 单条） */
     private void onPairServiceFound(int port) {
         pairPort = port;
-        long now = System.currentTimeMillis();
-        if (now - lastNotifiedAt < NOTIFY_COOLDOWN_MS) return; // 去重
-        lastNotifiedAt = now;
-        // Android 13+ 无通知权限：静默（App 内工作区仍可配对）
-        if (Build.VERSION.SDK_INT >= 33
-                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
-            return;
-        }
-        try {
-            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm == null) return;
-            if (Build.VERSION.SDK_INT >= 26) {
-                NotificationChannel ch = new NotificationChannel(
-                        WATCH_CHANNEL, "ADB 配对提醒",
-                        NotificationManager.IMPORTANCE_HIGH);
-                nm.createNotificationChannel(ch);
-            }
-            RemoteInput ri = new RemoteInput.Builder(AdbPairReceiver.EXTRA_CODE)
-                    .setLabel("6 位配对码")
-                    .build();
-            Intent pairIntent = new Intent(this, AdbPairReceiver.class)
-                    .setAction(AdbPairReceiver.ACTION_PAIR);
-            // RemoteInput 必须 FLAG_MUTABLE：IMMUTABLE 收不到通知里输入的内容
-            PendingIntent pi = PendingIntent.getBroadcast(this, 23, pairIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
-            NotificationCompat.Action action =
-                    new NotificationCompat.Action.Builder(0, "🔐 输码配对", pi)
-                            .addRemoteInput(ri)
-                            .build();
-            Intent app = new Intent(this, MainActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            PendingIntent appPi = PendingIntent.getActivity(this, 24, app,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-            NotificationCompat.Builder b = new NotificationCompat.Builder(this, WATCH_CHANNEL)
-                    .setSmallIcon(R.drawable.ic_launch)
-                    .setContentTitle("🔐 ADB 配对进行中")
-                    .setContentText("点「输码配对」直接在通知里输入 6 位码（端口已自动捕获）")
-                    .setContentIntent(appPi)
-                    .setStyle(new NotificationCompat.BigTextStyle()
-                            .bigText("无线调试配对弹窗已打开（端口 " + port + " 已捕获）。\n"
-                                    + "直接在通知里输入屏幕上的 6 位配对码，无需离开通知栏。"))
-                    .setAutoCancel(true)
-                    .setPriority(NotificationCompat.PRIORITY_HIGH)
-                    .addAction(action);
-            nm.notify(WATCH_NOTIF_ID, b.build());
-        } catch (Throwable ignored) {
-        }
     }
 }

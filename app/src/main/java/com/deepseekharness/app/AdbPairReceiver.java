@@ -215,6 +215,12 @@ public class AdbPairReceiver extends BroadcastReceiver {
         try {
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return;
+            // 最多一条配对通知：弹结果前先清掉「输入配对码」卡（3101），
+            // 避免配对卡 + 结果通知并存（用户反馈：最多只存在一条配对通知）
+            try {
+                nm.cancel(Constants.NOTIF_ADB_PAIR_CARD);
+            } catch (Throwable ignored) {
+            }
             if (Build.VERSION.SDK_INT >= 26) {
                 NotificationChannel ch = new NotificationChannel(RESULT_CHANNEL, "ADB 配对结果",
                         ok ? NotificationManager.IMPORTANCE_HIGH : NotificationManager.IMPORTANCE_DEFAULT);

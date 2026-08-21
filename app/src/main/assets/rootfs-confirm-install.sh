@@ -8,7 +8,10 @@ mkdir -p "$DSH_BIN"
 cat > /root/dsh-confirm.sh <<'EOF'
 #!/bin/bash
 CMD="$*"
-RES=$(curl -s -m 65 -G "http://127.0.0.1:3090/confirm" --data-urlencode "cmd=$CMD" 2>/dev/null)
+# 3090 桥有 token 鉴权（防其他 App 冒充 agent 弹确认框）：
+# 必须带 X-Token 头（= /root/.dsh/.bridge_token 内容），否则一律 [UNAUTHORIZED] 被拒
+TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
+RES=$(curl -s -m 65 -G "http://127.0.0.1:3090/confirm" --data-urlencode "cmd=$CMD" -H "X-Token: $TOKEN" 2>/dev/null)
 if [ $? -eq 0 ] && [ -n "$RES" ]; then
   echo "$RES" | grep -q YES && exit 0 || exit 1
 fi

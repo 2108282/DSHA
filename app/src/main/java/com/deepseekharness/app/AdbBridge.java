@@ -175,7 +175,9 @@ public final class AdbBridge {
     /** 状态快照：key/deps/connect_port（供 UI 展示） */
     public static String status(ProotBootstrap proot) {
         String cmd = "K=$(test -f /root/.dsh/adbkeys/adbkey && echo YES || echo NO); "
-                + "D=$(python3 -c 'import adb_shell_wifi,spake2_cffi' 2>/dev/null && echo YES || echo NO); "
+                // 注意：新版库模块名是 spake2.spake2（无下划线），旧名 spake2_cffi 已不存在，
+                // 用旧名会导致 import 永远失败 → UI 永远显示依赖缺失
+                + "D=$(python3 -c 'import adb_shell_wifi; from spake2.spake2 import Spake2_Alice, Spake2_Bob' 2>/dev/null && echo YES || echo NO); "
                 + "P=$(test -f /root/.dsh/adbkeys/connect_port && cat /root/.dsh/adbkeys/connect_port || echo -); "
                 + "echo 'key='$K' deps='$D' port='$P";
         return proot.execAndRead(cmd);
