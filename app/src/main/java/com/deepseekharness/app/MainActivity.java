@@ -79,6 +79,8 @@ public class MainActivity extends AppCompatActivity {
         HarnessController.get(this).maybeAdbSelfHeal();
         // dsh 子包依赖完整性自愈（npmmirror 镜像元数据不一致导致 Cannot find module）
         HarnessController.get(this).maybeHealDshDeps();
+        // 空 pets 目录清理（deepseek-pet 插件空目录会崩插件树）
+        HarnessController.get(this).maybeCleanEmptyPets();
         // 步骤⑥版本对比：内置插件/补丁有更新时自动重跑（无需手动重装⑥）
         HarnessController.get(this).maybeRefreshStep6();
         // 崩溃自愈提示：上次异常退出时读 crash.log 告知原因（不阻塞使用）

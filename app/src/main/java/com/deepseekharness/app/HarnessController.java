@@ -1605,8 +1605,13 @@ public class HarnessController {
           // PATH 包装器 + bash 工具 lib 补丁加载守卫（双保险；不设 BASH_ENV——它会污染
           // RC6 插件初始化时子 shell 的环境，导致 dsh web 加载插件失败(index 24 崩溃)）
           .append("export DSH_CONFIRM=1 && ")
-          // 预创建常见插件数据目录（防止插件扫描空目录崩溃拖垮 WebUI）
-          .append("mkdir -p /root/.codex/pets /root/.dsh/plugins 2>/dev/null; ")
+          // 预创建常见插件数据目录：只建 /root/.dsh/plugins（无副作用）。
+          // 注意：不再建 /root/.codex/pets —— deepseek-pet 插件把「空 pets 目录」
+          // 当错误（no pet packages found）→ 整个插件树加载失败！
+          // 改为：若 pets 目录存在但为空则删除（让插件走「无 pet」正常分支）。
+          .append("mkdir -p /root/.dsh/plugins 2>/dev/null; "
+                  + "[ -d /root/.codex/pets ] && [ -z \"$(ls -A /root/.codex/pets 2>/dev/null)\" ] "
+                  + "&& rmdir /root/.codex/pets 2>/dev/null; ")
           // 局域网模式：补丁成功后绑定 0.0.0.0 并打印访问地址；失败只提示，不影响启动
           .append(lanReady ? "echo '[DSHA] 局域网访问(App桥): http://$(hostname -I 2>/dev/null | cut -d' ' -f1):3081' && "
                   : lan ? "echo '[DSHA] 局域网未开启(官方 0.0.0.0 未放行)，仅本机可访问' && " : "")
@@ -1704,8 +1709,12 @@ public class HarnessController {
                     "export DSH_PERMISSION_MODE=" + getPermissionMode() + "\n" +
                     "export DSH_CONFIRM=1\n" +
                     // 工作区目录先于 cd 创建：RC6 模式没有源码树，不建目录的话
-                    // 看门狗重启第一步 cd || exit 1 必失败 → 自动重启形同虚设
-                    "mkdir -p /root/" + getWorkdir() + " /root/.codex/pets /root/.dsh/plugins 2>/dev/null\n" +
+                    // 看门狗重启第一步 cd || exit 1 必失败 → 自动重启形同虚设。
+                    // 不建 /root/.codex/pets（deepseek-pet 空目录会崩插件树）：
+                    // 空则删，让插件走「无 pet」正常分支。
+                    "mkdir -p /root/" + getWorkdir() + " /root/.dsh/plugins 2>/dev/null\n" +
+                    "[ -d /root/.codex/pets ] && [ -z \"$(ls -A /root/.codex/pets 2>/dev/null)\" ] " +
+                    "&& rmdir /root/.codex/pets 2>/dev/null || true\n" +
                     "cd /root/" + getWorkdir() + " || exit 1\n" +
                     restartCmd + "\n";
             String watchdog =
@@ -2492,6 +2501,20 @@ public class HarnessController {
     }
 
 
+
+    /** 启动时自愈：删除空的 /root/.codex/pets（deepseek-pet 插件把空目录当错误
+     *  → 整个插件树加载失败）。老版本预创建过空目录，需清理。幂等、后台静默。 */
+    public void maybeCleanEmptyPets() {
+        IO.execute(() -> {
+            try {
+                if (!proot.isInstalled()) return;
+                proot.execAndRead(
+                        "[ -d /root/.codex/pets ] && [ -z \"$(ls -A /root/.codex/pets 2>/dev/null)\" ] "
+                        + "&& rmdir /root/.codex/pets 2>/dev/null; echo cleaned");
+            } catch (Throwable ignored) {
+            }
+        });
+    }
 
     /** 启动时对比步骤⑥版本标记（step6.version + builtin-assets.version）：
      *  任一与当前不符 → 自动重跑⑥（守卫/补丁/内置插件资产更新自动适配）。
