@@ -3,7 +3,7 @@
 # offline-provision.sh — 在 arm64 rootfs（chroot / proot）内
 # 预装 deepseek-harness 运行环境，产出「解压即用」的 rootfs。
 #
-# 默认装 rc.8（@deepseek-ai/dsh@0.1.0-rc.8，2026-08-19 发布），
+# 默认装 rc.2（@deepseek-ai/dsh@0.1.1-rc.2，2026-08-21 发布），
 # 与 App 在线安装（@rc 跟随最新）对齐；rc.8 失败再回退源码构建。
 # 升级 rc 版本时同步改 DSH_VERSION 常量即可。
 #
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # dsh 版本（pin 到具体 rc，保证离线包可复现；与 App 在线 @rc 策略解耦）
-DSH_VERSION="${DSH_VERSION:-0.1.0-rc.8}"
+DSH_VERSION="${DSH_VERSION:-0.1.1-rc.2}"
 WORKDIR="${WORKDIR:-deepseek-harness}"
 IN_CI="${GITHUB_ACTIONS:-}"
 KEEP_CA="${DSHA_KEEP_CA:-}"

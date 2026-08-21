@@ -771,11 +771,9 @@ public class HarnessController {
                 "&& command -v python3 >/dev/null 2>&1 && command -v make >/dev/null 2>&1 " +
                 "&& command -v gcc >/dev/null 2>&1 && command -v xz >/dev/null 2>&1 && echo 1 || echo 0); " +
                 "B=$(command -v pnpm >/dev/null 2>&1 && command -v node-gyp >/dev/null 2>&1 && echo 1 || echo 0); " +
-                "C=$(command -v dsh >/dev/null 2>&1 && V=$(dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 | grep -oE '[0-9]+') " +
-                "&& [ -n \"$V\" ] && [ \"$V\" -ge 8 ] && echo 1 || echo 0); " +
+                "C=$(command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | head -1 || echo NONE); " +
                 "D=$(test -f /root/dsh-guard.sh && test -d /root/dsh-bin && test -f /root/dsh-bin/.version && echo 1 || echo 0); " +
-                "E=$(command -v dsh >/dev/null 2>&1 && V=$(dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 | grep -oE '[0-9]+') " +
-                "&& [ -n \"$V\" ] && [ \"$V\" -lt 8 ] && echo 1 || echo 0); " +
+                "E=$(command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | head -1 || echo NONE); " +
                 "F=$(test -f /root/dsh-bin/.version && V2=$(cat /root/dsh-bin/.version 2>/dev/null) " +
                 "&& [ -n \"$V2\" ] && [ \"$V2\" != \"" + GUARD_VERSION + "\" ] && echo 1 || echo 0); " +
                 "echo R=$A$B$C$D U=$E$F");
@@ -795,10 +793,25 @@ public class HarnessController {
             upd[0] = b.charAt(0) == '1';
             upd[1] = b.charAt(1) == '1';
         }
+        // C/E 位输出 dsh 完整版本（如 0.1.1-rc.2），Java 侧比较：
+        // C=已就绪（>=0.1.0-rc.8），E=装了旧版（<0.1.0-rc.8 → 可更新）
+        String dshVer = "";
+        int ci = merged == null ? -1 : merged.indexOf("C=");
+        if (ci >= 0) {
+            String cv = merged.substring(ci + 2);
+            int nl2 = cv.indexOf('\n');
+            if (nl2 >= 0) cv = cv.substring(0, nl2);
+            dshVer = cv.trim();
+        }
+        boolean dshReady = dshVersionScore(dshVer) >= dshVersionScore("0.1.0-rc.8");
+        boolean dshOld = !dshVer.isEmpty() && !"NONE".equals(dshVer)
+                && dshVersionScore(dshVer) < dshVersionScore("0.1.0-rc.8");
         boolean r2 = bits[0];
         boolean r4 = bits[1];
         boolean r5 = bits[2];
         boolean r6 = bits[3];
+        r5 = dshReady; // ⑤ dsh 已就绪（完整版本判定）
+        updatableCache[STEP_HARNESS] = dshOld; // ⑤ 装了旧版 → 可更新
         boolean r3 = new File(proot.getRootfsDir(), "usr/local/bin/node").exists()
                 && new File(proot.getRootfsDir(), "usr/local/bin/npm").exists();
         synchronized (stepCache) {
@@ -809,8 +822,7 @@ public class HarnessController {
             stepCache[STEP_HARNESS] = r5;
             stepCache[STEP_GUARD] = r6;
             stepCache[0] = false;
-            // 可更新标记（装旧版但未达标）：⑤ dsh 旧版 / ⑥ 守卫版本旧
-            updatableCache[STEP_HARNESS] = upd[0];
+            // 可更新标记：⑥ 守卫版本旧（⑤ dsh 旧版已在上面处理）
             updatableCache[STEP_GUARD] = upd[1];
             stepCacheTs = System.currentTimeMillis();
             return stepCache.clone();
@@ -822,12 +834,12 @@ public class HarnessController {
         if (useRc6()) {
             try {
                 String r = proot.execAndRead(
-                        "command -v dsh >/dev/null 2>&1 && " +
-                        // 版本检查：必须 >= rc.8（npmmirror 镜像 tag 同步滞后会导致
-                        // 旧版 rc.6 残留，旧版满足旧判定 → 重装被跳过 → 永远旧版）
-                        "V=$(dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 | grep -oE '[0-9]+'); " +
-                        "[ -n \"$V\" ] && [ \"$V\" -ge 8 ] && echo OK || echo OLD:$V" );
-                return r != null && !r.startsWith("ERROR") && r.contains("OK");
+                        "command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | head -1 || echo NONE");
+                if (r == null || r.startsWith("ERROR") || r.contains("NONE")) return false;
+                String v = r.trim();
+                // 最低要求：0.1.0-rc.8（含）以上。完整版本比较（只看 rc 号会把
+                // 0.1.1-rc.2 误判旧版 → 永远重装循环）
+                return dshVersionScore(v) >= dshVersionScore("0.1.0-rc.8");
             } catch (Exception e) {
                 return false;
             }
@@ -1165,7 +1177,7 @@ public class HarnessController {
         runStep("安装 @deepseek-ai/dsh 最新 RC", 95,
                 // 优先 @next（官方最新 rc）；npmmirror 镜像同步滞后时回退 pin rc.8，再回退官方源
                 "(npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmmirror.com 2>&1 || " +
-                "npm install -g @deepseek-ai/dsh@0.1.0-rc.8 --force --registry=https://registry.npmmirror.com 2>&1 || " +
+                "npm install -g @deepseek-ai/dsh@0.1.1-rc.2 --force --registry=https://registry.npmmirror.com 2>&1 || " +
                 "npm install -g @deepseek-ai/dsh@rc --force --registry=https://registry.npmmirror.com 2>&1 || " +
                 "npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmjs.org 2>&1) | tail -25; " +
                 "echo \">> npm 退出码: ${PIPESTATUS[0]}\"; " +
@@ -2563,23 +2575,53 @@ public class HarnessController {
             // 查询真正执行且有输出（哪怕没解析出 rc）→ 记时间戳
             prefs.edit().putLong("last_dsh_rc_check_ts", System.currentTimeMillis()).apply();
             String v = r.trim();
-            // 只认 rc.X 格式（0.1.0-rc.8 / rc.9 等），防 dist-tags 是 stable 版本号
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("rc\\.(\\d+)").matcher(v);
-            return m.find() ? "rc." + m.group(1) : null;
+            // 返回完整版本（0.1.1-rc.2）——旧实现截成 rc.2 无法区分 0.1.0-rc.2 和
+            // 0.1.1-rc.2（跨小版本同 rc 号会误判/漏判）。只认含 rc 的版本，防 stable。
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                    "(\\d+\\.\\d+\\.\\d+-rc\\.\\d+)").matcher(v);
+            return m.find() ? m.group(1) : null;
         } catch (Throwable e) {
             return null;
         }
     }
 
     /** rc 号比较：a > b 返回 true（只升不降，防镜像回退触发重装） */
-    private static boolean rcNewer(String a, String b) {
+    /** dsh 版本比较（完整版本，支持 0.1.0-rc.8 与 0.1.1-rc.2 这种跨小版本）。
+     *  仅比较 rc 号会误判（rc.2 < rc.8 → 0.1.1-rc.2 被当旧版 → 不升级）！
+     *  格式：<major>.<minor>.<patch>-rc.<n>，缺省段按 0。a > b 返回 true。 */
+    private static boolean dshVersionNewer(String a, String b) {
         try {
-            int x = Integer.parseInt(a.replaceAll("[^0-9]", ""));
-            int y = Integer.parseInt(b.replaceAll("[^0-9]", ""));
-            return x > y;
+            return dshVersionScore(a) > dshVersionScore(b);
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /** 解析 dsh 版本为可比较的整数分数：主版本段 * 1000 + rc 号（rc 号权重最大）。 */
+    private static long dshVersionScore(String v) {
+        if (v == null) return 0;
+        String t = v.trim().toLowerCase();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?.*?rc\\.(\\d+)").matcher(t);
+        if (m.find()) {
+            long major = Long.parseLong(m.group(1));
+            long minor = m.group(2) == null ? 0 : Long.parseLong(m.group(2));
+            long patch = m.group(3) == null ? 0 : Long.parseLong(m.group(3));
+            long rc = Long.parseLong(m.group(4));
+            return ((major * 1000 + minor) * 1000 + patch) * 1000 + rc;
+        }
+        // 无 rc 段（如 stable 版本）：按纯数字段比较
+        String[] parts = t.replaceAll("[^0-9.]", "").split("\\.");
+        long score = 0;
+        for (int i = 0; i < Math.min(3, parts.length); i++) {
+            if (!parts[i].isEmpty()) score = score * 1000 + Long.parseLong(parts[i]);
+        }
+        return score * 1000; // rc 段视为 0（stable 高于同版本 rc）
+    }
+
+    /** 兼容旧调用（rcNewer 改名保留，内部走完整比较） */
+    private static boolean rcNewer(String a, String b) {
+        return dshVersionNewer(a, b);
     }
 
     /** 启动时检测 dsh 新版本：主动查 npm 最新 rc，比已装新 → 自动【重装⑤+⑥】；
@@ -2592,19 +2634,19 @@ public class HarnessController {
                 final SharedPreferences prefs =
                         appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
                 String installed = proot.execAndRead(
-                        "command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | grep -oE 'rc\\.[0-9]+' | head -1 || echo NONE");
+                        "command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | head -1 || echo NONE");
                 if (installed == null || installed.contains("NONE") || installed.startsWith("ERROR")) return;
-                String installedRc = installed.trim();
+                String installedRc = installed.trim(); // 完整版本，如 0.1.1-rc.2
                 String last = prefs.getString("last_dsh_rc", "");
                 String target = null;
                 // 1) 主动：npm 最新 rc > 已装 → 目标 = 最新（真正"检测到新版自动升级"）
                 String latest = queryLatestDshRc();
-                if (latest != null && rcNewer(latest, installedRc)) {
+                if (latest != null && dshVersionNewer(latest, installedRc)) {
                     target = latest;
                 }
                 // 2) 被动：已装版本比上次记录**更新**（离线包带新版/手动升级）→ 适配已装版本。
                 //    只升不降：防离线包回退旧版触发降级重装（重装 @next 又升回去 → 反复重装）
-                if (target == null && !last.isEmpty() && rcNewer(installedRc, last)) {
+                if (target == null && !last.isEmpty() && dshVersionNewer(installedRc, last)) {
                     target = installedRc;
                 }
                 if (target == null) {
