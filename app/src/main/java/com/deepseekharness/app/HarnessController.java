@@ -922,7 +922,9 @@ public class HarnessController {
     private void installGuard() throws Exception {
         requireRootfs();
         setProgress("安装安全守卫与补丁", 91);
-        // 内置插件资产版本自愈：资产变更时删 marker 强制重注入（老用户拿到新 UI/引导）
+        // 内置插件资产版本自愈：资产变更时删 marker 强制重注入（老用户拿到新 UI/引导）。
+        // 注意：删 marker 与写版本分离（版本在末尾 runStep 写）——中途失败则版本未写，
+        // 下次启动版本不一致仍会重跑⑥，自愈闭环不中断。
         refreshBuiltinAssetMarkers();
         ensureDangerGuard();   // PATH 包装器（rm/adb 等 15 命令）
         ensureBashGuardPatch(); // bash 工具 lib 强制加载 dsh-guard
@@ -2377,7 +2379,9 @@ public class HarnessController {
 
     /** 启动时对比步骤⑥版本标记（step6.version + builtin-assets.version）：
      *  任一与当前不符 → 自动重跑⑥（守卫/补丁/内置插件资产更新自动适配）。
-     *  幂等、后台静默。注意：版本检查（execAndRead 起 proot）丢 IO 线程，不能在主线程跑。 */
+     *  幂等、后台静默。注意：版本检查（execAndRead 起 proot）丢 IO 线程，不能在主线程跑。
+     *  全新离线包（预置 marker 但无版本标记）首启也会重跑⑥——幂等无害，可接受
+     *  （离线预置与在线⑥内容一致，重跑只是把版本标记补齐）。 */
     public void maybeRefreshStep6() {
         IO.execute(() -> {
             try {
