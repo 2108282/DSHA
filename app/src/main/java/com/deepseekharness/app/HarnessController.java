@@ -2843,6 +2843,13 @@ public class HarnessController {
                 if (fx.getParentFile() != null) fx.getParentFile().mkdirs();
                 java.nio.file.Files.write(fx.toPath(), fixer.getBytes(StandardCharsets.UTF_8));
             }
+            // 注入 Python 自愈主程序（os.walk 扫描，不依赖 find/bash glob）
+            String healPy = readAsset("heal-sessions.py");
+            if (healPy != null && !healPy.isEmpty()) {
+                java.io.File hp = new java.io.File(proot.getRootfsDir(), "root/.dsh/heal-sessions.py");
+                if (hp.getParentFile() != null) hp.getParentFile().mkdirs();
+                java.nio.file.Files.write(hp.toPath(), healPy.getBytes(StandardCharsets.UTF_8));
+            }
             // 注入 zstandard 离线 wheel（在线安装的 rootfs 无 zstd、pip 可能没网时，
             // heal 用它 --no-index 本地装，保证能解压修复会话）
             try {
