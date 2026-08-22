@@ -30,7 +30,7 @@ public final class UpdateChecker {
                 HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
                 conn.setConnectTimeout(8000);
                 conn.setReadTimeout(8000);
-                conn.setRequestProperty("User-Agent", "DSHA/1.1.3.1");
+                conn.setRequestProperty("User-Agent", "DSHA/1.1.4");
                 conn.setRequestProperty("Accept", "application/vnd.github+json");
                 int code = conn.getResponseCode();
                 if (code != 200) {
