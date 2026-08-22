@@ -221,8 +221,14 @@ public class WorkspaceFragment extends Fragment {
                 if (isAdded()) Toast.makeText(requireContext(), "正在恢复，请稍候…", Toast.LENGTH_SHORT).show();
             });
         }
-        // 提前取 context（后台线程用 requireContext() 在 Fragment detach 后会抛异常）
-        final android.content.Context appCtx = requireContext().getApplicationContext();
+        // 提前取 context（doRestoreWithStop 从后台线程调本方法时，
+        // requireContext() 在 Fragment detach 后会抛异常——用 try 兜底）
+        final android.content.Context appCtx;
+        try {
+            appCtx = requireContext().getApplicationContext();
+        } catch (Throwable e) {
+            return; // Fragment 已销毁，放弃恢复
+        }
         new Thread(() -> {
             try {
                 File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-restore.tar.gz");
