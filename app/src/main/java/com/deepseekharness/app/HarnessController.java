@@ -2512,6 +2512,8 @@ public class HarnessController {
                         waitPortClosed(4000);
                     }
                 }
+                // 会话损坏自愈：web 拉起前先修（无门槛全量扫描，幂等；修复后用户刷新即恢复历史）
+                doHealSessionCorruption();
                 setProgress("正在启动 Web UI", 0);
                 proot.ensureRuntimeFiles();
                 ensureDangerGuard(); // 安全包装器缺失则自动补装
@@ -2783,28 +2785,33 @@ public class HarnessController {
      *  检测到 → 备份损坏 .db 并删除（dsh 重建），老会话丢失但 App 可用。
      *  配合停止命令 SIGTERM 优雅退出（减少写入中断）。幂等、后台静默。 */
     public void maybeHealSessionCorruption() {
-        IO.execute(() -> {
-            try {
-                if (!proot.isInstalled()) return;
-                String script = readAsset("heal-session.sh");
-                if (script == null || script.isEmpty()) return;
-                java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-heal-session.sh");
-                f.getParentFile().mkdirs();
-                java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
-                // 注入会话修复脚本（heal-session.sh 调用它补缺失 message.id）
-                String fixer = readAsset("fix-session.py");
-                if (fixer != null && !fixer.isEmpty()) {
-                    java.io.File fx = new java.io.File(proot.getRootfsDir(), "root/.dsh/fix-session.py");
-                    if (fx.getParentFile() != null) fx.getParentFile().mkdirs();
-                    java.nio.file.Files.write(fx.toPath(), fixer.getBytes(StandardCharsets.UTF_8));
-                }
-                String r = proot.execAndRead("bash /root/dsha-heal-session.sh; rm -f /root/dsha-heal-session.sh");
-                if (r != null && r.contains("SESSION_HEALED")) {
-                    android.util.Log.w("DSHA", "会话损坏自愈：已备份并重建会话库（旧对话可能丢失）");
-                }
-            } catch (Throwable ignored) {
+        IO.execute(this::doHealSessionCorruption);
+    }
+
+    /** 同步执行会话自愈（可在 IO 线程/启动链路内联调用）：
+     *  heal-session.sh 无门槛全量扫描（不依赖日志错误文案），
+     *  fix-session.py 幂等——正常文件秒过 NO_FIX。 */
+    private void doHealSessionCorruption() {
+        try {
+            if (!proot.isInstalled()) return;
+            String script = readAsset("heal-session.sh");
+            if (script == null || script.isEmpty()) return;
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-heal-session.sh");
+            f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
+            // 注入会话修复脚本（heal-session.sh 调用它补缺失 message.id）
+            String fixer = readAsset("fix-session.py");
+            if (fixer != null && !fixer.isEmpty()) {
+                java.io.File fx = new java.io.File(proot.getRootfsDir(), "root/.dsh/fix-session.py");
+                if (fx.getParentFile() != null) fx.getParentFile().mkdirs();
+                java.nio.file.Files.write(fx.toPath(), fixer.getBytes(StandardCharsets.UTF_8));
             }
-        });
+            String r = proot.execAndRead("bash /root/dsha-heal-session.sh; rm -f /root/dsha-heal-session.sh");
+            if (r != null && r.contains("SESSION_HEALED")) {
+                android.util.Log.w("DSHA", "会话损坏自愈：已修复/隔离损坏会话（详情见 heal 输出）");
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 启动时对比步骤⑥版本标记（step6.version + builtin-assets.version）：
