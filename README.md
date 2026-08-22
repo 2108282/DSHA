@@ -1,6 +1,6 @@
 # DSHA
 
-> 下一个 AI / 开发者请先读 **[HANDOFF.md](HANDOFF.md)**，不要先全库扫描。
+> 下一个 AI / 开发者请先读 **[AGENTS.md](AGENTS.md)**，不要先全库扫描。
 
 **DeepSeek Harness 安卓启动器** —— 在手机上跑 deepseek-harness 的一体化方案，无需 Termux、无需 ROOT。
 

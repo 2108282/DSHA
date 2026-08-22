@@ -75,7 +75,7 @@ PROOT_ARGS=(
 echo "==> [5/7] 注入预装脚本与补丁"
 "${PROOT_ARGS[@]}" /usr/bin/bash -c "mkdir -p /root/patches" 2>/dev/null
 if [ -d "$REPO_ROOT/app/src/main/assets" ]; then
-  for f in webui-sidebar.patch bash-guard.patch webui-polyfill.sh rootfs-confirm-install.sh; do
+  for f in webui-sidebar.patch bash-guard.patch webui-polyfill.sh webui-origin-port-patch.sh rootfs-confirm-install.sh; do
     cp "$REPO_ROOT/app/src/main/assets/$f" "$ROOTFS_DIR/root/patches/$f" 2>/dev/null || true
   done
 fi

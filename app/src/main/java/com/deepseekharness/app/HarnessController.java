@@ -716,6 +716,39 @@ public class HarnessController {
         });
     }
 
+    /** 确保 WebUI 老浏览器兼容补丁已应用（AbortSignal.any/timeout polyfill，幂等）。
+     *  老版本 Android System WebView（< Chrome 116）没有 AbortSignal.any/timeout，
+     *  dsh 前端在选择工作区等带取消的 remote 调用上会抛 "AbortSignal.any is not a function"。
+     *  RC6 / 源码构建通用；失败不阻塞启动。 */
+    private void ensureWebUiPolyfill() {
+        try {
+            String script = readAsset("webui-polyfill.sh");
+            if (script == null || script.isEmpty()) return;
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-webui-polyfill.sh");
+            f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
+            proot.execAndRead("bash /root/dsha-webui-polyfill.sh; rm -f /root/dsha-webui-polyfill.sh");
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 确保外部浏览器 /api 403 修复已应用（Chrome 150+ Origin 省略端口，幂等）。
+     *  dsh-client-connection 的 isTrustedApiRequest 用 new URL(origin).host === hostUrl.host
+     *  比较 Origin 与 Host；Chrome 150+ 对 loopback 同源请求发送的 Origin 省略端口，
+     *  导致 127.0.0.1:3080 页面所有 /api 请求被 403 拒绝，表现为外部浏览器无法连接网络。
+     *  修复为只比较 hostname；失败不阻塞启动。 */
+    private void ensureWebUiOriginPatch() {
+        try {
+            String script = readAsset("webui-origin-port-patch.sh");
+            if (script == null || script.isEmpty()) return;
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-origin-port-patch.sh");
+            f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
+            proot.execAndRead("bash /root/dsha-origin-port-patch.sh; rm -f /root/dsha-origin-port-patch.sh");
+        } catch (Throwable ignored) {
+        }
+    }
+
     public void maybePrewarmWeb() {
         try {
             ensureWebUiDegrade(); // 每次启动前置自愈（幂等秒回，防插件失败卡启动）
@@ -1045,10 +1078,18 @@ public class HarnessController {
         }
         ensureBashGuardPatch(); // bash 工具 lib 强制加载 dsh-guard
         try {
-            proot.ensureRuntimeFiles(); // polyfill / 运行环境文件
+            proot.ensureRuntimeFiles(); // 运行环境文件
         } catch (Throwable ignored) {
         }
         ensureWatchdogFiles();  // 看门狗 + 重启命令（最新端口）
+        try {
+            ensureWebUiPolyfill(); // WebView 老版本 AbortSignal.any/timeout polyfill（幂等）
+        } catch (Throwable ignored) {
+        }
+        try {
+            ensureWebUiOriginPatch(); // 外部浏览器 /api 403 修复（Chrome 150+ Origin 省略端口）
+        } catch (Throwable ignored) {
+        }
         // ===== 原生内置移动端 UI 适配（免第三方插件） =====
         // 把 dsh-client-ui-mobile-adapt 的 client 产物直接注入 web-app 前端，
         // 手机端单栏/抽屉/汉堡/全屏设置开箱即用。幂等，失败不阻塞安装。
@@ -1299,6 +1340,15 @@ public class HarnessController {
         runStep("校验 dsh 子包依赖完整性", 99,
                 "if [ -f /root/dsha-deps-heal.sh ]; then bash /root/dsha-deps-heal.sh; rm -f /root/dsha-deps-heal.sh; " +
                 "else echo 'dsha-deps-heal.sh 未就位，跳过'; fi; tail -3 /root/dsh-deps-heal.log 2>/dev/null || true");
+        // 立即打老 WebView 兼容补丁：单独重装⑤（dsh 更新）时不会走⑥，这里保证 RC6 路径也生效
+        try {
+            ensureWebUiPolyfill();
+        } catch (Throwable ignored) {
+        }
+        try {
+            ensureWebUiOriginPatch();
+        } catch (Throwable ignored) {
+        }
         setProgress("RC 安装完成", 100);
     }
 
@@ -1668,6 +1718,16 @@ public class HarnessController {
     public String startWebCommand() {
         // 启动前自愈：确保配置修复脚本已就位（钳制超限 timeoutMs）
         ensureConfigFixAsset();
+        // 启动前自愈：老 WebView 兼容补丁（AbortSignal.any/timeout polyfill，幂等）
+        try {
+            ensureWebUiPolyfill();
+        } catch (Throwable ignored) {
+        }
+        // 启动前自愈：外部浏览器 /api 403 修复（Chrome 150+ Origin 省略端口，幂等）
+        try {
+            ensureWebUiOriginPatch();
+        } catch (Throwable ignored) {
+        }
         // 启动前自愈：内置插件（mobile-adapt/device-shell-guide）注册校验，
         // 被 dsh plugin reconcile 清掉/丢失时自动补回（幂等）
         try {
