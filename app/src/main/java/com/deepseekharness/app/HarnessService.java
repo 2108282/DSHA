@@ -53,9 +53,8 @@ public class HarnessService extends Service {
         shellHttp = new HttpShellService(this);
         shellHttp.start();
         ShizukuShell.ensureBound(this);
-        // 任务完成通知：agent 干活结束后提醒
-        taskNotifier = new TaskNotifier(this, c);
-        taskNotifier.start();
+        // 任务完成通知已改为内置插件 dsh-task-notifier（turn/end 监听更准），
+        // 旧 TaskNotifier 轮询停用（否则双重通知）
         // 局域网转发桥：开启局域网模式时，App 侧 0.0.0.0:3081 → 127.0.0.1:3080
         // （绕开官方 0.0.0.0 拦截与 Host 校验，Shizuku 式桥接思路；状态写 /root/dsh-lan.log 可终端查看）
         if (c.isLanMode()) {
@@ -165,7 +164,7 @@ public class HarnessService extends Service {
         c.removeStateListener(stateListener);
         stopKeepAlive();
         if (shellHttp != null) shellHttp.stop();
-        if (taskNotifier != null) taskNotifier.stop();
+        // taskNotifier 已停用（插件方案）
         LanProxyService.stop();
         c.stopWeb();
         super.onDestroy();

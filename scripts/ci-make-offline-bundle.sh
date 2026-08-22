@@ -121,6 +121,7 @@ if [ -d "$REPO_ROOT/app/src/main/assets/mobile-adapt" ]; then
   sudo mkdir -p "$ROOTFS_DIR/root/patches/builtin"
   sudo cp -r "$REPO_ROOT/app/src/main/assets/mobile-adapt" "$ROOTFS_DIR/root/patches/builtin/"
   sudo cp -r "$REPO_ROOT/app/src/main/assets/device-shell-guide" "$ROOTFS_DIR/root/patches/builtin/"
+  sudo cp -r "$REPO_ROOT/app/src/main/assets/task-notifier" "$ROOTFS_DIR/root/patches/builtin/"
   sudo cp "$REPO_ROOT/scripts/provision-builtin-plugins.sh" "$ROOTFS_DIR/root/patches/"
 fi
 sudo cp "$REPO_ROOT/scripts/offline-provision.sh" "$ROOTFS_DIR/root/offline-provision.sh"

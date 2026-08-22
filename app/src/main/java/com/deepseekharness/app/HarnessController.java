@@ -452,7 +452,14 @@ public class HarnessController {
     public void setRootShellAllowed(boolean v) { prefs.edit().putBoolean("allow_root_shell", v).apply(); }
 
     public String getWorkdir() { return prefs.getString("workdir", "deepseek-harness"); }
-    public void setWorkdir(String v) { prefs.edit().putString("workdir", v).apply(); }
+    /** 设置工作目录：只允许安全字符（字母数字下划线连字符），防 shell 注入。
+     *  非法输入忽略并回退默认。 */
+    public void setWorkdir(String v) {
+        if (v == null) return;
+        String t = v.trim();
+        if (!t.matches("[A-Za-z0-9_-]+")) return; // 非法：拒绝（保持原值）
+        prefs.edit().putString("workdir", t).apply();
+    }
 
     /** 局域网模式是否开启（App 设置项） */
     public boolean isLanMode() {
@@ -1755,10 +1762,10 @@ public class HarnessController {
                     // 看门狗重启第一步 cd || exit 1 必失败 → 自动重启形同虚设。
                     // 不建 /root/.codex/pets（deepseek-pet 空目录会崩插件树）：
                     // 空则删，让插件走「无 pet」正常分支。
-                    "mkdir -p /root/" + getWorkdir() + " /root/.dsh/plugins 2>/dev/null\n" +
+                    "mkdir -p /root/'" + getWorkdir() + "' /root/.dsh/plugins 2>/dev/null\n" +
                     "[ -d /root/.codex/pets ] && [ -z \"$(ls -A /root/.codex/pets 2>/dev/null)\" ] " +
                     "&& rmdir /root/.codex/pets 2>/dev/null || true\n" +
-                    "cd /root/" + getWorkdir() + " || exit 1\n" +
+                    "cd /root/'" + getWorkdir() + "' || exit 1\n" +
                     restartCmd + "\n";
             String watchdog =
                     "#!/bin/bash\n" +

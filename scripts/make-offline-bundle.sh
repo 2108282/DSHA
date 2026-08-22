@@ -84,6 +84,7 @@ if [ -d "$REPO_ROOT/app/src/main/assets/mobile-adapt" ]; then
   mkdir -p "$ROOTFS_DIR/root/patches/builtin"
   cp -r "$REPO_ROOT/app/src/main/assets/mobile-adapt" "$ROOTFS_DIR/root/patches/builtin/" 2>/dev/null || true
   cp -r "$REPO_ROOT/app/src/main/assets/device-shell-guide" "$ROOTFS_DIR/root/patches/builtin/" 2>/dev/null || true
+  cp -r "$REPO_ROOT/app/src/main/assets/task-notifier" "$ROOTFS_DIR/root/patches/builtin/" 2>/dev/null || true
   cp "$REPO_ROOT/scripts/provision-builtin-plugins.sh" "$ROOTFS_DIR/root/patches/" 2>/dev/null || true
 fi
 cp "$REPO_ROOT/scripts/offline-provision.sh" "$ROOTFS_DIR/root/offline-provision.sh"

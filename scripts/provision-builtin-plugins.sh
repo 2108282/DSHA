@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # provision-builtin-plugins.sh — 在离线 rootfs 内预置 DSHA 内置插件
-# （dsh-client-ui-mobile-adapt / dsh-device-shell-guide），
+# （dsh-client-ui-mobile-adapt / dsh-device-shell-guide / dsh-task-notifier），
 # 让离线包「解压即用」：首启无需运行时注入。
 #
 # 由 offline-provision.sh（chroot 内）调用；插件源在 /root/patches/builtin/。
@@ -13,6 +13,7 @@ set -euo pipefail
 SRC=/root/patches/builtin
 DEST_MOBILE=/root/dsha-mobile-adapt
 DEST_GUIDE=/root/dsha-device-shell-guide
+DEST_NOTIFIER=/root/dsha-task-notifier
 PROFILE_DIR=/root/.dsh/profiles/web
 NM="$PROFILE_DIR/node_modules"
 PF="$PROFILE_DIR/package.json"
@@ -20,6 +21,7 @@ PF="$PROFILE_DIR/package.json"
 # ensureDeviceShellGuide 检查的路径一致）
 MARK_MOBILE="${DEST_MOBILE}-installed"
 MARK_GUIDE="${DEST_GUIDE}-installed"
+MARK_NOTIFIER="${DEST_NOTIFIER}-installed"
 BUILTIN_SNAPSHOT=/root/dsha-builtin.txt
 
 echo "==> 预置 DSHA 内置插件"
@@ -46,6 +48,17 @@ if [ -d "$SRC/device-shell-guide" ]; then
   echo "  ✓ device-shell-guide 已预置 ($(ls "$DEST_GUIDE" "$DEST_GUIDE/lib" 2>/dev/null | wc -l) 文件)"
 else
   echo "  WARN: 缺 device-shell-guide 源（/root/patches/builtin/device-shell-guide），跳过"
+fi
+
+if [ -d "$SRC/task-notifier" ]; then
+  mkdir -p "$DEST_NOTIFIER/lib"
+  cp -f "$SRC/task-notifier/package.json" "$DEST_NOTIFIER/" 2>/dev/null || true
+  cp -f "$SRC/task-notifier/cordis.patch.yml" "$DEST_NOTIFIER/" 2>/dev/null || true
+  cp -f "$SRC/task-notifier/lib/index.js" "$DEST_NOTIFIER/lib/" 2>/dev/null || true
+  touch "$MARK_NOTIFIER"
+  echo "  ✓ task-notifier 已预置 ($(ls "$DEST_NOTIFIER" "$DEST_NOTIFIER/lib" 2>/dev/null | wc -l) 文件)"
+else
+  echo "  WARN: 缺 task-notifier 源（/root/patches/builtin/task-notifier），跳过"
 fi
 
 # ---------- 2) 注册到 web profile（merge，不覆盖已有插件） ----------

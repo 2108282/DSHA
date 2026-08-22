@@ -151,9 +151,16 @@ public final class TarGzipExtractor {
                     break;
                 case '2':
                     if (out.getParentFile() != null) out.getParentFile().mkdirs();
-                    try {
-                        Os.symlink(linkname, out.getAbsolutePath());
-                    } catch (Throwable ignored) {
+                    // 符号链接目标安全校验：目标不能是绝对路径/穿越（防恶意备份
+                    // 用链接指向 /etc/passwd 等系统文件）；相对目标且不逃逸才创建
+                    boolean linkSafe = linkname != null && !linkname.isEmpty()
+                            && !linkname.startsWith("/")
+                            && !linkname.startsWith("../") && !linkname.contains("/../");
+                    if (linkSafe) {
+                        try {
+                            Os.symlink(linkname, out.getAbsolutePath());
+                        } catch (Throwable ignored) {
+                        }
                     }
                     skipPadding(in, size);
                     break;
