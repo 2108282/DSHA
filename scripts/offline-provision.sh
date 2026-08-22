@@ -68,6 +68,11 @@ else
 fi
 command -v pnpm >/dev/null 2>&1 || npm install -g pnpm@11.7.0
 command -v node-gyp >/dev/null 2>&1 || npm install -g node-gyp
+# 会话修复自愈需要 zstandard（解压 session.jsonl.zstd）：
+# 有 pip 就直接装，装不上不阻塞（自愈时会再尝试）
+if command -v pip >/dev/null 2>&1 || python3 -m pip --version >/dev/null 2>&1; then
+  python3 -m pip install --break-system-packages -q zstandard 2>/dev/null || python3 -m pip install -q zstandard 2>/dev/null || true
+fi
 pnpm -v
 node-gyp --version || true
 

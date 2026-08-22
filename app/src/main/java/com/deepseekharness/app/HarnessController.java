@@ -2690,6 +2690,13 @@ public class HarnessController {
                 java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-heal-session.sh");
                 f.getParentFile().mkdirs();
                 java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
+                // 注入会话修复脚本（heal-session.sh 调用它补缺失 message.id）
+                String fixer = readAsset("fix-session.py");
+                if (fixer != null && !fixer.isEmpty()) {
+                    java.io.File fx = new java.io.File(proot.getRootfsDir(), "root/.dsh/fix-session.py");
+                    if (fx.getParentFile() != null) fx.getParentFile().mkdirs();
+                    java.nio.file.Files.write(fx.toPath(), fixer.getBytes(StandardCharsets.UTF_8));
+                }
                 String r = proot.execAndRead("bash /root/dsha-heal-session.sh; rm -f /root/dsha-heal-session.sh");
                 if (r != null && r.contains("SESSION_HEALED")) {
                     android.util.Log.w("DSHA", "会话损坏自愈：已备份并重建会话库（旧对话可能丢失）");

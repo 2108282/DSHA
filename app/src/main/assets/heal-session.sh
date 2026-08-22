@@ -16,12 +16,28 @@ HEALED=0
 IDS=$(grep -oE 'session-[a-f0-9-]{36}' "$LOG" 2>/dev/null | sort -u | head -10)
 if [ -n "$IDS" ]; then
   for id in $IDS; do
-    # 找该会话的所有文件（jsonl / zstd / db）
-    FOUND=$(find /root/.dsh/sessions -path "*$id*" -type f 2>/dev/null)
+    # 找该会话的 JSONL 文件
+    FOUND=$(find /root/.dsh/sessions -path "*$id*" -name 'session.jsonl.zstd' -type f 2>/dev/null)
     for f in $FOUND; do
-      REL=${f#/root/.dsh/sessions/}
-      mkdir -p "/root/.dsh/corrupt-backup/$(dirname "$REL")"
-      mv "$f" "/root/.dsh/corrupt-backup/$REL" 2>/dev/null && { echo "已隔离: $REL"; HEALED=1; }
+      # 先尝试【修复】（补缺失 message.id，保留对话）——修复不了才隔离
+      # 调独立 python 脚本（fix-session.py，避免 heredoc 转义问题）
+      # 无 zstandard 先尝试装（在线环境；离线包已预装）
+      if ! python3 -c "import zstandard" 2>/dev/null; then
+        python3 -m pip install --break-system-packages -q zstandard 2>/dev/null \
+          || python3 -m pip install -q zstandard 2>/dev/null || true
+      fi
+      FIXED=$(python3 /root/.dsh/fix-session.py "$f" 2>&1)
+      if echo "$FIXED" | grep -q 'FIXED:'; then
+        echo "已修复会话($FIXED): $f"; HEALED=1
+      elif echo "$FIXED" | grep -q 'NO_ZSTD\|NO_FILE\|DECODE_FAIL'; then
+        # 解码失败/无 zstd → 隔离
+        REL=${f#/root/.dsh/sessions/}
+        mkdir -p "/root/.dsh/corrupt-backup/$(dirname "$REL")"
+        mv "$f" "/root/.dsh/corrupt-backup/$REL" 2>/dev/null && { echo "已隔离(无法修复): $REL"; HEALED=1; }
+      else
+        # NO_FIX（缺 id 已处理过但仍有其他问题）→ 保留（避免误隔离）
+        echo "会话无缺id问题，保留: $f"
+      fi
     done
     # 删空目录
     find /root/.dsh/sessions -path "*$id*" -type d -empty -delete 2>/dev/null
