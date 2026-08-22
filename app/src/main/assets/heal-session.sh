@@ -28,12 +28,19 @@ repair_one() {
   fi
   if ! python3 -c "import zstandard" 2>/dev/null; then
     # 优先本地 wheel（APK 已注入 /root/.dsh/zstandard-0.25.0-*.whl，离线可用）；
-    # 失败再试在线 pip（在线安装环境有网络时可用）
+    # pip 缺失/失败时兜底：wheel 就是 zip，直接解压进 site-packages（零依赖）。
     local ZWHL
     ZWHL=$(ls /root/.dsh/zstandard-0.25.0-*.whl 2>/dev/null | head -1)
     if [ -n "$ZWHL" ]; then
       python3 -m pip install --break-system-packages --no-index \
         "$ZWHL" >/tmp/zstd-pip.log 2>&1 || true
+      python3 -c "import zstandard" 2>/dev/null || {
+        local SITE
+        SITE=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null)
+        [ -z "$SITE" ] && SITE="/usr/local/lib/python3.12/dist-packages"
+        mkdir -p "$SITE"
+        unzip -qo "$ZWHL" -d "$SITE" 2>/dev/null || true
+      }
     fi
     python3 -c "import zstandard" 2>/dev/null || \
       python3 -m pip install --break-system-packages -q zstandard 2>/dev/null \
