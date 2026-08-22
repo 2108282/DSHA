@@ -172,7 +172,14 @@ def fix_file(path):
         kept.append(json.dumps(ev, ensure_ascii=False))
     if need_isolate:
         return "isolate", "存在无法安全修复的事件"
-    if fixed == 0:
+    if fixed == 0 and len(kept) > 1 and is_zstd:
+        # 无缺 id 问题，但格式可能不对（旧版本修回的单帧有多行→dsh 拒绝）
+        # 继续往下走，重写成多帧格式（第一帧 = 仅 header 行）
+        fixed = 0  # 不计数，但仍写回以规范化格式
+        need_format_fix = True
+    else:
+        need_format_fix = False
+    if fixed == 0 and not need_format_fix:
         return "no_fix", "未发现缺 id 等可修问题 (检=%d行 消息事件=%d 缺id=%d)" % (len(kept), diag_msg_events, diag_missing_id)
     bak = path + ".corrupt-" + time.strftime("%Y%m%d-%H%M%S")
     try:
@@ -184,19 +191,15 @@ def fix_file(path):
         # 后续帧 = 剩余事件行（assertZstdHeaderFrame 要求第一帧解压后恰好一行）。
         if is_zstd:
             cctx = zstd.ZstdCompressor()
-            buf = io.BytesIO()
+            frames = []
             # 帧 1: header（第一行）
             if kept and kept[0]:
-                w = cctx.stream_writer(buf)
-                w.write((kept[0] + "\n").encode("utf-8"))
-                w.flush()
+                frames.append(cctx.compress((kept[0] + "\n").encode("utf-8")))
             # 帧 2: 剩余事件行
             if len(kept) > 1:
                 rest = "\n".join(kept[1:]) + "\n"
-                w = cctx.stream_writer(buf)
-                w.write(rest.encode("utf-8"))
-                w.flush()
-            new_data = buf.getvalue()
+                frames.append(cctx.compress(rest.encode("utf-8")))
+            new_data = b"".join(frames)
         else:
             new_data = ("\n".join(kept) + "\n").encode("utf-8")
         with open(path, "wb") as f:
