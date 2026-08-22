@@ -111,7 +111,7 @@ fi
 
 log "[4/6] 注入预装脚本与补丁"
 sudo mkdir -p "$ROOTFS_DIR/root/patches"
-for f in webui-sidebar.patch bash-guard.patch webui-polyfill.sh rootfs-confirm-install.sh; do
+for f in webui-sidebar.patch bash-guard.patch webui-polyfill.sh webui-origin-port-patch.sh rootfs-confirm-install.sh; do
   if [ -f "$REPO_ROOT/app/src/main/assets/$f" ]; then
     sudo cp "$REPO_ROOT/app/src/main/assets/$f" "$ROOTFS_DIR/root/patches/$f"
   fi

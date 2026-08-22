@@ -24,7 +24,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bundle/offline-rootfs.tar.gz
-          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/*.patch') }}
+          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/webui-origin-port-patch.sh', 'app/src/main/assets/*.patch') }}
 
       - name: Build offline rootfs bundle
         if: steps.cache.outputs.cache-hit != 'true'

@@ -145,6 +145,9 @@ fi
 if [ -f /root/patches/webui-polyfill.sh ]; then
   bash /root/patches/webui-polyfill.sh || true
 fi
+if [ -f /root/patches/webui-origin-port-patch.sh ]; then
+  bash /root/patches/webui-origin-port-patch.sh || true
+fi
 
 echo "==> [7/8] 安装危险命令确认包装器"
 if [ -f /root/patches/rootfs-confirm-install.sh ]; then
