@@ -39,10 +39,8 @@ def zstd_load(raw, max_size=512 * 1024 * 1024):
     if raw[:4] != ZSTD_MAGIC:
         return raw  # 明文 JSONL
     import io as _io
-    try:
-        return zstd.ZstdDecompressor().decompress(raw, max_output_size=max_size)
-    except Exception:
-        pass
+    # 注意：绝不能用 decompress() 短路——dsh 文件是多帧拼接，decompress 只解
+    # 首帧（首帧带 content size 时会“成功”返回 1 行），必须 stream_reader 跨帧全读。
     out = _io.BytesIO()
     try:
         r = zstd.ZstdDecompressor().stream_reader(_io.BytesIO(raw), read_size=131072)

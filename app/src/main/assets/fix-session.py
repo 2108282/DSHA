@@ -111,17 +111,21 @@ def main():
         raw = open(path, "rb").read()
         is_zstd = raw[:4] == b"\x28\xb5\x2f\xfd"
         if is_zstd:
-            # 流式解压：dsh 的帧头不带 content size，单帧 decompress 会失败
+            # 流式全量解压：dsh 会话是多帧拼接（每次 append 一帧），decompress 只解
+            # 首帧会谎报成功；统一用 stream_reader 跨帧读取。
+            out = io.BytesIO()
             try:
-                data = zstd.ZstdDecompressor().decompress(
-                    raw, max_output_size=512 * 1024 * 1024)
+                r = zstd.ZstdDecompressor().stream_reader(io.BytesIO(raw), read_size=131072)
+                while True:
+                    ch = r.read(262144)
+                    if not ch:
+                        break
+                    out.write(ch)
+                    if out.tell() > 512 * 1024 * 1024:
+                        break
             except Exception:
-                out = b""
-                try:
-                    out = zstd.ZstdDecompressor().decompressobj().decompress(raw[:512 * 1024 * 1024 + 4096])
-                except Exception:
-                    out = b""
-                data = out
+                pass
+            data = out.getvalue()
         else:
             data = raw
     except Exception:
