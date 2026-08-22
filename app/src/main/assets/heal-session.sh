@@ -39,7 +39,13 @@ repair_one() {
         SITE=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null)
         [ -z "$SITE" ] && SITE="/usr/local/lib/python3.12/dist-packages"
         mkdir -p "$SITE"
-        unzip -qo "$ZWHL" -d "$SITE" 2>/dev/null || true
+        # 兜底解压 wheel：优先系统 unzip，没有则用 python 自带 zipfile（零依赖）
+        if command -v unzip >/dev/null 2>&1; then
+          unzip -qo "$ZWHL" -d "$SITE" 2>/dev/null || true
+        else
+          python3 -m zipfile -e "$ZWHL" "$SITE" 2>/dev/null || \
+            python3 -c "import zipfile,shutil; zipfile.ZipFile('$ZWHL').extractall('$SITE')" 2>/dev/null || true
+        fi
       }
     fi
     python3 -c "import zstandard" 2>/dev/null || \
