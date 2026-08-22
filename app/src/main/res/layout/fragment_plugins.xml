@@ -5,6 +5,56 @@
     android:background="@color/surface"
     android:orientation="vertical">
 
+    <!-- 链接解析栏：位于标签行上方，右对齐（视觉上在"市场"右侧） -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingStart="18dp"
+        android:paddingEnd="18dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="4dp"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🔗 链接安装"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp" />
+
+        <EditText
+            android:id="@+id/githubInstallInput"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_input"
+            android:hint="粘贴插件链接自动解析"
+            android:imeOptions="actionGo"
+            android:inputType="textUri"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:singleLine="true"
+            android:textColor="@color/text"
+            android:textColorHint="@color/text_muted"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/btnGithubInstall"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_btn"
+            android:gravity="center"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="解析"
+            android:textColor="#E6EDF3"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -123,46 +173,6 @@
         android:textSize="13sp"
         android:visibility="gone" />
 
-    <LinearLayout
-        android:id="@+id/githubInstallBar"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:paddingStart="18dp"
-        android:paddingEnd="18dp"
-        android:paddingBottom="6dp"
-        android:gravity="center_vertical">
-
-        <EditText
-            android:id="@+id/githubInstallInput"
-            android:layout_width="0dp"
-            android:layout_height="40dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_input"
-            android:hint="复制插件链接自动解析（如 https://github.com/owner/repo）"
-            android:imeOptions="actionGo"
-            android:inputType="textUri"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:singleLine="true"
-            android:textColor="@color/text"
-            android:textColorHint="@color/text_muted"
-            android:textSize="13sp" />
-
-        <TextView
-            android:id="@+id/btnGithubInstall"
-            android:layout_width="wrap_content"
-            android:layout_height="40dp"
-            android:layout_marginStart="8dp"
-            android:background="@drawable/bg_btn"
-            android:gravity="center"
-            android:paddingStart="14dp"
-            android:paddingEnd="14dp"
-            android:text="安装"
-            android:textColor="#E6EDF3"
-            android:textSize="13sp"
-            android:textStyle="bold" />
-    </LinearLayout>
 
     <EditText
         android:id="@+id/pluginSearch"
