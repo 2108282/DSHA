@@ -18,6 +18,12 @@ import java.util.zip.GZIPInputStream;
 public final class TarGzipExtractor {
 
     private static final int BLOCK = 512;
+    /** 元数据记录（GNU/PAX）最大长度：超过视为损坏，防巨量 skip 后读错流。 */
+    private static final long MAX_META_RECORD = 256 * 1024;
+    /** 单个常规文件解压上限：防 tar bomb（rootfs 内最大单文件一般远小于此）。 */
+    private static final long MAX_FILE_BYTES = 8L * 1024 * 1024 * 1024;
+    /** 单次解压总输出上限：给足 rootfs/备份空间，同时拦截无限增长。 */
+    private static final long MAX_TOTAL_BYTES = 64L * 1024 * 1024 * 1024;
 
     private TarGzipExtractor() {}
 
@@ -38,6 +44,13 @@ public final class TarGzipExtractor {
         }
     }
 
+    /** 严格模式解压（插件导入用）：拒绝符号链接/硬链接条目，防链接逃逸。 */
+    public static void extractSafe(File tarball, File dest) throws IOException {
+        try (InputStream raw = new FileInputStream(tarball)) {
+            extractAuto(raw, dest, 0, false, true);
+        }
+    }
+
     /** gzip 或裸 tar 自动识别。 */
     public static void extractAuto(InputStream raw, File dest, int strip) throws IOException {
         extractAuto(raw, dest, strip, false);
@@ -45,6 +58,12 @@ public final class TarGzipExtractor {
 
     /** gzip 或裸 tar 自动识别。lenient=true 用于恢复用户备份：文件名含逗号/引号不判损坏。 */
     public static void extractAuto(InputStream raw, File dest, int strip, boolean lenient) throws IOException {
+        extractAuto(raw, dest, strip, lenient, false);
+    }
+
+    /** 完整参数：rejectLinks=true 时遇到 symlink/hardlink 直接判非法（严格来源用）。 */
+    public static void extractAuto(InputStream raw, File dest, int strip, boolean lenient,
+                                   boolean rejectLinks) throws IOException {
         PushbackInputStream pin = new PushbackInputStream(new BufferedInputStream(raw, 1 << 16), 2);
         int b0 = pin.read();
         int b1 = pin.read();
@@ -54,10 +73,10 @@ public final class TarGzipExtractor {
         }
         if (b0 == 0x1f && b1 == 0x8b) {
             try (GZIPInputStream gz = new GZIPInputStream(pin)) {
-                extractTar(gz, dest, strip, lenient);
+                extractTar(gz, dest, strip, lenient, rejectLinks);
             }
         } else {
-            extractTar(pin, dest, strip, lenient);
+            extractTar(pin, dest, strip, lenient, rejectLinks);
         }
     }
 
@@ -66,16 +85,22 @@ public final class TarGzipExtractor {
     }
 
     public static void extractTar(InputStream tar, File dest, int strip) throws IOException {
-        extractTar(tar, dest, strip, false);
+        extractTar(tar, dest, strip, false, false);
     }
 
     public static void extractTar(InputStream tar, File dest, int strip, boolean lenient) throws IOException {
+        extractTar(tar, dest, strip, lenient, false);
+    }
+
+    public static void extractTar(InputStream tar, File dest, int strip, boolean lenient,
+                                  boolean rejectLinks) throws IOException {
         InputStream in = (tar instanceof BufferedInputStream) ? tar : new BufferedInputStream(tar, 1 << 16);
         byte[] header = new byte[BLOCK];
         byte[] buf = new byte[8192];
         String pendingName = null;
         /** GNU 长链接名（type 'K'）：下一个符号链接/硬链接条目的 linkname 用这个 */
         String pendingLinkname = null;
+        long totalBytes = 0;
 
         while (true) {
             if (!readFull(in, header, BLOCK)) break;
@@ -97,7 +122,12 @@ public final class TarGzipExtractor {
             }
 
             if (type == 'L' || type == 'x' || type == 'K') {
-                byte[] longData = new byte[clampSize(size)];
+                // 元数据记录必须整体读入（旧实现 clampSize 只读 64KB，超过会漏读
+                // 导致流错位）；超过上限直接判损坏。
+                if (size <= 0 || size > MAX_META_RECORD) {
+                    throw new IOException("预构建包损坏（超长元数据记录 size=" + size + "）");
+                }
+                byte[] longData = new byte[(int) size];
                 readFull(in, longData, longData.length);
                 skipPadding(in, size);
                 if (type == 'L') {
@@ -155,20 +185,23 @@ public final class TarGzipExtractor {
                 case '0':
                 case 0:
                 case '7':
+                    if (size > MAX_FILE_BYTES || totalBytes + size > MAX_TOTAL_BYTES) {
+                        throw new IOException("预构建包损坏（文件过大 size=" + size + "）");
+                    }
                     writeFile(in, out, size, mode, buf);
+                    totalBytes += size;
                     break;
                 case '5':
                     out.mkdirs();
                     skipPadding(in, size);
                     break;
                 case '2':
+                    if (rejectLinks) {
+                        throw new IOException("预构建包损坏（禁止符号链接条目: " + safeName(name) + "）");
+                    }
                     if (out.getParentFile() != null) out.getParentFile().mkdirs();
-                    // 符号链接目标安全校验：目标不能是绝对路径/穿越（防恶意备份
-                    // 用链接指向 /etc/passwd 等系统文件）；相对目标且不逃逸才创建
-                    boolean linkSafe = linkname != null && !linkname.isEmpty()
-                            && !linkname.startsWith("/")
-                            && !linkname.startsWith("../") && !linkname.contains("/../");
-                    if (linkSafe) {
+                    // 符号链接目标安全校验：目标必须在 dest 内（绝不指向系统文件/外部目录）
+                    if (linkSafeWithin(dest, out, linkname)) {
                         try {
                             Os.symlink(linkname, out.getAbsolutePath());
                         } catch (Throwable ignored) {
@@ -177,10 +210,16 @@ public final class TarGzipExtractor {
                     skipPadding(in, size);
                     break;
                 case '1':
+                    if (rejectLinks) {
+                        throw new IOException("预构建包损坏（禁止硬链接条目: " + safeName(name) + "）");
+                    }
                     if (out.getParentFile() != null) out.getParentFile().mkdirs();
-                    try {
-                        Os.link(new File(dest, linkname).getAbsolutePath(), out.getAbsolutePath());
-                    } catch (Throwable ignored) {
+                    // 硬链接目标同样必须留在 dest 内（不允许链到已有敏感文件）
+                    if (linkSafeWithin(dest, out, linkname)) {
+                        try {
+                            Os.link(new File(dest, linkname).getAbsolutePath(), out.getAbsolutePath());
+                        } catch (Throwable ignored) {
+                        }
                     }
                     skipPadding(in, size);
                     break;
@@ -188,6 +227,26 @@ public final class TarGzipExtractor {
                     skipPadding(in, size);
                     break;
             }
+        }
+    }
+
+    /** 链接目标安全校验：非绝对路径且 normalize 后仍落在 dest 内。 */
+    private static boolean linkSafeWithin(File dest, File out, String linkname) {
+        if (linkname == null || linkname.isEmpty()) return false;
+        String trimmed = new File(linkname).getPath();
+        if (new File(trimmed).isAbsolute()) return false;
+        try {
+            java.nio.file.Path root = dest.toPath().toAbsolutePath().normalize();
+            java.nio.file.Path base = out.getParentFile() == null
+                    ? root
+                    : out.getParentFile().toPath().toAbsolutePath().normalize();
+            java.nio.file.Path target = base.resolve(trimmed).normalize();
+            String rs = root.toString();
+            String ts = target.toString();
+            return ts.equals(rs) || (ts.startsWith(rs) && ts.length() > rs.length()
+                    && ts.charAt(rs.length()) == java.io.File.separatorChar);
+        } catch (Throwable e) {
+            return false;
         }
     }
 
@@ -274,14 +333,15 @@ public final class TarGzipExtractor {
     }
 
     private static String parsePaxPath(byte[] data) {
+        // PAX 记录格式： "<len> key=value\n"（len 含 key=value+\n 本身长度）
         String s = new String(data, java.nio.charset.StandardCharsets.UTF_8);
-        for (String line : s.split("\n")) {
-            if (line.startsWith("path=")) return line.substring(5);
+        for (String line : s.split("\\n")) {
+            String t = line.trim();
+            int sp = t.indexOf(' ');
+            if (sp <= 0) continue;
+            String kv = t.substring(sp + 1).trim();
+            if (kv.startsWith("path=")) return kv.substring("path=".length());
         }
         return null;
-    }
-
-    private static int clampSize(long size) {
-        return (int) Math.min(size, 64 * 1024);
     }
 }

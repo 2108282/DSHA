@@ -31,24 +31,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // 崩溃捕获：写日志到 files/crash.log，并继续交给系统默认 handler（保留 DropBox 崩溃报告）
-        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
-        Thread.setDefaultUncaughtExceptionHandler((thread, t) -> {
-            try {
-                java.io.File f = new java.io.File(getFilesDir(), "crash.log");
-                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f, true)) {
-                    fos.write(("\n===== " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(new java.util.Date()) + " =====\n"
-                            + android.util.Log.getStackTraceString(t) + "\n").getBytes());
-                }
-            } catch (Exception ignored) {
-            }
-            // 转交系统默认 handler（否则系统 CrashReport/DropBox 收不到，只剩我们自己写的日志）
-            if (prev != null) {
-                prev.uncaughtException(thread, t);
-            } else {
-                android.os.Process.killProcess(android.os.Process.myPid());
-            }
-        });
+        // 崩溃捕获已统一在 DshaApp 安装一次（防止 Activity 重建导致重复/覆盖 handler）
 
         // 首次启动进入引导页
         SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
@@ -158,8 +141,14 @@ public class MainActivity extends AppCompatActivity {
     /** 崩溃自愈提示：上次有未处理崩溃时，读 crash.log 首条摘要告知用户（不阻塞，仅提示） */
     private void showCrashRecoveryNotice() {
         try {
+            // 同一份 crash.log 只提醒一次（24h 去重，不删除日志本体，保留取证）
+            SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
             final java.io.File f = new java.io.File(getFilesDir(), "crash.log");
             if (!f.isFile() || f.length() == 0) return;
+            if (System.currentTimeMillis() - prefs.getLong("crash_notice_shown", 0) < 24L * 3600 * 1000) {
+                return;
+            }
+            prefs.edit().putLong("crash_notice_shown", System.currentTimeMillis()).apply();
             String all = new String(java.nio.file.Files.readAllBytes(f.toPath()),
                     java.nio.charset.StandardCharsets.UTF_8);
             if (all.trim().isEmpty()) return;
@@ -175,13 +164,19 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
             final String info = summary.isEmpty() ? "发生异常" : summary;
-            // 删除已读日志（下次崩溃再提示，避免每次启动都弹）
-            //noinspection ResultOfMethodCallIgnored
-            f.delete();
+            // 不影响提示：已读内容归档到 crash.log.prev（本轮 crash.log 保留供反复查看）
+            try {
+                java.io.File prev = new java.io.File(getFilesDir(), "crash.log.prev");
+                //noinspection ResultOfMethodCallIgnored
+                prev.delete();
+                //noinspection ResultOfMethodCallIgnored
+                f.renameTo(prev);
+            } catch (Throwable ignored) {
+            }
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> new AlertDialog.Builder(this)
                     .setTitle("上次异常退出")
                     .setMessage("DSHA 上次运行发生了未处理异常，已自动恢复。\n\n" + info
-                            + "\n\n如果问题反复出现，请把内置终端里 `cat /data/data/com.dsh.client/files/crash.log` 的内容发给开发者。")
+                            + "\n\n如果问题反复出现，请把内置终端里 `cat /data/data/com.dsh.client/files/crash.log.prev`（或 crash.log）的内容发给开发者。")
                     .setPositiveButton("知道了", null)
                     .show(), 1200);
         } catch (Throwable ignored) {

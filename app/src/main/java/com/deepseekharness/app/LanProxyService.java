@@ -11,8 +11,8 @@ import java.net.Socket;
 
 /**
  * 局域网转发桥（Shizuku 式思路的轻量版）：
- * 在 App 侧监听 0.0.0.0:{@link #LAN_PORT}，把 HTTP 请求转发到本机 127.0.0.1:{@link #BACKEND_PORT}，
- * 并把 Host 头重写为 127.0.0.1:{@link #BACKEND_PORT} —— 后端 WebUI 的 Host 校验看到的是 loopback，
+ * 在 App 侧监听 0.0.0.0:{@link #LAN_PORT}，把 HTTP 请求转发到本机 127.0.0.1:backendPort，
+ * 并把 Host 头重写为 127.0.0.1:backendPort —— 后端 WebUI 的 Host 校验看到的是 loopback，
  * 天然放行，彻底绕开 CLI 的 0.0.0.0 拦截与 trusted-host 限制。支持 keep-alive、chunked、
  * WebSocket 升级（升级后双向透传）与 Location 重写（防重定向回 127.0.0.1）。
  */
@@ -41,32 +41,58 @@ public final class LanProxyService {
         return lanToken;
     }
 
-    /** 校验请求是否带正确 token（?token= 或 X-DSHA-Token header） */
-    private static boolean tokenOk(String head, String token) {
-        if (token == null || token.isEmpty()) return true; // 无 token 配置（旧版兼容）→ 放行
-        // header 校验
-        for (String l : head.split("\r?\n")) {
-            int i = l.indexOf(':');
-            if (i > 0 && l.substring(0, i).trim().equalsIgnoreCase("X-DSHA-Token")) {
-                return token.equals(l.substring(i + 1).trim());
+    /** 校验请求是否带正确 token（?token= / X-DSHA-Token / Cookie: dsha_token=）。
+         *  token 只应从 URL 查询串、显式 header 或本站 Cookie 中读取，避免无鉴权放行。 */
+        private static boolean tokenOk(String head, String token) {
+            if (token == null || token.isEmpty()) return true; // 无 token 配置（旧版兼容）→ 放行
+            for (String l : head.split("\\r?\\n")) {
+                int i = l.indexOf(':');
+                if (i <= 0) continue;
+                String key = l.substring(0, i).trim();
+                String v = l.substring(i + 1).trim();
+                if (key.equalsIgnoreCase("X-DSHA-Token")) {
+                    return constantTimeEquals(token, v);
+                }
+                if (key.equalsIgnoreCase("Cookie")) {
+                    for (String c : v.split(";")) {
+                        c = c.trim();
+                        if (c.startsWith("dsha_token=")) {
+                            return constantTimeEquals(token, c.substring("dsha_token=".length()));
+                        }
+                    }
+                }
             }
+            // query 参数校验（?token=xxx）
+            int tq = head.indexOf("token=");
+            if (tq >= 0) {
+                String v = head.substring(tq + 6);
+                int amp = v.indexOf('&');
+                if (amp >= 0) v = v.substring(0, amp);
+                int sp = v.indexOf(' ');
+                if (sp >= 0) v = v.substring(0, sp);
+                if (v.indexOf('\r') >= 0) v = v.substring(0, v.indexOf('\r'));
+                return constantTimeEquals(token, v.trim());
+            }
+            return false;
         }
-        // query 参数校验（?token=xxx）
-        int tq = head.indexOf("token=");
-        if (tq >= 0) {
-            String v = head.substring(tq + 6);
-            int amp = v.indexOf('&');
-            if (amp >= 0) v = v.substring(0, amp);
-            int sp = v.indexOf(' ');
-            if (sp >= 0) v = v.substring(0, sp);
-            return token.equals(v.trim());
+
+        private static boolean constantTimeEquals(String a, String b) {
+            if (a == null || b == null) return false;
+            int diff = 0;
+            for (int i = 0; i < a.length(); i++) {
+                char ca = a.charAt(i);
+                char cb = i < b.length() ? b.charAt(i) : 0;
+                diff |= ca ^ cb;
+            }
+            diff |= a.length() ^ b.length();
+            return diff == 0;
         }
-        return false;
-    }
     /** 桥监听端口：WebUI 默认 3080，桥用 3081 避免端口冲突（用户访问 http://<手机IP>:3081/） */
     public static final int LAN_PORT = 3081;
-    /** 后端 WebUI 地址 */
-    public static final int BACKEND_PORT = 3080;
+    /** 全局后端端口：每次 start 时用当前配置覆盖（自定义端口场景必须跟随 WebUI）。 */
+    public static final int DEFAULT_BACKEND_PORT = 3080;
+
+    private static volatile int backendPort = DEFAULT_BACKEND_PORT;
 
     private static ServerSocket server;
     private static Thread acceptThread;
@@ -81,8 +107,23 @@ public final class LanProxyService {
 
     private LanProxyService() {}
 
+    /** 兼容旧调用：未传端口时保持默认 3080。 */
     public static synchronized void start(String rootfsDir, android.content.Context ctx) {
+        int port;
+        try {
+            port = HarnessController.get(ctx).getPortInt();
+        } catch (Throwable ignored) {
+            port = DEFAULT_BACKEND_PORT;
+        }
+        start(rootfsDir, ctx, port);
+    }
+
+    /** 真正的启动入口：后端端口每次取自当前配置。 */
+    public static synchronized void start(String rootfsDir, android.content.Context ctx, int backendPortArg) {
         if (running) return;
+        int backend = backendPortArg > 0 && backendPortArg <= 65535 ? backendPortArg : DEFAULT_BACKEND_PORT;
+        if (backend == LAN_PORT) backend = 3080; // 与桥监听端口冲突时回退默认（配置页已拦截，这里兜底）
+        backendPort = backend;
         logPath = rootfsDir + "/root/dsh-lan.log";
         if (ctx != null) getLanToken(ctx); // 初始化 token
         running = true;
@@ -93,7 +134,7 @@ public final class LanProxyService {
             return t;
         });
         lanIp = HarnessController.getLanAddress();
-        log("LAN 桥启动中: 0.0.0.0:" + LAN_PORT + " → 127.0.0.1:" + BACKEND_PORT + " (LAN IP=" + lanIp + ")");
+        log("LAN 桥启动中: 0.0.0.0:" + LAN_PORT + " → 127.0.0.1:" + backend + " (LAN IP=" + lanIp + ")");
         acceptThread = new Thread(() -> {
             try {
                 server = new ServerSocket();
@@ -204,14 +245,14 @@ public final class LanProxyService {
                 boolean upgrade = containsIgnoreCase(head, "Upgrade: websocket")
                         || reqLine.contains("HTTP/1.1") && containsIgnoreCase(head, "Connection: Upgrade");
 
-                // 2. 改写 Host 头 → 127.0.0.1:3080
+                // 2. 改写 Host 头 → 127.0.0.1:<backendPort>
                 String rewritten = rewriteHost(head);
                 byte[] headBytes = rewritten.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
 
                 // 3. 连接后端
                 try (Socket back = new Socket()) {
                     back.setSoTimeout(120000);
-                    back.connect(new InetSocketAddress("127.0.0.1", BACKEND_PORT), 5000);
+                    back.connect(new InetSocketAddress("127.0.0.1", backendPort), 5000);
                     InputStream bin = back.getInputStream();
                     OutputStream bout = back.getOutputStream();
                     bout.write(headBytes);
@@ -297,8 +338,9 @@ public final class LanProxyService {
         out.flush();
     }
 
-    /** chunked 透传直到末尾 0 块 */
+    /** chunked 透传直到末尾 0 块；单块上限 1MB + 块尾必须 CRLF（畸形流直接结束）。 */
     private static void pipeChunked(InputStream in, OutputStream out) throws IOException {
+        final int MAX_CHUNK = 1024 * 1024;
         java.io.ByteArrayOutputStream line = new java.io.ByteArrayOutputStream();
         while (true) {
             line.reset();
@@ -308,21 +350,24 @@ public final class LanProxyService {
                 line.write(b);
                 if (line.size() >= 2 && line.toByteArray()[line.size() - 2] == '\r' && line.toByteArray()[line.size() - 1] == '\n') {
                     try {
-                        size = Integer.parseInt(new String(line.toByteArray(), java.nio.charset.StandardCharsets.ISO_8859_1).trim().split(";")[0], 16);
+                        String h = new String(line.toByteArray(), java.nio.charset.StandardCharsets.ISO_8859_1).trim();
+                        size = Integer.parseInt(h.split(";")[0].trim(), 16);
                     } catch (Exception e) { size = -1; }
                     break;
                 }
                 if (line.size() > 1024) break;
             }
             if (b < 0) break;
+            if (size < 0 || size > MAX_CHUNK) break; // 非法/超大块：中止透传（客户端可重新提交）
             out.write(line.toByteArray());
             if (size == 0) { out.flush(); break; }
             if (size > 0) {
                 pipeBytes(in, out, size);
-                // 块尾 CRLF（EOF 时 -1 不写入，防脏字节 0xff）
+                // 块尾必须 CRLF（EOF 时 -1 不写入，防脏字节 0xff）
                 int c1 = in.read(); int c2 = in.read();
-                if (c1 >= 0) out.write(c1);
-                if (c2 >= 0) out.write(c2);
+                if (c1 < 0 || c2 < 0 || c1 != '\r' || c2 != '\n') break;
+                out.write(c1);
+                out.write(c2);
             }
         }
         out.flush();
@@ -361,55 +406,75 @@ public final class LanProxyService {
         return idx >= 0;
     }
 
-    /** 重写请求 Host 头为 127.0.0.1:端口（后端 Host 校验放行） */
-    private static String rewriteHost(String head) {
-        StringBuilder sb = new StringBuilder();
-        boolean hostDone = false;
-        for (String l : head.split("\r?\n")) {
-            if (l.isEmpty()) { sb.append("\r\n"); continue; }
-            int i = l.indexOf(':');
-            String key = i > 0 ? l.substring(0, i).trim() : "";
-            if (key.equalsIgnoreCase("Host")) {
-                sb.append("Host: 127.0.0.1:").append(BACKEND_PORT).append("\r\n");
-                hostDone = true;
-            } else if (key.equalsIgnoreCase("Origin")) {
-                // 关键：dsh /api trust fence 要求 Origin.host === Host（严格含端口）。
-                // 桥把 Host 重写成 loopback，但局域网浏览器的 Origin 是
-                // http://<手机IP>:3081 → 不匹配 → 403 → ERR_HTTP_RESPONSE_CODE_FAILURE。
-                // 把 Origin 也重写成 loopback 同源，让后端 trust fence 放行。
-                sb.append("Origin: http://127.0.0.1:").append(BACKEND_PORT).append("\r\n");
-            } else if (key.equalsIgnoreCase("sec-fetch-site")) {
-                // cross-site 标记被 trust fence 直接拒绝 → 改 same-origin
-                sb.append("Sec-Fetch-Site: same-origin\r\n");
-            } else {
-                sb.append(l).append("\r\n");
+    /** 重写请求 Host 头为 127.0.0.1:<backendPort>（后端 Host 校验放行） */
+        private static String rewriteHost(String head) {
+                StringBuilder sb = new StringBuilder();
+                boolean hostDone = false;
+                boolean first = true;
+                for (String l : head.split("\\r?\\n")) {
+                    if (l.isEmpty()) { sb.append("\r\n"); continue; }
+                    int i = l.indexOf(':');
+                    String key = i > 0 ? l.substring(0, i).trim() : "";
+                    if (first) {
+                        first = false;
+                        // 请求行：剥离 token 查询参数（LAN 鉴权 token 不转发给后端）
+                        sb.append(stripTokenFromRequestLine(l)).append("\r\n");
+                        continue;
+                    }
+                    if (key.equalsIgnoreCase("Host")) {
+                    sb.append("Host: 127.0.0.1:").append(backendPort).append("\r\n");
+                    hostDone = true;
+                } else if (key.equalsIgnoreCase("Origin")) {
+                    // 关键：dsh /api trust fence 要求 Origin.host === Host（严格含端口）。
+                    // 桥把 Host 重写成 loopback，但局域网浏览器的 Origin 是
+                    // http://<手机IP>:3081 → 不匹配 → 403 → ERR_HTTP_RESPONSE_CODE_FAILURE。
+                    // 把 Origin 也重写成 loopback 同源，让后端 trust fence 放行。
+                    sb.append("Origin: http://127.0.0.1:").append(backendPort).append("\r\n");
+                } else if (key.equalsIgnoreCase("sec-fetch-site")) {
+                                // cross-site 标记被 trust fence 直接拒绝 → 改 same-origin
+                                sb.append("Sec-Fetch-Site: same-origin\r\n");
+                            } else {
+                                // 普通头 / 请求行：保留（token 只作为本站鉴权，不回传后端）
+                                sb.append(l).append("\r\n");
+                            }
             }
+            if (!hostDone) sb.insert(0, "Host: 127.0.0.1:" + backendPort + "\r\n");
+            return sb.toString();
         }
-        if (!hostDone) sb.insert(0, "Host: 127.0.0.1:" + BACKEND_PORT + "\r\n");
-        return sb.toString();
-    }
 
-    /** 响应头里 Location 重写：127.0.0.1:3080 → 局域网IP:3081（防跳回本机）。
-     *  每次实时取 IP（WiFi 切换后 IP 变化也能正确重写，不缓存旧值）。 */
-    private static String rewriteLocation(String head) {
-        if (!containsIgnoreCase(head, "Location:")) return head;
-        String ip = HarnessController.getLanAddress();
-        if (ip == null || ip.isEmpty()) ip = "127.0.0.1";
-        StringBuilder sb = new StringBuilder();
-        for (String l : head.split("\r?\n")) {
-            if (l.isEmpty()) { sb.append("\r\n"); continue; }
-            int i = l.indexOf(':');
-            if (i > 0 && l.substring(0, i).trim().equalsIgnoreCase("Location")) {
-                String v = l.substring(i + 1).trim();
-                v = v.replace("http://127.0.0.1:" + BACKEND_PORT, "http://" + ip + ":" + LAN_PORT);
-                v = v.replace("http://localhost:" + BACKEND_PORT, "http://" + ip + ":" + LAN_PORT);
-                sb.append("Location: ").append(v).append("\r\n");
-            } else {
-                sb.append(l).append("\r\n");
+        /** 请求行里的 ?token=xxx 只用于本站鉴权：转发后端前剥离，避免 token 进后端日志。 */
+            private static String stripTokenFromRequestLine(String line) {
+                int q = line.indexOf('?');
+                if (q < 0) return line;
+                String path = line.substring(0, q);
+                String query = line.substring(q + 1);
+                String cleaned = query.replaceAll("[&]?token=[^&]*", "");
+                if (cleaned.endsWith("&")) cleaned = cleaned.substring(0, cleaned.length() - 1);
+                if (cleaned.isEmpty()) return path;
+                return path + "?" + cleaned;
             }
+
+            /** 响应头里 Location 重写：127.0.0.1:<backendPort> → 局域网IP:3081（防跳回本机）。
+             *  每次实时取 IP（WiFi 切换后 IP 变化也能正确重写，不缓存旧值）。 */
+        private static String rewriteLocation(String head) {
+            if (!containsIgnoreCase(head, "Location:")) return head;
+            String ip = HarnessController.getLanAddress();
+            if (ip == null || ip.isEmpty()) ip = "127.0.0.1";
+            StringBuilder sb = new StringBuilder();
+            for (String l : head.split("\\r?\\n")) {
+                if (l.isEmpty()) { sb.append("\r\n"); continue; }
+                int i = l.indexOf(':');
+                if (i > 0 && l.substring(0, i).trim().equalsIgnoreCase("Location")) {
+                    String v = l.substring(i + 1).trim();
+                    v = v.replace("http://127.0.0.1:" + backendPort, "http://" + ip + ":" + LAN_PORT);
+                    v = v.replace("http://localhost:" + backendPort, "http://" + ip + ":" + LAN_PORT);
+                    sb.append("Location: ").append(v).append("\r\n");
+                } else {
+                    sb.append(l).append("\r\n");
+                }
+            }
+            return sb.toString();
         }
-        return sb.toString();
-    }
 
     private static void closeQuietly(ServerSocket s) {
         try { if (s != null) s.close(); } catch (Exception ignored) {}

@@ -50,9 +50,11 @@ public final class HttpShellService {
     private volatile boolean running;
     /** 连接处理线程池（请求可能阻塞等用户确认 60s，必须并发处理，否则一个确认卡死全部请求） */
     private java.util.concurrent.ExecutorService pool;
-    /** 鉴权 token（随机生成，rootfs 内 agent 通过它访问；外部网络无法到达 127.0.0.1） */
+    /** 鉴权 token（随机生成，rootfs 内 agent 通过它访问；外部网络无法到达 127.0.0.1）。
+     *  每次 start 都会和 rootfs 文件对账：文件存在则沿用，缺失/内容异常则轮换重写，
+     *  防止重解压 rootfs 后内存 token 与文件不一致导致 agent 无法认证。 */
     private static volatile String authToken = "";
-    /** token 持久化位置（rootfs 内 agent 可读） */
+    /** token 持久化位置（rootfs 内 agent 可读，建议 0600） */
     private static final String TOKEN_FILE = "/root/.dsh/.bridge_token";
 
     public HttpShellService(Context ctx) {
@@ -63,32 +65,57 @@ public final class HttpShellService {
         return instance;
     }
 
-    /** 生成/读取鉴权 token，并写入 rootfs（agent 读取用）。
-     *  注意：路径是 rootfs 内的 /root/.dsh/.bridge_token，App 写的是
-     *  rootfs 实际目录（files/linux/ubuntu/root/.dsh/）。 */
+    private static java.io.File tokenFileIfPossible() {
+        try {
+            HarnessController hc = HarnessController.get(instance().ctx);
+            if (hc != null && hc.getProot() != null && hc.getProot().getRootfsDir() != null) {
+                return new java.io.File(hc.getProot().getRootfsDir(), "root/.dsh/.bridge_token");
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** 读取 rootfs 内 token 文件（只读，不修改内容）。 */
+    private static String readTokenFromFile(java.io.File tf) {
+        if (tf == null || !tf.isFile()) return null;
+        try {
+            String s = new String(java.nio.file.Files.readAllBytes(tf.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8).trim();
+            if (s.isEmpty() || s.length() > 128) return null;
+            // 只允许可安全放入 URL/Header 的一半字符，拒绝换行等脏内容
+            if (!s.matches("[A-Za-z0-9_-]+")) return null;
+            return s;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** 生成/对账 token（rootfs 文件优先；缺失或无效则轮换并写入）。
+     *  注：token 属于 rootfs 内 agent 访问 3090 桥的共享凭据，不做 0600 之外的额外加密。 */
     private static String ensureToken() {
-        if (!authToken.isEmpty()) return authToken;
         synchronized (HttpShellService.class) {
-            // 双检：并发请求可能同时进 ensureToken，不加锁会生成两个 token，
-            // 一个覆盖另一个 → 内存 token 与 rootfs 文件不一致 → agent 认证失败
-            if (!authToken.isEmpty()) return authToken;
-            try {
-                String t = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32);
-                authToken = t;
-                // 写入 rootfs（通过 HarnessController 拿 rootfs 路径；失败不影响运行）
+            java.io.File tf = tokenFileIfPossible();
+            String fromFile = readTokenFromFile(tf);
+            if (fromFile != null && !fromFile.isEmpty()) {
+                authToken = fromFile;
+                return authToken;
+            }
+            // 无文件或内容无效 → 轮换（不能用旧内存值，否则 agent 读到的文件永远不会出现）
+            String t = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32);
+            authToken = t;
+            if (tf != null) {
                 try {
-                    HarnessController hc = HarnessController.get(instance().ctx);
-                    if (hc != null && hc.getProot() != null) {
-                        java.io.File tf = new java.io.File(hc.getProot().getRootfsDir(),
-                                "root/.dsh/.bridge_token");
-                        if (tf.getParentFile() != null) tf.getParentFile().mkdirs();
-                        try (java.io.FileOutputStream fo = new java.io.FileOutputStream(tf)) {
-                            fo.write(t.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                        }
+                    if (tf.getParentFile() != null) tf.getParentFile().mkdirs();
+                    java.nio.file.Files.write(tf.toPath(), t.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    try {
+                        java.nio.file.attribute.PosixFilePermissions.fromString("rw-------");
+                        java.nio.file.Files.setPosixFilePermissions(tf.toPath(),
+                                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+                    } catch (Throwable ignored) {
                     }
                 } catch (Throwable ignored) {
                 }
-            } catch (Throwable ignored) {
             }
             return authToken;
         }
@@ -146,6 +173,23 @@ public final class HttpShellService {
         cancelConfirmNotification();
     }
 
+    /** 校验查询串/头中的 token（常量时间比较 + URL 解码容错） */
+    private static boolean tokenMatch(String presented) {
+        String token = authToken.isEmpty() ? ensureToken() : authToken;
+        return token != null && !token.isEmpty() && constantTimeEquals(token, presented);
+    }
+
+    private static boolean constantTimeEquals(String a, String b) {
+        if (a == null || b == null) return false;
+        int diff = a.length() ^ b.length();
+        for (int i = 0; i < a.length(); i++) {
+            char ca = a.charAt(i);
+            char cb = i < b.length() ? b.charAt(i) : 0;
+            diff |= ca ^ cb;
+        }
+        return diff == 0;
+    }
+
     private void handle(Socket client) {
         try (Socket c = client) {
             BufferedReader reader = new BufferedReader(new InputStreamReader(c.getInputStream()));
@@ -169,15 +213,17 @@ public final class HttpShellService {
             // 鉴权：token 必须匹配（通过 ?token= 或 X-Token header）
             boolean authed = false;
             String t = "";
-            int tq = path.indexOf("token=");
+            // 只认 query 中的 token（EXCLUSIVE：跳过 path 其他位置的 token=）
+            int qm = path.indexOf('?');
+            String query = qm >= 0 ? path.substring(qm + 1) : "";
+            int tq = query.indexOf("token=");
             if (tq >= 0) {
-                t = path.substring(tq + 6);
+                t = query.substring(tq + 6);
                 int amp = t.indexOf('&');
                 if (amp >= 0) t = t.substring(0, amp);
                 try { t = URLDecoder.decode(t, "UTF-8"); } catch (Exception ignored) { }
+                if (!t.isEmpty()) authed = tokenMatch(t.trim());
             }
-            String token = authToken.isEmpty() ? ensureToken() : authToken;
-            if (!t.isEmpty() && token.equals(t)) authed = true;
             if (!authed) {
                 // 也支持 header 传 token（agent 引导用 curl -H）
                 try {
@@ -185,7 +231,7 @@ public final class HttpShellService {
                     while ((hdr = reader.readLine()) != null && !hdr.isEmpty()) {
                         if (hdr.toLowerCase().startsWith("x-token:")) {
                             String hv = hdr.substring(8).trim();
-                            if (token.equals(hv)) authed = true;
+                            if (!hv.isEmpty() && tokenMatch(hv)) authed = true;
                             break;
                         }
                     }
@@ -238,8 +284,9 @@ public final class HttpShellService {
         try {
             // App 前台时不发通知（用户正看着页面，不打扰）——与 TaskNotifier 抑制一致
             if (TaskNotifier.appInForeground) return "FOREGROUND_SKIP";
-            String title = getParam(path, "title", "DSHA 通知");
-            String text = getParam(path, "text", "");
+            String q = queryOf(path);
+            String title = getParam(q, "title", "DSHA 通知");
+            String text = getParam(q, "text", "");
             if (text.isEmpty()) return "NO_TEXT";
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return "NO_SERVICE";
@@ -267,7 +314,7 @@ public final class HttpShellService {
     /** /app/toast?text= ：弹 App 内 Toast */
     private String appToast(String path) {
         try {
-            final String text = getParam(path, "text", "");
+            final String text = getParam(queryOf(path), "text", "");
             if (text.isEmpty()) return "NO_TEXT";
             new Handler(Looper.getMainLooper()).post(() -> {
                 try {
@@ -285,7 +332,7 @@ public final class HttpShellService {
      *  安全：禁止读凭据文件（.env / .bridge_token / settings.yaml —— 含 API key/对话密钥）。 */
     private String appReadFile(String path) {
         try {
-            String p = getParam(path, "path", "");
+            String p = getParam(queryOf(path), "path", "");
             if (p.isEmpty()) return "NO_PATH";
             String lower = p.toLowerCase();
             if (lower.endsWith("/.env") || lower.contains("/.env/")
@@ -293,6 +340,18 @@ public final class HttpShellService {
                 return "FORBIDDEN: 凭据文件不可读（.env/.bridge_token/settings.yaml）";
             }
             java.io.File f = new java.io.File(p);
+            // 只允许读取外部存储（/sdcard 或 /storage/emulated/0）：
+            // 否则 agent 可绕过过滤直接读 App 私有目录（SharedPreferences 里含 API key）
+            String canon;
+            try {
+                canon = f.getCanonicalPath();
+            } catch (Exception e) {
+                return "FORBIDDEN: 路径无法解析（" + p + "）";
+            }
+            boolean external = canon.startsWith("/sdcard/") || canon.startsWith("/storage/emulated/0/");
+            if (!external && !canon.startsWith("/sdcard") && !canon.startsWith("/storage/emulated/0")) {
+                return "FORBIDDEN: 仅允许读取 /sdcard 外部存储（" + p + "）";
+            }
             if (!f.isFile()) return "NOT_FOUND: " + p;
             if (f.length() > 256 * 1024) return "TOO_LARGE: " + f.length();
             byte[] bytes = new byte[(int) f.length()];
@@ -310,18 +369,26 @@ public final class HttpShellService {
         }
     }
 
-    /** 从查询串提取参数（已 URL 解码） */
-    private static String getParam(String path, String key, String def) {
+/** 从（仅含 query 的）查询串提取参数。调用方务必先截取 '?' 之后的内容。 */
+    private static String getParam(String q, String key, String def) {
         try {
-            int i = path.indexOf(key + "=");
+            int i = q.indexOf(key + "=");
             if (i < 0) return def;
-            String v = path.substring(i + key.length() + 1);
+            String v = q.substring(i + key.length() + 1);
             int amp = v.indexOf('&');
             if (amp >= 0) v = v.substring(0, amp);
+            int frag = v.indexOf('#');
+            if (frag >= 0) v = v.substring(0, frag);
             return URLDecoder.decode(v, "UTF-8");
         } catch (Exception e) {
             return def;
         }
+    }
+
+    // 便捷包装：路径中取 query 部分
+    private static String queryOf(String path) {
+        int i = path.indexOf('?');
+        return i >= 0 ? path.substring(i + 1) : "";
     }
 
     private boolean confirmEnabled() {

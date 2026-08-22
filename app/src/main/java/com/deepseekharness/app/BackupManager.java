@@ -49,12 +49,19 @@ public final class BackupManager {
     private static String backup(Context ctx, HarnessController c, String fixedName) {
         synchronized (BACKUP_LOCK) { // 串行备份（防中转文件互相覆盖）
         try {
-            // 1. rootfs 内打包（wd 单引号包裹 + 内部 ' 转义防注入；.dsh 缺失时
-            //    tar 会报错，但 test -s 兜底：有部分内容就算成功）
-            String wd = c.getWorkdir().replace("'", "'\\''");
+            // rootfs 内打包：
+            // - .dsh（配置+对话）为必选项，缺失视为备份失败；
+            // - <workdir>/.env 在自定义工作目录存在时加入；
+            // - dsh-web.log 仅当存在时加入，不存在不失败（旧实现 tar 会因缺文件退出非零）
+            String wd = c.getWorkdir();
+            String dshEsc = wd.replace("'", "'\\''");
             c.getProot().execChecked("cd /root && rm -f .dsha-backup.tar.gz && "
-                    + "tar -czf .dsha-backup.tar.gz .dsh '" + wd + "'/.env dsh-web.log 2>/dev/null; "
-                    + "test -s .dsha-backup.tar.gz && echo OK || echo EMPTY");
+                    + "[ -d .dsh ] || { echo 'NO_DSH_DIR'; exit 1; } && "
+                    + "ARGS=\".dsh\"; "
+                    + "if [ -f '" + dshEsc + "'/.env ]; then ARGS=\"$ARGS '" + dshEsc + "'/.env\"; fi; "
+                    + "[ -f dsh-web.log ] && ARGS=\"$ARGS dsh-web.log\"; "
+                    + "tar -czf .dsha-backup.tar.gz $ARGS 2>/dev/null || { echo TAR_FAIL; exit 1; } && "
+                    + "test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }; echo OK");
             File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-backup.tar.gz");
             if (!tmp.isFile() || tmp.length() == 0) return null;
 
@@ -62,18 +69,21 @@ public final class BackupManager {
                     ? fixedName
                     : "DSHA-backup-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
                             .format(new Date()) + ".tar.gz";
-            String path = Build.VERSION.SDK_INT >= 29
-                    ? writeViaMediaStore(ctx, tmp, name, fixedName != null)
-                    : writeDirect(tmp, name);
-            //noinspection ResultOfMethodCallIgnored
-            tmp.delete();
+            String path = null;
+            try {
+                path = Build.VERSION.SDK_INT >= 29
+                        ? writeViaMediaStore(ctx, tmp, name, fixedName != null)
+                        : writeDirect(tmp, name);
+            } finally {
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+            }
+            if (path == null) return null; // 导出失败：不残留 half 备份
             // 手动备份保留最近 MAX_MANUAL_KEEP 份，删最旧（防无限膨胀）
-            if (fixedName == null && path != null) pruneOldManual(ctx, name);
+            if (fixedName == null) pruneOldManual(ctx, name);
             return path;
         } catch (Exception e) {
             return null;
-        } finally {
-            // synchronized 块在方法尾部闭合
         }
         }
     }

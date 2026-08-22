@@ -439,13 +439,37 @@ public class HarnessController {
             return 3080;
         }
     }
-    public void setPort(String v) { prefs.edit().putString("port", v).apply(); }
+    /** 保存端口时就校验，避免 UI 显示已保存但启动时静默回退。 */
+    public void setPort(String v) {
+        try {
+            int n = Integer.parseInt(v == null ? "" : v.trim());
+            if (n < 1 || n > 65535 || n == LanProxyService.LAN_PORT) return;
+            prefs.edit().putString("port", String.valueOf(n)).apply();
+        } catch (Exception ignored) {
+        }
+    }
 
     public String getModel() { return prefs.getString("model", "deepseek-v4-flash"); }
-    public void setModel(String v) { prefs.edit().putString("model", v).apply(); }
+    public void setModel(String v) {
+        if (v == null) return;
+        String t = v.trim();
+        if (t.isEmpty() || t.length() > 128 || !t.matches("[A-Za-z0-9._:/-]+")) return;
+        prefs.edit().putString("model", t).apply();
+    }
 
-    public String getPermissionMode() { return prefs.getString("permission_mode", "danger-full-access"); }
-    public void setPermissionMode(String v) { prefs.edit().putString("permission_mode", v).apply(); }
+    private static final java.util.Set<String> PERMISSION_MODES =
+            java.util.Collections.unmodifiableSet(new java.util.HashSet<>(java.util.Arrays.asList(
+                    "danger-full-access", "workspace-write", "read-only")));
+
+    public String getPermissionMode() {
+        String mode = prefs.getString("permission_mode", "danger-full-access");
+        return PERMISSION_MODES.contains(mode) ? mode : "danger-full-access";
+    }
+    public void setPermissionMode(String v) {
+        if (v != null && PERMISSION_MODES.contains(v)) {
+            prefs.edit().putString("permission_mode", v).apply();
+        }
+    }
 
     /** agent 是否被允许使用 root shell（--su 提权）。默认关，配置页手动授权。 */
     public boolean isRootShellAllowed() {
@@ -453,14 +477,30 @@ public class HarnessController {
     }
     public void setRootShellAllowed(boolean v) { prefs.edit().putBoolean("allow_root_shell", v).apply(); }
 
-    public String getWorkdir() { return prefs.getString("workdir", "deepseek-harness"); }
-    /** 设置工作目录：只允许安全字符（字母数字下划线连字符），防 shell 注入。
-     *  非法输入忽略并回退默认。 */
+    public String getWorkdir() {
+        String value = prefs.getString("workdir", "deepseek-harness");
+        if (isSafeWorkdir(value)) return value.trim();
+        // 兼容旧版本已经写入的损坏值：回退并持久化，不能继续拼进 shell。
+        prefs.edit().putString("workdir", "deepseek-harness").apply();
+        return "deepseek-harness";
+    }
+
+    /** 设置工作目录：只允许安全字符（字母数字下划线连字符），防 shell 注入。 */
     public void setWorkdir(String v) {
         if (v == null) return;
         String t = v.trim();
-        if (!t.matches("[A-Za-z0-9_-]+")) return; // 非法：拒绝（保持原值）
+        if (!isSafeWorkdir(t)) return; // 非法：拒绝（保持原值）
         prefs.edit().putString("workdir", t).apply();
+    }
+
+    private static boolean isSafeWorkdir(String value) {
+        return value != null && value.matches("[A-Za-z0-9_-]{1,64}")
+                && !".".equals(value) && !"..".equals(value);
+    }
+
+    /** 供局域网桥使用的规范化端口。 */
+    public int getPortInt() {
+        return parsePort();
     }
 
     /** 局域网模式是否开启（App 设置项） */
@@ -1652,7 +1692,7 @@ public class HarnessController {
         StringBuilder sb = new StringBuilder();
         sb.append("export DSH_HOME=/root/.dsh && ")
           .append("export DEEPSEEK_API_KEY='").append(escShell(effectiveApiKey())).append("' && ")
-          .append("export DSH_PERMISSION_MODE=").append(getPermissionMode()).append(" && ")
+          .append("export DSH_PERMISSION_MODE=").append(shellArg(getPermissionMode())).append(" && ")
           // 危险命令确认：agent 在 rootfs 内的 rm/dd 等操作需用户确认
           // PATH 包装器 + bash 工具 lib 补丁加载守卫（双保险；不设 BASH_ENV——它会污染
           // RC6 插件初始化时子 shell 的环境，导致 dsh web 加载插件失败(index 24 崩溃)）
@@ -1758,7 +1798,7 @@ public class HarnessController {
                     "#!/bin/bash\n" +
                     "export DSH_HOME=/root/.dsh\n" +
                     "export DEEPSEEK_API_KEY='" + escShell(effectiveApiKey()) + "'\n" +
-                    "export DSH_PERMISSION_MODE=" + getPermissionMode() + "\n" +
+                    "export DSH_PERMISSION_MODE=" + shellArg(getPermissionMode()) + "\n" +
                     "export DSH_CONFIRM=1\n" +
                     // 工作区目录先于 cd 创建：RC6 模式没有源码树，不建目录的话
                     // 看门狗重启第一步 cd || exit 1 必失败 → 自动重启形同虚设。
@@ -2278,16 +2318,17 @@ public class HarnessController {
     }
 
     private String startWebTermuxCommand() {
-        // key 嵌在双引号里：转义 \ 和 "（防特殊字符破坏 Termux 命令）
-        String k = effectiveApiKey().replace("\\", "\\\\").replace("\"", "\\\"");
-        StringBuilder sb = new StringBuilder();
-        sb.append("export PATH=$HOME/dsh-bin:$PATH && ")
-          .append("cd ~/").append(getWorkdir()).append(" && ")
-          .append("export DEEPSEEK_API_KEY=\"").append(k).append("\" && ")
-          .append("export DSH_PERMISSION_MODE=\"").append(getPermissionMode()).append("\" && ")
-          .append("nohup node apps/cli/lib/bin.js web > ~/dsh-web.log 2>&1 & echo started");
-        return sb.toString();
-    }
+            // key 嵌在双引号里：转义 \\ 和 \"（防特殊字符破坏 Termux 命令）
+            String k = effectiveApiKey().replace("\\", "\\\\").replace("\"", "\\\"");
+            String pm = getPermissionMode(); // 白名单枚举，仍补引号
+            StringBuilder sb = new StringBuilder();
+            sb.append("export PATH=$HOME/dsh-bin:$PATH && ")
+              .append("cd ~/").append(getWorkdir()).append(" && ")
+              .append("export DEEPSEEK_API_KEY=\"").append(k).append("\" && ")
+              .append("export DSH_PERMISSION_MODE=\"").append(pm).append("\" && ")
+              .append("nohup node apps/cli/lib/bin.js web > ~/dsh-web.log 2>&1 & echo started");
+            return sb.toString();
+        }
 
     /** 通过 Termux 启动 Web UI */
     public void startWebViaTermux() {
@@ -2394,7 +2435,7 @@ public class HarnessController {
         // 保活重启路径不经过 HarnessService，之前桥没起导致局域网访问不了）
         if (isLanMode()) {
             try {
-                LanProxyService.start(getRootfsDirPath(), appContext);
+                LanProxyService.start(getRootfsDirPath(), appContext, getPortInt());
             } catch (Throwable ignored) {
             }
         }
@@ -3360,6 +3401,27 @@ public class HarnessController {
         return set;
     }
 
+    /** 校验可进入 shell 的插件 spec：npm 名 / github: / link: / file: 路径。 */
+    private static boolean isValidPluginSpec(String spec) {
+        if (spec == null) return false;
+        String s = spec.trim();
+        if (s.isEmpty() || s.length() > 256) return false;
+        if (s.startsWith("github:")) {
+            return s.length() > "github:".length()
+                    && s.substring("github:".length()).matches("[A-Za-z0-9._-]+/[A-Za-z0-9._-]+");
+        }
+        if (s.startsWith("link:") || s.startsWith("file:")) {
+            return s.substring(5).matches("[A-Za-z0-9@._:/\\-]+");
+        }
+        return s.matches("(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+");
+    }
+
+    /** POSIX 单引号 shell 参数（转义 ' 为 '\\''）。 */
+    private static String shellArg(String v) {
+        if (v == null) return "''";
+        return "'" + v.replace("'", "'\\''") + "'";
+    }
+
     /** 启用/禁用插件：禁用=从 dependencies+bundles 移除声明并改名；启用=还原（避开引号嵌套：用 heredoc 临时脚本）。
      *  注意：禁用/启用状态由链接条目决定（含悬空链接）——实体缺失时 File.exists()
      *  返回 false 会导致「操作失败」，必须用 existsOrBrokenLink 判断。 */
@@ -3382,12 +3444,16 @@ public class HarnessController {
                                 ? "link:" + builtinRealPath(name)
                                 : "*";
                     }
-                    String safe = src.replace("'", "\\'");
+                    if (!"*".equals(src) && !isValidPluginSpec(src)) {
+                        return false; // 脏/恶意源记录：拒绝写入 dependencies
+                    }
                     String r = proot.execAndRead(
                             toggleScript() +
-                            "node /root/dsha-toggle.js '" + PKG + "' '" + name + "' on '" + safe + "' && " +
-                            "rm -f /root/dsha-toggle.js && " +
-                            "mv '" + d + "/" + name + ".disabled' '" + d + "/" + name + "' && echo OK");
+                            "node /root/dsha-toggle.js " + shellArg(PKG) + " " + shellArg(name)
+                                    + " on " + shellArg(src) + " && " +
+                            "rm -f /root/dsha-toggle.js && ( mv " + shellArg(d + "/" + name + ".disabled")
+                                    + " " + shellArg(d + "/" + name) + " 2>/dev/null || touch "
+                                    + shellArg(d + "/" + name) + " ) && echo OK");
                     return r != null && r.contains("OK");
                 } else if (!enable) {
                     // 禁用：不依赖 on 存在（链接缺失/悬空也执行）——
@@ -3395,10 +3461,10 @@ public class HarnessController {
                     // 让 ensureDeviceShellGuide/ensureBuiltinBundles 识别「用户已禁用」跳过补回。
                     String r = proot.execAndRead(
                             toggleScript() +
-                            "node /root/dsha-toggle.js '" + PKG + "' '" + name + "' off && " +
+                            "node /root/dsha-toggle.js " + shellArg(PKG) + " " + shellArg(name) + " off && " +
                             "rm -f /root/dsha-toggle.js && " +
-                            "( mv '" + d + "/" + name + "' '" + d + "/" + name + ".disabled' 2>/dev/null " +
-                            "|| touch '" + d + "/" + name + ".disabled' ) && echo OK");
+                            "( mv " + shellArg(d + "/" + name) + " " + shellArg(d + "/" + name + ".disabled")
+                                    + " 2>/dev/null || touch " + shellArg(d + "/" + name + ".disabled") + " ) && echo OK");
                     boolean ok = r != null && r.contains("OK");
                     if (!ok) {
                         android.util.Log.w("DSHA", "禁用插件失败 " + name + " 输出: " + (r == null ? "null" : r));
@@ -3489,46 +3555,78 @@ public class HarnessController {
         return null;
     }
 
-    /** 导入插件包：解压到插件目录（rootfs 内中转）+ 注册到 profile（dependencies+bundles）。
-     *  只解压不注册的旧行为会导致插件「列表可见但不生效」（cordis 只加载 bundles 声明的）。 */
+    /** 导入插件包：先安全解压到 staging（拒绝路径穿越/符号链接/硬链接），再原子移入插件目录。
+     *  只解压不注册会导致插件「列表可见但不生效」，因此解压成功后统一注册。 */
     public boolean importPlugins(java.io.File tarGz) {
         try {
-            java.io.File tmpHost = new java.io.File(proot.getRootfsDir(), "root/plugins-import.tar.gz");
-            copyFile(tarGz, tmpHost);
-            final String TMP_GUEST = "/root/plugins-import.tar.gz";
-            boolean imported = false;
+            java.io.File staging = new java.io.File(proot.getRootfsDir(),
+                    "root/plugins-import-stage-" + System.currentTimeMillis());
+            staging.mkdirs();
+            boolean moved = false;
             java.util.Set<String> importedNames = new java.util.LinkedHashSet<>();
-            for (String d : PLUGIN_DIRS) {
-                java.io.File dir = new java.io.File(proot.getRootfsDir(), d.substring(1));
-                if (!dir.isDirectory()) dir.mkdirs();
-                String r = proot.execAndRead(
-                        "cd '" + d + "' && tar -xzf '" + TMP_GUEST + "' 2>/dev/null && echo OK");
-                if (r != null && r.contains("OK")) {
-                    imported = true;
-                    // 收集导入的插件名（顶层目录，排除 .disabled/隐藏）
-                    java.io.File[] top = dir.listFiles();
-                    if (top != null) for (java.io.File f : top) {
-                        String n = f.getName();
+            try {
+                // 安全解压：拒绝绝对路径/..（宽松仅限备份恢复）；链接类条目一律丢弃，防止逃逸
+                TarGzipExtractor.extractSafe(tarGz, staging);
+                for (String d : PLUGIN_DIRS) {
+                    java.io.File dir = new java.io.File(proot.getRootfsDir(), d.substring(1));
+                    if (!dir.isDirectory()) dir.mkdirs();
+                    java.io.File[] children = staging.listFiles();
+                    if (children == null) continue;
+                    for (java.io.File c : children) {
+                        String n = c.getName();
                         if (n.startsWith(".") || n.endsWith(".disabled")) continue;
-                        // 是包目录且有 package.json 才注册
-                        if (f.isDirectory() && new java.io.File(f, "package.json").isFile()) {
-                            importedNames.add(n);
+                        if (!n.matches("[A-Za-z0-9@._+\\-]+")) continue; // 非法包名直接忽略
+                        java.io.File target = new java.io.File(dir, n);
+                        deleteRecursively(target); // 只删目标目录内的同名旧条目
+                        boolean ok = c.renameTo(target);
+                        if (!ok && c.isDirectory()) ok = copyRecursivelySafe(c, target);
+                        if (ok) {
+                            moved = true;
+                            if (target.isDirectory() && new java.io.File(target, "package.json").isFile()) {
+                                importedNames.add(n);
+                            }
                         }
                     }
                 }
+            } finally {
+                deleteRecursively(staging);
             }
-            //noinspection ResultOfMethodCallIgnored
-            tmpHost.delete();
-            if (imported && !importedNames.isEmpty()) {
+            if (moved && !importedNames.isEmpty()) {
                 for (String name : importedNames) {
                     registerImportedPlugin(name);
                 }
                 android.util.Log.i("DSHA", "插件导入完成并注册: " + importedNames);
             }
-            return imported;
+            return moved;
         } catch (Exception ignored) {
+            return false;
         }
-        return false;
+    }
+
+    /** 只允许写入目标目录内的递归拷贝（导入 staging→final 用；拒绝跟随符号链接）。 */
+    private boolean copyRecursivelySafe(java.io.File src, java.io.File dst) {
+        try {
+            java.nio.file.Path root = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/node_modules").toPath().toAbsolutePath().normalize();
+            java.nio.file.Path target = dst.toPath().toAbsolutePath().normalize();
+            if (!target.startsWith(root)) return false;
+            if (java.nio.file.Files.isSymbolicLink(src.toPath())) return false;
+            if (src.isDirectory()) {
+                if (!dst.isDirectory() && !dst.mkdirs()) return false;
+                java.io.File[] cs = src.listFiles();
+                if (cs != null) for (java.io.File c : cs) {
+                    if (!copyRecursivelySafe(c, new java.io.File(dst, c.getName()))) return false;
+                }
+                return true;
+            }
+            if (src.isFile()) {
+                copyFile(src, dst);
+                return true;
+            }
+            return false;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     /** 把导入的插件注册进 web profile（dependencies + bundles + node_modules 链接/实体）。
@@ -3906,23 +4004,28 @@ public class HarnessController {
     public String removePlugin(String pkg) {
         StringBuilder log = new StringBuilder();
         try {
-            String esc = pkg.replace("'", "'\\''"); // 防注入
+            if (!isValidPluginSpec(pkg)) {
+                log.append("卸载失败：非法插件名（").append(pkg == null ? "null" : pkg).append("）\n");
+                return log.toString();
+            }
+            String esc = shellArg(pkg); // 防注入（dsh remove / python argv 共用）
             // 1. 先物理清理（即使后面异常，实体也已删除）
             boolean cleared = physicalRemovePluginRobust(pkg);
             log.append("[DSHA] 实体清理").append(cleared ? "完成 ✅" : "失败（仍存在）⚠️").append("\n");
-            // 2. dsh remove + manifest 直改
-            String py = "python3 - <<'PY'\n" +
+            // 2. dsh remove + manifest 直改（包名走 python argv，避免拼进 heredoc 内容）
+            String py = "python3 - " + esc + " <<'PY'\n" +
                     "import json,sys\n" +
                     "p='/root/.dsh/profiles/web/package.json'\n" +
+                    "pn=sys.argv[1]\n" +
                     "try:\n" +
                     " d=json.load(open(p))\n" +
-                    " d.get('dependencies',{}).pop('" + esc + "',None)\n" +
+                    " d.get('dependencies',{}).pop(pn,None)\n" +
                     " b=d.get('dsh',{}).get('profile',{}).get('bundles')\n" +
-                    " if b: d['dsh']['profile']['bundles']=[x for x in b if x!='" + esc + "']\n" +
+                    " if b: d['dsh']['profile']['bundles']=[x for x in b if x!=pn]\n" +
                     " json.dump(d,open(p,'w'),indent=2,ensure_ascii=False)\n" +
                     "except Exception as e:\n" +
                     " print('[DSHA] manifest 修改失败:',e); sys.exit(1)\n" +
-                    "print('[DSHA] manifest 已移除: " + esc + "')\n" +
+                    "print('[DSHA] manifest 已移除: '+pn)\n" +
                     "PY";
             String r = proot.execAndRead(
                     "( dsh plugin --profile web remove " + esc + " 2>&1 || " +
@@ -3991,9 +4094,18 @@ public class HarnessController {
         }
     }
 
-    /** 递归删除文件/目录（Java 侧，绕过 bash rm 的环境问题） */
+    /** 递归删除文件/目录（Java 侧，绕过 bash rm 的环境问题）。
+     *  符号链接一律只删链接本身，禁止跟随链接递归（防恶意链接指向目录外被连带删除）。 */
     private void deleteRecursively(java.io.File f) {
         if (f == null || !f.exists()) return;
+        try {
+            if (java.nio.file.Files.isSymbolicLink(f.toPath())) {
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+                return;
+            }
+        } catch (Throwable ignored) {
+        }
         if (f.isDirectory()) {
             java.io.File[] cs = f.listFiles();
             if (cs != null) for (java.io.File c : cs) deleteRecursively(c);
@@ -4012,9 +4124,17 @@ public class HarnessController {
      * 自动用 github:owner/repo 重试一次（市场条目多为仅 GitHub 发布的仓库插件）。
      */
     public String installPlugin(String pkg, String fallbackSpec) {
+        if (!isValidPluginSpec(pkg)) {
+            return "安装失败：非法插件名/来源：" + (pkg == null ? "null" : pkg);
+        }
         String r = runPluginInstall(pkg);
-        if (r != null && fallbackSpec != null && !fallbackSpec.equals(pkg) && isPkgNotFound(r)) {
-            r = "\n[自动回退 GitHub 仓库方式安装…]\n" + runPluginInstall(fallbackSpec);
+        if (r != null && fallbackSpec != null && !fallbackSpec.equals(pkg)
+                && isPkgNotFound(r)) {
+            if (!isValidPluginSpec(fallbackSpec)) {
+                r += "\n[自动回退被忽略：非法来源 " + fallbackSpec + "]";
+            } else {
+                r = "\n[自动回退 GitHub 仓库方式安装…]\n" + runPluginInstall(fallbackSpec);
+            }
         }
         if (r != null && r.contains("INSTALL_EXIT=0")) {
             return r + "\n\n[已安装到 profile，重启 WebUI 生效]";
@@ -4091,21 +4211,24 @@ public class HarnessController {
                 || out.contains("404") || out.contains("ENOTFOUND");
     }
 
-    /** 单次插件安装执行（源码目录优先，无则全局 dsh） */
-    private String runPluginInstall(String pkg) {
-        try {
-            String wd = detectWorkdir();
-            return proot.execAndRead(
-                    "if [ -d /root/" + wd + " ]; then cd /root/" + wd + "; " + depsSelfHeal() +
-                    "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc; " +
-                    "( node apps/cli/lib/bin.js plugin --profile web add " + pkg + " 2>&1 || dsh plugin --profile web add " + pkg + " 2>&1 ); " +
-                    "else echo '[DSHA] 无源码目录，回退全局 dsh'; " +
-                    "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc; " +
-                    "dsh plugin --profile web add " + pkg + " 2>&1; fi | tail -15; echo INSTALL_EXIT=${PIPESTATUS[0]}");
-        } catch (Exception e) {
-            return "安装失败: " + e.getMessage();
+    /** 单次插件安装执行（源码目录优先，无则全局 dsh）；pkg 已由入口校验，这里再兜一道。 */
+        private String runPluginInstall(String pkg) {
+            try {
+                if (!isValidPluginSpec(pkg)) return "安装失败：非法插件名/来源：" + (pkg == null ? "null" : pkg);
+                String wd = detectWorkdir();
+                String arg = shellArg(pkg);
+                return proot.execAndRead(
+                        "if [ -d /root/" + wd + " ]; then cd /root/" + wd + "; " + depsSelfHeal() +
+                        "printf 'registry=https://registry.npmmirror.com\\\\n' > /root/.npmrc; " +
+                        "( node apps/cli/lib/bin.js plugin --profile web add " + arg
+                                + " 2>&1 || dsh plugin --profile web add " + arg + " 2>&1 ); " +
+                        "else echo '[DSHA] 无源码目录，回退全局 dsh'; " +
+                        "printf 'registry=https://registry.npmmirror.com\\\\n' > /root/.npmrc; " +
+                        "dsh plugin --profile web add " + arg + " 2>&1; fi | tail -15; echo INSTALL_EXIT=${PIPESTATUS[0]}");
+            } catch (Exception e) {
+                return "安装失败: " + e.getMessage();
+            }
         }
-    }
 
 
     private String copyToDownloads(java.io.File src, String name) {
