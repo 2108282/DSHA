@@ -16,6 +16,10 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+// GeckoView（内置浏览器内核兜底：系统 WebView 过旧时前端 JS 崩 → 白屏转圈）
+import org.mozilla.geckoview.GeckoRuntime;
+import org.mozilla.geckoview.GeckoSession;
+import org.mozilla.geckoview.GeckoView;
 import android.widget.FrameLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -229,11 +233,64 @@ public class LaunchFragment extends Fragment {
         if (getActivity() instanceof MainActivity) {
             ((MainActivity) getActivity()).setBottomNavVisible(false);
         }
+        boolean useGecko = requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("gecko_core", false);
+        // 自动检测：系统 WebView 过旧（Chrome < 118，前端需要 AbortSignal.any/timeout）
+        // → 强制用 GeckoView（内置内核，版本新）。用户也可手动开 gecko_core。
+        if (!useGecko) {
+            try {
+                String ua = WebSettings.getDefaultUserAgent(requireContext());
+                java.util.regex.Matcher cm = java.util.regex.Pattern.compile("Chrome/(\\d+)").matcher(ua);
+                if (cm.find() && Integer.parseInt(cm.group(1)) < 118) {
+                    android.util.Log.w("DSHA", "系统 WebView 过旧 (Chrome/" + cm.group(1)
+                            + " < 118)，自动切换 GeckoView");
+                    useGecko = true;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        if (useGecko) {
+            // GeckoView 兜底：系统 WebView 过旧（Chrome<118）时前端 JS 崩
+            try {
+                // 已有 GeckoView（child>0）→ 复用并刷新；否则新建
+                GeckoView gv = null;
+                for (int i = 0; i < webBox.getChildCount(); i++) {
+                    if (webBox.getChildAt(i) instanceof GeckoView) {
+                        gv = (GeckoView) webBox.getChildAt(i);
+                        break;
+                    }
+                }
+                if (gv == null) {
+                    GeckoRuntime runtime = GeckoRuntime.getDefault(requireContext());
+                    gv = new GeckoView(requireContext());
+                    webBox.addView(gv, new FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                }
+                GeckoSession gs = gv.getSession() != null
+                        ? gv.getSession() : new GeckoSession();
+                if (gv.getSession() == null) {
+                    gs.open(GeckoRuntime.getDefault(requireContext()));
+                    gv.setSession(gs);
+                }
+                gs.loadUri(uiUrl());
+                return; // GeckoView 加载，不走 WebView
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "GeckoView 启动失败，回退 WebView: " + e);
+            }
+        }
         if (webView == null) {
             webView = new WebView(requireContext());
             WebSettings ws = webView.getSettings();
             ws.setJavaScriptEnabled(true);
             ws.setDomStorageEnabled(true);
+            // 现代前端特性：混合内容（http 页面加载资源）+ 数据库 + 多窗口
+            ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            ws.setDatabaseEnabled(true);
+            ws.setSupportMultipleWindows(false);
+            ws.setLoadWithOverviewMode(true);
+            ws.setUseWideViewPort(true);
+            ws.setCacheMode(WebSettings.LOAD_DEFAULT);
             boolean desktop = requireContext()
                     .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                     .getBoolean("desktop_mode", false);
