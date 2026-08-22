@@ -96,6 +96,10 @@ public class HarnessController {
     private boolean webStarting = false;
     private final java.util.Set<Process> webProcesses = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /** 会话自愈进行中：期间禁止 prewarm/keepAlive 拉起 web，防边修边写。 */
+    private static volatile boolean healingSession = false;
+    public static boolean isHealingSession() { return healingSession; }
+
     public long getWebEpoch() { return webEpoch; }
     public void bumpWebEpoch() { webEpoch = System.currentTimeMillis(); }
     public long getHardRestartEpoch() { return hardRestartEpoch; }
@@ -767,6 +771,7 @@ public class HarnessController {
     }
 
     public void maybePrewarmWeb() {
+        if (isHealingSession()) return; // 自愈进行中不预启动（防写会话文件）
         try {
             ensureWebUiDegrade(); // 每次启动前置自愈（幂等秒回，防插件失败卡启动）
         } catch (Throwable ignored) {
@@ -2830,6 +2835,7 @@ public class HarnessController {
      *  2) heal-sessions.py（Python os.walk + 流式 zstd 解码）无门槛全量扫描修复。
      *  幂等：正常文件秒过。 */
     private void doHealSessionCorruption() {
+        healingSession = true;
         try {
             if (!proot.isInstalled()) return;
             // 先停 Web / 等端口关透，防止修复期间 dsh 进程继续写同一会话文件
@@ -2877,6 +2883,8 @@ public class HarnessController {
                 android.util.Log.w("DSHA", "会话损坏自愈：已修复/隔离损坏会话（详情见 heal 输出）");
             }
         } catch (Throwable ignored) {
+        } finally {
+            healingSession = false;
         }
     }
 

@@ -107,8 +107,8 @@ public class HarnessService extends Service {
                 if (fail < KEEPALIVE_MAX_FAIL) continue;
                 fail = 0;
                 long now = System.currentTimeMillis();
-                if (c.isKeepAlivePaused()) {
-                    // 用户手动停止过、尚未手动/预启动：keepAlive 不自动拉起（尊重用户）
+                if (c.isKeepAlivePaused() || HarnessController.isHealingSession()) {
+                    // 用户手动停止过、或会话自愈进行中：不自动拉起（防止边修边写）
                     continue;
                 }
                 if (now - lastRestartAt.get() < RESTART_COOLDOWN_MS) continue; // 冷却期，等它自己缓过来
