@@ -479,10 +479,40 @@ public class HarnessController {
 
     public String getWorkdir() {
         String value = prefs.getString("workdir", "deepseek-harness");
-        if (isSafeWorkdir(value)) return value.trim();
-        // 兼容旧版本已经写入的损坏值：回退并持久化，不能继续拼进 shell。
-        prefs.edit().putString("workdir", "deepseek-harness").apply();
-        return "deepseek-harness";
+        if (!isSafeWorkdir(value)) {
+            // 兼容旧版本已经写入的损坏值：回退并持久化，不能继续拼进 shell。
+            prefs.edit().putString("workdir", "deepseek-harness").apply();
+            value = "deepseek-harness";
+        }
+        // ===== 工作区名自适应 =====
+        // 配置值目录不存在源码入口（apps/cli/lib/bin.js 或 lib/bin.js）时，
+        // 自动扫描 /root 认唯一含源码入口的目录并回写——这样「启动/看门狗/
+        // 备份/重置/守卫补丁」全部跟随真实目录，不再各自用旧配置值。
+        // RC6 全局 npm 模式（无源码树）扫不到 → 保持配置值不变。
+        if (!workdirExists(value)) {
+            String detected = scanWorkdirSource();
+            if (detected != null) {
+                prefs.edit().putString("workdir", detected).apply();
+                return detected;
+            }
+        }
+        return value;
+    }
+
+    /** 扫描 rootfs /root 下含 harness 源码入口（apps/cli/lib/bin.js / lib/bin.js）的目录名；无则 null。 */
+    private String scanWorkdirSource() {
+        try {
+            java.io.File root = new java.io.File(proot.getRootfsDir(), "root");
+            java.io.File[] dirs = root.isDirectory() ? root.listFiles(java.io.File::isDirectory) : null;
+            if (dirs != null) for (java.io.File d : dirs) {
+                if (new java.io.File(d, "apps/cli/lib/bin.js").isFile()
+                        || new java.io.File(d, "lib/bin.js").isFile()) {
+                    return d.getName();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 
     /** 设置工作目录：只允许安全字符（字母数字下划线连字符），防 shell 注入。 */
@@ -513,23 +543,10 @@ public class HarnessController {
         return proot.getRootfsDir().getAbsolutePath();
     }
 
-    /** 实际工作目录自愈：prefs 指定名不存在时，扫描 rootfs /root 下含 apps/cli/lib/bin.js 的目录并回写 */
+    /** 实际工作目录自愈：直接委托 getWorkdir()（其内部已含“配置缺失→扫描 /root
+     *  认源码目录并回写”的自适应逻辑）。 */
     public String detectWorkdir() {
-        String wd = getWorkdir();
-        if (workdirExists(wd)) return wd;
-        try {
-            java.io.File root = new java.io.File(proot.getRootfsDir(), "root");
-            java.io.File[] dirs = root.isDirectory() ? root.listFiles(java.io.File::isDirectory) : null;
-            if (dirs != null) for (java.io.File d : dirs) {
-                if (new java.io.File(d, "apps/cli/lib/bin.js").isFile()
-                        || new java.io.File(d, "lib/bin.js").isFile()) {
-                    prefs.edit().putString("workdir", d.getName()).apply();
-                    return d.getName();
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        return wd;
+        return getWorkdir();
     }
 
     private boolean workdirExists(String wd) {
