@@ -2518,6 +2518,9 @@ public class HarnessController {
     }
 
     public void startWeb() {
+        // ===== 会话自愈必跑点：无论 web 是否已经在运行，都先提交一次自愈（幂等，秒级）。
+        // 若把 heal 放在 IO 启动任务里，web 已存活时 startWeb 提前 return 会导致修复永不执行。
+        maybeHealSessionCorruption();
         synchronized (webStartLock) {
             if (webProcess != null && webProcess.isAlive()) {
                 return; // 已在运行，避免重复启动
