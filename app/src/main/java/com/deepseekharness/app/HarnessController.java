@@ -1950,7 +1950,17 @@ public class HarnessController {
                 writeAssetTo("task-notifier/lib/index.js", new java.io.File(realDir, "lib/index.js"));
                 return;
             }
-            if (marker.exists() && nmLink.exists()) return; // 已注入
+            if (marker.exists() && nmLink.exists()) {
+                // 语法自愈：JS 语法错误（漏 + 连接符等）→ 删 marker 强制重注入
+                String syn = proot.execAndRead(
+                        "node --check /root/dsha-task-notifier/lib/index.js 2>&1 | head -2; echo SYNTAX=${PIPESTATUS[0]}");
+                if (syn != null && syn.contains("SYNTAX=1")) {
+                    android.util.Log.w("DSHA", "task-notifier JS 语法错误，删 marker 强制重注入");
+                    marker.delete();
+                } else {
+                    return; // 已注入且语法正常
+                }
+            }
             // 1) 注入实体
             writeAssetTo("task-notifier/package.json", new java.io.File(realDir, "package.json"));
             writeAssetTo("task-notifier/cordis.patch.yml", new java.io.File(realDir, "cordis.patch.yml"));
@@ -2009,6 +2019,16 @@ public class HarnessController {
                 return;
             }
             java.io.File marker = new java.io.File(proot.getRootfsDir(), "root/dsha-device-shell-guide-installed");
+            // 语法自愈：marker 存在但 JS 语法错误（如漏 + 连接符 → Unexpected string 崩溃）
+            // → 删 marker 强制重注入修复版（不依赖版本 bump）
+            if (marker.exists()) {
+                String syn = proot.execAndRead(
+                        "node --check /root/dsha-device-shell-guide/lib/index.js 2>&1 | head -2; echo SYNTAX=${PIPESTATUS[0]}");
+                if (syn != null && syn.contains("SYNTAX=1")) {
+                    android.util.Log.w("DSHA", "device-shell-guide JS 语法错误，删 marker 强制重注入");
+                    marker.delete();
+                }
+            }
             // 版本自愈：marker 存在但插件版本旧（缺 cordis.entry 等修复）→ 删除 marker 强制重注入
             if (marker.exists()) {
                 String curVer = "";
