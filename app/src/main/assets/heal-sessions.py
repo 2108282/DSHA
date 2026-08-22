@@ -235,7 +235,7 @@ def main():
                         if isolate_file(p, detail):
                             isolated += 1
                     elif action in ("no_fix",):
-                        log("无需修复，保留: %s" % p)
+                        log("无需修复，保留: %s (%s)" % (p, detail))
                     elif action == "no_zstd":
                         log("跳过(缺 zstandard): %s" % p)
                     else:
