@@ -32,27 +32,33 @@ ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 
 def zstd_load(raw, max_size=512 * 1024 * 1024):
-    """流式解压（兼容 dsh 的流式 zstd：帧头无 content size、尾部 torn）。
-
-    dsh 用 zstd compressobj/stream 边写边压缩，帧头通常不声明 content size，
-    单帧 decompress() 会报 'could not determine content size'。这里改用
-    decompressobj 流式累积：能解多少解多少，坏尾巴原样保留（dsh 的 torn-tail
-    机制同理）。
+    """流式全量解压（与 dump 命令同款）。dsh 的流式 zstd 帧头不带 content size，
+    且崩溃后追加可产生多帧拼接；decompressobj 只解第一帧/半路崩会误导修复判定。
+    这里唯一使用 stream_reader 累积读取：能读多少读多少，坏尾巴保留。
     """
     if raw[:4] != ZSTD_MAGIC:
         return raw  # 明文 JSONL
+    import io as _io
     try:
         return zstd.ZstdDecompressor().decompress(raw, max_output_size=max_size)
     except Exception:
         pass
-    out = b""
+    out = _io.BytesIO()
     try:
-        dobj = zstd.ZstdDecompressor().decompressobj()
-        out = dobj.decompress(raw[:max_size + 4096])
+        r = zstd.ZstdDecompressor().stream_reader(_io.BytesIO(raw), read_size=131072)
+        while True:
+            try:
+                ch = r.read(262144)
+            except Exception:
+                break  # torn 尾部：保留已读内容
+            if not ch:
+                break
+            out.write(ch)
+            if out.tell() > max_size:
+                break
     except Exception:
         pass
-    return out
-
+    return out.getvalue()
 
 def log(msg):
     try:
@@ -142,6 +148,8 @@ def fix_file(path):
     except Exception:
         return "decode_fail", "文本解码失败"
     kept, fixed, need_isolate = [], 0, False
+    diag_missing_id = 0
+    diag_msg_events = 0
     for line in text.split("\n"):
         s = line.strip()
         if not s:
@@ -150,6 +158,13 @@ def fix_file(path):
             ev = json.loads(s)
         except Exception:
             continue
+        t = ev.get("type", "")
+        if t in ("user/message", "assistant/message", "tool/result"):
+            diag_msg_events += 1
+            d = ev.get("data")
+            m = d if t == "user/message" else (d.get("message") if isinstance(d, dict) else None)
+            if isinstance(m, dict) and (not isinstance(m.get("id"), str) or not m["id"]):
+                diag_missing_id += 1
         ok, n = handle_event(ev, len(kept))
         if not ok:
             need_isolate = True
@@ -159,7 +174,7 @@ def fix_file(path):
     if need_isolate:
         return "isolate", "存在无法安全修复的事件"
     if fixed == 0:
-        return "no_fix", "未发现缺 id 等可修问题"
+        return "no_fix", "未发现缺 id 等可修问题 (检=%d行 消息事件=%d 缺id=%d)" % (len(kept), diag_msg_events, diag_missing_id)
     bak = path + ".corrupt-" + time.strftime("%Y%m%d-%H%M%S")
     try:
         os.rename(path, bak)
