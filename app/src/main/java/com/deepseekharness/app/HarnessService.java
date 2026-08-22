@@ -58,7 +58,7 @@ public class HarnessService extends Service {
         // 局域网转发桥：开启局域网模式时，App 侧 0.0.0.0:3081 → 127.0.0.1:3080
         // （绕开官方 0.0.0.0 拦截与 Host 校验，Shizuku 式桥接思路；状态写 /root/dsh-lan.log 可终端查看）
         if (c.isLanMode()) {
-            LanProxyService.start(c.getRootfsDirPath());
+            LanProxyService.start(c.getRootfsDirPath(), this);
         }
     }
 

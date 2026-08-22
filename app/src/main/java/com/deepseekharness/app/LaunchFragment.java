@@ -358,7 +358,9 @@ public class LaunchFragment extends Fragment {
         }
         // 注意：局域网访问走 App 侧 LanProxyService 桥（端口 3081 → 后端 3080），
         // 不是直连 3080（直连需要 lan-bind 补丁成功且 CLI 放行 0.0.0.0，不可靠）
-        final String copyAddr = "http://" + ip + ":" + LanProxyService.LAN_PORT + "/";
+        // LAN 访问带 token（鉴权：防同 WiFi 任意设备访问 dsh）
+        final String lanTok = LanProxyService.getLanToken(requireContext());
+        final String copyAddr = "http://" + ip + ":" + LanProxyService.LAN_PORT + "/?token=" + lanTok;
         lanAddrText.setText("局域网访问: " + copyAddr + "  （同 WiFi 设备可打开）");
         lanAddrText.setVisibility(View.VISIBLE);
         lanAddrText.setOnClickListener(v -> {

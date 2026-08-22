@@ -157,10 +157,12 @@ public class HarnessController {
             destroyAllWebProcesses();
             proot.execAndRead(stopWebCommand());
             if (!waitPortClosed(5000)) {
-                proot.execAndRead("pkill -TERM -f node 2>/dev/null; pkill -TERM -f 'dsh web' 2>/dev/null; "
-                        + "pkill -TERM -f 'bin.js' 2>/dev/null; sleep 3; "
-                        + "pkill -9 -f node 2>/dev/null; pkill -9 -f 'dsh web' 2>/dev/null; "
-                        + "pkill -9 -f 'bin.js' 2>/dev/null; sleep 1; echo done");
+                // 只杀 dsh web 相关进程（bin.js web / dsh web），不裸杀 node
+                // （裸 pkill -f node 会误杀 agent/用户跑的其他 node 进程！）
+                proot.execAndRead("pkill -TERM -f 'bin.js web' 2>/dev/null; pkill -TERM -f 'dsh web' 2>/dev/null; "
+                        + "sleep 3; "
+                        + "pkill -9 -f 'bin.js web' 2>/dev/null; pkill -9 -f 'dsh web' 2>/dev/null; "
+                        + "sleep 1; echo done");
                 waitPortClosed(5000);
             }
             // Web 停了桥也没用：停桥（幂等，HarnessService.onDestroy 也会停）
@@ -2372,7 +2374,7 @@ public class HarnessController {
         // 保活重启路径不经过 HarnessService，之前桥没起导致局域网访问不了）
         if (isLanMode()) {
             try {
-                LanProxyService.start(getRootfsDirPath());
+                LanProxyService.start(getRootfsDirPath(), appContext);
             } catch (Throwable ignored) {
             }
         }

@@ -19,6 +19,50 @@ import java.net.Socket;
 public final class LanProxyService {
 
     private static final String TAG = "DSHA-LanProxy";
+    /** LAN 桥访问 token：开启局域网时生成，访问需带 ?token= 或 X-DSHA-Token
+     *  （防同 WiFi 任意设备访问 dsh → 官方明确拒绝 0.0.0.0 的原因）。
+     *  首次生成后存 prefs（跨重启保持），启动页显示带 token 的地址。 */
+    private static volatile String lanToken = "";
+
+    /** 获取 LAN token（首次生成 16 位随机并持久化） */
+    public static String getLanToken(android.content.Context ctx) {
+        if (!lanToken.isEmpty()) return lanToken;
+        try {
+            String t = ctx.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .getString("lan_token", "");
+            if (t.isEmpty()) {
+                t = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+                ctx.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                        .edit().putString("lan_token", t).apply();
+            }
+            lanToken = t;
+        } catch (Throwable ignored) {
+        }
+        return lanToken;
+    }
+
+    /** 校验请求是否带正确 token（?token= 或 X-DSHA-Token header） */
+    private static boolean tokenOk(String head, String token) {
+        if (token == null || token.isEmpty()) return true; // 无 token 配置（旧版兼容）→ 放行
+        // header 校验
+        for (String l : head.split("\r?\n")) {
+            int i = l.indexOf(':');
+            if (i > 0 && l.substring(0, i).trim().equalsIgnoreCase("X-DSHA-Token")) {
+                return token.equals(l.substring(i + 1).trim());
+            }
+        }
+        // query 参数校验（?token=xxx）
+        int tq = head.indexOf("token=");
+        if (tq >= 0) {
+            String v = head.substring(tq + 6);
+            int amp = v.indexOf('&');
+            if (amp >= 0) v = v.substring(0, amp);
+            int sp = v.indexOf(' ');
+            if (sp >= 0) v = v.substring(0, sp);
+            return token.equals(v.trim());
+        }
+        return false;
+    }
     /** 桥监听端口：WebUI 默认 3080，桥用 3081 避免端口冲突（用户访问 http://<手机IP>:3081/） */
     public static final int LAN_PORT = 3081;
     /** 后端 WebUI 地址 */
@@ -37,9 +81,10 @@ public final class LanProxyService {
 
     private LanProxyService() {}
 
-    public static synchronized void start(String rootfsDir) {
+    public static synchronized void start(String rootfsDir, android.content.Context ctx) {
         if (running) return;
         logPath = rootfsDir + "/root/dsh-lan.log";
+        if (ctx != null) getLanToken(ctx); // 初始化 token
         running = true;
         // 连接线程池：固定 8 线程（防局域网扫描/大量连接耗尽），daemon 线程
         pool = java.util.concurrent.Executors.newFixedThreadPool(8, r -> {
@@ -124,6 +169,18 @@ public final class LanProxyService {
                 if (nl < 0) break; // 畸形请求头：无换行直接断开，防 substring 越界
                 String reqLine = head.substring(0, nl).trim();
                 if (reqLine.isEmpty()) break;
+
+                // ===== LAN 鉴权：无 token 返回 401（防同 WiFi 任意设备访问）=====
+                if (!tokenOk(head, lanToken)) {
+                    String deny = "HTTP/1.1 401 Unauthorized\r\n"
+                            + "Content-Type: text/plain\r\n"
+                            + "Content-Length: 30\r\n"
+                            + "Connection: close\r\n\r\n"
+                            + "Unauthorized: need token";
+                    cout.write(deny.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+                    cout.flush();
+                    break;
+                }
 
                 // ===== CORS：局域网设备浏览器跨域访问（http://<手机IP>:3081 前端
                 // JS 请求 /api/... → Origin 不同）。后端（Host 已重写为 127.0.0.1）

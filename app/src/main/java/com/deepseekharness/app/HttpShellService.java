@@ -281,11 +281,17 @@ public final class HttpShellService {
         }
     }
 
-    /** /app/readfile?path= ：读外部文件（文本，限制 256KB）。路径如 /sdcard/Download/x.txt */
+    /** /app/readfile?path= ：读外部文件（文本，限制 256KB）。路径如 /sdcard/Download/x.txt
+     *  安全：禁止读凭据文件（.env / .bridge_token / settings.yaml —— 含 API key/对话密钥）。 */
     private String appReadFile(String path) {
         try {
             String p = getParam(path, "path", "");
             if (p.isEmpty()) return "NO_PATH";
+            String lower = p.toLowerCase();
+            if (lower.endsWith("/.env") || lower.contains("/.env/")
+                    || lower.contains(".bridge_token") || lower.contains("settings.yaml")) {
+                return "FORBIDDEN: 凭据文件不可读（.env/.bridge_token/settings.yaml）";
+            }
             java.io.File f = new java.io.File(p);
             if (!f.isFile()) return "NOT_FOUND: " + p;
             if (f.length() > 256 * 1024) return "TOO_LARGE: " + f.length();
