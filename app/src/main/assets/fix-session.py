@@ -109,11 +109,19 @@ def main():
         sys.exit(0)
     try:
         raw = open(path, "rb").read()
-        # zstd 魔数 28 B5 2F FD；非 zstd 按明文 JSONL 处理（compression=none 场景）
         is_zstd = raw[:4] == b"\x28\xb5\x2f\xfd"
         if is_zstd:
-            data = zstd.ZstdDecompressor().decompress(
-                raw, max_output_size=512 * 1024 * 1024)
+            # 流式解压：dsh 的帧头不带 content size，单帧 decompress 会失败
+            try:
+                data = zstd.ZstdDecompressor().decompress(
+                    raw, max_output_size=512 * 1024 * 1024)
+            except Exception:
+                out = b""
+                try:
+                    out = zstd.ZstdDecompressor().decompressobj().decompress(raw[:512 * 1024 * 1024 + 4096])
+                except Exception:
+                    out = b""
+                data = out
         else:
             data = raw
     except Exception:

@@ -2826,11 +2826,21 @@ public class HarnessController {
     }
 
     /** 同步执行会话自愈（可在 IO 线程/启动链路内联调用）：
-     *  heal-session.sh 无门槛全量扫描（不依赖日志错误文案），
-     *  fix-session.py 幂等——正常文件秒过 NO_FIX。 */
+     *  1) 修复前先停 Web（否则写入中的会话文件边修边坏）；
+     *  2) heal-sessions.py（Python os.walk + 流式 zstd 解码）无门槛全量扫描修复。
+     *  幂等：正常文件秒过。 */
     private void doHealSessionCorruption() {
         try {
             if (!proot.isInstalled()) return;
+            // 先停 Web / 等端口关透，防止修复期间 dsh 进程继续写同一会话文件
+            try {
+                if (isWebPortUp(300)) {
+                    destroyAllWebProcesses();
+                    proot.execAndRead(stopWebCommand());
+                    waitPortClosed(5000);
+                }
+            } catch (Throwable ignored) {
+            }
             String script = readAsset("heal-session.sh");
             if (script == null || script.isEmpty()) return;
             java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-heal-session.sh");

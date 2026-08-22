@@ -31,6 +31,29 @@ except ImportError:
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 
+def zstd_load(raw, max_size=512 * 1024 * 1024):
+    """流式解压（兼容 dsh 的流式 zstd：帧头无 content size、尾部 torn）。
+
+    dsh 用 zstd compressobj/stream 边写边压缩，帧头通常不声明 content size，
+    单帧 decompress() 会报 'could not determine content size'。这里改用
+    decompressobj 流式累积：能解多少解多少，坏尾巴原样保留（dsh 的 torn-tail
+    机制同理）。
+    """
+    if raw[:4] != ZSTD_MAGIC:
+        return raw  # 明文 JSONL
+    try:
+        return zstd.ZstdDecompressor().decompress(raw, max_output_size=max_size)
+    except Exception:
+        pass
+    out = b""
+    try:
+        dobj = zstd.ZstdDecompressor().decompressobj()
+        out = dobj.decompress(raw[:max_size + 4096])
+    except Exception:
+        pass
+    return out
+
+
 def log(msg):
     try:
         with open(LOG_PATH, "a") as f:
@@ -109,7 +132,9 @@ def fix_file(path):
     try:
         raw = open(path, "rb").read()
         is_zstd = raw[:4] == ZSTD_MAGIC
-        data = zstd.ZstdDecompressor().decompress(raw, max_output_size=512 * 1024 * 1024) if is_zstd else raw
+        data = zstd_load(raw)
+        if is_zstd and data == b"":
+            return "decode_fail", "zstd 流式解码无内容"
     except Exception:
         return "decode_fail", "zstd 解码失败"
     try:
