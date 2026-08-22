@@ -19,7 +19,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="🔗 链接安装"
+            android:text="🔗 GitHub"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
 
@@ -30,7 +30,9 @@
             android:layout_marginStart="8dp"
             android:layout_weight="1"
             android:background="@drawable/bg_input"
-            android:hint="粘贴插件链接自动解析"
+            android:hint="GitHub 仓库链接，粘贴自动解析"
+            android:ellipsize="end"
+            android:maxLines="1"
             android:imeOptions="actionGo"
             android:inputType="textUri"
             android:paddingStart="10dp"
