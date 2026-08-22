@@ -74,6 +74,8 @@ public final class TarGzipExtractor {
         byte[] header = new byte[BLOCK];
         byte[] buf = new byte[8192];
         String pendingName = null;
+        /** GNU 长链接名（type 'K'）：下一个符号链接/硬链接条目的 linkname 用这个 */
+        String pendingLinkname = null;
 
         while (true) {
             if (!readFull(in, header, BLOCK)) break;
@@ -88,14 +90,24 @@ public final class TarGzipExtractor {
             int mode = (int) parseOctal(header, 100, 8);
             int type = header[156] & 0xFF;
             String linkname = parseString(header, 157, 100);
+            // GNU 长链接名：优先用 K 扩展提供的（header 里的 100 字节是截断的）
+            if (pendingLinkname != null) {
+                linkname = pendingLinkname;
+                pendingLinkname = null;
+            }
 
-            if (type == 'L' || type == 'x') {
+            if (type == 'L' || type == 'x' || type == 'K') {
                 byte[] longData = new byte[clampSize(size)];
                 readFull(in, longData, longData.length);
                 skipPadding(in, size);
-                pendingName = (type == 'L')
-                        ? parseString(longData, 0, longData.length)
-                        : parsePaxPath(longData);
+                if (type == 'L') {
+                    pendingName = parseString(longData, 0, longData.length);
+                } else if (type == 'K') {
+                    // GNU 长链接名：下一个链接条目用它（不直接拼 name）
+                    pendingLinkname = parseString(longData, 0, longData.length);
+                } else {
+                    pendingName = parsePaxPath(longData);
+                }
                 continue;
             }
 
