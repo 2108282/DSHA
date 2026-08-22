@@ -109,7 +109,13 @@ def main():
         sys.exit(0)
     try:
         raw = open(path, "rb").read()
-        data = zstd.ZstdDecompressor().decompress(raw, max_output_size=512 * 1024 * 1024)
+        # zstd 魔数 28 B5 2F FD；非 zstd 按明文 JSONL 处理（compression=none 场景）
+        is_zstd = raw[:4] == b"\x28\xb5\x2f\xfd"
+        if is_zstd:
+            data = zstd.ZstdDecompressor().decompress(
+                raw, max_output_size=512 * 1024 * 1024)
+        else:
+            data = raw
     except Exception:
         print("DECODE_FAIL")
         sys.exit(0)
@@ -150,8 +156,9 @@ def main():
         print("BAK_FAIL")
         sys.exit(0)
     try:
-        cctx = zstd.ZstdCompressor()
-        new_data = cctx.compress((chr(10).join(kept) + chr(10)).encode("utf-8"))
+        cctx = zstd.ZstdCompressor() if is_zstd else None
+        body = (chr(10).join(kept) + chr(10)).encode("utf-8")
+        new_data = cctx.compress(body) if is_zstd else body
         with open(path, "wb") as f:
             f.write(new_data)
     except Exception:

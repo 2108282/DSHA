@@ -8,6 +8,9 @@
 set -u
 HEALED=0
 SCANNED=0
+LOG=/root/.dsh/heal.log
+
+log() { echo "$1" | tee -a "$LOG"; }
 
 # 修复函数：对单个 zstd 会话文件尝试修复；幂等。
 repair_one() {
@@ -16,22 +19,31 @@ repair_one() {
   SCANNED=$((SCANNED + 1))
   # 极小文件必损坏，直接隔离
   local sz
-  sz=$(stat -c %s "$f" 2>/dev/null || wc -c < "$f" 2>/dev/null)
+  sz=$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null || wc -c < "$f" 2>/dev/null)
   if [ -n "$sz" ] && [ "$sz" -lt 50 ] 2>/dev/null; then
     local rel="${f#/root/.dsh/sessions/}"
     mkdir -p "/root/.dsh/corrupt-backup/$(dirname "$rel")"
-    mv "$f" "/root/.dsh/corrupt-backup/$rel" 2>/dev/null && { echo "已隔离(极小 <50B): $rel"; HEALED=1; }
+    mv "$f" "/root/.dsh/corrupt-backup/$rel" 2>/dev/null && { log "已隔离(极小 <50B): $rel"; HEALED=1; }
     return
   fi
   if ! python3 -c "import zstandard" 2>/dev/null; then
-    python3 -m pip install --break-system-packages -q zstandard 2>/dev/null \
+    # 优先本地 wheel（APK 已注入 /root/.dsh/zstandard-0.25.0-*.whl，离线可用）；
+    # 失败再试在线 pip（在线安装环境有网络时可用）
+    local ZWHL
+    ZWHL=$(ls /root/.dsh/zstandard-0.25.0-*.whl 2>/dev/null | head -1)
+    if [ -n "$ZWHL" ]; then
+      python3 -m pip install --break-system-packages --no-index \
+        "$ZWHL" >/tmp/zstd-pip.log 2>&1 || true
+    fi
+    python3 -c "import zstandard" 2>/dev/null || \
+      python3 -m pip install --break-system-packages -q zstandard 2>/dev/null \
       || python3 -m pip install -q zstandard 2>/dev/null || true
   fi
   local FIXED
   FIXED=$(python3 /root/.dsh/fix-session.py "$f" 2>&1)
   case "$FIXED" in
     *FIXED:*)
-      echo "已修复会话($FIXED): $f"
+      log "已修复会话($FIXED): $f"
       HEALED=1
       ;;
     *DECODE_FAIL*|*NO_ZSTD*|*NEED_ISOLATE*)
@@ -39,7 +51,7 @@ repair_one() {
       # source、tool 缺 callId/合法结果块）：备份隔离（dsh 也无法读），保留可恢复
       local rel="${f#/root/.dsh/sessions/}"
       mkdir -p "/root/.dsh/corrupt-backup/$(dirname "$rel")"
-      mv "$f" "/root/.dsh/corrupt-backup/$rel" 2>/dev/null && { echo "已隔离(无法修复: ${FIXED%%:*}) : $rel"; HEALED=1; }
+      mv "$f" "/root/.dsh/corrupt-backup/$rel" 2>/dev/null && { log "已隔离(无法修复: ${FIXED%%:*}) : $rel"; HEALED=1; }
       ;;
     *)
       # NO_FIX / NO_FILE / NO_ARGS：无缺 id 问题或其他原因，保留（不误隔离）

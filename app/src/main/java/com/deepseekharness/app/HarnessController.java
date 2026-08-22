@@ -1711,6 +1711,19 @@ public class HarnessController {
         }
     }
 
+    /** 二进制读取 assets（如 whl 等）；失败返回 null */
+    private byte[] readAssetBytes(String name) {
+        try (java.io.InputStream in = appContext.getAssets().open(name)) {
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+            return bos.toByteArray();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private String buildInstallScript() {
         String s = readAsset("install.sh");
         return s.replace("@@API_KEY@@", effectiveApiKey())
@@ -2809,6 +2822,18 @@ public class HarnessController {
                 java.io.File fx = new java.io.File(proot.getRootfsDir(), "root/.dsh/fix-session.py");
                 if (fx.getParentFile() != null) fx.getParentFile().mkdirs();
                 java.nio.file.Files.write(fx.toPath(), fixer.getBytes(StandardCharsets.UTF_8));
+            }
+            // 注入 zstandard 离线 wheel（在线安装的 rootfs 无 zstd、pip 可能没网时，
+            // heal 用它 --no-index 本地装，保证能解压修复会话）
+            try {
+                String wheelName = "zstandard-0.25.0-cp312-cp312-manylinux_2_17_aarch64.whl";
+                byte[] wheel = readAssetBytes(wheelName);
+                if (wheel != null && wheel.length > 0) {
+                    java.io.File whl = new java.io.File(proot.getRootfsDir(), "root/.dsh/" + wheelName);
+                    if (whl.getParentFile() != null) whl.getParentFile().mkdirs();
+                    java.nio.file.Files.write(whl.toPath(), wheel);
+                }
+            } catch (Throwable ignored) {
             }
             String r = proot.execAndRead("bash /root/dsha-heal-session.sh; rm -f /root/dsha-heal-session.sh");
             if (r != null && r.contains("SESSION_HEALED")) {
