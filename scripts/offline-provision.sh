@@ -44,17 +44,17 @@ command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python || 
 
 echo "==> [3/8] 安装 Node.js v24.19.0"
 if [ ! -x /usr/local/bin/node ]; then
-  cd /tmp
-  rm -f node.tar.xz
+  mkdir -p /tmp 2>/dev/null || true
+  rm -f /tmp/node.tar.xz
   if [ -n "$IN_CI" ]; then
-    curl -fSL --retry 3 https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o node.tar.xz \
-      || curl -fSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o node.tar.xz
+    curl -fSL --retry 3 https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o /tmp/node.tar.xz \
+      || curl -fSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o /tmp/node.tar.xz
   else
-    curl -kfsSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o node.tar.xz \
-      || curl -kfsSL --retry 3 https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o node.tar.xz
+    curl -kfsSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o /tmp/node.tar.xz \
+      || curl -kfsSL --retry 3 https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o /tmp/node.tar.xz
   fi
-  tar -xJf node.tar.xz -C /usr/local --strip-components=1
-  rm -f node.tar.xz
+  tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
+  rm -f /tmp/node.tar.xz
 fi
 node -v && npm -v
 

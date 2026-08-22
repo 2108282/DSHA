@@ -1228,11 +1228,14 @@ public class HarnessController {
             downloadWithPick(TASK_NODE, ProotBootstrap.NODE_URLS, "下载 Node.js", nodePkg, 71, 6);
         }
         // 解压失败自动重下一次（npmmirror）再试一次；仍失败则抛错中断
+        // 注意：不使用 `cd /tmp` —— 部分云手机/翻译层（如卓易通）对 chdir(/tmp)
+        // 返回 ENOSYS("Function not implemented")，必须全程绝对路径。
         runStep("安装 Node.js", 88,
-                "cd /tmp && (tar -xJf node.tar.xz -C /usr/local --strip-components=1 || "
-                        + "(echo '安装包损坏，自动重新下载…'; rm -f node.tar.xz; "
-                        + "curl -kfsSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o node.tar.xz && "
-                        + "tar -xJf node.tar.xz -C /usr/local --strip-components=1))");
+                "mkdir -p /tmp /usr/local 2>/dev/null; "
+                        + "(tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 || "
+                        + "(echo '安装包损坏，自动重新下载…'; rm -f /tmp/node.tar.xz; "
+                        + "curl -kfsSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o /tmp/node.tar.xz && "
+                        + "tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1))");
         setProgress("Node.js 就绪", 89);
     }
 
@@ -1380,7 +1383,8 @@ public class HarnessController {
                         + "else "
                         + "echo 'npm 缺失，自动补装 Node.js'; "
                         + "[ -s /tmp/node.tar.xz ] || curl -kfsSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o /tmp/node.tar.xz; "
-                        + "cd /tmp && tar -xJf node.tar.xz -C /usr/local --strip-components=1 && "
+                        + "mkdir -p /tmp /usr/local 2>/dev/null; "
+                        + "tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 && "
                         + "npm install -g pnpm@11.7.0 --registry=https://registry.npmmirror.com; "
                         + "fi");
 
