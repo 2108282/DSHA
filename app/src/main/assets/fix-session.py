@@ -168,9 +168,22 @@ def main():
         print("BAK_FAIL")
         sys.exit(0)
     try:
-        cctx = zstd.ZstdCompressor() if is_zstd else None
-        body = (chr(10).join(kept) + chr(10)).encode("utf-8")
-        new_data = cctx.compress(body) if is_zstd else body
+        if is_zstd:
+            # dsh v0.1.1-rc.2+ 要求第 1 帧 = 仅 header 行
+            cctx = zstd.ZstdCompressor()
+            buf = io.BytesIO()
+            if kept and kept[0]:
+                w = cctx.stream_writer(buf)
+                w.write((kept[0] + chr(10)).encode("utf-8"))
+                w.flush()
+            if len(kept) > 1:
+                rest = chr(10).join(kept[1:]) + chr(10)
+                w = cctx.stream_writer(buf)
+                w.write(rest.encode("utf-8"))
+                w.flush()
+            new_data = buf.getvalue()
+        else:
+            new_data = (chr(10).join(kept) + chr(10)).encode("utf-8")
         with open(path, "wb") as f:
             f.write(new_data)
     except Exception:

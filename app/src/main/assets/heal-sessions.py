@@ -12,6 +12,7 @@
 3. 全程写 /root/.dsh/heal.log（无条件创建），供排查。
 """
 import datetime
+import io
 import json
 import os
 import shutil
@@ -41,7 +42,7 @@ def zstd_load(raw, max_size=512 * 1024 * 1024):
     import io as _io
     # 注意：绝不能用 decompress() 短路——dsh 文件是多帧拼接，decompress 只解
     # 首帧（首帧带 content size 时会“成功”返回 1 行），必须 stream_reader 跨帧全读。
-    out = _io.BytesIO()
+    out = io.BytesIO()
     try:
         r = zstd.ZstdDecompressor().stream_reader(_io.BytesIO(raw), read_size=131072)
         while True:
@@ -179,8 +180,25 @@ def fix_file(path):
     except Exception:
         return "bake_fail", "备份失败"
     try:
-        body = ("\n".join(kept) + "\n").encode("utf-8")
-        new_data = zstd.ZstdCompressor().compress(body) if is_zstd else body
+        # dsh v0.1.1-rc.2+ 会话文件必须是多帧 zstd：第 1 帧 = 仅 header 行，
+        # 后续帧 = 剩余事件行（assertZstdHeaderFrame 要求第一帧解压后恰好一行）。
+        if is_zstd:
+            cctx = zstd.ZstdCompressor()
+            buf = io.BytesIO()
+            # 帧 1: header（第一行）
+            if kept and kept[0]:
+                w = cctx.stream_writer(buf)
+                w.write((kept[0] + "\n").encode("utf-8"))
+                w.flush()
+            # 帧 2: 剩余事件行
+            if len(kept) > 1:
+                rest = "\n".join(kept[1:]) + "\n"
+                w = cctx.stream_writer(buf)
+                w.write(rest.encode("utf-8"))
+                w.flush()
+            new_data = buf.getvalue()
+        else:
+            new_data = ("\n".join(kept) + "\n").encode("utf-8")
         with open(path, "wb") as f:
             f.write(new_data)
     except Exception:
