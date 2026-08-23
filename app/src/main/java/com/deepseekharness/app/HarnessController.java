@@ -732,9 +732,22 @@ public class HarnessController {
                     ensureDeviceShellGuide();
                     dirOk = new java.io.File(proot.getRootfsDir(), "root" + real.substring(4)).isDirectory();
                 }
-                // 用户主动禁用（.disabled 存在）→ 跳过补回（尊重用户）
-                boolean userDisabled = new java.io.File(proot.getRootfsDir(),
-                        "root/.dsh/profiles/web/node_modules/" + name + ".disabled").exists();
+                // 用户主动禁用（.disabled 存在）→ 跳过补回（尊重用户）。
+                // 但要区分两种 .disabled：
+                //   目录/非空  = 真的禁用（禁用时把实体 mv 过去了）→ 尊重
+                //   空文件     = 异常残留（禁用时实体已丢失，只 touch 了个占位）
+                // 空占位不清掉的话，补回逻辑会永远跳过，用户重开 App、重跑步骤⑥都没用 ——
+                // 自检还会显示「实体在，但 bundles 与 dependencies 都没有它」，死在这儿。
+                java.io.File disabledMark = new java.io.File(proot.getRootfsDir(),
+                        "root/.dsh/profiles/web/node_modules/" + name + ".disabled");
+                boolean staleMark = disabledMark.isFile() && disabledMark.length() == 0;
+                if (staleMark && dirOk) {
+                    //noinspection ResultOfMethodCallIgnored
+                    disabledMark.delete();
+                    android.util.Log.w("DSHA", "清掉 " + name
+                            + " 的空禁用标记（实体在，属异常残留）");
+                }
+                boolean userDisabled = disabledMark.exists() && !staleMark;
                 if (dirOk && !userDisabled && !inBundles) {
                     bundles.put(name);
                     changed = true;

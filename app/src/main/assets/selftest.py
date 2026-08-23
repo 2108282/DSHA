@@ -361,8 +361,19 @@ def check_guide(want_ver):
             why = "bundles 里没有它"
         else:
             why = "node_modules 缺链接"
-        add("FAIL", "设备引导插件未注册",
-            "v%s 实体在，但 %s —— 重开 App 会自动补齐（补不上就重跑步骤⑥）" % (ver, why))
+        # 「重开 App 会自动补齐」不能无条件说 —— 存在禁用标记时补回逻辑会尊重用户
+        # 而永远跳过，用户重开 App、重跑步骤⑥都不会有反应（有人就这样卡住过）。
+        mark = "/root/.dsh/profiles/web/node_modules/dsh-device-shell-guide.disabled"
+        if os.path.exists(mark):
+            if os.path.isfile(mark) and os.path.getsize(mark) == 0:
+                hint = ("发现一个**空的**禁用标记（%s）：那是上次禁用时实体已丢失留下的残留。"
+                        "新版本启动时会自动清掉并补回；想立刻解决就手动删掉它再重开 App" % mark)
+            else:
+                hint = ("它是被禁用的（存在 %s）—— 请到「插件」页把开关打开。"
+                        "重开 App 与重跑步骤⑥都不会补回用户主动禁用的插件" % mark)
+        else:
+            hint = "重开 App 会自动补齐（补不上就重跑步骤⑥）"
+        add("FAIL", "设备引导插件未注册", "v%s 实体在，但 %s —— %s" % (ver, why, hint))
     else:
         add("PASS", "设备引导插件", "v%s，已注册进 profile，注入消息带 id" % ver)
 
