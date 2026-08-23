@@ -84,8 +84,8 @@ public class PluginFragment extends Fragment {
         android.widget.EditText searchBox = view.findViewById(R.id.pluginSearch);
         // ===== GitHub 仓库链接解析（市场顶部）：输入链接 → 列表切换为解析结果 =====
         final android.widget.EditText githubInput = view.findViewById(R.id.githubInstallInput);
-        TextView btnGithubInstall = view.findViewById(R.id.btnGithubInstall);
-        if (githubInput != null && btnGithubInstall != null) {
+        // 没有「解析」按钮：输入停顿 600ms 自动解析，回车也能立刻解析，按钮纯属多余
+        if (githubInput != null) {
             // 当前解析结果缓存（null=非解析模式）
             final java.util.concurrent.atomic.AtomicReference<String[]> parsedRef =
                     new java.util.concurrent.atomic.AtomicReference<>(null);
@@ -107,27 +107,32 @@ public class PluginFragment extends Fragment {
                     say("无法解析链接：" + u);
                     return;
                 }
-                say("正在解析 " + info[1] + " …");
-                // 后台拉 npm 名（fetchNpmName 走网络）
+                final String owner2 = info[1].substring(0, info[1].indexOf('/'));
+                final String repo2 = info[1].substring(info[1].indexOf('/') + 1);
+                // 先把仓库本身显示出来 —— 查 npm 包名要走网络（多源回退，最坏几十秒），
+                // 以前等它跑完才 setData，用户看到的就是「点了没反应」。
+                parsedRef.set(info);
+                java.util.List<String[]> one0 = new java.util.ArrayList<>();
+                one0.add(new String[]{info[1], "0", owner2, "⏳待定",
+                        "查询中…", "来自仓库链接：\n" + info[2], info[2]});
+                adapter.setData(one0, true);
+                say("已解析 " + info[1] + "，正在查 npm 包名…（可直接点「安装」按仓库方式装）");
                 new Thread(() -> {
-                    String npmName = c.fetchNpmName(
-                            info[1].substring(0, info[1].indexOf('/')),
-                            info[1].substring(info[1].indexOf('/') + 1));
+                    String npmName = c.fetchNpmName(owner2, repo2);
                     if (npmName != null) info[0] = npmName;
                     runOnUiThreadSafely(() -> {
                         if (githubInput.getText().toString().trim().isEmpty()) return; // 已被清空
                         parsedRef.set(info);
                         // 列表显示解析结果（单条）。it[2]=owner（startAutoInstall 用它），
                         // it[6]=完整仓库 URL（详情/复制用）
-                        String owner2 = info[1].substring(0, info[1].indexOf('/'));
-                        String repo2 = info[1].substring(info[1].indexOf('/') + 1);
                         java.util.List<String[]> one = new java.util.ArrayList<>();
                         one.add(new String[]{info[1], "0", owner2, "⏳待定",
                                 npmName != null ? npmName : "仅GitHub仓库", "来自仓库链接：\n" + info[2], info[2]});
                         adapter.setData(one, true);
                         say(npmName != null
                                 ? "✅ 解析成功：" + npmName + "（点「安装」装到已装插件）"
-                                : "⚠️ 未发布 npm，仅支持 GitHub 仓库方式安装");
+                                : "⚠️ 没查到 npm 包名（仓库未发布 npm，或网络/代理不通）——"
+                                        + "仍可点「安装」按 GitHub 仓库方式装");
                     });
                 }).start();
             };
@@ -141,8 +146,6 @@ public class PluginFragment extends Fragment {
                 }
                 @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
             });
-            // 按钮 = 立即解析
-            btnGithubInstall.setOnClickListener(v -> doParse.accept(githubInput.getText().toString()));
             // 回车 = 立即解析
             githubInput.setOnEditorActionListener((v, actionId, event) -> {
                 if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_GO
