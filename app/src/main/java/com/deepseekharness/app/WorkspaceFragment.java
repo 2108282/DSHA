@@ -275,7 +275,21 @@ public class WorkspaceFragment extends Fragment {
                     }
                 }
                 if (getActivity() == null) return;
-                final String msg = result + (keySynced ? "\n· API key 已同步到配置页" : "");
+                // .env 读不到就找 .dsha-apikey（离线包安装用户走这条 —— issue #22）
+                if (!keySynced) {
+                    String k2 = c.getProot().execAndRead("cat /root/.dsh/.dsha-apikey 2>/dev/null");
+                    if (k2 != null) {
+                        k2 = k2.trim();
+                        if (!k2.isEmpty() && !k2.contains(" ") && !k2.contains("\n") && k2.length() >= 8) {
+                            c.setApiKey(k2);
+                            keySynced = true;
+                        }
+                    }
+                }
+                // 读不到就如实说，别再无条件提示「已同步」（issue #22 的第二个问题）
+                final String msg = result + (keySynced
+                        ? "\n· API key 已同步到配置页"
+                        : "\n· 备份里没有 API key，请到「配置」页手动填写");
                 getActivity().runOnUiThread(() -> {
                     // 用 appCtx（Fragment 可能已 detach，requireContext 会抛）
                     Toast.makeText(appCtx, msg, Toast.LENGTH_LONG).show();
