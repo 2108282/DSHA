@@ -33,10 +33,11 @@ import java.util.List;
  * - 下载地址只认写死的三个域名，不接受清单里出现的其他主机；
  * - 每个文件下载后校验 sha256，与清单不符即丢弃；
  * - 清单自身靠 HTTPS 保护完整性。
- * - **尚未做的**：清单签名。如果仓库本身被攻破，攻击者可以推送带正确 sha256 的
- *   恶意脚本 —— HTTPS 挡不住这种情况。要根治需要用 release 私钥签清单、
- *   APK 内置公钥验签。在那之前，这个功能保持「手动触发 + 展示变更清单 + 只动脚本」
- *   三条约束，不做自动静默更新。
+ * - **清单签名**：清单由 release 私钥签名（SHA256withRSA），APK 内置公钥
+ *   （assets/runtime-update-pubkey.pem）验签，验不过整批拒绝、不降级放行。
+ *   这一层把信任锚点从「GitHub 仓库没被黑」挪到「私钥没泄露」—— 后者我们能控制。
+ * - 即便如此仍保持「手动触发 + 展示变更清单 + 只动脚本」三条约束：签名证明的是
+ *   来源，不是内容无害，发错了一样要人能看见、能回退。
  */
 public final class RuntimeUpdater {
 
@@ -49,6 +50,16 @@ public final class RuntimeUpdater {
             "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/runtime-manifest.json",
             "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/runtime-manifest.json",
     };
+
+    /** 清单签名（base64 的 SHA256withRSA），与清单一一对应 */
+    private static final String[] SIG_URLS = {
+            "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/runtime-manifest.sig",
+            "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/runtime-manifest.sig",
+            "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/runtime-manifest.sig",
+    };
+
+    /** APK 内置的验签公钥（从 release keystore 的证书导出，4096 bit RSA） */
+    private static final String PUBKEY_ASSET = "runtime-update-pubkey.pem";
 
     /** 只允许从这些主机下载。清单被篡改成指向别处时，这一层能挡住。 */
     private static final String[] ALLOWED_HOSTS = {
@@ -84,17 +95,46 @@ public final class RuntimeUpdater {
     /** 拉清单 → 比对 → 下载有差异的。返回给 UI 直接展示的结果。 */
     public static Result checkAndApply(Context ctx, HarnessController c, boolean dryRun) {
         Result r = new Result();
+        byte[] raw = null;
         String json = null;
         String from = "";
         for (String u : MANIFEST_URLS) {
-            json = httpGet(u, 8000, 15000);
-            if (json != null && json.contains("\"files\"")) {
-                from = hostOf(u);
+            // 保留原始字节：签名是对清单字节做的，重新序列化会破坏验签
+            raw = httpGetBytes(u, 8000, 15000, 1 << 20);
+            if (raw != null) {
+                String body = new String(raw, StandardCharsets.UTF_8);
+                if (body.contains("\"files\"")) {
+                    json = body;
+                    from = hostOf(u);
+                    break;
+                }
+            }
+            raw = null;
+        }
+        if (json == null || raw == null) {
+            r.message = "拉不到更新清单（三个源都失败）——网络不通时这个功能直接跳过，不影响使用";
+            return r;
+        }
+
+        // 验签：这是唯一能防住「仓库被攻破」的一层。sha256 只保证下载内容与清单一致，
+        // 清单本身是谁发的、只有签名能证明。验不过就整批拒绝，不做任何降级放行。
+        String sig = null;
+        for (String u : SIG_URLS) {
+            String b = httpGet(u, 8000, 15000);
+            if (b != null && b.trim().length() > 64) {
+                sig = b.trim();
                 break;
             }
         }
-        if (json == null) {
-            r.message = "拉不到更新清单（三个源都失败）——网络不通时这个功能直接跳过，不影响使用";
+        if (sig == null) {
+            r.message = "拿不到清单签名，已放弃这次更新。\n"
+                    + "（增量更新是一条远程代码通道，没有签名就不应用 —— 不影响现有功能）";
+            return r;
+        }
+        if (!verifyManifest(ctx, raw, sig)) {
+            r.message = "清单签名验证失败，已拒绝这次更新。\n"
+                    + "可能是镜像缓存了不匹配的新旧组合，稍后再试；"
+                    + "若持续失败请到 GitHub 反馈（这也可能意味着内容被篡改）";
             return r;
         }
         List<Item> items = parse(json);
@@ -201,6 +241,35 @@ public final class RuntimeUpdater {
     /** 覆盖层里现有多少个文件（配置页展示用） */
     public static int overlayCount(Context ctx) {
         return countFiles(overlayDir(ctx));
+    }
+
+    /** 用 APK 内置公钥验证清单签名（SHA256withRSA）。任何异常都当作验签失败。 */
+    private static boolean verifyManifest(Context ctx, byte[] manifestBytes, String sigBase64) {
+        try {
+            String pem;
+            try (InputStream in = ctx.getAssets().open(PUBKEY_ASSET)) {
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    bos.write(buf, 0, n);
+                }
+                pem = new String(bos.toByteArray(), StandardCharsets.UTF_8);
+            }
+            String b64 = pem.replace("-----BEGIN PUBLIC KEY-----", "")
+                    .replace("-----END PUBLIC KEY-----", "")
+                    .replaceAll("\\s", "");
+            byte[] der = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+            java.security.PublicKey pub = java.security.KeyFactory.getInstance("RSA")
+                    .generatePublic(new java.security.spec.X509EncodedKeySpec(der));
+            java.security.Signature v = java.security.Signature.getInstance("SHA256withRSA");
+            v.initVerify(pub);
+            v.update(manifestBytes);
+            return v.verify(android.util.Base64.decode(sigBase64, android.util.Base64.DEFAULT));
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "清单验签失败: " + e);
+            return false;
+        }
     }
 
     // ==================== 内部工具 ====================

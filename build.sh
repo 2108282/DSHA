@@ -20,6 +20,14 @@ VERSION_NAME=$(sed -n 's/.*versionName "\([^"]*\)".*/\1/p' app/build.gradle | he
 VERSION_NAME=${VERSION_NAME:-0.0}
 echo "==> 版本: ${VERSION_NAME}"
 
+# 增量更新清单 + 签名：改过 assets 里任何脚本都必须重新生成，否则客户端比对到的是旧
+# sha256 —— 要么以为没更新，要么下载后校验不过。放在构建前自动做，不靠人记。
+# 没有 keystore 的环境（外部贡献者）会自动跳过签名，构建照常。
+if command -v python3 >/dev/null 2>&1; then
+  python3 tools/gen-runtime-manifest.py || echo "（清单生成失败，继续构建）"
+  bash tools/sign-runtime-manifest.sh || echo "（清单签名失败，继续构建）"
+fi
+
 "$GRADLE_BIN" :app:assembleDebug
 
 APK="app/build/outputs/apk/debug/app-debug.apk"
