@@ -650,6 +650,11 @@ public class HarnessController {
                     {"dsh-task-notifier", "/root/dsha-task-notifier"},
             };
             boolean changed = false;
+            org.json.JSONObject deps = root.optJSONObject("dependencies");
+            if (deps == null) {
+                deps = new org.json.JSONObject();
+                root.put("dependencies", deps);
+            }
             for (String[] b : builtins) {
                 String name = b[0], real = b[1];
                 boolean inBundles = false;
@@ -670,6 +675,15 @@ public class HarnessController {
                     bundles.put(name);
                     changed = true;
                     android.util.Log.w("DSHA", "内置插件 " + name + " 被清掉，已自动补回");
+                }
+                // 关键：dsh 的 reconcile 会把「bundles 里有名字、但 dependencies 没有
+                // 对应声明」的项判为无法解析并摘掉。以前这里只补 bundles 和符号链接，
+                // 于是形成「补回 → 被摘 → 再补回」的死循环，用户看到的就是插件一直没生效
+                // （实测现场：实体在、node_modules 链接在，bundles 与 dependencies 双缺）。
+                if (dirOk && !userDisabled && !deps.has(name)) {
+                    deps.put(name, "link:" + real);
+                    changed = true;
+                    android.util.Log.w("DSHA", "内置插件 " + name + " 缺 dependencies 声明，已补 link:");
                 }
                 java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
                         "root/.dsh/profiles/web/node_modules/" + name);
@@ -798,10 +812,18 @@ public class HarnessController {
             org.json.JSONObject prof = dsh == null ? null : dsh.optJSONObject("profile");
             org.json.JSONArray bundles = prof == null ? null : prof.optJSONArray("bundles");
             if (bundles == null) return false;
+            boolean inBundles = false;
             for (int i = 0; i < bundles.length(); i++) {
-                if (name.equals(bundles.optString(i, "").trim())) return true;
+                if (name.equals(bundles.optString(i, "").trim())) {
+                    inBundles = true;
+                    break;
+                }
             }
-            return false;
+            // dependencies 声明缺失时，dsh reconcile 会把它从 bundles 里摘掉 ——
+            // 所以「注册成功」必须两者都在，只看 bundles 会误判为已就绪
+            org.json.JSONObject deps = root.optJSONObject("dependencies");
+            boolean inDeps = deps != null && deps.optString(name, "").startsWith("link:");
+            return inBundles && inDeps;
         } catch (Throwable e) {
             return false;
         }

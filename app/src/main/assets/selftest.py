@@ -249,11 +249,16 @@ def check_guide(want_ver):
     registered = False
     prof = os.path.join(DSH_HOME, "profiles", "web", "package.json")
     profile_exists = os.path.isfile(prof)
+    dep_ok = False
     if profile_exists:
         try:
             pkg = json.loads(read(prof, 200000))
             bundles = (((pkg.get("dsh") or {}).get("profile") or {}).get("bundles")) or []
             registered = "dsh-device-shell-guide" in bundles
+            # dependencies 缺声明时 dsh reconcile 会把它从 bundles 摘掉，
+            # 所以两者都要在才算真注册
+            dep_ok = str((pkg.get("dependencies") or {}).get(
+                "dsh-device-shell-guide", "")).startswith("link:")
         except Exception:
             registered = False
     if disabled:
@@ -264,10 +269,17 @@ def check_guide(want_ver):
         add("FAIL", "设备引导插件版本", "当前 %s 期望 %s —— 重开 App 会自动重注入" % (ver, want_ver))
     elif not profile_exists:
         add("SKIP", "设备引导插件", "v%s 实体已就位，但还没有 web profile —— 启动一次 WebUI 后会自动注册" % ver)
-    elif not registered or not linked:
+    elif not registered or not linked or not dep_ok:
+        if not registered and not dep_ok:
+            why = "bundles 与 dependencies 都没有它（dsh reconcile 摘掉了）"
+        elif not dep_ok:
+            why = "dependencies 缺 link: 声明（下次 reconcile 还会被摘）"
+        elif not registered:
+            why = "bundles 里没有它"
+        else:
+            why = "node_modules 缺链接"
         add("FAIL", "设备引导插件未注册",
-            "v%s 实体在，但 %s —— 重开 App 会自动补注册（补不上就重跑步骤⑥）"
-            % (ver, "bundles 里没有它" if not registered else "node_modules 缺链接"))
+            "v%s 实体在，但 %s —— 重开 App 会自动补齐（补不上就重跑步骤⑥）" % (ver, why))
     else:
         add("PASS", "设备引导插件", "v%s，已注册进 profile，注入消息带 id" % ver)
 
