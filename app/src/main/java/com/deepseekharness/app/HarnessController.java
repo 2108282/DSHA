@@ -4685,6 +4685,14 @@ public class HarnessController {
         } catch (Exception e) {
             log.append("卸载执行异常: ").append(e.getMessage());
         }
+        // 上游报告过一种更阴的情形：插件卸载后 manifest 看着干净了，但 profile 的
+        // package-map/lock 仍留着 profile-local 的 @deepseek-ai 副本，故障延后爆发
+        // （表现依旧是所有工具调用失败）。所以卸完也查一次。
+        String dupes = checkAndFixDshDupes();
+        if (dupes != null && dupes.contains("DUPES_FIXED=") && !dupes.contains("DUPES_FIXED=0")) {
+            log.append("\n\n已顺带清掉残留的 @deepseek-ai 重复副本 —— 它们会在卸载后留下来，"
+                    + "让工具调用全部失败。");
+        }
         return log.toString();
     }
 
@@ -4829,7 +4837,19 @@ public class HarnessController {
             }
         }
         if (r != null && r.contains("INSTALL_EXIT=0")) {
-            return r + "\n\n[已安装到 profile，重启 WebUI 生效]";
+            // 装完当场查双副本：pnpm 可能刚把 @deepseek-ai/* 物理复制进 profile，
+            // 那会让下次启动后所有工具调用失败
+            String dupes = checkAndFixDshDupes();
+            String dupeNote = "";
+            if (dupes != null && dupes.contains("DUPES_FIXED=")
+                    && !dupes.contains("DUPES_FIXED=0")) {
+                dupeNote = "\n\n已顺手修掉安装过程产生的 @deepseek-ai 重复副本"
+                        + "（不修的话下次启动后所有工具调用都会失败）。";
+            } else if (dupes != null && dupes.contains("★关键包")) {
+                dupeNote = "\n\n⚠️ 检测到 @deepseek-ai 重复副本且无法自动处理（版本不一致）——"
+                        + "工具调用可能全部失败，建议卸载这个插件。";
+            }
+            return r + explainPeerWarnings(r) + dupeNote + "\n\n[已安装到 profile，重启 WebUI 生效]";
         }
         return r == null ? "无输出" : r;
     }
@@ -4904,7 +4924,44 @@ public class HarnessController {
     }
 
     /** 单次插件安装执行（源码目录优先，无则全局 dsh）；pkg 已由入口校验，这里再兜一道。 */
-        private String runPluginInstall(String pkg) {
+    /** 装/卸插件后立刻查 @deepseek-ai 双副本并顺手修掉。
+     *
+     *  为什么必须在这里做：pnpm 把 @deepseek-ai/dsh-tools 物理复制进 profile 之后，
+     *  故障不会立刻显现 —— 要等下次启动、用户让 agent 干活时才爆，而且症状是
+     *  「所有工具调用都失败」，完全指不到插件安装这一步。装完当场查当场修，
+     *  能把一次灾难降级成一行提示。 */
+    private String checkAndFixDshDupes() {
+        try {
+            String script = readAsset("check-dsh-dupes.py");
+            if (script == null || script.isEmpty()) return null;
+            java.io.File dst = new java.io.File(proot.getRootfsDir(), "root/.dsha-dupes.py");
+            if (dst.getParentFile() != null) dst.getParentFile().mkdirs();
+            java.nio.file.Files.write(dst.toPath(),
+                    script.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String out = proot.execAndRead(
+                    "python3 /root/.dsha-dupes.py --fix 2>&1 | tail -12; "
+                            + "rm -f /root/.dsha-dupes.py", 90_000);
+            android.util.Log.i("DSHA", "插件副本检查: " + (out == null ? "无输出" : out.trim()));
+            return out;
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "插件副本检查失败: " + e);
+            return null;
+        }
+    }
+
+    /** 安装输出里的 peer 警告要主动解释：生态里大量「插件不可用」的判定就是
+     *  把这几行当成了失败（实测某索引站 23 个精选插件里 15 个被误判）。 */
+    private static String explainPeerWarnings(String out) {
+        if (out == null) return "";
+        if (!out.contains("missing peer") && !out.contains("Peer dependencies that should be installed")) {
+            return "";
+        }
+        return "\n\n提示：上面那些 missing peer **不是错误**。profile 的 pnpm-workspace.yaml"
+                + " 里 autoInstallPeers=false，@deepseek-ai/* 由 dsh 本体提供，本来就不需要"
+                + "单独解析。只要下面写着安装成功，插件就是装好了。";
+    }
+
+    private String runPluginInstall(String pkg) {
             try {
                 if (!isValidPluginSpec(pkg)) return "安装失败：非法插件名/来源：" + (pkg == null ? "null" : pkg);
                 String wd = detectWorkdir();

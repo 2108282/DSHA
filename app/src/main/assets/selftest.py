@@ -474,6 +474,59 @@ def check_web_auth():
             "在 App 里「重启 Web」会自动补上（dsh 升级后补丁可能失配）")
 
 
+# ===================== 5.7 @deepseek-ai 双副本 =====================
+def check_dsh_dupes():
+    """profile 里的 @deepseek-ai/* 物理副本 —— 生态里最致命的坑。
+
+    症状极具误导性：**所有**工具调用都失败（连内置 filesystem 都崩），报
+    「Cannot read properties of undefined (reading 'prepare')」，看着像 dsh 坏了。
+    真因是 dsh-agent-loop 用模块级 Symbol 找调度器，而 profile 里跑过
+    pnpm install（dsh plugin add 就是转发给 pnpm）会把 @deepseek-ai/dsh-tools
+    物理复制一份，两份副本 → 两个 Symbol → 查不到调度器。
+    两份版本相同、内容一致，按版本 dedupe 看不出来。
+
+    判据：profile 自己的 node_modules/@deepseek-ai/ 下有真实目录（非符号链接）。
+    用 readlink 判断 —— proot 下 os.path.islink 会因 lstat 被劫持而一律返回 False。
+    """
+    root = "/root/.dsh/profiles"
+    if not os.path.isdir(root):
+        add("SKIP", "插件副本检查", "还没有 profile 目录")
+        return
+    critical = ("dsh-tools", "cordis", "dsh-agent-loop", "dsh-session", "dsh-skill")
+    hits, crit = [], []
+    for prof in sorted(os.listdir(root)):
+        if prof == "node_modules":
+            continue  # 扁平兜底目录里全是正常符号链接
+        scope = os.path.join(root, prof, "node_modules", "@deepseek-ai")
+        if not os.path.isdir(scope):
+            continue
+        for name in sorted(os.listdir(scope)):
+            if name.startswith("."):
+                continue
+            q = os.path.join(scope, name)
+            try:
+                os.readlink(q)
+                continue          # 符号链接 = 正常
+            except OSError:
+                pass
+            if os.path.isdir(q):
+                hits.append("%s/%s" % (prof, name))
+                if name in critical:
+                    crit.append(name)
+    if crit:
+        add("FAIL", "插件副本检查",
+            "profile 内有 %d 个 @deepseek-ai 物理副本（%s）—— 这会让**所有**工具调用失败"
+            "（Cannot read properties of undefined reading 'prepare'）；"
+            "在「插件」页重装/卸载一次会自动修，或让 AI 跑 check-dsh-dupes.py --fix"
+            % (len(hits), "、".join(crit[:3])))
+    elif hits:
+        add("WARN", "插件副本检查",
+            "有 %d 个非关键 @deepseek-ai 副本（%s）—— 暂不影响工具调用，但建议清掉"
+            % (len(hits), "、".join(hits[:3])))
+    else:
+        add("PASS", "插件副本检查", "没有 @deepseek-ai 物理副本（工具调用不会因此崩）")
+
+
 # ===================== 6. 会话健康（只统计，不修） =====================
 def check_sessions():
     if not os.path.isdir(SESSIONS):
@@ -641,6 +694,7 @@ def main():
         (check_write_patch, ()),
         (check_l2s, ()),
         (check_web_auth, ()),
+        (check_dsh_dupes, ()),
         (check_sessions, ()),
         (check_bundles, ()),
         (check_backup, ()),
