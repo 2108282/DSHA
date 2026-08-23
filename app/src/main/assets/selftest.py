@@ -241,12 +241,35 @@ def check_guide(want_ver):
         ver = "?"
     body = read(idx, 200000)
     has_id = "randomUUID" in body
-    if not has_id:
+    # 光有目录不算装上：必须注册进 web profile 的 bundles，并且 node_modules 里有链接，
+    # 否则 dsh 根本不会加载它，agent 也就看不到设备操作提示词
+    nm = os.path.join(DSH_HOME, "profiles", "web", "node_modules", "dsh-device-shell-guide")
+    disabled = os.path.exists(nm + ".disabled")
+    linked = os.path.islink(nm) or os.path.exists(nm)
+    registered = False
+    prof = os.path.join(DSH_HOME, "profiles", "web", "package.json")
+    profile_exists = os.path.isfile(prof)
+    if profile_exists:
+        try:
+            pkg = json.loads(read(prof, 200000))
+            bundles = (((pkg.get("dsh") or {}).get("profile") or {}).get("bundles")) or []
+            registered = "dsh-device-shell-guide" in bundles
+        except Exception:
+            registered = False
+    if disabled:
+        add("SKIP", "设备引导插件", "已被用户手动禁用（市场页可重新启用）")
+    elif not has_id:
         add("FAIL", "设备引导插件", "注入的消息没补 message.id（会把会话写坏）—— 重跑步骤⑥")
     elif want_ver and ver != want_ver:
-        add("FAIL", "设备引导插件版本", "当前 %s 期望 %s —— 重跑步骤⑥" % (ver, want_ver))
+        add("FAIL", "设备引导插件版本", "当前 %s 期望 %s —— 重开 App 会自动重注入" % (ver, want_ver))
+    elif not profile_exists:
+        add("SKIP", "设备引导插件", "v%s 实体已就位，但还没有 web profile —— 启动一次 WebUI 后会自动注册" % ver)
+    elif not registered or not linked:
+        add("FAIL", "设备引导插件未注册",
+            "v%s 实体在，但 %s —— 重开 App 会自动补注册（补不上就重跑步骤⑥）"
+            % (ver, "bundles 里没有它" if not registered else "node_modules 缺链接"))
     else:
-        add("PASS", "设备引导插件", "v%s，注入消息带 id" % ver)
+        add("PASS", "设备引导插件", "v%s，已注册进 profile，注入消息带 id" % ver)
 
 
 # ===================== 5. write 发布补丁 =====================

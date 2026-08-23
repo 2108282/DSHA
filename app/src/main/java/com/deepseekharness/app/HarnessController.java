@@ -657,6 +657,12 @@ public class HarnessController {
                     if (name.equals(bundles.optString(i, "").trim())) { inBundles = true; break; }
                 }
                 boolean dirOk = new java.io.File(proot.getRootfsDir(), "root" + real.substring(4)).isDirectory();
+                // 实体目录不见了（被清理/从没装成）→ 先把 assets 里的补出来再谈注册，
+                // 否则这里只会一路 return，用户看到的就是「插件没自动安装」
+                if (!dirOk && "dsh-device-shell-guide".equals(name)) {
+                    ensureDeviceShellGuide();
+                    dirOk = new java.io.File(proot.getRootfsDir(), "root" + real.substring(4)).isDirectory();
+                }
                 // 用户主动禁用（.disabled 存在）→ 跳过补回（尊重用户）
                 boolean userDisabled = new java.io.File(proot.getRootfsDir(),
                         "root/.dsh/profiles/web/node_modules/" + name + ".disabled").exists();
@@ -775,6 +781,53 @@ public class HarnessController {
         } catch (Throwable e) {
             return "自检失败：" + describe(e);
         }
+    }
+
+    /** 插件是否真的注册进 web profile（bundles 里有名字 + node_modules 链接在） */
+    private boolean guideRegistered(String name) {
+        try {
+            java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/node_modules/" + name);
+            if (!nmLink.exists()) return false;
+            java.io.File pf = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/package.json");
+            if (!pf.isFile()) return false;
+            org.json.JSONObject root = new org.json.JSONObject(
+                    new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8));
+            org.json.JSONObject dsh = root.optJSONObject("dsh");
+            org.json.JSONObject prof = dsh == null ? null : dsh.optJSONObject("profile");
+            org.json.JSONArray bundles = prof == null ? null : prof.optJSONArray("bundles");
+            if (bundles == null) return false;
+            for (int i = 0; i < bundles.length(); i++) {
+                if (name.equals(bundles.optString(i, "").trim())) return true;
+            }
+            return false;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /** 启动自愈：确保内置插件（设备引导 / 任务通知 / 移动端适配）实体在位且注册有效。
+     *  不再只依赖步骤⑥ —— ⑥ 可能跑在 profile 生成之前，也可能被版本标记判定跳过。 */
+    public void ensureBuiltinPluginsReady() {
+        IO.execute(() -> {
+            try {
+                if (!proot.isInstalled()) return;
+                ensureDeviceShellGuide();
+                ensureTaskNotifier();
+                ensureBuiltinBundles();
+                if (!guideRegistered("dsh-device-shell-guide")) {
+                    boolean disabled = new java.io.File(proot.getRootfsDir(),
+                            "root/.dsh/profiles/web/node_modules/dsh-device-shell-guide.disabled").exists();
+                    if (!disabled) {
+                        android.util.Log.w("DSHA", "设备引导插件仍未注册（profile 可能还没生成，"
+                                + "启动一次 WebUI 后会自动补上）");
+                    }
+                }
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "内置插件自愈失败（不影响启动）: " + e);
+            }
+        });
     }
 
     /** 是否已加入电池优化白名单（自检据此判断保活能不能真正生效） */
@@ -2335,7 +2388,9 @@ public class HarnessController {
                     }
                 } catch (Throwable ignored) {
                 }
-                if (!"0.1.5".equals(curVer)) {
+                // 这里以前写死 "0.1.5"，插件版本一升就永远走「删 marker 重做」分支。
+                // 改成对账 assets 里的真实版本。
+                if (!builtinGuideVersion().equals(curVer)) {
                     //noinspection ResultOfMethodCallIgnored
                     marker.delete();
                 } else {
@@ -2425,6 +2480,15 @@ public class HarnessController {
                     } catch (Throwable ignored) {
                     }
                 }
+            }
+            // 只有「真的注册进 bundles 且链接在」才写 marker。
+            // 以前无条件写：步骤⑥往往跑在 dsh 首次启动之前，那时
+            // /root/.dsh/profiles/web/package.json 还不存在 → 注册段被 if 跳过 →
+            // marker 却已落地 → 之后永远认为装好了，agent 一直拿不到设备提示词。
+            if (!guideRegistered(NAME)) {
+                android.util.Log.w("DSHA", "device-shell-guide 实体已就位，但 profile 尚未生成："
+                        + "本次不写 marker，等 profile 出现后由 ensureBuiltinBundles/下次启动补注册");
+                return;
             }
             java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
             android.util.Log.i("DSHA", "设备 Shell 引导插件已注册（link: 依赖 + 符号链接）");

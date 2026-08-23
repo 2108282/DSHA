@@ -70,6 +70,9 @@ public class MainActivity extends AppCompatActivity {
         HarnessController.get(this).maybeHealSessionCorruption();
         // 步骤⑥版本对比：内置插件/补丁有更新时自动重跑（无需手动重装⑥）
         HarnessController.get(this).maybeRefreshStep6();
+        // 内置插件注册自愈：⑥ 可能跑在 profile 生成之前（那时注册会被静默跳过），
+        // 所以每次开 App 都校验一遍「设备引导插件是否真的注册进 bundles」
+        HarnessController.get(this).ensureBuiltinPluginsReady();
         // 崩溃自愈提示：上次异常退出时读 crash.log 告知原因（不阻塞使用）
         showCrashRecoveryNotice();
         // 解压完成后进入主界面（skip_extract=true）才检测"全新环境可恢复"，
