@@ -1700,6 +1700,9 @@ public class HarnessController {
                 // Ubuntu 24.04 无 /usr/bin/python（只有 python3），部分构建工具死认 python 命令
                 "(command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python || true)");
 
+        // 先把 pnpm 的硬链接导入关掉：proot 下 link() 只是 symlink 模拟，
+        // 留下的悬空链会让后续安装报各种莫名的 ENOENT
+        runAssetScript("pnpm-env-fix.sh", "dsha-pnpm-env-fix.sh", 60_000);
         setProgress("安装依赖 pnpm install（npmmirror 源）", 95);
         try {
             // 注意：npm 11 的 `npm config set disturl` 会报 "not a valid npm option"，
@@ -4669,6 +4672,33 @@ public class HarnessController {
         return installPlugin(pkg, null);
     }
 
+    /** 已经内置在 APK 里的插件（用 link: 指向本地目录注册，不走网络）。
+     *  再从 GitHub 装一份同名的，只会和内置版本抢同一个包名，还得走 git-hosted
+     *  那条最容易出错的路（clone → 跑 prepare → 硬链接进 store）。 */
+    private static final String[] BUILTIN_PLUGIN_NAMES = {
+            "dsh-client-ui-mobile-adapt",
+            "dsh-device-shell-guide",
+            "dsh-task-notifier",
+    };
+
+    private static String builtinPluginHit(String spec) {
+        if (spec == null || spec.isEmpty()) return null;
+        String s = spec.toLowerCase(java.util.Locale.ROOT);
+        for (String n : BUILTIN_PLUGIN_NAMES) {
+            if (s.contains(n)) return n;
+        }
+        return null;
+    }
+
+    /** pnpm 在容器里最常见的一类失败：git-hosted 包在 store 的临时目录里
+     *  clone/prepare 时 ENOENT。根子是 proot 下硬链接只能靠 --link2symlink 模拟。 */
+    private static boolean isPnpmEnvFailure(String out) {
+        if (out == null) return false;
+        if (out.contains("Failed to prepare git-hosted package")) return true;
+        boolean storePath = out.contains("pnpm/store") || out.contains("/store/v");
+        return storePath && (out.contains("ENOENT") || out.contains("EEXIST"));
+    }
+
     /**
      * 安装插件（带 GitHub 兜底）：先按 pkg 装（npm 名），若 404/找不到包 且给了 fallbackSpec，
      * 自动用 github:owner/repo 重试一次（市场条目多为仅 GitHub 发布的仓库插件）。
@@ -4677,7 +4707,23 @@ public class HarnessController {
         if (!isValidPluginSpec(pkg)) {
             return "安装失败：非法插件名/来源：" + (pkg == null ? "null" : pkg);
         }
+        // 内置插件直接劝退：装了只会打架，而且白踩一次 git-hosted 的坑
+        String builtin = builtinPluginHit(pkg);
+        if (builtin == null) builtin = builtinPluginHit(fallbackSpec);
+        if (builtin != null) {
+            return "无需安装：" + builtin + " 已经内置在 DSHA 里。\n\n"
+                    + "它每次启动都会自动注册（本地 link:，不走网络），再从 GitHub 装一份"
+                    + "同名插件会和内置版本抢同一个包名。\n"
+                    + "如果市场里显示它未安装，去「配置」页点「重启 Web」让内置版本生效即可。";
+        }
         String r = runPluginInstall(pkg);
+        // ENOENT 这类是环境问题而不是包的问题：修掉硬链接配置与残留后重试一次，
+        // 多数情况这一次就过了（dsh 那句「去改 allowBuilds」是误导，跟本错无关）
+        if (isPnpmEnvFailure(r)) {
+            String fix = runAssetScript("pnpm-env-fix.sh", "dsha-pnpm-env-fix.sh", 60_000);
+            r = r + "\n\n[检测到 pnpm 环境问题（proot 下硬链接只能模拟），已修复并重试]\n"
+                    + (fix == null ? "" : fix.trim() + "\n") + runPluginInstall(pkg);
+        }
         if (r != null && fallbackSpec != null && !fallbackSpec.equals(pkg)
                 && isPkgNotFound(r)) {
             if (!isValidPluginSpec(fallbackSpec)) {
