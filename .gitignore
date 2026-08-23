@@ -29,3 +29,8 @@ bundle/
 # 签名密钥绝不入库
 *.keystore
 *.jks
+
+# Python 字节码缓存：在容器里跑过 assets 里的脚本就会生成，
+# 之前有一份 adb-shell.cpython-312.pyc 混进了 APK
+__pycache__/
+*.pyc

@@ -80,7 +80,6 @@ public final class HttpShellService {
      *  防止重解压 rootfs 后内存 token 与文件不一致导致 agent 无法认证。 */
     private static volatile String authToken = "";
     /** token 持久化位置（rootfs 内 agent 可读，建议 0600） */
-    private static final String TOKEN_FILE = "/root/.dsh/.bridge_token";
 
     public HttpShellService(Context ctx) {
         this.ctx = ctx;
