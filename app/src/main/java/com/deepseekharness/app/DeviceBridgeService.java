@@ -245,12 +245,21 @@ public class DeviceBridgeService extends Service {
      *  5. 都失败 → 分类记录状态，低频通知用户
      */
     private void runProbe(String reason) {
+        // 3090 桥自愈：HarnessService 也会 new 一个 HttpShellService，谁抢到端口谁持有；
+        // 它在停止 Web 时把桥关掉后，ADB 开关还开着，agent 的确认请求就会全部
+        // fail-closed 被拒。这里补起来（start() 内部有跨实例互斥，重复调用安全）。
+        try {
+            if (HttpShellService.instance() == null) {
+                new HttpShellService(this).start();
+            }
+        } catch (Throwable ignored) {
+        }
         HarnessController c = HarnessController.get(this);
         if (c == null || !c.getProot().isInstalled()) {
             setAdbState("no_env", "环境未安装");
             return;
         }
-        String r = c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py id 2>&1 | head -3");
+        String r = c.getProot().execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py id 2>&1 | head -3");
         if (r != null && r.contains("uid=")) {
             onProbeOk(reason);
             return;
@@ -266,7 +275,7 @@ public class DeviceBridgeService extends Service {
         if (connPort > 0) {
             saveConnectPort(connPort);
             String r2 = c.getProot().execAndRead(
-                    "python3 /root/.dsh/adb-shell.py --port " + connPort + " id 2>&1 | head -3");
+                    "DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py --port " + connPort + " id 2>&1 | head -3");
             if (r2 != null && r2.contains("uid=")) {
                 android.util.Log.i("DSHA-ADB", "保活：已重连端口 " + connPort + "（" + reason + "）");
                 onProbeOk("重连端口 " + connPort);
@@ -291,7 +300,7 @@ public class DeviceBridgeService extends Service {
             if (p2 > 0) {
                 saveConnectPort(p2);
                 String r3 = c.getProot().execAndRead(
-                        "python3 /root/.dsh/adb-shell.py --port " + p2 + " id 2>&1 | head -1");
+                        "DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py --port " + p2 + " id 2>&1 | head -1");
                 if (r3 != null && r3.contains("uid=")) {
                     onProbeOk("自动重开无线调试后重连");
                     return;

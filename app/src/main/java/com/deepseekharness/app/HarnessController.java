@@ -2745,21 +2745,50 @@ public class HarnessController {
         }
     }
 
-    /** 给已构建的 bash 工具 lib 直接打补丁（强制每次执行前加载守卫，不依赖重新 build）
-     *  失败时写 /root/dsh-guard-patch.log（不影响启动，日志可查） */
+    private static final String KEY_GUARD_PATCH = "guard_patch_state";
+
+    /** bash 工具守卫补丁的状态：ok / no_lib / patch_failed / unknown（还没启动过 Web）。
+     *  （吸收上游 PR#24）配置页据此显示，别让用户以为确认仍是双保险。 */
+    public String guardPatchState() {
+        return prefs.getString(KEY_GUARD_PATCH, "unknown");
+    }
+
+    /** 给已构建的 bash 工具 lib 直接打补丁（强制每次执行前加载守卫，不依赖重新 build）。
+     *
+     *  这是全项目对 dsh 内部实现最脆弱的耦合：sed 匹配的是已构建代码里的字面串
+     *  `command: request.command`，而 dsh 走「始终最新 RC」自动升级 —— 上游一改这行，
+     *  这层保险就静默失配。所以每个分支都要 echo 到 stdout 让 Java 侧判得出成败，
+     *  结果记进 prefs 供配置页展示（以前只写个用户永远看不到的日志文件）。 */
     public void ensureBashGuardPatch() {
+        String state = "unknown";
         try {
             // RC6（npm 全局安装，依赖可能是嵌套或扁平布局，用 find 通配兼容两种）；
             // 源码版：packages/shell/bash-local
             String wd = getWorkdir();
-            proot.execAndRead(
+            String out = proot.execAndRead(
                     "F=$(find /usr/local/lib/node_modules -path '*/@deepseek-ai/dsh-bash-local/lib/index.js' 2>/dev/null | head -1); " +
                     "if [ -z \"$F\" ]; then F=/root/" + wd + "/packages/shell/bash-local/lib/index.js; fi; " +
-                    "if [ ! -f \"$F\" ]; then echo \"守卫补丁: 未找到 bash 工具 lib\" > /root/dsh-guard-patch.log; " +
+                    "if [ ! -f \"$F\" ]; then echo 'NO_LIB 守卫补丁: 未找到 bash 工具 lib' | tee /root/dsh-guard-patch.log; " +
                     "elif grep -q 'dsh-guard' \"$F\"; then echo LIB_ALREADY; " +
                     "else sed -i 's|command: request\\.command|command: `source /root/dsh-guard.sh 2>/dev/null; ${request.command}`|' \"$F\" " +
-                    "&& grep -q 'dsh-guard' \"$F\" && echo LIB_PATCHED || echo \"守卫补丁: patch 失败\" > /root/dsh-guard-patch.log; fi");
+                    "&& grep -q 'dsh-guard' \"$F\" && echo LIB_PATCHED || " +
+                    "echo 'PATCH_FAILED 守卫补丁: sed 未匹配（dsh 可能已升级改动代码）' | tee /root/dsh-guard-patch.log; fi");
+            if (out != null) {
+                if (out.contains("LIB_ALREADY") || out.contains("LIB_PATCHED")) state = "ok";
+                else if (out.contains("NO_LIB")) state = "no_lib";
+                else if (out.contains("PATCH_FAILED")) state = "patch_failed";
+            }
         } catch (Exception ignored) {
+        }
+        try {
+            if (!"unknown".equals(state) && !state.equals(prefs.getString(KEY_GUARD_PATCH, ""))) {
+                prefs.edit().putString(KEY_GUARD_PATCH, state).apply();
+                if (!"ok".equals(state)) {
+                    android.util.Log.w("DSHA", "bash 工具守卫补丁未生效：" + state
+                            + "（危险命令仍有 PATH 包装器拦截，但少一层兜底）");
+                }
+            }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -3317,7 +3346,7 @@ public class HarnessController {
                     }
                     // 4) 有密钥有依赖 → 探一次连接（失败交给看门狗周期重连）
                     if (AdbBridge.keyPresent(proot) && AdbBridge.depsOk(proot)) {
-                        String r = proot.execAndRead("python3 /root/.dsh/adb-shell.py id 2>&1 | head -2");
+                        String r = proot.execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py id 2>&1 | head -2");
                         if (r != null && r.contains("uid=")) {
                             android.util.Log.i("DSHA-ADB", "启动体检：ADB 连接正常");
                         } else {

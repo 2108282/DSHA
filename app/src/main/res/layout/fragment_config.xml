@@ -159,6 +159,15 @@
                 android:paddingStart="@dimen/gap_tight"
                 android:text="危险 Shell 操作需确认（删除/格式化/卸载/重启等）" />
 
+            <TextView
+                android:id="@+id/config_guard_status"
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/gap_tight"
+                android:layout_marginTop="@dimen/gap_hair"
+                android:visibility="gone" />
+
             <CheckBox
                 android:id="@+id/config_root_shell"
                 style="@style/DshaText.Body"

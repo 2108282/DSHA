@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# DSHA_ADB_SCRIPT_VERSION=11
+# DSHA_ADB_SCRIPT_VERSION=12
 """
 DSHA 设备 shell 工具（ADB 无线通道，免 Shizuku）。
 用法：
@@ -86,11 +86,16 @@ def main():
     # 通过 3090 桥 /confirm 弹窗（App 前台）或通知（后台）让用户确认；
     # 命令里 # 后的注释作为「理由」展示。未确认/超时默认拒绝。
     # 只读命令（getprop/dumpsys 等以只读开头）直接放行，减少打扰。
+    # DSH_INTERNAL=1：App 自己的调用（保活探活、pm grant 授权）跳过确认关卡 ——
+    # 否则六层保活每分钟探一次活，就会不停弹确认框。（吸收上游 PR#24 的做法）
     confirm_reason = cmd.split('#', 1)[1].strip() if '#' in cmd else ''
-    if not is_readonly_cmd(cmd):
+    if os.environ.get('DSH_INTERNAL') != '1' and not is_readonly_cmd(cmd):
         ok = request_confirm(cmd, confirm_reason)
         if not ok:
-            print('USER_REJECTED: 用户未确认该命令（报备被拒）')
+            print('USER_REJECTED: 未获授权，命令未执行')
+            print('  命令：%s' % cmd)
+            print('  可能原因：用户点了拒绝 / 60 秒内未确认 / 3090 确认桥不可达')
+            print('  处理：在 App「配置」页启用 ADB 设备通道，确认桥运行后重试')
             print('[EXIT=1]')
             sys.exit(1)
 

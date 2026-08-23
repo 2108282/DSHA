@@ -38,13 +38,32 @@ public final class HttpShellService {
     private static final long CONFIRM_TIMEOUT_S = 60;
 
     private static volatile HttpShellService instance;
+    /** 全局「已有桥在监听」标志。HarnessService 与 DeviceBridgeService 各自 new 一个
+     *  实例并都调 start()，实例字段 running 挡不住跨实例的重复启动 —— 第二个实例会
+     *  因端口占用绑定失败，进而把活着的那个从 instance 里抹掉（通知按钮全废）。
+     *  （吸收上游 PR#24） */
+    private static final java.util.concurrent.atomic.AtomicBoolean STARTED =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    /** 本实例是否真正持有监听：只有持有者的 stop() 才做清理，
+     *  否则那个没绑上端口的实例一被销毁就会把真桥的状态清掉。 */
+    private volatile boolean owner;
 
     private final Context ctx;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private volatile CountDownLatch pendingLatch;
     private volatile boolean pendingAllow;
-    /** 确认进行中标志：并发确认请求直接拒绝（避免 latch 覆盖导致"点了允许却拒绝"） */
-    private volatile boolean confirmBusy = false;
+    /** 确认进行中标志：并发确认请求直接拒绝（避免 latch 覆盖导致"点了允许却拒绝"）。
+     *  用 AtomicBoolean 而非 volatile boolean —— "检查后置位"必须原子，
+     *  否则两个请求线程可能同时通过检查、互相覆盖 pendingLatch。（吸收上游 PR#24） */
+    private final java.util.concurrent.atomic.AtomicBoolean confirmBusy =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    /** 每次确认的序号：判定一次「允许/拒绝」点击属于哪个请求。
+     *  没有它的话，残留通知（锁屏/通知历史/手表转发）上的旧按钮会把授权决定
+     *  打到下一个请求上——等于一次点击授权了另一条命令。（吸收上游 PR#24） */
+    private final java.util.concurrent.atomic.AtomicLong confirmEpoch =
+            new java.util.concurrent.atomic.AtomicLong();
+    /** 当前挂起的弹窗：setCancelable(false) 后它自己关不掉，确认完必须主动 dismiss */
+    private volatile androidx.appcompat.app.AlertDialog pendingDialog;
     /** /app/ask 的一次性问答状态（同一时刻只允许一个提问在等待） */
     private volatile CountDownLatch askLatch;
     private volatile String askAnswer = "";
@@ -162,6 +181,12 @@ public final class HttpShellService {
 
     public void start() {
         if (running) return;
+        // 跨实例互斥：已经有桥在监听就直接返回，别去抢端口把活着的那个搞坏
+        if (!STARTED.compareAndSet(false, true)) {
+            android.util.Log.i("DSHA", "3090 桥已在运行，跳过重复启动");
+            return;
+        }
+        owner = true;
         running = true;
         instance = this;
         ensureToken();
@@ -230,6 +255,8 @@ public final class HttpShellService {
     }
 
     public void stop() {
+        if (!owner) return; // 非持有者：什么都别动，否则会把真桥的状态清掉
+        owner = false;
         running = false;
         writeBridgeStatus("stopped");
         instance = null;
@@ -248,7 +275,9 @@ public final class HttpShellService {
         // 释放挂起的确认（默认拒绝）
         CountDownLatch l = pendingLatch;
         if (l != null) l.countDown();
+        dismissConfirmDialog();
         cancelConfirmNotification();
+        STARTED.set(false); // 放开，允许后续重新启动（DeviceBridgeService 会自愈拉起）
     }
 
     /** 校验查询串/头中的 token（常量时间比较 + URL 解码容错） */
@@ -328,6 +357,8 @@ public final class HttpShellService {
             } else if (path.startsWith("/app/readfile")) {
                 // agent 读外部文件（rootfs 挂载 /sdcard 的补充；支持路径参数）
                 result = appReadFile(path);
+            } else if (path.startsWith("/health")) {
+                result = "OK"; // 存活探测（仍需 token）：客户端可据此区分「桥没起」与「命令失败」
             } else if (path.startsWith("/app/device")) {
                 result = appDevice();
             } else if (path.startsWith("/app/apps")) {
@@ -816,77 +847,118 @@ public final class HttpShellService {
         return requestUserConfirm(cmd) ? ShizukuShell.exec(cmd) : "[USER_REJECTED]";
     }
 
-    /** 只请求用户确认（不执行命令），返回是否允许；/confirm 端点用 */
+    /** 只请求用户确认（不执行命令），返回是否允许；/confirm 端点用。
+     *  通知与弹窗同时发：只走弹窗的话，Activity 一被 pause 用户就再也看不见，
+     *  只能干等 60s 超时——这正是「弹窗有时不出现」的由来。（吸收上游 PR#24） */
     private boolean requestUserConfirm(String cmd) {
-        if (confirmBusy) return false; // 已有确认在进行：拒绝新的（避免状态覆盖）
-        confirmBusy = true;
+        if (!confirmBusy.compareAndSet(false, true)) {
+            return false; // 已有确认在进行：拒绝新的（避免 pendingLatch 互相覆盖）
+        }
         try {
             CountDownLatch latch = new CountDownLatch(1);
+            // epoch 先递增：上一轮残留的弹窗/通知按钮带的是旧 epoch，会被丢弃
+            final long myEpoch = confirmEpoch.incrementAndGet();
+            pendingAllow = false;   // 先写标志，再发布 latch
             pendingLatch = latch;
-            pendingAllow = false;
 
-            MainActivity act = MainActivity.current;
+            // 通知是权威渠道（前后台都在），前台再叠一个弹窗当快捷方式
+            showConfirmNotification(cmd, myEpoch);
+            final MainActivity act = MainActivity.current;
             if (act != null) {
-                // 前台：App 内弹窗
                 final String prompt = "模型试图在设备上执行：\n" + cmd + "\n\n是否允许？";
-                act.runOnUiThread(() -> new androidx.appcompat.app.AlertDialog.Builder(act)
-                        .setTitle("DSHA 安全确认")
-                        .setMessage(prompt)
-                        .setPositiveButton("允许", (d, w) -> {
-                            pendingAllow = true;
-                            CountDownLatch l = pendingLatch;
-                            if (l != null) l.countDown();
-                        })
-                        .setNegativeButton("拒绝", (d, w) -> {
-                            CountDownLatch l = pendingLatch;
-                            if (l != null) l.countDown();
-                        })
-                        .setOnCancelListener(d -> {
-                            CountDownLatch l = pendingLatch;
-                            if (l != null) l.countDown();
-                        })
-                        .setOnDismissListener(d -> {
-                            CountDownLatch l = pendingLatch;
-                            if (l != null) l.countDown();
-                        })
-                        .show());
-            } else {
-                // 后台：高优先级通知 + 允许/拒绝按钮
-                showConfirmNotification(cmd);
+                act.runOnUiThread(() -> {
+                    // 正在 finishing 的 Activity 上 show() 会抛 BadTokenException，
+                    // 而这里是主线程，异常不在 handle() 的 catch 范围内 → 会崩 App
+                    try {
+                        if (act.isFinishing() || act.isDestroyed()) return;
+                        pendingDialog = new androidx.appcompat.app.AlertDialog.Builder(act)
+                                .setTitle("DSHA 安全确认")
+                                .setMessage(prompt)
+                                // 必须明确选一个：误触关闭不再被当作拒绝。也不要在
+                                // OnDismiss/OnCancel 里 countDown —— Activity 被 pause
+                                // 导致的 dismiss 会误判成「用户拒绝」，而用户还能从通知里点。
+                                .setCancelable(false)
+                                .setPositiveButton("允许", (d, w) -> resolveConfirm(true, myEpoch))
+                                .setNegativeButton("拒绝", (d, w) -> resolveConfirm(false, myEpoch))
+                                .show();
+                    } catch (Throwable t) {
+                        android.util.Log.w("DSHA", "确认弹窗弹出失败，仍可从通知确认：" + t);
+                    }
+                });
+            } else if (!notificationsEnabled()) {
+                // 后台 + 通知被拒 = 用户看不到任何提示，只能干等 60s 超时被拒。
+                // 至少留下日志，别让这变成无从排查的「命令莫名被拒」。
+                android.util.Log.w("DSHA", "无前台界面且通知权限被拒，确认必然超时拒绝：" + cmd);
             }
 
             try {
                 boolean finished = latch.await(CONFIRM_TIMEOUT_S, TimeUnit.SECONDS);
-                pendingLatch = null;
-                if (!finished) {
-                    cancelConfirmNotification();
-                    return false;
-                }
-                return pendingAllow;
+                return finished && pendingAllow;
             } catch (InterruptedException e) {
-                pendingLatch = null;
                 return false;
             }
         } finally {
-            confirmBusy = false;
+            // 顺序要紧：清理全部做完，最后才放开 confirmBusy。反过来的话，
+            // 下一个请求会抢在清理前发出新通知，而 cancelConfirmNotification()
+            // 用的是固定通知 ID，会把它刚发的那条取消掉。
             pendingLatch = null;
+            dismissConfirmDialog();
             cancelConfirmNotification();
+            confirmBusy.set(false);
         }
     }
 
-    /** 通知按钮回调（ConfirmReceiver） */
-    public void resolveConfirm(boolean allow) {
-        pendingAllow = allow;
+    private boolean notificationsEnabled() {
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            // framework API 24+，比运行时权限检查更准（用户在设置里关掉通知也算）
+            return nm == null || nm.areNotificationsEnabled();
+        } catch (Throwable e) {
+            return true; // 判断不了就别妄下结论
+        }
+    }
+
+    /** 通知按钮（ConfirmReceiver）与前台弹窗按钮共用的回调。
+     *  epoch 校验 + latch 认领：丢弃迟到的、属于上一个请求的点击。 */
+    public void resolveConfirm(boolean allow, long epoch) {
+        if (epoch != confirmEpoch.get()) {
+            android.util.Log.i("DSHA", "忽略过期的确认点击（epoch " + epoch + "）");
+            return;
+        }
         CountDownLatch l = pendingLatch;
-        if (l != null) l.countDown();
+        if (l == null || l.getCount() == 0) return; // 已决或无挂起
+        pendingAllow = allow;
+        l.countDown();
+        dismissConfirmDialog();
         cancelConfirmNotification();
     }
 
-    private void showConfirmNotification(String cmd) {
+    /** 关掉挂起的弹窗：setCancelable(false) 让它自己关不掉，确认完成后必须主动 dismiss，
+     *  否则它会滞留在屏幕上，用户后来点它就把授权打到下一个请求上了。
+     *  先把引用摘到局部变量再置 null，这样即使下一个请求已设好新弹窗也不会误关它。 */
+    private void dismissConfirmDialog() {
+        final androidx.appcompat.app.AlertDialog d = pendingDialog;
+        if (d == null) return;
+        pendingDialog = null;
+        try {
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                try {
+                    if (d.isShowing()) d.dismiss();
+                } catch (Throwable ignored) {
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void showConfirmNotification(String cmd, long epoch) {
         createConfirmChannel();
         String shortCmd = cmd.length() > 100 ? cmd.substring(0, 100) + "…" : cmd;
-        Intent allowI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_ALLOW);
-        Intent denyI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_DENY);
+        // epoch 随 Intent 带回：残留通知上的旧按钮会因 epoch 过期被丢弃
+        Intent allowI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_ALLOW)
+                .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
+        Intent denyI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_DENY)
+                .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
         PendingIntent allowPi = PendingIntent.getBroadcast(ctx, 31, allowI,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         PendingIntent denyPi = PendingIntent.getBroadcast(ctx, 32, denyI,

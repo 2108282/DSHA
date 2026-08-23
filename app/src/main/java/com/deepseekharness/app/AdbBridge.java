@@ -30,7 +30,7 @@ public final class AdbBridge {
     }
 
     /** 当前 assets 脚本版本：每次改脚本 +1，旧版 APK 的残留脚本会因版本不符被强制重注入 */
-    private static final String SCRIPT_VERSION = "11";
+    private static final String SCRIPT_VERSION = "12";
 
     /** 供自检/诊断读取期望版本（包内可见，避免把常量再抄一份） */
     static String scriptVersion() {
@@ -171,7 +171,7 @@ public final class AdbBridge {
         try {
             String pkg = "com.dsh.client";
             // 先查是否已授权，避免每次配对都重复 grant
-            String r = proot.execAndRead("python3 /root/.dsh/adb-shell.py pm grant " + pkg
+            String r = proot.execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py pm grant " + pkg
                     + " android.permission.WRITE_SECURE_SETTINGS 2>&1 | head -2");
             android.util.Log.i("DSHA-ADB", "WRITE_SECURE_SETTINGS 授权结果: " + r);
         } catch (Throwable ignored) {
