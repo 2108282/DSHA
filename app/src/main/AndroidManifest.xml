@@ -69,12 +69,17 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- 关键修复：Shizuku UserService 必须注册，否则 bindUserService 永久失败 -->
+        <!-- 关键修复：Shizuku UserService 必须注册，否则 bindUserService 永久失败。
+             lint 的 Instantiatable 检查在这里是误报：Shizuku 的 UserService 不继承
+             android.app.Service，而是实现 AIDL 接口（IShellService.Stub），由 Shizuku
+             在 :shizuku 进程里自己实例化。加了 debuggable false 后 debug 构建也会跑
+             release 级 lint，于是这条误报会直接中断打包，所以精准忽略它。 -->
         <service
             android:name=".ShellService"
             android:exported="false"
             android:process=":shizuku"
-            android:permission="moe.shizuku.manager.permission.API_V23" />
+            android:permission="moe.shizuku.manager.permission.API_V23"
+            tools:ignore="Instantiatable" />
 
         <!-- 设备桥服务（普通后台服务）：3090 桥 + ADB 预热 + 配对弹窗监听 -->
         <service
