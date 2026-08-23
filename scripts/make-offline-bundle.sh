@@ -79,6 +79,14 @@ if [ -d "$REPO_ROOT/app/src/main/assets" ]; then
     cp "$REPO_ROOT/app/src/main/assets/$f" "$ROOTFS_DIR/root/patches/$f" 2>/dev/null || true
   done
 fi
+# 内置插件源码 + 预置脚本（offline-provision.sh 里调用）
+if [ -d "$REPO_ROOT/app/src/main/assets/mobile-adapt" ]; then
+  mkdir -p "$ROOTFS_DIR/root/patches/builtin"
+  cp -r "$REPO_ROOT/app/src/main/assets/mobile-adapt" "$ROOTFS_DIR/root/patches/builtin/" 2>/dev/null || true
+  cp -r "$REPO_ROOT/app/src/main/assets/device-shell-guide" "$ROOTFS_DIR/root/patches/builtin/" 2>/dev/null || true
+  cp -r "$REPO_ROOT/app/src/main/assets/task-notifier" "$ROOTFS_DIR/root/patches/builtin/" 2>/dev/null || true
+  cp "$REPO_ROOT/scripts/provision-builtin-plugins.sh" "$ROOTFS_DIR/root/patches/" 2>/dev/null || true
+fi
 cp "$REPO_ROOT/scripts/offline-provision.sh" "$ROOTFS_DIR/root/offline-provision.sh"
 chmod +x "$ROOTFS_DIR/root/offline-provision.sh"
 
@@ -92,7 +100,7 @@ echo "    预计耗时 15~30 分钟（取决于网络与设备性能）"
 
 echo "==> [7/7] 清理 + 打包"
 "${PROOT_ARGS[@]}" /usr/bin/bash -c "rm -f /root/offline-provision.sh; \
-  rm -rf /var/lib/apt/lists /root/.cache /root/.npm /tmp/* 2>/dev/null || true"
+  rm -rf /root/patches /var/lib/apt/lists /root/.cache /root/.npm /tmp/* 2>/dev/null || true"
 cd "$ROOTFS_DIR"
 tar -czf "$OUTPUT" .
 echo "✅ 离线包已生成: $OUTPUT ($(du -h "$OUTPUT" | cut -f1))"

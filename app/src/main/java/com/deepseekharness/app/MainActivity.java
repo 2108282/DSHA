@@ -31,24 +31,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // 崩溃捕获：写日志到 files/crash.log，并继续交给系统默认 handler（保留 DropBox 崩溃报告）
-        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
-        Thread.setDefaultUncaughtExceptionHandler((thread, t) -> {
-            try {
-                java.io.File f = new java.io.File(getFilesDir(), "crash.log");
-                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f, true)) {
-                    fos.write(("\n===== " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(new java.util.Date()) + " =====\n"
-                            + android.util.Log.getStackTraceString(t) + "\n").getBytes());
-                }
-            } catch (Exception ignored) {
-            }
-            // 转交系统默认 handler（否则系统 CrashReport/DropBox 收不到，只剩我们自己写的日志）
-            if (prev != null) {
-                prev.uncaughtException(thread, t);
-            } else {
-                android.os.Process.killProcess(android.os.Process.myPid());
-            }
-        });
+        // 崩溃捕获已统一在 DshaApp 安装一次（防止 Activity 重建导致重复/覆盖 handler）
 
         // 首次启动进入引导页
         SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
@@ -77,8 +60,19 @@ public class MainActivity extends AppCompatActivity {
         HarnessController.get(this).maybeAutoReinstallGuardOnDshUpdate();
         // ADB 链路自动体检+自愈（打开即用：脚本/依赖/包装命令/连接，缺啥修啥）
         HarnessController.get(this).maybeAdbSelfHeal();
+        // dsh 子包依赖完整性自愈（npmmirror 镜像元数据不一致导致 Cannot find module）
+        HarnessController.get(this).maybeHealDshDeps();
+        // write 工具悬空链接自愈（proot l2s 与 dsh 的 link 发布冲突；幂等秒回）
+        HarnessController.get(this).maybeFixFsWrite();
+        // 空 pets 目录清理（deepseek-pet 插件空目录会崩插件树）
+        HarnessController.get(this).maybeCleanEmptyPets();
+        // 会话损坏自愈（中途强杀导致 SQLite 写一半 → 历史加载失败）
+        HarnessController.get(this).maybeHealSessionCorruption();
         // 步骤⑥版本对比：内置插件/补丁有更新时自动重跑（无需手动重装⑥）
         HarnessController.get(this).maybeRefreshStep6();
+        // 内置插件注册自愈：⑥ 可能跑在 profile 生成之前（那时注册会被静默跳过），
+        // 所以每次开 App 都校验一遍「设备引导插件是否真的注册进 bundles」
+        HarnessController.get(this).ensureBuiltinPluginsReady();
         // 崩溃自愈提示：上次异常退出时读 crash.log 告知原因（不阻塞使用）
         showCrashRecoveryNotice();
         // 解压完成后进入主界面（skip_extract=true）才检测"全新环境可恢复"，
@@ -86,6 +80,10 @@ public class MainActivity extends AppCompatActivity {
         if (getIntent().getBooleanExtra("skip_extract", false)) {
             HarnessController.get(this).maybePromptRestore(this);
         }
+        // 离线包升级感知：APK 内置新离线包 → 提示重解压（数据自动保留）。
+        // 放外面：正常启动（rootfs 已解压）也要检测，方法内部自带
+        // isOfflineExtracted() 保护（首启未解压时静默）。
+        HarnessController.get(this).maybeOfferOfflineUpgrade(this);
 
         requestPermissions();
         requestBatteryOptimization();
@@ -148,8 +146,14 @@ public class MainActivity extends AppCompatActivity {
     /** 崩溃自愈提示：上次有未处理崩溃时，读 crash.log 首条摘要告知用户（不阻塞，仅提示） */
     private void showCrashRecoveryNotice() {
         try {
+            // 同一份 crash.log 只提醒一次（24h 去重，不删除日志本体，保留取证）
+            SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
             final java.io.File f = new java.io.File(getFilesDir(), "crash.log");
             if (!f.isFile() || f.length() == 0) return;
+            if (System.currentTimeMillis() - prefs.getLong("crash_notice_shown", 0) < 24L * 3600 * 1000) {
+                return;
+            }
+            prefs.edit().putLong("crash_notice_shown", System.currentTimeMillis()).apply();
             String all = new String(java.nio.file.Files.readAllBytes(f.toPath()),
                     java.nio.charset.StandardCharsets.UTF_8);
             if (all.trim().isEmpty()) return;
@@ -165,13 +169,19 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
             final String info = summary.isEmpty() ? "发生异常" : summary;
-            // 删除已读日志（下次崩溃再提示，避免每次启动都弹）
-            //noinspection ResultOfMethodCallIgnored
-            f.delete();
+            // 不影响提示：已读内容归档到 crash.log.prev（本轮 crash.log 保留供反复查看）
+            try {
+                java.io.File prev = new java.io.File(getFilesDir(), "crash.log.prev");
+                //noinspection ResultOfMethodCallIgnored
+                prev.delete();
+                //noinspection ResultOfMethodCallIgnored
+                f.renameTo(prev);
+            } catch (Throwable ignored) {
+            }
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> new AlertDialog.Builder(this)
                     .setTitle("上次异常退出")
                     .setMessage("DSHA 上次运行发生了未处理异常，已自动恢复。\n\n" + info
-                            + "\n\n如果问题反复出现，请把内置终端里 `cat /data/data/com.dsh.client/files/crash.log` 的内容发给开发者。")
+                            + "\n\n如果问题反复出现，请把内置终端里 `cat /data/data/com.dsh.client/files/crash.log.prev`（或 crash.log）的内容发给开发者。")
                     .setPositiveButton("知道了", null)
                     .show(), 1200);
         } catch (Throwable ignored) {
@@ -203,6 +213,13 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        // 用户回到 App 时催一次 ADB 探测：这一刻往往正要用它（内部有防抖与单飞）
+        try {
+            if (DeviceBridgeService.isAdbEnabled(this)) {
+                DeviceBridgeService.kickNow(this, "回到 App");
+            }
+        } catch (Throwable ignored) {
+        }
         current = this;
         TaskNotifier.appInForeground = true;
     }
@@ -217,8 +234,11 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        // App 真正销毁：关闭终端持久 shell（防进程泄漏）
-        TerminalFragment.shutdownShell();
+        // 只在「真正退出」（finishing）时关闭终端持久 shell（防进程泄漏）；
+        // 旋转屏幕/配置变化触发 onDestroy 时 isFinishing()=false，保留会话（否则转屏即丢终端）
+        if (isFinishing()) {
+            TerminalFragment.shutdownShell();
+        }
     }
 
     private void requestBatteryOptimization() {
@@ -252,6 +272,9 @@ public class MainActivity extends AppCompatActivity {
             String tag = UpdateChecker.checkLatestVersion();
             if (tag == null || tag.equals(ignored)) return;
             if (!UpdateChecker.isNewer(tag, current)) return;
+            // 更新前自动存档：检测到新版先静默备份一次（同一版本只备份一次），
+            // 防覆盖安装/下载期间出意外丢数据
+            HarnessController.get(this).backupBeforeUpdate(tag);
             runOnUiThread(() -> new AlertDialog.Builder(this)
                     .setTitle("发现新版本 " + tag)
                     .setMessage("当前版本 v" + current + "\n是否前往下载？")
@@ -317,7 +340,13 @@ public class MainActivity extends AppCompatActivity {
             String path = BackupManager.backupToExternal(this, HarnessController.get(this));
             runOnUiThread(() -> {
                 if (path == null) {
-                    Toast.makeText(this, "备份失败：环境可能未安装或空间不足", Toast.LENGTH_LONG).show();
+                    // 别再猜原因：BackupManager 已经把真实失败原因记下来了
+                    String why = BackupManager.lastError();
+                    new AlertDialog.Builder(this)
+                            .setTitle("备份失败")
+                            .setMessage(why.isEmpty() ? "未知原因，请查看 logcat" : why)
+                            .setPositiveButton("知道了", null)
+                            .show();
                     return;
                 }
                 new AlertDialog.Builder(this)

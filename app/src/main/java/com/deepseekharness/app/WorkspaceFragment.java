@@ -24,6 +24,7 @@ import androidx.fragment.app.Fragment;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 
 /** 工作区管理模块：工作目录配置、环境信息、无 ROOT 文件共享（MT 注入文件提供器） */
@@ -59,6 +60,7 @@ public class WorkspaceFragment extends Fragment {
         Button clearBtn = view.findViewById(R.id.workspace_clear);
         Button backupBtn = view.findViewById(R.id.workspace_backup);
         Button restoreBtn = view.findViewById(R.id.workspace_restore);
+        Button cleanSessionsBtn = view.findViewById(R.id.workspace_clean_sessions);
         Button resetBtn = view.findViewById(R.id.workspace_reset);
         SubPageBack.bind(this, view);
 
@@ -97,9 +99,15 @@ public class WorkspaceFragment extends Fragment {
                         .setTitle("Web UI 正在运行")
                         .setMessage("对话记录可能正在写入。建议先停止 Web UI 再备份，避免备份到半截文件。\n\n仍要继续备份吗？")
                         .setPositiveButton("停止后备份", (d, w) -> {
-                            c.stopWeb();
+                            // 用同步深停（等端口关透）再备份，避免异步 stopWeb 期间 tar 到写入中的文件
                             Toast.makeText(requireContext(), "正在停止 Web 并备份…", Toast.LENGTH_SHORT).show();
-                            new Thread(() -> doBackup()).start();
+                            new Thread(() -> {
+                                try {
+                                    c.stopWebAndWait();
+                                } catch (Throwable ignored) {
+                                }
+                                doBackup();
+                            }).start();
                         })
                         .setNegativeButton("直接备份", (d, w) -> {
                             Toast.makeText(requireContext(), "正在备份（可能含写入中的会话）…", Toast.LENGTH_SHORT).show();
@@ -125,6 +133,27 @@ public class WorkspaceFragment extends Fragment {
 
         restoreBtn.setOnClickListener(v ->
                 pickBackup.launch(new String[]{"*/*"}));
+
+        // 清理损坏会话（dsh 双进程写导致 seq 重复损坏，官方 #420）
+        if (cleanSessionsBtn != null) {
+            cleanSessionsBtn.setOnClickListener(v -> new AlertDialog.Builder(requireContext())
+                    .setTitle("清理损坏会话？")
+                    .setMessage("将把无法解码/极小的会话文件移到 .dsh/corrupt-backup/\n"
+                            + "（不删除，可恢复）。用于修复「历史加载失败 / resume failed」。\n\n"
+                            + "建议先停止 Web UI 再清理。")
+                    .setPositiveButton("清理", (d, w) -> {
+                        Toast.makeText(requireContext(), "正在清理损坏会话…", Toast.LENGTH_SHORT).show();
+                        new Thread(() -> {
+                            String r = c.cleanCorruptSessions();
+                            if (getActivity() != null) {
+                                getActivity().runOnUiThread(() -> Toast.makeText(requireContext(),
+                                        r, Toast.LENGTH_LONG).show());
+                            }
+                        }).start();
+                    })
+                    .setNegativeButton("取消", null)
+                    .show());
+        }
     }
 
     /** 执行备份并展示结果（独立方法，供直接备份/停止后备份复用） */
@@ -133,7 +162,12 @@ public class WorkspaceFragment extends Fragment {
         if (!isAdded() || getActivity() == null) return;
         getActivity().runOnUiThread(() -> {
             if (path == null) {
-                Toast.makeText(requireContext(), "备份失败：环境可能未安装", Toast.LENGTH_LONG).show();
+                String why = BackupManager.lastError();
+                new AlertDialog.Builder(requireContext())
+                        .setTitle("备份失败")
+                        .setMessage(why.isEmpty() ? "未知原因，请查看 logcat" : why)
+                        .setPositiveButton("知道了", null)
+                        .show();
                 return;
             }
             new AlertDialog.Builder(requireContext())
@@ -153,50 +187,102 @@ public class WorkspaceFragment extends Fragment {
     }
 
     private void restoreBackup(Uri uri) {
+        // Web 在跑时恢复会覆盖正在写入的 .dsh（对话可能损坏/丢失）：
+        // 先深停再恢复，比"建议"更可靠（弹窗文案已说明）
+        if (c.isWebRunning()) {
+            new AlertDialog.Builder(requireContext())
+                    .setTitle("Web UI 正在运行")
+                    .setMessage("恢复备份会覆盖对话记录，建议先停止 Web UI 再恢复。\n\n是否停止 Web 并恢复？")
+                    .setPositiveButton("停止并恢复", (d, w) -> doRestoreWithStop(uri))
+                    .setNegativeButton("取消", null)
+                    .show();
+            return;
+        }
         new AlertDialog.Builder(requireContext())
                 .setTitle("恢复备份？")
-                .setMessage("将用备份文件覆盖当前的配置和对话记录。\n建议先停止 Web UI 再恢复。")
+                .setMessage("将用备份文件覆盖当前的配置和对话记录。\n\n确认恢复？")
                 .setPositiveButton("恢复", (d, w) -> doRestore(uri))
                 .setNegativeButton("取消", null)
                 .show();
     }
 
-    private void doRestore(Uri uri) {
-        Toast.makeText(requireContext(), "正在恢复，请稍候…", Toast.LENGTH_SHORT).show();
+    /** 停止 Web 后恢复（后台线程深停 → 恢复） */
+    private void doRestoreWithStop(final Uri uri) {
+        Toast.makeText(requireContext(), "正在停止 Web 并恢复，请稍候…", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
             try {
-                File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-restore.tar.gz");
+                c.stopWebAndWait();
+            } catch (Throwable ignored) {
+            }
+            doRestore(uri);
+        }).start();
+    }
+
+    private void doRestore(Uri uri) {
+        // 开头 Toast 必须主线程（doRestoreWithStop 从后台线程调本方法会 NPE！
+        // 崩溃报告：Can't toast on a thread that has not called Looper.prepare()）
+        if (getActivity() != null) {
+            getActivity().runOnUiThread(() -> {
+                if (isAdded()) Toast.makeText(requireContext(), "正在恢复，请稍候…", Toast.LENGTH_SHORT).show();
+            });
+        }
+        // 提前取 context（doRestoreWithStop 从后台线程调本方法时，
+        // requireContext() 在 Fragment detach 后会抛异常——用 try 兜底）
+        final android.content.Context appCtx;
+        try {
+            appCtx = requireContext().getApplicationContext();
+        } catch (Throwable e) {
+            return; // Fragment 已销毁，放弃恢复
+        }
+        new Thread(() -> {
+            try {
+                File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-restore-src.tar.gz");
                 if (tmp.getParentFile() != null) tmp.getParentFile().mkdirs();
-                try (InputStream in = requireContext().getContentResolver().openInputStream(uri);
+                // 显式判空：openInputStream 返回 null（权限/文件损坏）时给友好提示
+                InputStream in = appCtx.getContentResolver().openInputStream(uri);
+                if (in == null) {
+                    throw new IOException("无法打开所选文件（可能权限不足或文件已损坏）");
+                }
+                try (InputStream ins = in;
                      FileOutputStream out = new FileOutputStream(tmp)) {
                     byte[] buf = new byte[8192];
                     int n;
-                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                    while ((n = ins.read(buf)) != -1) out.write(buf, 0, n);
                 }
-                // 解压到 /root（备份包内含 .dsh、<wd>/.env、dsh-web.log）
-                c.getProot().execChecked("cd /root && tar -xzf .dsha-restore.tar.gz 2>/dev/null; "
-                        + "test -d .dsh && echo OK || echo EMPTY");
+                // 统一走 Java 宽松解压器（与 HarnessController.restoreFromBackup 一致）：
+                // GNU tar 会把文件名含逗号/引号的正常备份误判损坏（issue#9），
+                // extractLenient 只拦真正的路径穿越
+                // 统一交给 HarnessController.restoreFromBackup（宽容恢复）：
+                // 布局识别（.dsh 在包内任意层级）、工作目录名重映射、本机路径插件重建、
+                // bundle 预检（解析不了的先摘掉，保证 dsh web 能启动）。
+                final String result = c.restoreFromBackup(tmp);
                 //noinspection ResultOfMethodCallIgnored
                 tmp.delete();
                 // 同步 API key：恢复的 .env 写回 App 配置，避免下次启动被覆盖
                 String env = c.getProot().execAndRead(
                         "cat /root/" + c.getWorkdir() + "/.env 2>/dev/null");
+                boolean keySynced = false;
                 if (env != null) {
                     for (String line : env.split("\n")) {
                         if (line.startsWith("DEEPSEEK_API_KEY=")) {
                             String key = line.substring("DEEPSEEK_API_KEY=".length()).trim();
-                            if (!key.isEmpty()) c.setApiKey(key);
+                            if (!key.isEmpty()) {
+                                c.setApiKey(key);
+                                keySynced = true;
+                            }
                             break;
                         }
                     }
                 }
                 if (getActivity() == null) return;
-                getActivity().runOnUiThread(() ->
-                        Toast.makeText(requireContext(), "恢复完成（API key 已同步）",
-                                Toast.LENGTH_LONG).show());
+                final String msg = result + (keySynced ? "\n· API key 已同步到配置页" : "");
+                getActivity().runOnUiThread(() -> {
+                    // 用 appCtx（Fragment 可能已 detach，requireContext 会抛）
+                    Toast.makeText(appCtx, msg, Toast.LENGTH_LONG).show();
+                });
             } catch (Exception e) {
                 if (getActivity() != null) {
-                    getActivity().runOnUiThread(() -> Toast.makeText(requireContext(),
+                    getActivity().runOnUiThread(() -> Toast.makeText(appCtx,
                             "恢复失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
                 }
             }

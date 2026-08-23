@@ -9,7 +9,7 @@ DSHA is the **DeepSeek Harness Android launcher**: it runs the `@deepseek-ai/dsh
 
 ## One-paragraph picture
 
-The APK ships the Termux `proot` binary (in `jniLibs/arm64-v8a`, shipped as `libproot.so`) plus an offline **Ubuntu 24.04 arm64** rootfs. On first run the rootfs is extracted into app-private storage; afterwards `proot` chroots into it, where **Node 24 + pnpm + `@deepseek-ai/dsh@0.1.0-rc.6`** run the harness. The native UI (pure Java, Material3, bottom nav) drives the install/start/stop and hosts the Web UI preview in a system WebView (optional GeckoView).
+The APK ships the Termux `proot` binary (in `jniLibs/arm64-v8a`, shipped as `libproot.so`) plus an offline **Ubuntu 24.04 arm64** rootfs. On first run the rootfs is extracted into app-private storage; afterwards `proot` chroots into it, where **Node 24 + pnpm + `@deepseek-ai/dsh` (rc.8 by default)** run the harness. The native UI (pure Java, Material3, bottom nav) drives the install/start/stop and hosts the Web UI preview in a system WebView (optional GeckoView).
 
 ## Tech constraints (design around these)
 
@@ -25,7 +25,7 @@ The APK ships the Termux `proot` binary (in `jniLibs/arm64-v8a`, shipped as `lib
 - `isOfflineExtracted()` → main UI (bottom nav tabs: 启动 / 终端 / 市场 / 设置).
 - `ExtractActivity → MainActivity` **must** pass `skip_extract=true`, or Main re-launches Extract forever.
 - Entry into main UI keys **only** on `.offline-extracted` (not on the older `.installed` marker).
-- Default runtime is RC6 (`use_rc6=true`). Do **not** place a half-cloned source tree in the rootfs alongside it — `startWeb` prefers a source tree and half a tree breaks startup.
+- Default runtime is the npm/prebuilt route (`use_rc6=true` — the pref name is historical, it installs rc.8). Do **not** place a half-cloned source tree in the rootfs alongside it — `startWeb` prefers a source tree and half a tree breaks startup.
 
 ## Architecture (bottom-up)
 
@@ -41,7 +41,7 @@ Key files under `app/src/main/java/com/deepseekharness/app/`:
 | File | Responsibility |
 |---|---|
 | `MainActivity.java` | Shell, startup gates, crash log, update check, backup reminder, upgrade/migration guards |
-| `HarnessController.java` | ~2600-line business core. Read before editing; make minimal patches |
+| `HarnessController.java` | ~4500-line business core. Read before editing; make minimal patches |
 | `ProotBootstrap.java` | proot/env exec, offline extraction, multi-mirror downloads |
 | `ExtractActivity.java` | First-run offline extraction screen |
 | `BackupManager.java` | Manual + migration backups to `Download/DSHA`, restore |
@@ -72,6 +72,116 @@ Protecting user data across upgrades/reinstalls is split across two spots — ke
 - Re-enabling restores the source from the stash. If the stash is gone the caller falls back to `"*"`; `toggleScript()` (in `HarnessController`) must never write `"*"`, `"null"`, or empty into `dependencies` — a `"*"` dependency on a non-npm plugin name breaks `pnpm install`.
 - Market index is `PLUGINS-ALL.md` from `awesome-dsh-plugins`, fetched through mirror URLs with a local cache fallback.
 
+## Self-healing scripts (`app/src/main/assets/`)
+
+Injected into the rootfs on demand and run through proot; all are idempotent and fail soft.
+
+| Script | Called from | Purpose |
+|---|---|---|
+| `heal-session.sh` → `heal-sessions.py` | `doHealSessionCorruption` (Main start + `startWeb`) | Scan `/root/.dsh/sessions`, repair missing `message.id`, isolate unrepairable logs. Matches `session.jsonl{,.zstd}` **exactly** and stores pre-fix copies under `corrupt-backup/` — an earlier prefix match re-healed its own backups and doubled the file count every launch |
+| `fs-write-patch.sh` | `maybeFixFsWrite` (Main start) + `installGuard` + `startWebCommand` | Patch `dsh-fs-local` so a **new** file is published with `rename` instead of `link` (see traps) |
+| `backup-prepare.py` | `BackupManager.backup` | Emit `.dsha-backup-manifest.json` and inline `link:`/`file:` plugin sources into `.dsha-plugin-src/` |
+| `restore-merge.py` | `restoreFromBackup` | Locate `.dsh` at any depth, remap the workdir name, re-land inlined plugins, rewrite `link:` paths, add the `node_modules` symlinks, drop unresolvable bundles, write `.dsh/restore-report.txt` |
+| `rootfs-confirm-install.sh` | `ensureDangerGuard` | `/root/dsh-bin` wrappers + `dsh-confirm.sh` (3090 bridge, dual-stack) |
+| `adb-{shell,pair,setup}.{py,sh}` | `AdbBridge` | Wireless-ADB channel |
+| `webui-{polyfill,degrade-patch,origin-port-patch}.sh`, `lan-bind-patch.sh`, `fix-stale-bundles.sh`, `dsh-deps-heal.sh` | pre-start self-heal in `startWebCommand` | WebView/LAN/bundle/dependency fixes |
+
+### Version markers — bump these or old installs keep the stale copy
+
+| Constant | Where | Bump when |
+|---|---|---|
+| `AdbBridge.SCRIPT_VERSION` | `/root/.dsh/script-version` | any `adb-*.py/sh` change |
+| `HarnessController.GUARD_VERSION` | `/root/dsh-bin/.version` | `rootfs-confirm-install.sh` change (**must equal the number echoed at the end of that script**) |
+| `HarnessController.STEP6_VERSION` | `/root/.dsh/step6.version` | anything step ⑥ installs |
+| `HarnessController.BUILTIN_ASSET_VERSION` | `/root/.dsh/builtin-assets.version` | builtin plugin assets change |
+| `device-shell-guide/package.json` `version` | plugin dir | that plugin's code change |
+
+## Backup format v2 (tolerant by design)
+
+Rule: **restore as much as possible, never fail the whole archive over one unknown entry, and tell the user what was skipped.**
+
+- Archive holds `.dsh`, `<workdir>/.env`, `dsh-web.log`, plus (v2) `.dsha-backup-manifest.json` and `.dsha-plugin-src/`.
+- Restore stages into `/root/.dsha-restore-stage`, then `restore-merge.py` merges: `.dsh` at any nesting depth, `.env` remapped onto the *current* workdir name, inlined plugins landed in `/root/plugin-src/<name>` with `link:` rewritten and `node_modules/<name>` symlinked.
+- Bundles that still cannot resolve are removed from `dsh.profile.bundles` (dsh must be able to boot) and reported; those with a registry spec are printed as `MISSING_PLUGINS:` and reinstalled **silently in the background** by `autoInstallPluginsSilently`.
+- Pre-existing `.dsh` is moved to `.dsh.pre-restore-<ts>` instead of deleted. Archives without a manifest still restore (heuristics).
+- `TarGzipExtractor.extractLenient` skips suspicious/oversized entries (counted in `lastSkipped`) rather than aborting.
+
+## UI design tokens
+
+`values/dimens.xml` + `values/styles.xml` own every spacing, radius and text size; layouts must reference tokens, not literals.
+
+- Spacing: 4 / 8 / 12 / 16 / 20 (`gap_hair` … `gap_section`, `page_pad`, `card_pad`).
+- Radius: `radius_card` 18dp (containers), `radius_control` 14dp (buttons/inputs), `radius_small` 10dp, `radius_pill`.
+- Text: `text_display` 24sp, `text_title` 17sp, `text_body` 15sp, `text_label` 13sp, `text_caption` 12sp (+ `text_hero` for the welcome pages).
+- Backgrounds are `ripple` + `selector` drawables: press feedback **and** a disabled state. Inputs highlight their stroke on focus. Bottom-nav tint must stay `@color/nav_item_tint` (a flat `@color/primary` makes all four tabs look selected).
+- `themes.xml` sets the M3 semantic colors (`colorSurface`/`colorSurfaceVariant`/`colorOutline`/`colorSecondaryContainer`/…) so Switch/CheckBox/Spinner/AlertDialog follow the app palette instead of Material's default purple. `alertDialogTheme` needs a full Dialog theme, `materialAlertDialogTheme` needs a ThemeOverlay — passing the wrong kind crashes the dialog.
+
+## 3090 bridge endpoints (what the agent can call)
+
+`HttpShellService` listens on `127.0.0.1:3090` (plus `[::1]`), token in `/root/.dsh/.bridge_token`, every request must carry `?token=` or `X-Token`. The rootfs side is steered by the `device-shell-guide` prompt.
+
+| Endpoint | Purpose |
+|---|---|
+| `/exec?cmd=` | Shizuku shell (may be unavailable; ADB channel is the primary one) |
+| `/confirm?cmd=&force=1` | Ask the user to approve a command; blocks, 60s timeout ⇒ deny |
+| `/app/device` | Model, Android version, battery, network, screen, foreground flag, storage, memory |
+| `/app/apps?q=&limit=&user=1` | Installed packages (`pkg<TAB>label`); needs `QUERY_ALL_PACKAGES` on Android 11+ |
+| `/app/launch?pkg=` | Launch an app through `PackageManager` — no ADB needed |
+| `/app/clip` / `/app/clip?text=` | Read (foreground only, OS restriction) / write the clipboard |
+| `/app/ask?q=&options=a\|b\|c` | Modal question, **blocks up to 120s**, returns the chosen label |
+| `/app/notify?title=&text=` | Notification (suppressed while the app is foreground) |
+| `/app/toast?text=` | In-app toast |
+| `/app/share?text=` \| `?path=` | System share sheet (files must live under `/sdcard`) |
+| `/app/open?url=` | Open a link (http/https/geo/tel/mailto/market only) |
+| `/app/vibrate?ms=` | Haptic ping when a long task finishes |
+| `/app/export?path=&name=` | Copy a file into `Download/DSHA` via MediaStore (accepts guest paths like `/root/x.md`) |
+| `/app/readfile?path=` | Read a text file under `/sdcard` (credential files are refused) |
+
+Rules when adding endpoints: keep them **token-gated**, refuse paths outside `/sdcard` for file access, never expose credential files, and return plain text — `handle()` wraps whatever you return in `{"result":"…"}`, so nested JSON gets double-escaped. Blocking endpoints must have a timeout and a single-flight guard (see `askBusy`).
+
+## Upgrade compatibility (old installs must upgrade in place)
+
+Users install by tapping an APK, so **签名一致是能否覆盖安装的唯一硬条件**. Rules:
+
+- All builds should share one keystore. `app/build.gradle` reads `DSHA_KEYSTORE` /
+  `DSHA_KEYSTORE_PASSWORD` / `DSHA_KEY_ALIAS` / `DSHA_KEY_PASSWORD` (env or gradle property);
+  without them it falls back to AGP's default debug keystore, which **differs per machine/CI
+  runner** — that fallback is what forces users to uninstall first. CI does the same via the
+  `DSHA_KEYSTORE_B64` secret and prints the certificate fingerprint after every build.
+- Current fingerprint of the historical local builds (v1.1.0 … today):
+  `e7e3a31a75946f2669194c972b3dd0c9aea3fc7c50a8b885d2dee710b22a53f5`. Compare before publishing.
+- `versionCode` must only ever increase; Android refuses to install a lower one over a higher one.
+- Never rename or drop a SharedPreferences key: `use_rc6`, `workdir`, `api_key`… are read by
+  every past version. Add new keys instead (`Constants`).
+- Anything shipped into the rootfs must be version-marked (see the table above) so an upgraded
+  APK re-injects it; `installGuard` is idempotent and safe to re-run on old rootfs trees.
+- Data written by an older release must keep working: `restore-merge.py` accepts manifest-less
+  archives, `heal-sessions.py` migrates the legacy `session.jsonl.*.corrupt-*` copies that older
+  builds left inside `sessions/`, and new backups stay readable by old builds (they just see two
+  extra entries).
+- New permissions must be install-time (`normal`) ones — `QUERY_ALL_PACKAGES` / `VIBRATE` are,
+  so覆盖安装不会弹权限询问也不会失败.
+
+## ADB keep-alive (layered, `DeviceBridgeService`)
+
+The wireless-debugging port is random and changes on every reboot / toggle, Doze freezes background
+networking, and a plain background service can be reclaimed at any time — so keep-alive is layered:
+
+| Layer | Mechanism |
+|---|---|
+| Probe schedule | Adaptive: 60s while connected, `3/6/12/24/45s` backoff right after a drop, 120s once it keeps failing |
+| Event triggers | `registerDefaultNetworkCallback` (network back), `ACTION_SCREEN_ON` / `ACTION_USER_PRESENT`, config page open, app foreground — all funnel through `kick(reason)` with a 1.5s debounce and single-flight guard |
+| Doze fallback | `AdbKeepAliveReceiver` + `setAndAllowWhileIdle` (~9 min in practice); `Handler.postDelayed` alone gets deferred indefinitely in deep sleep |
+| Service survival | `START_STICKY`; the **foreground** `HarnessService` also re-`apply()`s the bridge service every 15s if the ADB switch is on but the service is gone; `BootReceiver` restarts it and re-arms the alarm |
+| Self-heal ladder | probe → mDNS re-discover port → retry → auto re-enable wireless debugging (`WRITE_SECURE_SETTINGS`, else Shizuku) → wait 5s → retry |
+| Port fallbacks | `connect_port` → mDNS → **`connect_port_history` (last 5 successful ports)** → `5555`; every success is remembered |
+| Failure classes | `ok` / `reconnecting` / `installing` / `need_pair` (pairing invalid) / `need_manual` (wireless debugging off) / `network_lost`; only notifies after 3 consecutive failures and cancels the notification on recovery |
+| Visibility | State mirrored to `/root/.dsh/adb-status` (`state/detail/failures/last_ok/updated`) — read by the self-test and readable from the container; config page shows it live |
+| Battery whitelist | Config page has a one-tap `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` button; without it Doze freezes the socket and no amount of retrying helps. The self-test fails this check explicitly |
+
+When touching this code: keep every probe on a background thread (it shells into proot), keep the
+single-flight guard, and never lower `SCRIPT_VERSION` — old installs keep their stale scripts otherwise.
+
 ## Build & CI
 
 - Two-stage Actions workflow (`.github/workflows/android-build.yml`):
@@ -90,6 +200,18 @@ Protecting user data across upgrades/reinstalls is split across two spots — ke
 
 ## Known traps (verify before assuming)
 
+- **确认弹窗要和通知一起发，而且别拿 dismiss 当拒绝.** 早期实现是「前台弹窗 / 后台通知」二选一：Activity 一被 pause，用户就再也看不到弹窗，只能干等 60s 超时被拒 —— 这正是「确认框有时不出现」的由来。现在两条都发（通知是权威渠道），弹窗用 `setCancelable(false)` 且**不在** `OnCancel`/`OnDismiss` 里 `countDown`（pause 造成的 dismiss 会被误判成用户拒绝）。在 finishing 的 Activity 上 `show()` 会抛 `BadTokenException`，那是主线程，异常不在 `handle()` 的 catch 范围内，必须自己 try 住。
+- **确认要带 epoch.** 锁屏残留通知、通知历史、手表转发上的旧「允许」按钮，会把授权决定打到**下一个**请求上（等于一次点击授权了另一条命令）。每次确认递增 `confirmEpoch`，回调校验 epoch 并认领 latch，过期点击直接丢弃。`confirmBusy` 必须是 `AtomicBoolean`：「检查后置位」不原子的话两个请求会互相覆盖 `pendingLatch`。清理顺序也有讲究 —— 先清 latch/弹窗/通知，最后才放开 `confirmBusy`，否则下一个请求抢先发出的通知会被本轮的 `cancelConfirmNotification()`（固定通知 ID）取消掉。
+- **3090 桥要跨实例互斥.** `HarnessService` 与 `DeviceBridgeService` 各 new 一个 `HttpShellService` 都调 `start()`，实例字段 `running` 挡不住跨实例重复启动：第二个实例绑定失败，却会把活着的那个从 `instance` 抹掉，通知按钮全废。用静态 `STARTED` + 实例 `owner`，只有持有者的 `stop()` 才做清理。反过来，`stopWeb` 关掉桥后 ADB 开关仍开着，所以保活探测里要检查 `instance() == null` 并补起来。
+- **App 自己调 `adb-shell.py` 必须带 `DSH_INTERNAL=1`.** 脚本内有 fail-closed 确认关卡，而保活探测每分钟（断线时每 3 秒）跑一次 `id` —— 漏了这个前缀就会不停弹确认框。目前六个内部调用点（保活 3、ADB 自愈 1、配置页状态 1、`pm grant` 1）都带了。
+- **A bundle needs both `bundles` and `dependencies`.** dsh's reconcile drops any entry that is listed in `dsh.profile.bundles` but has no matching entry in `dependencies` — it cannot resolve it, so it prunes it. `ensureBuiltinBundles` used to restore only the bundle name and the `node_modules` symlink, producing an endless restore→prune loop: the user just sees the plugin never taking effect. A real field capture looked like this — entity dir present, symlink present, **both** `bundles` and `dependencies` missing the plugin, while `dsh-client-ui-mobile-adapt` (whose dependency entry survived) stayed registered. Always write `dependencies[name] = "link:<real path>"` alongside the bundle entry, and treat "registered" as *both* present.
+
+- **Don't write an installed-marker before verifying.** `ensureDeviceShellGuide` wrote `dsha-device-shell-guide-installed` unconditionally, but its registration block is guarded by `if (profiles/web/package.json exists)` and step ⑥ usually runs *before* dsh first creates the web profile. The marker then made every later run skip the work. Markers must be written only after a positive check (`guideRegistered`).
+- **Hard links are forbidden in app-private storage.** `link()` under `/data/user/0/<pkg>/` fails with `AccessDeniedException` (SELinux), which is why proot needs `--link2symlink` at all. The extension emulates a link as *symlink → `.l2s.` intermediate*, stored next to the source unless `PROOT_L2S_DIR` is set. dsh publishes a **new** file with `link(temp, target)` and then deletes its staging dir — so every freshly written file became a dangling symlink (`write` reported success, the file was unreadable, `edit` was fine because it uses `rename`). Fixed by `fs-write-patch.sh` (publish new files with `rename`) plus `PROOT_L2S_DIR=<rootfs>/.l2s` as a fallback. Don't "simplify" this away.
+
+- **Injected messages need an `id`.** dsh validates every persisted `user/assistant/tool` event via `assertMessageEventShape`; a message without a non-empty `id` makes the **whole session history** refuse to load (`lacks an identified message`). `device-shell-guide` hand-rolls a message, so it must set `id: randomUUID()` — this was the root cause behind a long run of "history unavailable" reports, and session healing only cleaned up after it.
+- **Bind the 3090 bridge to `127.0.0.1` explicitly.** `InetAddress.getLoopbackAddress()` returns `::1` on Android, so the bridge listened only on IPv6 while every rootfs client dials IPv4 — the confirmation dialog could never fire and commands came back `USER_REJECTED`. A second listener on `[::1]` is kept for clients that resolve `localhost`.
+- **The bridge body must be valid JSON.** `{"result":YES}` (no quotes) broke `adb-shell.py`'s `'"YES"' in body` check, so even pressing *Allow* read back as a rejection.
 - **Locating the offline bundle**: enumerate the APK zip (`ZipFile(packageCodePath)`) looking for `offline-rootfs.{tar.gz,tar,bin,tgz}` — `AssetManager.open` cannot open 300MB+ entries, and aapt may have renamed the entry to `.tar` or `.bin`.
 - **Extraction**: `TarGzipExtractor.extractAuto` sniffs `1f 8b` gzip magic and falls back to raw tar.
 - **`libproot.so`**: patched to fix a WebUI crash; don't replace it with a stock proot build.

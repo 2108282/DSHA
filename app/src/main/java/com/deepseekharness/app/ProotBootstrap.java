@@ -76,6 +76,120 @@ public class ProotBootstrap {
 
     public File getRootfsDir() { return rootfsDir; }
 
+    /** 硬链接探测结果缓存（null=未探测）。见 {@link #hardlinkSupported()} */
+    private static volatile Boolean hardlinkOk = null;
+
+    /**
+     * rootfs 所在文件系统是否支持真实硬链接。
+     *
+     * 支持时 proot 不加 {@code --link2symlink}：该扩展会把 {@code link()} 的目标改写成
+     * 「指向临时目录内中间文件（.l2s.*）的符号链接」，而 dsh 新建文件正是用
+     * {@code link(临时文件, 目标)} 发布、随后立刻递归删除临时目录 —— 于是新建的文件
+     * 100% 变成悬空链接（write 工具报成功但文件读不出来，edit 走 rename 所以不受影响）。
+     * Android app 私有目录（/data/…，ext4/f2fs）本来就支持硬链接，扩展纯属多余。
+     *
+     * 探测失败（少数 ROM/文件系统真的不支持）时保留扩展，行为与旧版一致。
+     */
+    private boolean hardlinkSupported() {
+        Boolean cached = hardlinkOk;
+        if (cached != null) return cached;
+        synchronized (ProotBootstrap.class) {
+            if (hardlinkOk != null) return hardlinkOk;
+            boolean ok = false;
+            String detail = "";
+            File dir = rootfsDir.isDirectory() ? rootfsDir : baseDir;
+            File src = new File(dir, ".dsha-linkprobe");
+            File dst = new File(dir, ".dsha-linkprobe.hl");
+            try {
+                dir.mkdirs();
+                src.delete();
+                dst.delete();
+                java.nio.file.Files.write(src.toPath(), new byte[] { 'o', 'k' });
+                java.nio.file.Files.createLink(dst.toPath(), src.toPath());
+                ok = dst.isFile() && dst.length() == 2;
+                if (!ok) detail = "link 成功但目标不可读";
+            } catch (Throwable e) {
+                ok = false;
+                detail = e.getClass().getSimpleName() + ": " + e.getMessage();
+                android.util.Log.w("DSHA", "硬链接探测失败，保留 --link2symlink: " + e);
+            } finally {
+                src.delete();
+                dst.delete();
+            }
+            hardlinkOk = ok;
+            android.util.Log.i("DSHA", "硬链接支持=" + ok + (detail.isEmpty() ? "" : "（" + detail + "）"));
+            // 结果落盘，容器里 cat /root/.dsha-hardlink 就能看到判定依据（否则只能抓 logcat）
+            try {
+                File mark = new File(rootfsDir, "root/.dsha-hardlink");
+                if (mark.getParentFile() != null) mark.getParentFile().mkdirs();
+                java.nio.file.Files.write(mark.toPath(),
+                        ((ok ? "ok" : "no") + (detail.isEmpty() ? "" : " " + detail) + "\n")
+                                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } catch (Throwable ignored) {
+            }
+            return ok;
+        }
+    }
+
+    /** 不支持真实硬链接时，把 proot 的 l2s 中间文件集中到 rootfs 内固定目录。
+     *  默认行为是「就近存放」——存在临时目录里的中间文件会随临时目录被删掉，
+     *  正是 dsh write 新建文件变悬空的直接原因。 */
+    private void applyL2sEnv(ProcessBuilder pb) {
+        if (hardlinkSupported()) return;
+        try {
+            File l2s = new File(rootfsDir, ".l2s");
+            //noinspection ResultOfMethodCallIgnored
+            l2s.mkdirs();
+            pb.environment().put("PROOT_L2S_DIR", l2s.getAbsolutePath());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** proot 运行环境（两个 exec 入口共用，避免两处漂移） */
+    private void applyProotEnv(ProcessBuilder pb) {
+        pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
+        applyL2sEnv(pb);
+        pb.environment().put("PROOT_LOADER", findNativeLib("libprootloader.so").getAbsolutePath());
+        pb.environment().put("PROOT_LOADER_32", findNativeLib("libprootloader32.so").getAbsolutePath());
+        pb.environment().put("LD_LIBRARY_PATH",
+                libDir.getAbsolutePath() + ":" + findNativeLib("libproot.so").getParent());
+        pb.environment().put("HOME", "/root");
+        // guest 的 PATH（否则继承 Android 的 /system/bin，找不到 tail/apt 等）；
+        // 前置 /root/dsh-bin = 危险命令确认包装器（DSH_CONFIRM=1 时拦截）
+        pb.environment().put("PATH", "/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+        // TMPDIR 必须指向 guest 的 /tmp（否则 mktemp 会用 Android 的 cache 目录而失败）
+        pb.environment().put("TMPDIR", "/tmp");
+        pb.environment().put("DEBIAN_FRONTEND", "noninteractive");
+    }
+
+    /** 组装 proot 公共参数（两个 exec 入口共用，避免两处漂移） */
+    private java.util.List<String> baseProotArgv() {
+        java.util.List<String> argv = new java.util.ArrayList<>();
+        argv.add(prootPath());
+        // 只有文件系统不支持硬链接时才需要 link2symlink 模拟（会破坏 dsh write 工具）
+        if (!hardlinkSupported()) argv.add("--link2symlink");
+        argv.add("-L");
+        argv.add("--kill-on-exit");
+        argv.add("-0");
+        argv.add("--rootfs=" + rootfsDir.getAbsolutePath());
+        argv.add("--cwd=/root");
+        argv.add("-b");
+        argv.add("/dev");
+        argv.add("-b");
+        argv.add("/dev/urandom:/dev/random");
+        argv.add("-b");
+        argv.add("/proc");
+        argv.add("-b");
+        argv.add("/sys");
+        argv.add("-b");
+        argv.add("/proc/self/fd:/dev/fd");
+        argv.add("-b");
+        argv.add("/storage/emulated/0:/sdcard");
+        argv.add("-b");
+        argv.add("/storage/emulated/0:/storage/emulated/0");
+        return argv;
+    }
+
     public boolean isInstalled() {
         return hasBash();
     }
@@ -231,59 +345,22 @@ public class ProotBootstrap {
 
     /** 在 rootfs 内执行 bash 命令 */
     public Process execRootfs(String bashCommand) throws IOException {
-        String[] argv = {
-                prootPath(),
-                "--link2symlink", "-L", "--kill-on-exit",
-                "-0",
-                "--rootfs=" + rootfsDir.getAbsolutePath(),
-                "--cwd=/root",
-                "-b", "/dev",
-                "-b", "/dev/urandom:/dev/random",
-                "-b", "/proc",
-                "-b", "/sys",
-                "-b", "/proc/self/fd:/dev/fd",
-                "/bin/bash", "-c", bashCommand
-        };
+        java.util.List<String> argv = baseProotArgv();
+        argv.add("/bin/bash");
+        argv.add("-c");
+        argv.add(bashCommand);
         ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
         pb.redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null")));
-        pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
-        pb.environment().put("PROOT_LOADER", findNativeLib("libprootloader.so").getAbsolutePath());
-        pb.environment().put("PROOT_LOADER_32", findNativeLib("libprootloader32.so").getAbsolutePath());
-        pb.environment().put("LD_LIBRARY_PATH", libDir.getAbsolutePath() + ":" + findNativeLib("libproot.so").getParent());
-        pb.environment().put("HOME", "/root");
-        // 关键：guest 的 PATH（否则继承 Android 的 /system/bin，找不到 tail/apt 等）
-        // 前置 /root/dsh-bin：危险命令确认包装器（DSH_CONFIRM=1 时拦截）
-        pb.environment().put("PATH", "/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
-        // 关键：TMPDIR 必须指向 guest 的 /tmp（否则 mktemp 用 Android 的 cache 目录而失败）
-        pb.environment().put("TMPDIR", "/tmp");
-        pb.environment().put("DEBIAN_FRONTEND", "noninteractive");
+        applyProotEnv(pb);
         return pb.start();
     }
 
     /** 启动交互式 bash 会话（持久进程，可读写 stdin/stdout；cd/export 状态保持，供内置终端使用） */
     public Process execRootfsInteractive() throws IOException {
-        String[] argv = {
-                prootPath(),
-                "--link2symlink", "-L", "--kill-on-exit",
-                "-0",
-                "--rootfs=" + rootfsDir.getAbsolutePath(),
-                "--cwd=/root",
-                "-b", "/dev",
-                "-b", "/dev/urandom:/dev/random",
-                "-b", "/proc",
-                "-b", "/sys",
-                "-b", "/proc/self/fd:/dev/fd",
-                "/bin/bash"
-        };
+        java.util.List<String> argv = baseProotArgv();
+        argv.add("/bin/bash");
         ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
-        pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
-        pb.environment().put("PROOT_LOADER", findNativeLib("libprootloader.so").getAbsolutePath());
-        pb.environment().put("PROOT_LOADER_32", findNativeLib("libprootloader32.so").getAbsolutePath());
-        pb.environment().put("LD_LIBRARY_PATH", libDir.getAbsolutePath() + ":" + findNativeLib("libproot.so").getParent());
-        pb.environment().put("HOME", "/root");
-        pb.environment().put("PATH", "/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
-        pb.environment().put("TMPDIR", "/tmp");
-        pb.environment().put("DEBIAN_FRONTEND", "noninteractive");
+        applyProotEnv(pb);
         // 交互终端：危险命令启用确认（App 弹窗优先，交互输入兜底）
         pb.environment().put("DSH_CONFIRM", "1");
         pb.environment().put("DSH_INTERACTIVE", "1");
@@ -483,19 +560,24 @@ public class ProotBootstrap {
             long downloaded = resume ? existing : 0L;
             int n;
             int lastPct = -1;
+            long lastCbAt = 0;
             while ((n = in.read(buf)) != -1) {
                 raf.write(buf, 0, n);
                 downloaded += n;
-                // 节流：仅百分比变化时回调（每 64KB 回调会把 UI 线程塞爆导致卡顿）
+                // 节流：百分比变化或每 500ms 回调一次。
+                // （每 64KB 回调会把 UI 线程塞爆；只按百分比回调则大文件几秒才更新一次，
+                //  速率/剩余时间显示会很迟钝，所以加时间兜底。）
                 if (progress != null) {
+                    long now = System.currentTimeMillis();
                     if (totalBytes > 0) {
                         int pct = (int) (downloaded * 100 / totalBytes);
-                        if (pct != lastPct) {
+                        if (pct != lastPct || now - lastCbAt >= 500) {
                             lastPct = pct;
+                            lastCbAt = now;
                             progress.onProgress(downloaded, totalBytes);
                         }
-                    } else if (lastPct != -2) {
-                        lastPct = -2; // 源未提供大小：只通知一次"下载中"
+                    } else if (now - lastCbAt >= 500) {
+                        lastCbAt = now; // 源未提供大小：定期回调，界面才能显示已下大小与速率
                         progress.onProgress(downloaded, -1);
                     }
                 }
@@ -563,6 +645,46 @@ public class ProotBootstrap {
 
     /** 内置离线包 asset 名称（GitHub Actions 构建时预置的预装 rootfs 整包） */
     public static final String OFFLINE_BUNDLE_ASSET = "offline-rootfs.tar.gz";
+
+    /** 离线包版本标记 asset（与离线包同步 bump；App 对比 rootfs 里的已解压版本，
+     *  发现新版 → 提示用户可升级重解压。缺失=老包，按 0 处理不提示）。 */
+    public static final String OFFLINE_VERSION_ASSET = "offline-rootfs.version";
+
+    /** APK 内置离线包版本（读 asset；失败/缺失返回 "0"） */
+    public String bundledOfflineVersion() {
+        try (java.io.InputStream in = ctx.getAssets().open(OFFLINE_VERSION_ASSET)) {
+            byte[] buf = new byte[32];
+            int n = in.read(buf);
+            String s = n > 0 ? new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8).trim() : "";
+            return s.isEmpty() ? "0" : s;
+        } catch (Exception e) {
+            return "0";
+        }
+    }
+
+    /** rootfs 已解压的离线包版本（写于解压完成；缺失返回 "0"） */
+    public String installedOfflineVersion() {
+        try {
+            java.io.File f = new java.io.File(rootfsDir, "root/.dsh/offline-rootfs.version");
+            if (!f.isFile()) return "0";
+            String s = new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8).trim();
+            return s.isEmpty() ? "0" : s;
+        } catch (Exception e) {
+            return "0";
+        }
+    }
+
+    /** 解压完成后记录离线包版本标记（供启动时对比，发现新包可提示升级） */
+    private void writeOfflineVersion() {
+        try {
+            java.io.File f = new java.io.File(rootfsDir, "root/.dsh/offline-rootfs.version");
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), bundledOfflineVersion().getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Throwable ignored) {
+        }
+    }
 
     /** aapt 会把 .tar.gz 自动解成 .tar，所以这些名字都算内置包。 */
     private static final String[] BUNDLE_NAMES = {
@@ -664,21 +786,29 @@ public class ProotBootstrap {
         };
 
         try {
-            // ===== 数据保护：重解压前备份用户数据（.dsh 配置/对话 + .env），解压后自动还原 =====
+            // ===== 数据保护：重解压前备份用户数据（.dsh 配置/对话 + 所有工作目录 .env），解压后自动还原 =====
             // 旧 rootfs 存在但 isOfflineExtracted() 判定失败（标记丢失/bash 路径变化）会走到这里，
             // 直接删整个 rootfs 会连对话记录一起丢掉（issue#9 第1条）——必须先备份再删。
+            // .env 遍历 /root 下所有子目录（兼容用户自定义 workdir，不只默认 deepseek-harness）。
             java.io.File dataBak = null;
             if (rootfsDir.exists()) {
                 java.io.File dshDir = new java.io.File(rootfsDir, "root/.dsh");
-                java.io.File envFile = new java.io.File(rootfsDir, "root/" + getWorkdirDefault() + "/.env");
-                if (dshDir.isDirectory() || envFile.isFile()) {
+                java.io.File rootHome = new java.io.File(rootfsDir, "root");
+                java.io.File[] workDirs = rootHome.isDirectory() ? rootHome.listFiles(java.io.File::isDirectory) : null;
+                boolean hasData = dshDir.isDirectory() || (workDirs != null && workDirs.length > 0);
+                if (hasData) {
                     dataBak = new java.io.File(baseDir, ".data-preserve-" + System.currentTimeMillis());
                     dataBak.mkdirs();
                     if (dshDir.isDirectory()) {
                         copyRecursively(dshDir, new java.io.File(dataBak, "dsh"));
                     }
-                    if (envFile.isFile()) {
-                        copyFile(envFile, new java.io.File(dataBak, "env"));
+                    if (workDirs != null) {
+                        for (java.io.File d : workDirs) {
+                            java.io.File e = new java.io.File(d, ".env");
+                            if (e.isFile()) {
+                                copyFile(e, new java.io.File(dataBak, "env-" + d.getName()));
+                            }
+                        }
                     }
                 }
             }
@@ -689,7 +819,7 @@ public class ProotBootstrap {
                 throw new IOException("解压后 rootfs 不完整（缺少 bash）\n" + diagnoseRootfs());
             }
             setupResolvConf();
-            // 解压完成后还原用户数据
+            // 解压完成后还原用户数据（.dsh + 所有工作目录 .env）
             if (dataBak != null) {
                 try {
                     java.io.File dshDst = new java.io.File(rootfsDir, "root/.dsh");
@@ -698,19 +828,25 @@ public class ProotBootstrap {
                         if (!dshDst.exists()) dshDst.mkdirs();
                         copyRecursively(dshBak, dshDst);
                     }
-                    java.io.File envBak = new java.io.File(dataBak, "env");
-                    if (envBak.isFile()) {
-                        java.io.File envDst = new java.io.File(rootfsDir, "root/" + getWorkdirDefault() + "/.env");
-                        if (envDst.getParentFile() != null) envDst.getParentFile().mkdirs();
-                        copyFile(envBak, envDst);
+                    // 还原各工作目录 .env（env-<dir> 命名，还原到 root/<dir>/.env）
+                    java.io.File[] envBaks = dataBak.listFiles((d, n) -> n.startsWith("env-"));
+                    if (envBaks != null) {
+                        for (java.io.File eb : envBaks) {
+                            String dirName = eb.getName().substring("env-".length());
+                            java.io.File envDst = new java.io.File(rootfsDir, "root/" + dirName + "/.env");
+                            if (envDst.getParentFile() != null) envDst.getParentFile().mkdirs();
+                            copyFile(eb, envDst);
+                        }
                     }
-                    android.util.Log.i("DSHA", "重解压已还原用户数据 (.dsh + .env)");
+                    android.util.Log.i("DSHA", "重解压已还原用户数据 (.dsh + 工作区 .env)");
                 } catch (Throwable e) {
                     android.util.Log.w("DSHA", "还原用户数据失败: " + e);
                 }
                 deleteRecursively(dataBak);
             }
             markOfflineExtracted();
+            // 记录离线包版本（启动时对比，发现新版可提示升级）
+            writeOfflineVersion();
         } finally {
             try { counted.close(); } catch (Exception ignored) {}
             if (apk != null) {
@@ -782,7 +918,7 @@ public class ProotBootstrap {
         }
     }
 
-    /** 默认工作目录名（deepseek-harness 源码树）；重解压数据保护用 */
+    /** 默认工作目录名（deepseek-harness 源码树）；历史遗留，现数据保护遍历 /root 所有工作目录 */
     private String getWorkdirDefault() {
         return "deepseek-harness";
     }

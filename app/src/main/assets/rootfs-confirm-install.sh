@@ -7,46 +7,57 @@ mkdir -p "$DSH_BIN"
 
 cat > /root/dsh-confirm.sh <<'EOF'
 #!/bin/bash
-# DSHA 危险命令确认（走 App 3090 桥）。退出码：0=用户允许，1=拒绝/不可达
+# 用法：dsh-confirm.sh [--force] <命令...>
+#   --force：所有命令都弹确认（设备 shell 报备用；守卫开时）
+#   不带：仅危险命令确认（守卫内部行为由 3090 桥 confirmEnabled 决定）
+FORCE=0
+if [ "$1" = "--force" ]; then FORCE=1; shift; fi
 CMD="$*"
-# 桥要求 token 鉴权：不带的话一律 [UNAUTHORIZED]，所有守卫命令都会被拒
+# 3090 桥有 token 鉴权（防其他 App 冒充 agent 弹确认框）：
+# 必须带 X-Token 头（= /root/.dsh/.bridge_token 内容），否则一律 [UNAUTHORIZED] 被拒
 TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
-if [ -n "$TOKEN" ]; then
-  # 双地址：App 桥可能只监听 IPv6 回环（Android 上 localhost 解析优先 ::1）
-  for BASE in "http://127.0.0.1:3090" "http://[::1]:3090"; do
-    # -m 70 必须大于 App 侧 60s 确认超时，否则客户端先断、用户点了也白点
-    RES=$(curl -s -m 70 -G "$BASE/confirm" \
-            --data-urlencode "cmd=$CMD" --data-urlencode "token=$TOKEN" 2>/dev/null)
-    # 严格匹配 {"result":"YES"}：宽松的 grep YES 会被命令内容或其它字段带偏
-    case "$RES" in
-      *'"result":"YES"'*) exit 0 ;;
-      *'"result":"NO"'*)  echo "已拒绝: $CMD（用户点了拒绝）" >&2; exit 1 ;;
-    esac
-  done
+# 桥的监听地址随 App 版本不同（新版绑 127.0.0.1 并附加 [::1]，旧版只绑 [::1]）：
+# 两个地址族都试，避免「桥活着但连不上 → 确认弹窗永不出现」。
+RES=""
+for H in 127.0.0.1 '[::1]'; do
+  RES=$(curl -s -m 65 -G "http://$H:3090/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
+  # 严格匹配 {"result":"YES"}：宽松的 grep YES 会被响应里的其它字段或命令回显
+  # 带偏（吸收上游 PR#24）
+  case "$RES" in
+    *'"result":"YES"'*) exit 0 ;;
+    *'"result":"NO"'*)  echo "已拒绝: $CMD（用户点了拒绝）" >&2; exit 1 ;;
+    *'"result":YES'*)   exit 0 ;;  # 兼容老版 App 的非法 JSON 响应
+  esac
+  [ -n "$RES" ] && break
+done
+if [ -n "$RES" ]; then
+  # 有响应但既不是 YES 也不是 NO：桥说了别的（如 Shizuku 未就绪），一律拒绝
+  echo "已拒绝: $CMD" >&2
+  echo "  桥返回：$RES" >&2
+  exit 1
 fi
-# 桥不可达或没有 token：终端场景交互确认，10 秒超时默认拒绝
+# 3090 不可达（终端场景未启动服务）：终端内交互确认，10 秒超时默认拒绝
 if [ -n "$DSH_INTERACTIVE" ]; then
   echo -n "确认执行 [$CMD] ? [y/N] " >&2
   read -t 10 ans
   case "$ans" in
     y|Y) exit 0 ;;
   esac
-  echo "已拒绝: $CMD" >&2
-  exit 1
 fi
-# 静默拒绝最难排查——把原因写清楚（用户报的 USER_REJECTED 就是卡在这里）
+# 静默拒绝最难排查 —— 把原因写清楚（吸收上游 PR#24）
 echo "已拒绝: $CMD" >&2
 if [ -z "$TOKEN" ]; then
   echo "  原因：读不到 /root/.dsh/.bridge_token（App 未生成鉴权令牌）" >&2
 else
   echo "  原因：3090 确认桥不可达（127.0.0.1 与 [::1] 都连不上）" >&2
 fi
-echo "  处理：在 App「配置」页开启 ADB 开关，确认桥运行后重试" >&2
+echo "  处理：在 App「配置」页启用 ADB 设备通道，确认桥运行后重试" >&2
 exit 1
 EOF
 chmod +x /root/dsh-confirm.sh
 
-# BASH_ENV 函数级守卫：agent 每次 bash -c 执行前自动加载（非交互 bash 必读 BASH_ENV）
+# 函数级守卫：由 bash 工具 lib 补丁（ensureBashGuardPatch）在每条命令前 source 加载。
+# 不用 BASH_ENV —— 它会污染插件初始化时的子 shell，导致 dsh web 加载插件失败。
 # 函数优先于 PATH 查找，PATH 被覆盖/哈希缓存都无法绕过命令名拦截
 cat > /root/dsh-guard.sh <<'EOF'
 # DSHA 危险命令守卫（由 BASH_ENV 注入，勿手动删除）
@@ -134,6 +145,4 @@ chmod +x "$DSH_BIN/$C"
 done
 
 echo "OK dsh-bin: $(ls "$DSH_BIN" | tr '\n' ' ')"
-# 版本号必须与 HarnessController.GUARD_VERSION 完全一致，否则 ensureDangerGuard()
-# 的 equals 永远为假 → 每次启动 Web / 开终端都 rm -rf 重装守卫（顺带删掉 adb-shell）
-echo 10 > "$DSH_BIN/.version"
+echo 11 > "$DSH_BIN/.version"

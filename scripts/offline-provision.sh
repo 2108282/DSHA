@@ -3,7 +3,7 @@
 # offline-provision.sh — 在 arm64 rootfs（chroot / proot）内
 # 预装 deepseek-harness 运行环境，产出「解压即用」的 rootfs。
 #
-# 默认装 rc.8（@deepseek-ai/dsh@0.1.0-rc.8，2026-08-19 发布），
+# 默认装 rc.2（@deepseek-ai/dsh@0.1.1-rc.2，2026-08-21 发布），
 # 与 App 在线安装（@rc 跟随最新）对齐；rc.8 失败再回退源码构建。
 # 升级 rc 版本时同步改 DSH_VERSION 常量即可。
 #
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # dsh 版本（pin 到具体 rc，保证离线包可复现；与 App 在线 @rc 策略解耦）
-DSH_VERSION="${DSH_VERSION:-0.1.0-rc.8}"
+DSH_VERSION="${DSH_VERSION:-0.1.1-rc.2}"
 WORKDIR="${WORKDIR:-deepseek-harness}"
 IN_CI="${GITHUB_ACTIONS:-}"
 KEEP_CA="${DSHA_KEEP_CA:-}"
@@ -44,17 +44,17 @@ command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python || 
 
 echo "==> [3/8] 安装 Node.js v24.19.0"
 if [ ! -x /usr/local/bin/node ]; then
-  cd /tmp
-  rm -f node.tar.xz
+  mkdir -p /tmp 2>/dev/null || true
+  rm -f /tmp/node.tar.xz
   if [ -n "$IN_CI" ]; then
-    curl -fSL --retry 3 https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o node.tar.xz \
-      || curl -fSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o node.tar.xz
+    curl -fSL --retry 3 https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o /tmp/node.tar.xz \
+      || curl -fSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o /tmp/node.tar.xz
   else
-    curl -kfsSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o node.tar.xz \
-      || curl -kfsSL --retry 3 https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o node.tar.xz
+    curl -kfsSL --retry 3 https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o /tmp/node.tar.xz \
+      || curl -kfsSL --retry 3 https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.xz -o /tmp/node.tar.xz
   fi
-  tar -xJf node.tar.xz -C /usr/local --strip-components=1
-  rm -f node.tar.xz
+  tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
+  rm -f /tmp/node.tar.xz
 fi
 node -v && npm -v
 
@@ -68,6 +68,11 @@ else
 fi
 command -v pnpm >/dev/null 2>&1 || npm install -g pnpm@11.7.0
 command -v node-gyp >/dev/null 2>&1 || npm install -g node-gyp
+# 会话修复自愈需要 zstandard（解压 session.jsonl.zstd）：
+# 有 pip 就直接装，装不上不阻塞（自愈时会再尝试）
+if command -v pip >/dev/null 2>&1 || python3 -m pip --version >/dev/null 2>&1; then
+  python3 -m pip install --break-system-packages -q zstandard 2>/dev/null || python3 -m pip install -q zstandard 2>/dev/null || true
+fi
 pnpm -v
 node-gyp --version || true
 
@@ -155,6 +160,13 @@ if [ -f /root/patches/rootfs-confirm-install.sh ]; then
 fi
 # 空的内置插件快照，避免 App 误把后续用户插件当自带
 touch /root/dsha-builtin.txt
+
+echo "==> [7.5/8] 预置 DSHA 内置插件（mobile-adapt / device-shell-guide / task-notifier，解压即用）"
+if [ -f /root/patches/provision-builtin-plugins.sh ]; then
+  bash /root/patches/provision-builtin-plugins.sh
+else
+  echo "  WARN: 未找到 provision-builtin-plugins.sh（旧构建器？跳过预置，App 启动时会运行时注入）"
+fi
 
 echo "==> [8/8] 校验"
 node -v

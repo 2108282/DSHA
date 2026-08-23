@@ -51,6 +51,8 @@ public class BootReceiver extends BroadcastReceiver {
 
             // 拉起设备桥（看门狗会自动发现端口重连）
             DeviceBridgeService.apply(context);
+            // 重启后系统会清掉所有闹钟，Doze 兜底得重新排一次
+            AdbKeepAliveReceiver.schedule(context);
         } catch (Throwable ignored) {
         }
     }

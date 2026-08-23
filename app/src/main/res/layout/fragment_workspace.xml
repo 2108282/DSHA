@@ -8,15 +8,15 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="24dp">
+        android:padding="@dimen/page_pad">
         <TextView
             android:id="@+id/sub_back"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:paddingBottom="10dp"
+            android:paddingBottom="@dimen/gap_tight"
             android:text="‹ 返回"
             android:textColor="@color/text_secondary"
-            android:textSize="14sp"
+            android:textSize="@dimen/text_body"
             android:visibility="gone" />
 
 
@@ -24,13 +24,13 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="工作区管理"
-            android:textSize="22sp"
+            android:textSize="@dimen/text_display"
             android:textStyle="bold" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
+            android:layout_marginTop="@dimen/gap_section"
             android:text="工作区目录名（rootfs 内）" />
 
         <EditText
@@ -43,91 +43,98 @@
             android:id="@+id/workspace_apply"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="@dimen/gap_control"
             android:text="应用路径" />
 
         <TextView
             android:id="@+id/workspace_info"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="@dimen/gap_section"
             android:lineSpacingExtra="4dp"
-            android:textSize="14sp" />
+            android:textSize="@dimen/text_body" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="@dimen/gap_section"
             android:text="文件共享（MT 注入文件提供器 · 无需 ROOT）"
-            android:textSize="16sp"
+            android:textSize="@dimen/text_title"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/workspace_share_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/gap_tight"
             android:lineSpacingExtra="3dp"
             android:text="尚未加载"
-            android:textSize="13sp" />
+            android:textSize="@dimen/text_label" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="@dimen/gap_section"
             android:text="设备 Shell 能力（Shizuku）"
-            android:textSize="16sp"
+            android:textSize="@dimen/text_title"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/workspace_shizuku_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/gap_tight"
             android:text="Shizuku 未授权"
-            android:textSize="13sp" />
+            android:textSize="@dimen/text_label" />
 
         <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/workspace_shizuku_auth"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="@dimen/gap_control"
             android:text="授权 Shizuku" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/gap_tight"
             android:lineSpacingExtra="3dp"
             android:text="授权后，助手（Web UI 里的 agent）可在设备上执行 shell 命令：\ncurl http://127.0.0.1:3090/exec?cmd=..."
-            android:textSize="12sp" />
+            android:textSize="@dimen/text_caption" />
 
         <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/workspace_backup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="@dimen/gap_control"
             android:text="备份全部数据（导出到外部存储）" />
 
         <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/workspace_restore"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/gap_tight"
             android:text="从备份恢复（选择备份文件）" />
+
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
+            android:id="@+id/workspace_clean_sessions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_tight"
+            android:text="清理损坏会话（隔离到 corrupt-backup，可恢复）" />
 
         <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/workspace_reset"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/gap_tight"
             android:text="重置配置（保留对话记录）" />
 
         <Button android:background="@drawable/bg_btn_danger" android:textAllCaps="false"
             android:id="@+id/workspace_clear"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="@dimen/gap_section"
             android:text="清除环境" />
     </LinearLayout>
 </ScrollView>

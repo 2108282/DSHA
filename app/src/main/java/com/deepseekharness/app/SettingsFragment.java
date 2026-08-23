@@ -19,6 +19,8 @@ import java.util.function.Supplier;
 
 public class SettingsFragment extends Fragment {
 
+    private HarnessController c;
+
     private static final TabOption[] TAB_OPTIONS = {
             new TabOption("安装", "分步安装 rootfs / 工具 / Node / harness", InstallFragment::new),
             new TabOption("配置", "API key · 端口 · 模型 · 沙箱模式", ConfigFragment::new),
@@ -34,6 +36,7 @@ public class SettingsFragment extends Fragment {
 
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        c = HarnessController.get(requireContext());
         LinearLayout tabs = view.findViewById(R.id.settings_tabs);
         for (int i = 0; i < TAB_OPTIONS.length; i++) {
             if (i > 0) {
@@ -46,7 +49,7 @@ public class SettingsFragment extends Fragment {
             tabs.addView(buildRow(i));
         }
 
-        String version = "1.1.2";
+        String version = "unknown";
         try {
             version = requireContext().getPackageManager()
                     .getPackageInfo(requireContext().getPackageName(), 0).versionName;
@@ -58,6 +61,49 @@ public class SettingsFragment extends Fragment {
         updateSub.setText("当前 v" + version + " · 从 GitHub Releases 检查");
         view.findViewById(R.id.settings_about).setOnClickListener(v -> AboutDialog.show(requireContext()));
         view.findViewById(R.id.settings_update).setOnClickListener(v -> checkUpdate());
+        View selfTest = view.findViewById(R.id.settings_selftest);
+        if (selfTest != null) selfTest.setOnClickListener(v -> runSelfTest());
+    }
+
+    /** 一键自检：后台跑只读检查，结果用可滚动弹窗展示（可一键复制发给开发者） */
+    private void runSelfTest() {
+        Toast.makeText(requireContext(), "正在自检，约 10~30 秒…", Toast.LENGTH_SHORT).show();
+        final android.content.Context app = requireContext().getApplicationContext();
+        new Thread(() -> {
+            final String report = HarnessController.get(app).runSelfTest();
+            if (getActivity() == null) return;
+            requireActivity().runOnUiThread(() -> {
+                if (isAdded()) showSelfTestDialog(report);
+            });
+        }, "dsha-selftest").start();
+    }
+
+    private void showSelfTestDialog(final String report) {
+        TextView body = new TextView(requireContext());
+        body.setText(report);
+        body.setTypeface(android.graphics.Typeface.MONOSPACE);
+        body.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        body.setTextColor(requireContext().getColor(R.color.text));
+        body.setTextIsSelectable(true);
+        body.setPadding(dp(16), dp(8), dp(16), dp(8));
+        android.widget.ScrollView scroll = new android.widget.ScrollView(requireContext());
+        scroll.addView(body);
+        // 弹窗高度设上限，报告长了也不会把按钮顶出屏幕
+        scroll.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(420)));
+        new AlertDialog.Builder(requireContext())
+                .setTitle("自检结果")
+                .setView(scroll)
+                .setPositiveButton("复制", (d, w) -> {
+                    android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                            requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                    if (cm != null) {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("DSHA 自检", report));
+                        Toast.makeText(requireContext(), "已复制自检结果", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("关闭", null)
+                .show();
     }
 
     private LinearLayout buildRow(final int index) {
@@ -131,6 +177,8 @@ public class SettingsFragment extends Fragment {
                     Toast.makeText(requireContext(), "当前 v" + cur + " 已是最新", Toast.LENGTH_SHORT).show();
                     return;
                 }
+                // 更新前自动存档：检测到新版先静默备份一次（同一版本只备份一次）
+                c.backupBeforeUpdate(tag);
                 new AlertDialog.Builder(requireContext())
                         .setTitle("发现新版本 " + tag)
                         .setMessage("当前版本 v" + cur + "\n是否前往下载？")

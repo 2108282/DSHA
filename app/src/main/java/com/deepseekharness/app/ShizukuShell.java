@@ -84,9 +84,18 @@ public final class ShizukuShell {
                 + ",binding=" + binding;
     }
 
-    /** 请求 Shizuku 权限；授权成功回调自动触发绑定（联动修复） */
+    /** 请求 Shizuku 权限；授权成功回调自动触发绑定（联动修复）。
+     *  一次性语义：add 监听 → requestPermission → 回调后立即 remove。
+     *  （Shizuku 13.x 没有带 listener 的 requestPermission 重载，只有 add/remove 配对；
+     *   旧实现 add 后从不 remove → 每次请求都永久累积一个监听器 → 泄漏 + 重复回调） */
     public static void requestPermission(Shizuku.OnRequestPermissionResultListener listener) {
-        Shizuku.OnRequestPermissionResultListener wrapped = (code, result) -> {
+        final Shizuku.OnRequestPermissionResultListener[] holder = new Shizuku.OnRequestPermissionResultListener[1];
+        holder[0] = (code, result) -> {
+            // 一次性：先移除自身（防泄漏）
+            try {
+                Shizuku.removeRequestPermissionResultListener(holder[0]);
+            } catch (Throwable ignored) {
+            }
             try {
                 if (listener != null) listener.onRequestPermissionResult(code, result);
             } finally {
@@ -96,9 +105,14 @@ public final class ShizukuShell {
             }
         };
         try {
-            Shizuku.addRequestPermissionResultListener(wrapped);
+            Shizuku.addRequestPermissionResultListener(holder[0]);
             Shizuku.requestPermission(9527);
         } catch (Throwable ignored) {
+            // 添加/请求失败：立刻移除，避免残留
+            try {
+                Shizuku.removeRequestPermissionResultListener(holder[0]);
+            } catch (Throwable ignored2) {
+            }
         }
     }
 

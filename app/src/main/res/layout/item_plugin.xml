@@ -2,12 +2,12 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginStart="18dp"
-    android:layout_marginEnd="18dp"
-    android:layout_marginBottom="10dp"
-    android:background="@drawable/bg_card"
+    android:layout_marginStart="@dimen/page_pad"
+    android:layout_marginEnd="@dimen/page_pad"
+    android:layout_marginBottom="@dimen/gap_control"
+    android:background="@drawable/bg_card_clickable"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="@dimen/card_pad">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -20,28 +20,35 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:ellipsize="middle"
             android:fontFamily="monospace"
+            android:singleLine="true"
             android:textColor="@color/text"
-            android:textSize="14sp"
+            android:textSize="@dimen/text_body"
             android:textStyle="bold" />
 
+        <!-- 操作按钮：给最小宽度，让"安装/卸载/重装"三种文案的按钮宽度一致，
+             列表滚动时右边缘不会忽宽忽窄 -->
         <TextView
             android:id="@+id/pluginInstall"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
+            android:layout_marginStart="@dimen/gap_tight"
             android:background="@drawable/bg_btn"
             android:gravity="center"
-            android:paddingStart="13dp"
-            android:paddingEnd="13dp"
+            android:minWidth="72dp"
+            android:paddingStart="@dimen/gap_control"
+            android:paddingEnd="@dimen/gap_control"
             android:text="安装"
             android:textColor="@color/primary"
-            android:textSize="13sp"
+            android:textSize="@dimen/text_label"
             android:textStyle="bold" />
 
         <Switch
             android:id="@+id/pluginSwitch"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/gap_tight"
             android:visibility="gone" />
     </LinearLayout>
 
@@ -49,17 +56,18 @@
         android:id="@+id/pluginStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="@dimen/gap_hair"
         android:textColor="@color/warn"
-        android:textSize="11sp" />
+        android:textSize="@dimen/text_caption" />
 
     <TextView
         android:id="@+id/pluginDesc"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="@dimen/gap_hair"
         android:ellipsize="end"
+        android:lineSpacingExtra="2dp"
         android:maxLines="3"
         android:textColor="@color/text_muted"
-        android:textSize="12sp" />
+        android:textSize="@dimen/text_caption" />
 </LinearLayout>

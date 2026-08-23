@@ -23,16 +23,19 @@ public final class AdbBridge {
     }
 
     /** assets 脚本是否已注入 rootfs（校验版本标记，防止旧脚本残留不更新）。
-     *  用 equals 而非 contains：contains 会把 "10" 里的 "1"、"18" 里的 "8"
-     *  当成命中，版本号一进两位数就会误判为"已注入"而跳过重注入。 */
+     *  精确比较：contains 会让 "9" 误命中 "19"，将来版本号进两位数就静默失效。 */
     public static boolean injected(ProotBootstrap proot) {
         String r = proot.execAndRead("test -f /root/.dsh/script-version && cat /root/.dsh/script-version || echo NO");
-        return r != null && r.trim().equals(SCRIPT_VERSION);
+        return r != null && SCRIPT_VERSION.equals(r.trim());
     }
 
-    /** 当前 assets 脚本版本：每次改脚本 +1，旧版 APK 的残留脚本会因版本不符被强制重注入。
-     *  这是唯一生效的门——脚本头部的 # DSHA_ADB_SCRIPT_VERSION 注释 Java 侧不读。 */
-    private static final String SCRIPT_VERSION = "8";
+    /** 当前 assets 脚本版本：每次改脚本 +1，旧版 APK 的残留脚本会因版本不符被强制重注入 */
+    private static final String SCRIPT_VERSION = "12";
+
+    /** 供自检/诊断读取期望版本（包内可见，避免把常量再抄一份） */
+    static String scriptVersion() {
+        return SCRIPT_VERSION;
+    }
 
     /** 幂等注入：把三个 assets 脚本 base64 写入 /root/.dsh/ 并加执行位 + 写版本标记 */
     public static String inject(Context ctx, ProotBootstrap proot) {
@@ -168,8 +171,6 @@ public final class AdbBridge {
         try {
             String pkg = "com.dsh.client";
             // 先查是否已授权，避免每次配对都重复 grant
-            // DSH_INTERNAL=1：跳过 adb-shell.py 的用户确认关卡（App 自己的调用，
-            // pm grant 不是只读命令，不打标会弹窗骚扰用户）
             String r = proot.execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py pm grant " + pkg
                     + " android.permission.WRITE_SECURE_SETTINGS 2>&1 | head -2");
             android.util.Log.i("DSHA-ADB", "WRITE_SECURE_SETTINGS 授权结果: " + r);
@@ -180,7 +181,9 @@ public final class AdbBridge {
     /** 状态快照：key/deps/connect_port（供 UI 展示） */
     public static String status(ProotBootstrap proot) {
         String cmd = "K=$(test -f /root/.dsh/adbkeys/adbkey && echo YES || echo NO); "
-                + "D=$(python3 -c 'import adb_shell_wifi,spake2_cffi' 2>/dev/null && echo YES || echo NO); "
+                // 注意：新版库模块名是 spake2.spake2（无下划线），旧名 spake2_cffi 已不存在，
+                // 用旧名会导致 import 永远失败 → UI 永远显示依赖缺失
+                + "D=$(python3 -c 'import adb_shell_wifi; from spake2.spake2 import Spake2_Alice, Spake2_Bob' 2>/dev/null && echo YES || echo NO); "
                 + "P=$(test -f /root/.dsh/adbkeys/connect_port && cat /root/.dsh/adbkeys/connect_port || echo -); "
                 + "echo 'key='$K' deps='$D' port='$P";
         return proot.execAndRead(cmd);

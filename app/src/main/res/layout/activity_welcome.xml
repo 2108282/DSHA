@@ -11,21 +11,32 @@
         android:layout_height="0dp"
         android:layout_weight="1" />
 
+    <!-- 页码指示：3 页引导原来没有任何进度提示，不知道还有几页 -->
+    <LinearLayout
+        android:id="@+id/welcome_dots"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginBottom="@dimen/gap_block"
+        android:gravity="center"
+        android:orientation="horizontal" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:paddingStart="26dp"
-        android:paddingEnd="26dp"
-        android:paddingBottom="30dp">
+        android:paddingStart="@dimen/page_pad"
+        android:paddingEnd="@dimen/page_pad"
+        android:paddingBottom="@dimen/gap_section">
 
         <Button
             android:id="@+id/welcome_btn"
             android:layout_width="match_parent"
-            android:layout_height="50dp"
+            android:layout_height="@dimen/btn_height"
             android:background="@drawable/bg_btn_primary"
             android:text="下一步"
             android:textAllCaps="false"
-            android:textColor="@color/accent_on" />
+            android:textColor="@color/accent_on"
+            android:textSize="@dimen/text_body" />
     </LinearLayout>
 </LinearLayout>

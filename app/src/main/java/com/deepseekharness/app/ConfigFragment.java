@@ -30,7 +30,7 @@ public class ConfigFragment extends Fragment {
     private HarnessController c;
     private EditText apiKeyEdit, portEdit, modelEdit;
     private Spinner modeSpinner;
-    private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb;
+    private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb, rootShellCb;
     private EditText autoBackupEdit;
     private Button saveBtn;
     private TextView repoLink;
@@ -57,6 +57,7 @@ public class ConfigFragment extends Fragment {
         autoBackupEdit = view.findViewById(R.id.config_auto_backup);
         geckoCb = view.findViewById(R.id.config_gecko_core);
         adbCb = view.findViewById(R.id.config_adb_enable);
+        rootShellCb = view.findViewById(R.id.config_root_shell);
         saveBtn = view.findViewById(R.id.config_save);
         repoLink = view.findViewById(R.id.config_repo_link);
         SubPageBack.bind(this, view);
@@ -71,6 +72,11 @@ public class ConfigFragment extends Fragment {
                             .commit());
         }
 
+        Button batteryBtn = view.findViewById(R.id.config_battery_opt);
+        if (batteryBtn != null) {
+            refreshBatteryOptState(view);
+            batteryBtn.setOnClickListener(v -> requestIgnoreBatteryOpt());
+        }
         Button adbPairBtn = view.findViewById(R.id.config_adb_pair);
         if (adbPairBtn != null) {
             adbPairBtn.setOnClickListener(v -> {
@@ -95,7 +101,11 @@ public class ConfigFragment extends Fragment {
     private final Runnable adbStatusTick = this::pollAdbStatus;
     private boolean adbPolling = false;
 
-    /** 启动每秒轮询（Fragment 可见时） */
+    /** 启动每秒轮询（Fragment 可见时）。实际探测一次要起 proot 子进程（1~3s），
+     *  1s 太频繁 → 5s 一次（线程异步不卡 UI，但降低 CPU/电量消耗） */
+    private static final long ADB_POLL_MS = 5000;
+
+    /** 启动 ADB 状态轮询（Fragment 可见时） */
     private void startAdbStatusPolling() {
         if (adbPolling) return;
         adbPolling = true;
@@ -108,7 +118,7 @@ public class ConfigFragment extends Fragment {
         adbStatusHandler.removeCallbacks(adbStatusTick);
     }
 
-    /** 每秒执行：查询 ADB 实际运行状态并刷新 UI */
+    /** 每 5 秒执行：查询 ADB 实际运行状态并刷新 UI */
     private void pollAdbStatus() {
         if (!adbPolling) return;
         if (!isAdded() || getView() == null) {
@@ -119,13 +129,12 @@ public class ConfigFragment extends Fragment {
         if (adbStatus == null) { stopAdbStatusPolling(); return; }
         if (!DeviceBridgeService.isAdbEnabled(requireContext())) {
             adbStatus.setText("ADB 已关闭。不用无线调试就保持关闭。");
-            adbStatusHandler.postDelayed(adbStatusTick, 1000);
+            adbStatusHandler.postDelayed(adbStatusTick, ADB_POLL_MS);
             return;
         }
         new Thread(() -> {
             try {
                 // 探测 adb 是否真实可用（用 rootfs 里的 adb-shell 实际跑一下，最准）
-                // DSH_INTERNAL=1：App 自己的探活不走用户确认关卡
                 String r = c.getProot().execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py id 2>&1 | head -2");
                 final boolean connected = r != null && r.contains("uid=");
                 final String detail = r == null ? "" : r.replace("\n", " ").trim();
@@ -139,23 +148,78 @@ public class ConfigFragment extends Fragment {
                         tv.setTextColor(requireContext().getColor(R.color.warn));
                         tv.setText("○ ADB 未连接（无线调试可能未开启）\n点下方「无线配对」或查看手机「开发者选项→无线调试」");
                     }
+                    // 3090 桥绑定失败（端口被别的应用占了）时一并摊开说——否则表现出来
+                    // 只是「确认弹窗不出现 / agent 调什么都超时」，很难定位
+                    String bridgeErr = HttpShellService.bindError();
+                    if (bridgeErr != null && !bridgeErr.isEmpty()) {
+                        tv.setTextColor(requireContext().getColor(R.color.err));
+                        tv.setText(tv.getText() + "\n⚠ 命令桥未启动：" + bridgeErr);
+                    }
                 });
             } catch (Throwable ignored) {
             }
-            if (adbPolling) adbStatusHandler.postDelayed(adbStatusTick, 1000);
+            if (adbPolling) adbStatusHandler.postDelayed(adbStatusTick, ADB_POLL_MS);
         }, "adb-status-poll").start();
     }
 
-    @Override
-    public void onResume() {
-        super.onResume();
-        startAdbStatusPolling();
-        showGuardStatus(); // 上次启动 Web 时补丁可能已失配，切回本页就刷新
+    /** 电池优化白名单：系统休眠会冻结后台网络，不放行的话 ADB 保活等于白做 */
+    private void refreshBatteryOptState(View root) {
+        if (root == null) return;
+        Button btn = root.findViewById(R.id.config_battery_opt);
+        TextView hint = root.findViewById(R.id.config_battery_opt_hint);
+        if (btn == null) return;
+        boolean ignoring = false;
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager)
+                    requireContext().getSystemService(android.content.Context.POWER_SERVICE);
+            ignoring = pm != null
+                    && pm.isIgnoringBatteryOptimizations(requireContext().getPackageName());
+        } catch (Throwable ignored) {
+        }
+        if (ignoring) {
+            btn.setText("🔋 已关闭电池优化 ✓");
+            if (hint != null) {
+                hint.setText("已在白名单内：系统休眠不会再冻结 ADB 连接与后台自愈。");
+                hint.setTextColor(requireContext().getColor(R.color.ok));
+            }
+        } else {
+            btn.setText("🔋 关闭电池优化（保活必做）");
+            if (hint != null) {
+                hint.setText("系统休眠会冻结后台网络，ADB 连接因此断掉且无法自动恢复。加入白名单后保活才真正生效。");
+                hint.setTextColor(requireContext().getColor(R.color.warn));
+            }
+        }
     }
 
-    /** 危险命令守卫的完整性提示。
-     *  bash 工具补丁靠 sed 匹配 dsh 已构建代码，而 dsh 走"始终最新 RC"自动升级，
-     *  上游一改代码这层保险就静默降级——必须让用户看得见，
+    private void requestIgnoreBatteryOpt() {
+        String pkg = requireContext().getPackageName();
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager)
+                    requireContext().getSystemService(android.content.Context.POWER_SERVICE);
+            if (pm != null && pm.isIgnoringBatteryOptimizations(pkg)) {
+                // 已放行：跳系统列表页，用户可以自己核对或撤销
+                startActivity(new android.content.Intent(
+                        android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                return;
+            }
+            startActivity(new android.content.Intent(
+                    android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(android.net.Uri.parse("package:" + pkg)));
+        } catch (Throwable e) {
+            // 部分 ROM 屏蔽了直接申请：退回系统电池设置页
+            try {
+                startActivity(new android.content.Intent(
+                        android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Throwable ignored) {
+                Toast.makeText(requireContext(),
+                        "请手动到系统设置 → 电池 → 应用耗电管理里放行 DSHA", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    /** 危险命令守卫的完整性提示（吸收上游 PR#24）。
+     *  bash 工具补丁靠 sed 匹配 dsh 已构建的代码，而 dsh 走「始终最新 RC」自动升级，
+     *  上游一改代码这层保险就静默降级 —— 必须让用户看得见，
      *  否则会以为确认仍是「PATH 包装器 + 函数级守卫」双保险。 */
     private void showGuardStatus() {
         View v = getView();
@@ -179,6 +243,16 @@ public class ConfigFragment extends Fragment {
     }
 
     @Override
+    public void onResume() {
+        super.onResume();
+        startAdbStatusPolling();
+        refreshBatteryOptState(getView());
+        showGuardStatus(); // 上次启动 Web 时补丁可能已失配，切回本页就刷新
+        // 回到配置页顺手催一次 ADB 探测：用户往往就是来看连上没有的
+        DeviceBridgeService.kickNow(requireContext(), "打开配置页");
+    }
+
+    @Override
     public void onPause() {
         super.onPause();
         stopAdbStatusPolling();
@@ -192,6 +266,50 @@ public class ConfigFragment extends Fragment {
 
     private void refreshAdbStatus() {
         // 已由 pollAdbStatus 每秒轮询替代（保留空方法避免调用点改动）
+    }
+
+    /** root shell 授权标记：授权 → 写 /root/.dsh/allow-root-shell（adb-shell.py 检查）；
+     *  取消 → 删标记。rootfs 未就绪时静默。 */
+    private void applyRootShellMark() {
+        try {
+            final boolean allow = c.isRootShellAllowed();
+            new Thread(() -> {
+                try {
+                    if (c.getProot().isInstalled()) {
+                        if (allow) {
+                            c.getProot().execAndRead(
+                                    "mkdir -p /root/.dsh && touch /root/.dsh/allow-root-shell && echo ok");
+                        } else {
+                            c.getProot().execAndRead("rm -f /root/.dsh/allow-root-shell && echo ok");
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }, "root-shell-mark").start();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 守卫开关标记：confirm_shell=true → 写 /root/.dsh/confirm-shell-enabled
+     *  （adb-shell 包装据此对设备命令弹确认）；false → 删标记（只口头报备）。 */
+    private void applyConfirmShellMark() {
+        try {
+            final boolean enabled = confirmShellCb != null && confirmShellCb.isChecked();
+            new Thread(() -> {
+                try {
+                    if (c.getProot().isInstalled()) {
+                        if (enabled) {
+                            c.getProot().execAndRead(
+                                    "mkdir -p /root/.dsh && touch /root/.dsh/confirm-shell-enabled && echo ok");
+                        } else {
+                            c.getProot().execAndRead("rm -f /root/.dsh/confirm-shell-enabled && echo ok");
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }, "confirm-shell-mark").start();
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 构建「输入配对码」通知卡（RemoteInput，参考 Shizuku 无线配对交互）：
@@ -249,10 +367,14 @@ public class ConfigFragment extends Fragment {
     private void setupCommonControls() {
         String[] modes = {"danger-full-access", "workspace-write", "read-only"};
         ArrayAdapter<String> adapter = new ArrayAdapter<>(requireContext(),
-                android.R.layout.simple_spinner_dropdown_item, modes);
+                android.R.layout.simple_spinner_item, modes);
+        // 关闭态用 simple_spinner_item、展开态才用 dropdown_item：
+        // 两处都传 dropdown_item 会让关闭态也带上勾选标记的留白，和右侧箭头挤在一起
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         modeSpinner.setAdapter(adapter);
 
         loadConfig();
+        if (rootShellCb != null) rootShellCb.setChecked(c.isRootShellAllowed());
 
         saveBtn.setOnClickListener(v -> {
             c.setApiKey(apiKeyEdit.getText().toString().trim());
@@ -269,6 +391,9 @@ public class ConfigFragment extends Fragment {
                     .putBoolean(DeviceBridgeService.PREF_ADB, adbCb != null && adbCb.isChecked())
                     .putInt("auto_backup_launches", parseAutoBackup())
                     .apply();
+            c.setRootShellAllowed(rootShellCb != null && rootShellCb.isChecked());
+            applyRootShellMark();
+            applyConfirmShellMark();
             DeviceBridgeService.apply(requireContext());
             refreshAdbStatus();
             Toast.makeText(requireContext(),
@@ -311,7 +436,6 @@ public class ConfigFragment extends Fragment {
         confirmShellCb.setChecked(requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("confirm_shell", true));
-        showGuardStatus();
         checkUpdateCb.setChecked(requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("check_update", true));

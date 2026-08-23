@@ -1,5 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/err" />
-    <corners android:radius="14dp" />
-</shape>
+<!-- 危险按钮（停止/清除/卸载）：实心告警色 + 按压涟漪 + 禁用变灰 -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#33FFFFFF">
+
+    <item android:id="@android:id/mask">
+        <shape android:shape="rectangle">
+            <solid android:color="#FFFFFFFF" />
+            <corners android:radius="@dimen/radius_control" />
+        </shape>
+    </item>
+
+    <item>
+        <selector>
+            <item android:state_enabled="false">
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/disabled" />
+                    <corners android:radius="@dimen/radius_control" />
+                </shape>
+            </item>
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/err" />
+                    <corners android:radius="@dimen/radius_control" />
+                </shape>
+            </item>
+        </selector>
+    </item>
+</ripple>

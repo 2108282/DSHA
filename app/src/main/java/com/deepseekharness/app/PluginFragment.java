@@ -41,6 +41,18 @@ public class PluginFragment extends Fragment {
     private PluginAdapter adapter;
     private HarnessController c;
     private TextView status;
+    /** 底部细进度条：文案含「正在」时自动亮起，操作结束自动收起（见 {@link #say}） */
+    private android.widget.ProgressBar busyBar;
+
+    /** 统一设置状态文案：市场拉取/插件安装/卸载动辄几十秒，只有静态文字容易让人以为卡死，
+     *  这里按文案自动联动底部细进度条，所有调用点无需各自管理可见性。 */
+    private void say(String s) {
+        if (status != null) status.setText(s);
+        if (busyBar != null) {
+            boolean busy = s != null && (s.contains("正在") || s.contains("加载中"));
+            busyBar.setVisibility(busy ? View.VISIBLE : View.GONE);
+        }
+    }
     /** 当前排序：0 star / 1 名称 */
     private int sortMode = 0;
     /** 仅显示兼容插件（过滤 ❌不兼容） */
@@ -64,11 +76,84 @@ public class PluginFragment extends Fragment {
         rv.setLayoutManager(new LinearLayoutManager(requireContext()));
         rv.setAdapter(adapter);
         status = view.findViewById(R.id.statusText);
+        busyBar = view.findViewById(R.id.pluginBusy);
 
         TextView btnMarket = view.findViewById(R.id.btnMarket);
         TextView btnInstalled = view.findViewById(R.id.btnInstalled);
         TextView btnSort = view.findViewById(R.id.btnSort);
         android.widget.EditText searchBox = view.findViewById(R.id.pluginSearch);
+        // ===== GitHub 仓库链接解析（市场顶部）：输入链接 → 列表切换为解析结果 =====
+        final android.widget.EditText githubInput = view.findViewById(R.id.githubInstallInput);
+        TextView btnGithubInstall = view.findViewById(R.id.btnGithubInstall);
+        if (githubInput != null && btnGithubInstall != null) {
+            // 当前解析结果缓存（null=非解析模式）
+            final java.util.concurrent.atomic.AtomicReference<String[]> parsedRef =
+                    new java.util.concurrent.atomic.AtomicReference<>(null);
+            // 防抖 handler（输入停顿 600ms 才解析）
+            final android.os.Handler debounceHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+            final Runnable[] debounceTask = new Runnable[1];
+            java.util.function.Consumer<String> doParse = (link) -> {
+                String u = link == null ? "" : link.trim();
+                if (u.isEmpty()) {
+                    // 清空 → 恢复市场列表
+                    parsedRef.set(null);
+                    adapter.setData(new ArrayList<>(), true);
+                    if (mode == Mode.MARKET) showMarket();
+                    say("已恢复插件市场");
+                    return;
+                }
+                String[] info = c.parseGithubUrl(u);
+                if (info == null) {
+                    say("无法解析链接：" + u);
+                    return;
+                }
+                say("正在解析 " + info[1] + " …");
+                // 后台拉 npm 名（fetchNpmName 走网络）
+                new Thread(() -> {
+                    String npmName = c.fetchNpmName(
+                            info[1].substring(0, info[1].indexOf('/')),
+                            info[1].substring(info[1].indexOf('/') + 1));
+                    if (npmName != null) info[0] = npmName;
+                    runOnUiThreadSafely(() -> {
+                        if (githubInput.getText().toString().trim().isEmpty()) return; // 已被清空
+                        parsedRef.set(info);
+                        // 列表显示解析结果（单条）。it[2]=owner（startAutoInstall 用它），
+                        // it[6]=完整仓库 URL（详情/复制用）
+                        String owner2 = info[1].substring(0, info[1].indexOf('/'));
+                        String repo2 = info[1].substring(info[1].indexOf('/') + 1);
+                        java.util.List<String[]> one = new java.util.ArrayList<>();
+                        one.add(new String[]{info[1], "0", owner2, "⏳待定",
+                                npmName != null ? npmName : "仅GitHub仓库", "来自仓库链接：\n" + info[2], info[2]});
+                        adapter.setData(one, true);
+                        say(npmName != null
+                                ? "✅ 解析成功：" + npmName + "（点「安装」装到已装插件）"
+                                : "⚠️ 未发布 npm，仅支持 GitHub 仓库方式安装");
+                    });
+                }).start();
+            };
+            // 输入监听（防抖）
+            githubInput.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+                @Override public void afterTextChanged(android.text.Editable s) {
+                    if (debounceTask[0] != null) debounceHandler.removeCallbacks(debounceTask[0]);
+                    debounceTask[0] = () -> doParse.accept(githubInput.getText().toString());
+                    debounceHandler.postDelayed(debounceTask[0], 600);
+                }
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            });
+            // 按钮 = 立即解析
+            btnGithubInstall.setOnClickListener(v -> doParse.accept(githubInput.getText().toString()));
+            // 回车 = 立即解析
+            githubInput.setOnEditorActionListener((v, actionId, event) -> {
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_GO
+                        || actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                        || actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+                    doParse.accept(githubInput.getText().toString());
+                    return true;
+                }
+                return false;
+            });
+        }
         view.findViewById(R.id.actionBar).setVisibility(View.GONE);
 
         // 搜索：按名称过滤（忽略大小写）
@@ -89,7 +174,7 @@ public class PluginFragment extends Fragment {
                         if (q.isEmpty() || it[0].toLowerCase().contains(q)) filtered.add(it);
                     }
                     adapter.setData(filtered, false);
-                    status.setText("已装 " + filtered.size() + " 个插件 · 开关启用/禁用" + (q.isEmpty() ? "" : "（搜索：" + q + "）"));
+                    say("已装 " + filtered.size() + " 个插件 · 开关启用/禁用" + (q.isEmpty() ? "" : "（搜索：" + q + "）"));
                 }
             }
 
@@ -120,7 +205,7 @@ public class PluginFragment extends Fragment {
         TextView btnRefresh = view.findViewById(R.id.btnRefresh);
         if (btnRefresh != null) {
             btnRefresh.setOnClickListener(v -> {
-                status.setText("已清除缓存，正在重新拉取…");
+                say("已清除缓存，正在重新拉取…");
                 c.refreshMarketIndex();
                 items.clear();
                 showMarket();
@@ -229,7 +314,7 @@ public class PluginFragment extends Fragment {
         if (!q.isEmpty()) hint += "（搜索：\"" + q + "\"）";
         if (filterIncompat) hint += " · 仅显示兼容（已滤 " + skipped + " 条不兼容）";
         hint += " · 点击查看详情/安装" + cacheHint();
-        status.setText(hint);
+        say(hint);
     }
 
     /** 线程回调安全切主线程（Fragment detach 后不再崩溃）：未 attach 则丢弃 */
@@ -245,13 +330,13 @@ public class PluginFragment extends Fragment {
             refreshMarketView();
             return;
         }
-        status.setText("正在拉取插件市场…");
+        say("正在拉取插件市场…");
         new Thread(() -> {
             String json = c.fetchMarketIndex();
             List<String[]> list = json == null ? new ArrayList<>() : HarnessController.parseMarketTable(json);
             runOnUiThreadSafely(() -> {
                 if (list.isEmpty()) {
-                    status.setText("市场拉取失败（网络不通？）");
+                    say("市场拉取失败（网络不通？）");
                     return;
                 }
                 items.clear();
@@ -270,30 +355,30 @@ public class PluginFragment extends Fragment {
             runOnUiThreadSafely(() -> {
                 installed.clear();
                 if (pl == null || pl.length == 0) {
-                    status.setText("未发现已装插件（目录 " + String.join("/", HarnessController.PLUGIN_DIRS) + "）");
+                    say("未发现已装插件（目录 " + String.join("/", HarnessController.PLUGIN_DIRS) + "）");
                     adapter.setData(new ArrayList<>(), false);
                     return;
                 }
                 for (String[] p : pl) installed.add(p);
                 adapter.setData(installed, false);
-                status.setText("已装 " + installed.size() + " 个插件 · 开关启用/禁用");
+                say("已装 " + installed.size() + " 个插件 · 开关启用/禁用");
             });
         }).start();
     }
 
     private void exportPlugins() {
-        status.setText("正在导出插件…");
+        say("正在导出插件…");
         new Thread(() -> {
             String path = c.exportPlugins();
             runOnUiThreadSafely(() -> {
                 if (path == null) {
-                    status.setText("导出失败（打包出错）");
+                    say("导出失败（打包出错）");
                     Toast.makeText(requireContext(), "导出失败：打包出错", Toast.LENGTH_LONG).show();
                 } else if ("NO_PLUGINS".equals(path)) {
-                    status.setText("没有已启用的插件可导出（先去市场安装或确认插件已启用）");
+                    say("没有已启用的插件可导出（先去市场安装或确认插件已启用）");
                     Toast.makeText(requireContext(), "没有可导出的插件", Toast.LENGTH_LONG).show();
                 } else {
-                    status.setText("已导出：" + path);
+                    say("已导出：" + path);
                     Toast.makeText(requireContext(), "插件包已导出到 " + path, Toast.LENGTH_LONG).show();
                 }
             });
@@ -313,7 +398,7 @@ public class PluginFragment extends Fragment {
         if (requestCode == 1001 && resultCode == android.app.Activity.RESULT_OK && data != null) {
             android.net.Uri uri = data.getData();
             if (uri == null) return;
-            status.setText("正在导入插件…");
+            say("正在导入插件…");
             new Thread(() -> {
                 try {
                     File tmp = new File(requireContext().getCacheDir(), "plugin-import.tar.gz");
@@ -379,67 +464,54 @@ public class PluginFragment extends Fragment {
         }
     }
 
-    /** 批量异步拉取市场列表 star 数（GitHub search API，一次最多 ~80 仓库）。
-     *  注意匿名 API 限流 10 次/分钟：1700+ 条需 22 批，超过即 403。
-     *  → 降频（每批间 6s 休眠）+ 遇到限流/失败立即停止（不浪费配额），
-     *    已拿到的 star 保留，未拿到的显示 "—"。 */
+    /** 批量异步拉取市场列表 star 数（GitHub search API，每批 ~80 仓库）。
+     *  注意匿名 API 限流 10 次/分钟 + 1700+ 条全拉需要 22 批 × 6s ≈ 2 分钟，且几乎必然 403。
+     *  → 只刷新【前 1 批】（当前页可见的 80 条，1 个请求，限流内轻松完成）；
+     *    其余条目保留索引自带 star。遇 403/失败立即停止（不浪费配额）。 */
     private void fetchStars(java.util.List<String[]> items) {
         if (items == null || items.isEmpty()) return;
-        final long t0 = System.currentTimeMillis();
         new Thread(() -> {
-            int size = items.size();
-            int batch = 0;
-            for (int base = 0; base < size; base += 80) {
-                StringBuilder q = new StringBuilder("q=");
-                int n = 0;
-                java.util.List<Integer> idxs = new java.util.ArrayList<>();
-                for (int i = base; i < Math.min(size, base + 80); i++) {
-                    String u = items.get(i)[6].replace("https://github.com/", "").replace("http://github.com/", "");
-                    if (u.contains("/") && !u.startsWith("http")) {
-                        if (n > 0) q.append("+");
-                        q.append("repo:").append(u);
-                        idxs.add(i);
-                        n++;
-                    }
+            StringBuilder q = new StringBuilder("q=");
+            int n = 0;
+            java.util.List<Integer> idxs = new java.util.ArrayList<>();
+            for (int i = 0; i < Math.min(items.size(), 80); i++) {
+                String u = items.get(i)[6].replace("https://github.com/", "").replace("http://github.com/", "");
+                if (u.contains("/") && !u.startsWith("http")) {
+                    if (n > 0) q.append("+");
+                    q.append("repo:").append(u);
+                    idxs.add(i);
+                    n++;
                 }
-                if (n == 0) continue;
-                String uApi = "https://api.github.com/search/repositories?" + q + "&per_page=100";
-                String[] urls = {
-                        HarnessController.gitHubProxy(uApi),
-                        uApi,
-                        "https://ghfast.top/" + uApi
-                };
-                boolean ok = false;
-                for (String u : urls) {
-                    try {
-                        // 批间限流间隔（匿名 10 req/min，留余量）
-                        if (batch > 0) Thread.sleep(6000);
-                        batch++;
-                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
-                        conn.setConnectTimeout(8000);
-                        conn.setReadTimeout(12000);
-                        conn.setRequestProperty("User-Agent", "DSHA/1.1.0-mobile");
-                        if (conn.getResponseCode() != 200) {
-                            // 403 = 限流，停止所有后续批次（别再浪费配额）
-                            if (conn.getResponseCode() == 403) {
-                                conn.disconnect();
-                                return;
-                            }
-                            conn.disconnect();
-                            continue;
-                        }
-                        StringBuilder sb = new StringBuilder();
-                        String l;
-                        java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(
-                                conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
-                        while ((l = br.readLine()) != null) {
-                            sb.append(l);
-                            if (sb.length() > 400000) break;
-                        }
+            }
+            if (n == 0) return;
+            String uApi = "https://api.github.com/search/repositories?" + q + "&per_page=100";
+            String[] urls = {
+                    HarnessController.gitHubProxy(uApi),
+                    uApi,
+                    "https://ghfast.top/" + uApi
+            };
+            for (String u : urls) {
+                try {
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
+                    conn.setConnectTimeout(8000);
+                    conn.setReadTimeout(12000);
+                    conn.setRequestProperty("User-Agent", "DSHA/" + c.getVersionNameForUa());
+                    if (conn.getResponseCode() != 200) {
                         conn.disconnect();
-                        org.json.JSONObject j = new org.json.JSONObject(sb.toString());
-                        org.json.JSONArray arr = j.optJSONArray("items");
-                        if (arr == null) continue;
+                        continue; // 403 = 限流 → 直接放弃，不再重试其他源
+                    }
+                    StringBuilder sb = new StringBuilder();
+                    String l;
+                    java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(
+                            conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+                    while ((l = br.readLine()) != null) {
+                        sb.append(l);
+                        if (sb.length() > 400000) break;
+                    }
+                    conn.disconnect();
+                    org.json.JSONObject j = new org.json.JSONObject(sb.toString());
+                    org.json.JSONArray arr = j.optJSONArray("items");
+                    if (arr != null) {
                         for (int k = 0; k < arr.length(); k++) {
                             org.json.JSONObject o = arr.optJSONObject(k);
                             String full = o.optString("full_name", "");
@@ -452,12 +524,10 @@ public class PluginFragment extends Fragment {
                                 }
                             }
                         }
-                        ok = true;
-                        break; // 成功则跳过一个源
-                    } catch (Exception ignored) {
                     }
+                    break; // 成功即止
+                } catch (Exception ignored) {
                 }
-                if (!ok) break; // 所有源失败（多半限流/断网），停止后续批次
             }
             runOnUiThreadSafely(() -> {
                 if (adapter != null) adapter.notifyDataSetChanged();
@@ -468,12 +538,12 @@ public class PluginFragment extends Fragment {
     /** 一键安装：点一下就全自动（解析 npm 名 → 安装 → 提示），无二次确认 */
     private void startAutoInstall(String[] it, String owner, String repo) {
         final String display = it[0];
-        status.setText("正在解析并安装 " + display + " …");
+        say("正在解析并安装 " + display + " …");
         new Thread(() -> {
             String npmName = c.fetchNpmName(owner, repo);
             if (npmName == null) {
                 runOnUiThreadSafely(() -> {
-                    status.setText("无法安装 " + display + "（未发布 npm）");
+                    say("无法安装 " + display + "（未发布 npm）");
                     new android.app.AlertDialog.Builder(requireContext())
                             .setTitle("无法安装：" + display)
                             .setMessage("未在该仓库找到 package.json / npm 包名，可能未发布 npm，只能源码安装。\n\n仓库：\n" + it[6])
@@ -488,7 +558,7 @@ public class PluginFragment extends Fragment {
                 });
                 return;
             }
-            status.setText("正在安装 " + npmName + " …");
+            say("正在安装 " + npmName + " …");
             // npm 名找不到时自动回退 github:owner/repo（市场条目多为仅 GitHub 发布的仓库插件）
             String out = c.installPlugin(npmName, "github:" + owner + "/" + repo);
             final String fOut = out;
@@ -499,7 +569,7 @@ public class PluginFragment extends Fragment {
     /** 安装结果（成功/失败）弹窗 + 重启 WebUI 按钮 */
     private void showInstallResult(String pkg, String display, String out) {
         boolean ok = out != null && out.contains("INSTALL_EXIT=0");
-        status.setText((ok ? "✅ 安装成功 " : "❌ 安装失败 ") + display + (ok ? "，重启 WebUI 生效" : ""));
+        say((ok ? "✅ 安装成功 " : "❌ 安装失败 ") + display + (ok ? "，重启 WebUI 生效" : ""));
         new android.app.AlertDialog.Builder(requireContext())
                 .setTitle((ok ? "✅ 安装成功：" : "❌ 安装失败：") + display)
                 .setMessage(out == null ? "无输出" : out)
@@ -517,7 +587,7 @@ public class PluginFragment extends Fragment {
                         } else {
                             app.startService(i);
                         }
-                        if (isAdded()) status.setText("WebUI 已重启");
+                        if (isAdded()) say("WebUI 已重启");
                     }, 1500);
                 })
                 .setNegativeButton("关闭", null)
@@ -526,11 +596,11 @@ public class PluginFragment extends Fragment {
 
 
     private void doInstall(String pkg) {
-        status.setText("正在安装 " + pkg + " …");
+        say("正在安装 " + pkg + " …");
         new Thread(() -> {
             String out = c.installPlugin(pkg);
             runOnUiThreadSafely(() -> {
-                status.setText("安装结果：" + (out == null ? "无输出" : out.replace("\n", " ").substring(0, Math.min(200, out.length()))));
+                say("安装结果：" + (out == null ? "无输出" : out.replace("\n", " ").substring(0, Math.min(200, out.length()))));
                 new android.app.AlertDialog.Builder(requireContext())
                         .setTitle("安装完成")
                         .setMessage(out == null ? "无输出" : out)
@@ -600,11 +670,11 @@ public class PluginFragment extends Fragment {
                             .setTitle("卸载插件：" + it[0])
                             .setMessage("将执行：dsh plugin --profile web remove " + it[0] + "\n\n确定卸载？")
                             .setPositiveButton("卸载", (d, w) -> {
-                                status.setText("正在卸载 " + it[0] + " …");
+                                say("正在卸载 " + it[0] + " …");
                                 new Thread(() -> {
                                     String out = c.removePlugin(it[0]);
                                     runOnUiThreadSafely(() -> {
-                                        status.setText("卸载结果：" + (out == null ? "无输出" : out.replace("\n", " ").substring(0, Math.min(150, out.length()))));
+                                        say("卸载结果：" + (out == null ? "无输出" : out.replace("\n", " ").substring(0, Math.min(150, out.length()))));
                                         Toast.makeText(requireContext(), "卸载完成，重启 WebUI 生效", Toast.LENGTH_SHORT).show();
                                         showInstalled();
                                     });

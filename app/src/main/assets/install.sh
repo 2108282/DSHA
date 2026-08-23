@@ -30,9 +30,9 @@ fi
 
 echo "==> [3/6] 下载并安装 Node.js (arm64)"
 NODE_VERSION="24.19.0"
-cd /tmp
-curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-arm64.tar.xz" -o node.tar.xz
-tar -xJf node.tar.xz -C /usr/local --strip-components=1
+mkdir -p /tmp 2>/dev/null || true
+curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-arm64.tar.xz" -o /tmp/node.tar.xz
+tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
 node -v
 
 echo "==> [4/6] 启用 pnpm"

@@ -53,13 +53,12 @@ public class HarnessService extends Service {
         shellHttp = new HttpShellService(this);
         shellHttp.start();
         ShizukuShell.ensureBound(this);
-        // 任务完成通知：agent 干活结束后提醒
-        taskNotifier = new TaskNotifier(this, c);
-        taskNotifier.start();
+        // 任务完成通知已改为内置插件 dsh-task-notifier（turn/end 监听更准），
+        // 旧 TaskNotifier 轮询停用（否则双重通知）
         // 局域网转发桥：开启局域网模式时，App 侧 0.0.0.0:3081 → 127.0.0.1:3080
         // （绕开官方 0.0.0.0 拦截与 Host 校验，Shizuku 式桥接思路；状态写 /root/dsh-lan.log 可终端查看）
         if (c.isLanMode()) {
-            LanProxyService.start(c.getRootfsDirPath());
+            LanProxyService.start(c.getRootfsDirPath(), this, c.getPortInt());
         }
     }
 
@@ -100,6 +99,16 @@ public class HarnessService extends Service {
                     break;
                 }
                 if (!keepAliveRunning) break;
+                // 顺手守着设备桥：ADB 通道开着、但那个普通后台服务被系统回收时把它拉回来。
+                // 前台服务的存活率高得多，用它当靠山最稳（否则 ADB 能力会静默消失）。
+                try {
+                    if (DeviceBridgeService.isAdbEnabled(HarnessService.this)
+                            && !DeviceBridgeService.isRunning()) {
+                        android.util.Log.w("DSHA", "[保活] 设备桥服务不在了，重新拉起");
+                        DeviceBridgeService.apply(HarnessService.this);
+                    }
+                } catch (Throwable ignored) {
+                }
                 if (isWebUp()) {
                     fail = 0;
                     continue;
@@ -108,8 +117,8 @@ public class HarnessService extends Service {
                 if (fail < KEEPALIVE_MAX_FAIL) continue;
                 fail = 0;
                 long now = System.currentTimeMillis();
-                if (c.isKeepAlivePaused()) {
-                    // 用户手动停止过、尚未手动/预启动：keepAlive 不自动拉起（尊重用户）
+                if (c.isKeepAlivePaused() || HarnessController.isHealingSession()) {
+                    // 用户手动停止过、或会话自愈进行中：不自动拉起（防止边修边写）
                     continue;
                 }
                 if (now - lastRestartAt.get() < RESTART_COOLDOWN_MS) continue; // 冷却期，等它自己缓过来
@@ -165,7 +174,7 @@ public class HarnessService extends Service {
         c.removeStateListener(stateListener);
         stopKeepAlive();
         if (shellHttp != null) shellHttp.stop();
-        if (taskNotifier != null) taskNotifier.stop();
+        // taskNotifier 已停用（插件方案）
         LanProxyService.stop();
         c.stopWeb();
         super.onDestroy();

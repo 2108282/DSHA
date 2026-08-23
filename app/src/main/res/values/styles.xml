@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  文本与容器样式：字号/颜色/行距成套定义，布局引用 style 而不是各自硬编码。
+  之前同样是"页面标题"，启动页 15sp、市场页 22sp、解压页 21sp，字号阶梯断裂。
+-->
+<resources>
+
+    <!-- 页面主标题（每页顶部只有一个） -->
+    <style name="DshaText.Display" parent="">
+        <item name="android:textSize">@dimen/text_display</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:letterSpacing">-0.01</item>
+    </style>
+
+    <!-- 区块标题（卡片内的小节名） -->
+    <style name="DshaText.Title" parent="">
+        <item name="android:textSize">@dimen/text_title</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/text</item>
+    </style>
+
+    <!-- 正文 -->
+    <style name="DshaText.Body" parent="">
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:lineSpacingExtra">3dp</item>
+    </style>
+
+    <!-- 次要说明 -->
+    <style name="DshaText.Label" parent="">
+        <item name="android:textSize">@dimen/text_label</item>
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:lineSpacingExtra">2dp</item>
+    </style>
+
+    <!-- 辅助信息 / 脚注 -->
+    <style name="DshaText.Caption" parent="">
+        <item name="android:textSize">@dimen/text_caption</item>
+        <item name="android:textColor">@color/text_muted</item>
+        <item name="android:lineSpacingExtra">2dp</item>
+    </style>
+
+    <!-- 卡片容器：统一底色、圆角、内边距 -->
+    <style name="DshaCard" parent="">
+        <item name="android:background">@drawable/bg_card</item>
+        <item name="android:padding">@dimen/card_pad</item>
+        <item name="android:orientation">vertical</item>
+    </style>
+
+</resources>

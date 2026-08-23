@@ -33,11 +33,16 @@ public final class DangerShellGuard {
         // adb shell 通道：检查 shell 后的命令串是否含危险操作/混淆绕过（普通操作不拦）
         int ai = c.indexOf("adb");
         if (ai >= 0) {
+            // 按关键字实际长度切（"shell"=5 / "exec-out"=8 / "exec-in"=7），
+            // 旧实现固定 si+6 会把 exec-out/exec-in 切成 'ut ...'/'n ...' 导致漏检/误检
             int si = c.indexOf("shell", ai);
-            if (si < 0) si = c.indexOf("exec-out", ai);
-            if (si < 0) si = c.indexOf("exec-in", ai);
+            int kwLen = 5;
+            int ei = c.indexOf("exec-out", ai);
+            if (ei >= 0 && (si < 0 || ei < si)) { si = ei; kwLen = 8; }
+            int ii = c.indexOf("exec-in", ai);
+            if (ii >= 0 && (si < 0 || ii < si)) { si = ii; kwLen = 7; }
             if (si >= 0 && si - ai < 40) {
-                if (matchesDanger(c.substring(si + 6))) return true;
+                if (matchesDanger(c.substring(si + kwLen))) return true;
             }
         }
         return matchesDanger(c);

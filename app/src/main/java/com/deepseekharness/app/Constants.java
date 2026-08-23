@@ -60,4 +60,8 @@ public final class Constants {
     public static final String KEY_LAST_VERSION_CODE = "last_version_code";
     public static final String KEY_WELCOMED = "welcomed";
     public static final String KEY_HIDE_BUILTIN = "hide_builtin";
+    /** 允许 agent 使用 root shell（--su 提权）；默认关，需配置页手动授权 */
+    public static final String KEY_ALLOW_ROOT_SHELL = "allow_root_shell";
+    /** 用户选择"忽略"的离线包版本（下次不弹升级提示） */
+    public static final String KEY_IGNORED_OFFLINE_VER = "ignored_offline_version";
 }

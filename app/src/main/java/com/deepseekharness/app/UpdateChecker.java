@@ -13,10 +13,9 @@ import java.nio.charset.StandardCharsets;
 public final class UpdateChecker {
 
     private static final String[] URLS = {
-            // 直连 GitHub API（魔法环境可用）
+            // 只以 GitHub Releases latest 为准（不要用 main/VERSION——它只反映代码
+            // 当前版本不代表已发布，会导致版本判断错乱）
             "https://api.github.com/repos/qiannianhuanxiang/DSHA/releases/latest",
-            // jsdelivr CDN 读仓库 VERSION 文件（国内直连稳定）
-            "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/VERSION",
             // 代理 fallback（API 可能被代理拒，放最后兜底）
             "https://ghfast.top/https://api.github.com/repos/qiannianhuanxiang/DSHA/releases/latest"
     };
@@ -31,7 +30,8 @@ public final class UpdateChecker {
                 HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
                 conn.setConnectTimeout(8000);
                 conn.setReadTimeout(8000);
-                conn.setRequestProperty("User-Agent", "DSHA/1.1.2");
+                // UA 取构建版本，避免每次发版都要手工同步这里（曾长期停在 1.1.4）
+                conn.setRequestProperty("User-Agent", "DSHA/" + BuildConfig.VERSION_NAME);
                 conn.setRequestProperty("Accept", "application/vnd.github+json");
                 int code = conn.getResponseCode();
                 if (code != 200) {

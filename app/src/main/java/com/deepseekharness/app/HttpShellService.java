@@ -7,78 +7,79 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 
 import androidx.core.app.NotificationCompat;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URLDecoder;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 极简 HTTP 服务（host 侧，端口 3090），把 Shizuku shell 能力桥接给 rootfs 里的助手。
  * rootfs 内的 agent 可用 bash 工具执行：
- *   curl -s "http://127.0.0.1:3090/exec?cmd=<urlencoded>&token=$(cat /root/.dsh/.bridge_token)"
+ *   curl -s "http://127.0.0.1:3090/exec?cmd=<urlencoded>"
  * 返回 JSON：{"result":"...输出...[EXIT=0]"}
  *
- * 端点：
- *   /health  存活探测（仍需 token），返回 {"result":"OK"}
- *   /exec    执行命令；命中危险命令且开关开启时先确认
- *   /confirm 只问用户、不执行（rootfs 内包装器/adb-shell.py 用）
- *
- * 安全：需确认时前台弹窗 + 通知（允许/拒绝按钮）同时发，60 秒超时默认拒绝。
+ * 安全：命中危险命令（删除/格式化/卸载/重启等）时，若设置开启"需确认"，
+ * 前台弹窗 / 后台高优先级通知（允许/拒绝按钮），60 秒超时默认拒绝。
  */
 public final class HttpShellService {
 
-    public static final int PORT = Constants.SHELL_BRIDGE_PORT;
-    private static final String CONFIRM_CHANNEL = Constants.CHANNEL_SHELL_CONFIRM;
+    public static final int PORT = 3090;
+    private static final String CONFIRM_CHANNEL = "dsh_confirm_channel";
     private static final int CONFIRM_NOTIF_ID = Constants.NOTIF_SHELL_CONFIRM;
     private static final long CONFIRM_TIMEOUT_S = 60;
-    private static final String TAG = "DSHA-Bridge";
 
     private static volatile HttpShellService instance;
-    /** 全局"已有桥在监听"标志。HarnessService 与 DeviceBridgeService 各自 new 一个
-     *  实例并都调 start()，实例字段 running 挡不住跨实例的重复启动——第二个实例会
-     *  因端口占用绑定失败，进而把活着的那个从 instance 里抹掉（通知按钮全废）。 */
-    private static final AtomicBoolean STARTED = new AtomicBoolean(false);
+    /** 全局「已有桥在监听」标志。HarnessService 与 DeviceBridgeService 各自 new 一个
+     *  实例并都调 start()，实例字段 running 挡不住跨实例的重复启动 —— 第二个实例会
+     *  因端口占用绑定失败，进而把活着的那个从 instance 里抹掉（通知按钮全废）。
+     *  （吸收上游 PR#24） */
+    private static final java.util.concurrent.atomic.AtomicBoolean STARTED =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    /** 本实例是否真正持有监听：只有持有者的 stop() 才做清理，
+     *  否则那个没绑上端口的实例一被销毁就会把真桥的状态清掉。 */
+    private volatile boolean owner;
 
     private final Context ctx;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private volatile CountDownLatch pendingLatch;
     private volatile boolean pendingAllow;
-    /** 本实例是否真正持有监听：只有持有者的 stop() 才做清理，
-     *  否则第二个（没绑上端口的）实例一被销毁就会把真桥的状态清掉。 */
-    private volatile boolean owner;
-    /** 每次确认的序号：用来判定一次「允许/拒绝」点击属于哪个请求。
-     *  没有它的话，上一个请求残留的弹窗/通知按钮会把授权决定打到下一个请求上。 */
-    private final AtomicLong confirmEpoch = new AtomicLong();
-    /** 当前挂起的弹窗，确认完成后要主动 dismiss（setCancelable(false) 关不掉它） */
-    private volatile androidx.appcompat.app.AlertDialog pendingDialog;
     /** 确认进行中标志：并发确认请求直接拒绝（避免 latch 覆盖导致"点了允许却拒绝"）。
-     *  用 AtomicBoolean 而不是 volatile boolean——"检查后置位"必须原子，否则两个
-     *  请求线程可能同时通过检查、互相覆盖 pendingLatch。 */
-    private final AtomicBoolean confirmBusy = new AtomicBoolean(false);
+     *  用 AtomicBoolean 而非 volatile boolean —— "检查后置位"必须原子，
+     *  否则两个请求线程可能同时通过检查、互相覆盖 pendingLatch。（吸收上游 PR#24） */
+    private final java.util.concurrent.atomic.AtomicBoolean confirmBusy =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    /** 每次确认的序号：判定一次「允许/拒绝」点击属于哪个请求。
+     *  没有它的话，残留通知（锁屏/通知历史/手表转发）上的旧按钮会把授权决定
+     *  打到下一个请求上——等于一次点击授权了另一条命令。（吸收上游 PR#24） */
+    private final java.util.concurrent.atomic.AtomicLong confirmEpoch =
+            new java.util.concurrent.atomic.AtomicLong();
+    /** 当前挂起的弹窗：setCancelable(false) 后它自己关不掉，确认完必须主动 dismiss */
+    private volatile androidx.appcompat.app.AlertDialog pendingDialog;
+    /** /app/ask 的一次性问答状态（同一时刻只允许一个提问在等待） */
+    private volatile CountDownLatch askLatch;
+    private volatile String askAnswer = "";
+    private volatile boolean askBusy = false;
 
-    /** 双栈监听：Android 上 getLoopbackAddress() 可能只返回 ::1，而 rootfs 内的
-     *  客户端脚本大多写死 127.0.0.1 —— 只听一边会让确认链路整条断掉。
-     *  volatile：与 workers 一致，避免 start/stop 分处不同线程时读到 stale 值。 */
-    private volatile ServerSocket server4;
-    private volatile ServerSocket server6;
-    /** 每连接一个工作线程：确认请求会挂起最长 60s，串行 handle 会把整个桥堵死。
-     *  volatile：accept 线程读、调用 stop() 的线程写。 */
-    private volatile ExecutorService workers;
+    private ServerSocket server;
+    /** IPv6 回环监听（兼容脚本用 localhost 解析成 ::1 的场景；绑不上则忽略） */
+    private ServerSocket server6;
     private volatile boolean running;
-    /** 鉴权 token（随机生成，rootfs 内 agent 通过它访问；外部网络无法到达回环） */
+    /** 连接处理线程池（请求可能阻塞等用户确认 60s，必须并发处理，否则一个确认卡死全部请求） */
+    private java.util.concurrent.ExecutorService pool;
+    /** 鉴权 token（随机生成，rootfs 内 agent 通过它访问；外部网络无法到达 127.0.0.1）。
+     *  每次 start 都会和 rootfs 文件对账：文件存在则沿用，缺失/内容异常则轮换重写，
+     *  防止重解压 rootfs 后内存 token 与文件不一致导致 agent 无法认证。 */
     private static volatile String authToken = "";
-    /** token 持久化位置（rootfs 内 agent 可读） */
+    /** token 持久化位置（rootfs 内 agent 可读，建议 0600） */
     private static final String TOKEN_FILE = "/root/.dsh/.bridge_token";
 
     public HttpShellService(Context ctx) {
@@ -89,177 +90,211 @@ public final class HttpShellService {
         return instance;
     }
 
-    /** 生成 token 并确保 rootfs 内的 token 文件与内存一致。
-     *  每次 start() 都校验文件：rootfs 被重建 / 恢复备份后文件会丢，
-     *  若只在首次生成时写，客户端就永久拿不到 token（一律 UNAUTHORIZED）。 */
-    private static String ensureToken() {
-        if (authToken.isEmpty()) {
-            try {
-                authToken = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32);
-            } catch (Throwable ignored) {
+    private static java.io.File tokenFileIfPossible() {
+        try {
+            HarnessController hc = HarnessController.get(instance().ctx);
+            if (hc != null && hc.getProot() != null && hc.getProot().getRootfsDir() != null) {
+                return new java.io.File(hc.getProot().getRootfsDir(), "root/.dsh/.bridge_token");
             }
+        } catch (Throwable ignored) {
         }
-        writeTokenToRootfs(authToken);
-        return authToken;
+        return null;
     }
 
-    /** 写 token 到 rootfs（agent 读取用），内容已一致则跳过。
-     *  注意：路径是 rootfs 内的 /root/.dsh/.bridge_token，App 写的是
-     *  rootfs 实际目录（files/linux/ubuntu/root/.dsh/）。 */
-    private static void writeTokenToRootfs(String token) {
-        if (token == null || token.isEmpty()) return;
+    /** 读取 rootfs 内 token 文件（只读，不修改内容）。 */
+    private static String readTokenFromFile(java.io.File tf) {
+        if (tf == null || !tf.isFile()) return null;
         try {
-            HttpShellService self = instance;
-            if (self == null) return;
-            HarnessController hc = HarnessController.get(self.ctx);
-            if (hc == null || hc.getProot() == null) return;
-            java.io.File tf = new java.io.File(hc.getProot().getRootfsDir(),
-                    TOKEN_FILE.substring(1));
-            if (tf.isFile()) {
+            String s = new String(java.nio.file.Files.readAllBytes(tf.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8).trim();
+            if (s.isEmpty() || s.length() > 128) return null;
+            // 只允许可安全放入 URL/Header 的一半字符，拒绝换行等脏内容
+            if (!s.matches("[A-Za-z0-9_-]+")) return null;
+            return s;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** 生成/对账 token（rootfs 文件优先；缺失或无效则轮换并写入）。
+     *  注：token 属于 rootfs 内 agent 访问 3090 桥的共享凭据，不做 0600 之外的额外加密。 */
+    private static String ensureToken() {
+        synchronized (HttpShellService.class) {
+            java.io.File tf = tokenFileIfPossible();
+            String fromFile = readTokenFromFile(tf);
+            if (fromFile != null && !fromFile.isEmpty()) {
+                authToken = fromFile;
+                return authToken;
+            }
+            // 无文件或内容无效 → 轮换（不能用旧内存值，否则 agent 读到的文件永远不会出现）
+            String t = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32);
+            authToken = t;
+            if (tf != null) {
                 try {
-                    String cur = new String(java.nio.file.Files.readAllBytes(tf.toPath()),
-                            java.nio.charset.StandardCharsets.UTF_8).trim();
-                    if (token.equals(cur)) return; // 已一致，不必重写
+                    if (tf.getParentFile() != null) tf.getParentFile().mkdirs();
+                    java.nio.file.Files.write(tf.toPath(), t.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    try {
+                        java.nio.file.attribute.PosixFilePermissions.fromString("rw-------");
+                        java.nio.file.Files.setPosixFilePermissions(tf.toPath(),
+                                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+                    } catch (Throwable ignored) {
+                    }
                 } catch (Throwable ignored) {
                 }
             }
-            if (tf.getParentFile() != null) tf.getParentFile().mkdirs();
-            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(tf)) {
-                fo.write(token.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            }
+            return authToken;
+        }
+    }
+
+    /** 最近一次绑定结果：空 = 正常；非空 = 失败原因（自检与诊断读它）。
+     *  端口被别的应用占掉时，症状和当年那个「只绑 ::1」的 bug 一模一样
+     *  （agent 调什么都超时、确认弹窗不出现），所以必须留下明确的失败原因。 */
+    private static volatile String bindError = "";
+
+    public static String bindError() {
+        return bindError;
+    }
+
+    private void noteBindOk() {
+        bindError = "";
+        writeBridgeStatus("ok port=" + PORT);
+    }
+
+    private void noteBindError(String why) {
+        bindError = why;
+        android.util.Log.e("DSHA", "3090 桥绑定失败：" + why);
+        writeBridgeStatus("fail " + why);
+    }
+
+    /** 桥状态落到 rootfs 的 /root/.dsh/.bridge_status，容器里 cat 一下就知道桥为什么不通 */
+    private void writeBridgeStatus(String s) {
+        try {
+            java.io.File tf = tokenFileIfPossible();
+            if (tf == null || tf.getParentFile() == null) return;
+            java.io.File f = new java.io.File(tf.getParentFile(), ".bridge_status");
+            if (!f.getParentFile().isDirectory() && !f.getParentFile().mkdirs()) return;
+            java.nio.file.Files.write(f.toPath(),
+                    (s + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
         } catch (Throwable ignored) {
         }
     }
 
     public void start() {
         if (running) return;
-        // 跨实例守卫：已有桥在监听就直接放弃，不去抢端口、更不碰 instance。
-        // （两个 Service 各 new 一个实例，谁先起谁持有）
+        // 跨实例互斥：已经有桥在监听就直接返回，别去抢端口把活着的那个搞坏
         if (!STARTED.compareAndSet(false, true)) {
-            android.util.Log.i(TAG, "3090 桥已由另一个实例持有，本次 start 跳过");
+            android.util.Log.i("DSHA", "3090 桥已在运行，跳过重复启动");
             return;
         }
-        running = true;
         owner = true;
+        running = true;
         instance = this;
         ensureToken();
-        workers = Executors.newCachedThreadPool(r -> {
-            Thread w = new Thread(r, "http-shell-work");
-            w.setDaemon(true);
-            return w;
+        // 固定小线程池：请求可能挂起等用户确认（60s），串行处理会互相阻塞
+        pool = java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
+            Thread t = new Thread(r, "http-shell");
+            t.setDaemon(true);
+            return t;
         });
-        // 安全：仅绑定回环地址，外部网络无法访问！
-        // （原来 new ServerSocket(PORT) 默认绑 0.0.0.0 = 局域网可访问 → 严重漏洞）
-        // 双栈：IPv4 127.0.0.1 与 IPv6 ::1 都听，客户端写哪个地址都连得上。
-        server4 = bindLoopback(loopback4(), "IPv4 127.0.0.1");
-        server6 = bindLoopback(loopback6(), "IPv6 [::1]");
-        if (server4 == null && server6 == null) {
-            running = false;
-            owner = false;
-            if (instance == this) instance = null; // 只清自己，别抹掉别人的活实例
-            ExecutorService pool = workers;
-            workers = null;
-            if (pool != null) pool.shutdownNow();
-            STARTED.set(false);
-            android.util.Log.e(TAG, "3090 桥启动失败：IPv4/IPv6 回环都绑不上");
-            return;
-        }
-        if (server4 != null) startAcceptLoop(server4, "http-shell");
-        if (server6 != null) startAcceptLoop(server6, "http-shell6");
-    }
-
-    /** 127.0.0.1（显式字节，不经名字解析——localhost 在 Android 上会解析到 ::1） */
-    private static InetAddress loopback4() {
-        try {
-            return InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
-        } catch (Throwable e) {
-            return null;
-        }
-    }
-
-    /** ::1（16 字节，末位 1） */
-    private static InetAddress loopback6() {
-        try {
-            return InetAddress.getByAddress(
-                    new byte[]{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1});
-        } catch (Throwable e) {
-            return null;
-        }
-    }
-
-    /** 绑一个回环地址。失败只记日志返回 null（部分设备没有 IPv6 栈），
-     *  是否致命由调用方判断（两个都绑不上才算启动失败）。
-     *  catch Throwable：受限环境下 bind 可能抛 SecurityException，
-     *  而 HarnessService.onCreate 那侧没有 try/catch 兜底，逃出去就崩服务。 */
-    private ServerSocket bindLoopback(InetAddress addr, String label) {
-        if (addr == null) return null;
-        ServerSocket s = null;
-        try {
-            s = new ServerSocket();
-            s.setReuseAddress(true);
-            s.bind(new java.net.InetSocketAddress(addr, PORT));
-            android.util.Log.i(TAG, "3090 桥已监听 " + label);
-            return s;
-        } catch (Throwable e) {
-            closeQuietly(s); // 别泄漏半开的 fd
-            android.util.Log.w(TAG, "3090 绑定失败(" + label + ")：" + e);
-            return null;
-        }
-    }
-
-    private void startAcceptLoop(final ServerSocket s, String threadName) {
         Thread t = new Thread(() -> {
-            while (running) {
-                try {
-                    final Socket client = s.accept();
-                    // 交给线程池：确认请求最长挂起 60s，不能占住 accept 循环
-                    ExecutorService w = workers;
-                    if (w == null) {
-                        closeQuietly(client);
-                        break;
-                    }
-                    try {
-                        w.execute(() -> handle(client));
-                    } catch (Throwable rejected) {
-                        closeQuietly(client);
-                    }
-                } catch (IOException e) {
-                    if (!running) break;
-                }
+            try {
+                // 安全：仅绑定回环（loopback），外部网络无法访问！
+                // 关键：必须显式绑 IPv4 127.0.0.1 —— InetAddress.getLoopbackAddress()
+                // 在 Android（IPv6 优先）上返回 ::1，桥只监听 [::1]:3090，而 rootfs 内
+                // 所有客户端（adb-shell.py / dsh-confirm.sh / 内置插件）都连 127.0.0.1
+                // → Connection refused → 确认弹窗永不出现，命令被判 USER_REJECTED。
+                server = new ServerSocket();
+                server.setReuseAddress(true);
+                server.bind(new java.net.InetSocketAddress(
+                        java.net.InetAddress.getByName("127.0.0.1"), PORT));
+                noteBindOk();
+                acceptLoop(server);
+            } catch (java.net.BindException e) {
+                noteBindError("端口 " + PORT + " 已被其它应用占用（" + e.getMessage()
+                        + "）—— 关掉占用它的应用，或重启手机后重开 DSHA");
+            } catch (IOException e) {
+                noteBindError(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
-        }, threadName);
+        }, "http-shell-accept");
         t.setDaemon(true);
         t.start();
+        // 附加监听 [::1]:3090：脚本/插件若用 localhost（可能解析成 IPv6）也能命中。
+        // 绑不上（无 IPv6 栈/被占）时静默跳过，IPv4 主监听已足够。
+        Thread t6 = new Thread(() -> {
+            try {
+                server6 = new ServerSocket();
+                server6.setReuseAddress(true);
+                server6.bind(new java.net.InetSocketAddress(
+                        java.net.InetAddress.getByName("::1"), PORT));
+                acceptLoop(server6);
+            } catch (Throwable e) {
+                // IPv6 绑不上不算故障（有些设备没有 IPv6 栈），IPv4 那条是主通道
+                android.util.Log.i("DSHA", "3090 的 [::1] 附加监听未启用: " + e);
+            }
+        }, "http-shell-accept6");
+        t6.setDaemon(true);
+        t6.start();
+    }
+
+    /** 接受连接并分发到线程池（IPv4/IPv6 两个监听共用） */
+    private void acceptLoop(ServerSocket ss) {
+        while (running) {
+            try {
+                Socket client = ss.accept();
+                client.setSoTimeout(120_000);
+                java.util.concurrent.ExecutorService p = pool;
+                if (p == null) {
+                    try { client.close(); } catch (IOException ignored) { }
+                    return;
+                }
+                p.execute(() -> handle(client));
+            } catch (IOException e) {
+                if (!running) return;
+            }
+        }
     }
 
     public void stop() {
-        // 非持有者（start 时被跨实例守卫挡掉的那个）什么都不该动：
-        // 否则 HarnessService.onDestroy 会把 DeviceBridgeService 那个活桥的状态清掉。
-        if (!owner) return;
+        if (!owner) return; // 非持有者：什么都别动，否则会把真桥的状态清掉
         owner = false;
         running = false;
-        if (instance == this) instance = null;
-        closeQuietly(server4);
-        closeQuietly(server6);
-        server4 = null;
-        server6 = null;
-        ExecutorService pool = workers;
-        workers = null;
-        if (pool != null) pool.shutdownNow();
+        writeBridgeStatus("stopped");
+        instance = null;
+        try {
+            if (server != null) server.close();
+        } catch (IOException ignored) {
+        }
+        try {
+            if (server6 != null) server6.close();
+        } catch (IOException ignored) {
+        }
+        if (pool != null) {
+            pool.shutdownNow();
+            pool = null;
+        }
         // 释放挂起的确认（默认拒绝）
-        pendingAllow = false;
         CountDownLatch l = pendingLatch;
         if (l != null) l.countDown();
         dismissConfirmDialog();
         cancelConfirmNotification();
-        STARTED.set(false);
+        STARTED.set(false); // 放开，允许后续重新启动（DeviceBridgeService 会自愈拉起）
     }
 
-    private static void closeQuietly(java.io.Closeable c) {
-        try {
-            if (c != null) c.close();
-        } catch (IOException ignored) {
+    /** 校验查询串/头中的 token（常量时间比较 + URL 解码容错） */
+    private static boolean tokenMatch(String presented) {
+        String token = authToken.isEmpty() ? ensureToken() : authToken;
+        return token != null && !token.isEmpty() && constantTimeEquals(token, presented);
+    }
+
+    private static boolean constantTimeEquals(String a, String b) {
+        if (a == null || b == null) return false;
+        int diff = a.length() ^ b.length();
+        for (int i = 0; i < a.length(); i++) {
+            char ca = a.charAt(i);
+            char cb = i < b.length() ? b.charAt(i) : 0;
+            diff |= ca ^ cb;
         }
+        return diff == 0;
     }
 
     private void handle(Socket client) {
@@ -269,55 +304,96 @@ public final class HttpShellService {
             if (line == null) return;
             String[] parts = line.split(" ");
             String path = parts.length > 1 ? parts[1] : "/";
-
+            String cmd = "";
+            if (path.startsWith("/exec") || path.startsWith("/confirm")) {
+                int q = path.indexOf("cmd=");
+                if (q >= 0) {
+                    // 关键：cmd= 值要截断到 &（查询串可能有多个参数，如
+                    // /exec?cmd=ls&token=xxx）。旧实现 substring(q+4) 取到末尾，
+                    // cmd 会变成 "ls&token=xxx" → 执行错命令！
+                    String cv = path.substring(q + 4);
+                    int amp = cv.indexOf('&');
+                    if (amp >= 0) cv = cv.substring(0, amp);
+                    cmd = URLDecoder.decode(cv, "UTF-8");
+                }
+            }
             // 鉴权：token 必须匹配（通过 ?token= 或 X-Token header）
-            String token = authToken;
-            if (token.isEmpty()) token = ensureToken();
-            String t = queryParam(path, "token");
-            boolean authed = !t.isEmpty() && token.equals(t);
+            boolean authed = false;
+            String t = "";
+            // 只认 query 中的 token（EXCLUSIVE：跳过 path 其他位置的 token=）
+            int qm = path.indexOf('?');
+            String query = qm >= 0 ? path.substring(qm + 1) : "";
+            int tq = query.indexOf("token=");
+            if (tq >= 0) {
+                t = query.substring(tq + 6);
+                int amp = t.indexOf('&');
+                if (amp >= 0) t = t.substring(0, amp);
+                try { t = URLDecoder.decode(t, "UTF-8"); } catch (Exception ignored) { }
+                if (!t.isEmpty()) authed = tokenMatch(t.trim());
+            }
             if (!authed) {
                 // 也支持 header 传 token（agent 引导用 curl -H）
                 try {
                     String hdr;
                     while ((hdr = reader.readLine()) != null && !hdr.isEmpty()) {
                         if (hdr.toLowerCase().startsWith("x-token:")) {
-                            if (token.equals(hdr.substring(8).trim())) authed = true;
+                            String hv = hdr.substring(8).trim();
+                            if (!hv.isEmpty() && tokenMatch(hv)) authed = true;
                             break;
                         }
                     }
                 } catch (Throwable ignored) {
                 }
             }
-
-            // cmd 必须按 & 切分取：原来 indexOf("cmd=") 直接取到串尾，会把后面的
-            // &token=xxx 一起当成命令（弹窗里泄露 token，/exec 还会把它当后台任务执行）
-            String cmd = "";
-            if (path.startsWith("/exec") || path.startsWith("/confirm")) {
-                cmd = queryParam(path, "cmd");
-            }
-
             String result;
             if (!authed) {
                 result = "[UNAUTHORIZED]";
+            } else if (path.startsWith("/app/notify")) {
+                // agent 通过 App 发通知栏提醒（App 层交互）
+                result = appNotify(path);
+            } else if (path.startsWith("/app/toast")) {
+                // agent 弹 App 内 Toast
+                result = appToast(path);
+            } else if (path.startsWith("/app/readfile")) {
+                // agent 读外部文件（rootfs 挂载 /sdcard 的补充；支持路径参数）
+                result = appReadFile(path);
             } else if (path.startsWith("/health")) {
-                result = "OK";
+                result = "OK"; // 存活探测（仍需 token）：客户端可据此区分「桥没起」与「命令失败」
+            } else if (path.startsWith("/app/device")) {
+                result = appDevice();
+            } else if (path.startsWith("/app/apps")) {
+                result = appList(path);
+            } else if (path.startsWith("/app/launch")) {
+                result = appLaunch(path);
+            } else if (path.startsWith("/app/clip")) {
+                result = appClip(path);
+            } else if (path.startsWith("/app/share")) {
+                result = appShare(path);
+            } else if (path.startsWith("/app/open")) {
+                result = appOpen(path);
+            } else if (path.startsWith("/app/vibrate")) {
+                result = appVibrate(path);
+            } else if (path.startsWith("/app/ask")) {
+                result = appAsk(path);
+            } else if (path.startsWith("/app/export")) {
+                result = appExport(path);
             } else if (cmd.isEmpty()) {
                 result = "[NO_CMD]";
             } else if (path.startsWith("/confirm")) {
-                // rootfs 内包装器请求的确认：只弹窗，不执行。
-                // 客户端主动来问 = 它已判定该命令需要授权，所以这里不再用
-                // DangerShellGuard 二次过滤——宿主名单与 rootfs 包装侧的正则是两套
-                // 规则，靠它过滤会让"客户端认为危险、App 认为不危险"的命令静默放行。
-                result = !confirmEnabled() ? "YES" : (requestUserConfirm(cmd) ? "YES" : "NO");
+                // rootfs 内包装器请求的确认：只弹窗，不执行
+                // force=1（adb-shell 报备）→ 所有命令都确认；否则仅危险命令
+                boolean force = path.contains("force=1");
+                boolean needConfirm = force || (confirmEnabled() && DangerShellGuard.isDangerous(cmd));
+                result = needConfirm ? (requestUserConfirm(cmd) ? "YES" : "NO") : "YES";
             } else if (DangerShellGuard.isDangerous(cmd) && confirmEnabled()) {
                 result = awaitConfirm(cmd);
             } else {
                 result = ShizukuShell.exec(cmd);
             }
-            // exec 走 AIDL 跨进程，远端可能回 null；不兜住的话 jsonQuote 抛 NPE
-            // 被下面的 catch 吞掉 → 一个字节都不回，客户端只看到"桥无响应"
-            if (result == null) result = "[NULL_RESULT]";
-            String body = "{\"result\":" + jsonQuote(result) + "}";
+            // 关键：result 必须包引号 —— 旧实现输出 {"result":YES} 是非法 JSON，
+            // 客户端（adb-shell.py 判 '"YES"' in body / agent 用 json 解析）全部失效：
+            // 用户点「允许」也会被当成拒绝。
+            String body = "{\"result\":\"" + jsonEscape(result) + "\"}";
             byte[] bodyBytes = body.getBytes("UTF-8");
             String head = "HTTP/1.1 200 OK\r\n"
                     + "Content-Type: application/json; charset=utf-8\r\n"
@@ -331,45 +407,456 @@ public final class HttpShellService {
         }
     }
 
-    /** 取查询参数：按 & 切分后精确匹配键名再 URL 解码；没有则返回空串。 */
-    private static String queryParam(String path, String key) {
-        if (path == null) return "";
-        int q = path.indexOf('?');
-        if (q < 0) return "";
-        for (String pair : path.substring(q + 1).split("&")) {
-            int eq = pair.indexOf('=');
-            if (eq < 0 || !pair.substring(0, eq).equals(key)) continue;
-            String v = pair.substring(eq + 1);
-            try {
-                return URLDecoder.decode(v, "UTF-8");
-            } catch (Exception e) {
-                return v;
+    // ================= App 层交互端点（agent 通过 3090 桥调用） =================
+
+    /** /app/notify?title=&text= ：发通知栏提醒 */
+    private String appNotify(String path) {
+        try {
+            // App 前台时不发通知（用户正看着页面，不打扰）——与 TaskNotifier 抑制一致
+            if (TaskNotifier.appInForeground) return "FOREGROUND_SKIP";
+            String q = queryOf(path);
+            String title = getParam(q, "title", "DSHA 通知");
+            String text = getParam(q, "text", "");
+            if (text.isEmpty()) return "NO_TEXT";
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return "NO_SERVICE";
+            if (Build.VERSION.SDK_INT >= 26) {
+                NotificationChannel ch = new NotificationChannel(
+                        "dsh_agent_channel", "Agent 通知",
+                        NotificationManager.IMPORTANCE_HIGH);
+                ch.setDescription("智能体通过 App 发送的通知");
+                nm.createNotificationChannel(ch);
             }
+            NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, "dsh_agent_channel")
+                    .setSmallIcon(R.drawable.ic_launch)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setAutoCancel(true);
+            nm.notify(2002, b.build());
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + e.getMessage();
         }
-        return "";
+    }
+
+    /** /app/toast?text= ：弹 App 内 Toast */
+    private String appToast(String path) {
+        try {
+            final String text = getParam(queryOf(path), "text", "");
+            if (text.isEmpty()) return "NO_TEXT";
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    android.widget.Toast.makeText(ctx, text, android.widget.Toast.LENGTH_LONG).show();
+                } catch (Throwable ignored) {
+                }
+            });
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    /** /app/readfile?path= ：读外部文件（文本，限制 256KB）。路径如 /sdcard/Download/x.txt
+     *  安全：禁止读凭据文件（.env / .bridge_token / settings.yaml —— 含 API key/对话密钥）。 */
+    private String appReadFile(String path) {
+        try {
+            String p = getParam(queryOf(path), "path", "");
+            if (p.isEmpty()) return "NO_PATH";
+            String lower = p.toLowerCase();
+            if (lower.endsWith("/.env") || lower.contains("/.env/")
+                    || lower.contains(".bridge_token") || lower.contains("settings.yaml")) {
+                return "FORBIDDEN: 凭据文件不可读（.env/.bridge_token/settings.yaml）";
+            }
+            java.io.File f = new java.io.File(p);
+            // 只允许读取外部存储（/sdcard 或 /storage/emulated/0）：
+            // 否则 agent 可绕过过滤直接读 App 私有目录（SharedPreferences 里含 API key）
+            String canon;
+            try {
+                canon = f.getCanonicalPath();
+            } catch (Exception e) {
+                return "FORBIDDEN: 路径无法解析（" + p + "）";
+            }
+            boolean external = canon.startsWith("/sdcard/") || canon.startsWith("/storage/emulated/0/");
+            if (!external && !canon.startsWith("/sdcard") && !canon.startsWith("/storage/emulated/0")) {
+                return "FORBIDDEN: 仅允许读取 /sdcard 外部存储（" + p + "）";
+            }
+            if (!f.isFile()) return "NOT_FOUND: " + p;
+            if (f.length() > 256 * 1024) return "TOO_LARGE: " + f.length();
+            byte[] bytes = new byte[(int) f.length()];
+            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                int off = 0;
+                while (off < bytes.length) {
+                    int n = in.read(bytes, off, bytes.length - off);
+                    if (n < 0) break;
+                    off += n;
+                }
+            }
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Throwable e) {
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    // ================= App 层能力（不需要 ADB / Shizuku，agent 直接调） =================
+
+    /** /app/device ：设备状态一览（机型/系统/电量/网络/屏幕/存储/内存） */
+    private String appDevice() {
+        StringBuilder sb = new StringBuilder();
+        try {
+            sb.append("model=").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n');
+            sb.append("android=").append(Build.VERSION.RELEASE)
+                    .append(" (SDK ").append(Build.VERSION.SDK_INT).append(")\n");
+            try {
+                android.os.BatteryManager bm =
+                        (android.os.BatteryManager) ctx.getSystemService(Context.BATTERY_SERVICE);
+                android.content.Intent st = ctx.registerReceiver(null,
+                        new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+                int status = st == null ? -1 : st.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+                boolean charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING
+                        || status == android.os.BatteryManager.BATTERY_STATUS_FULL;
+                int level = bm == null ? -1
+                        : bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY);
+                sb.append("battery=").append(level).append("% charging=").append(charging).append('\n');
+            } catch (Throwable ignored) {
+            }
+            try {
+                android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                        ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+                String net = "none";
+                if (cm != null) {
+                    android.net.Network n = cm.getActiveNetwork();
+                    android.net.NetworkCapabilities nc = n == null ? null : cm.getNetworkCapabilities(n);
+                    if (nc != null) {
+                        if (nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) net = "wifi";
+                        else if (nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)) net = "cellular";
+                        else if (nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)) net = "ethernet";
+                        else net = "other";
+                    }
+                }
+                sb.append("network=").append(net).append('\n');
+            } catch (Throwable ignored) {
+            }
+            try {
+                android.os.PowerManager pm = (android.os.PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+                sb.append("screen=").append(pm != null && pm.isInteractive() ? "on" : "off").append('\n');
+            } catch (Throwable ignored) {
+            }
+            sb.append("app_foreground=").append(MainActivity.current != null).append('\n');
+            try {
+                android.os.StatFs fs = new android.os.StatFs(
+                        android.os.Environment.getExternalStorageDirectory().getPath());
+                long free = fs.getAvailableBytes(), total = fs.getTotalBytes();
+                sb.append("storage_free=").append(HarnessController.fmtBytes(free))
+                        .append(" total=").append(HarnessController.fmtBytes(total)).append('\n');
+            } catch (Throwable ignored) {
+            }
+            try {
+                android.app.ActivityManager am =
+                        (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+                android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+                if (am != null) {
+                    am.getMemoryInfo(mi);
+                    sb.append("memory_free=").append(HarnessController.fmtBytes(mi.availMem))
+                            .append(" total=").append(HarnessController.fmtBytes(mi.totalMem)).append('\n');
+                }
+            } catch (Throwable ignored) {
+            }
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+        return sb.toString().trim();
+    }
+
+    /** /app/apps?q=关键字&limit=50 ：已装应用列表（每行「包名<TAB>应用名」） */
+    private String appList(String path) {
+        try {
+            String q = getParam(queryOf(path), "q", "").toLowerCase();
+            int limit = 50;
+            try {
+                limit = Math.max(1, Math.min(300, Integer.parseInt(getParam(queryOf(path), "limit", "50"))));
+            } catch (Exception ignored) {
+            }
+            boolean userOnly = !"0".equals(getParam(queryOf(path), "user", "1")); // 默认只列第三方应用
+            android.content.pm.PackageManager pm = ctx.getPackageManager();
+            java.util.List<android.content.pm.PackageInfo> all = pm.getInstalledPackages(0);
+            StringBuilder sb = new StringBuilder();
+            int n = 0;
+            for (android.content.pm.PackageInfo pi : all) {
+                if (pi.applicationInfo == null) continue;
+                boolean sys = (pi.applicationInfo.flags
+                        & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0;
+                if (userOnly && sys) continue;
+                String label = String.valueOf(pm.getApplicationLabel(pi.applicationInfo));
+                if (!q.isEmpty() && !pi.packageName.toLowerCase().contains(q)
+                        && !label.toLowerCase().contains(q)) {
+                    continue;
+                }
+                sb.append(pi.packageName).append('\t').append(label).append('\n');
+                if (++n >= limit) break;
+            }
+            if (n == 0) return "（没有匹配的应用）";
+            return sb.append("共 ").append(n).append(" 个").toString();
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/launch?pkg=包名 ：启动应用（App 层，不需要 ADB） */
+    private String appLaunch(String path) {
+        try {
+            String pkg = getParam(queryOf(path), "pkg", "");
+            if (pkg.isEmpty()) return "NO_PKG";
+            android.content.Intent i = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
+            if (i == null) return "NOT_FOUND: " + pkg + "（该应用没有启动入口或未安装）";
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(i);
+            return "OK: 已启动 " + pkg;
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/clip 读剪贴板；/app/clip?text=xxx 写剪贴板 */
+    private String appClip(String path) {
+        final String text = getParam(queryOf(path), "text", "");
+        try {
+            final android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                    ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm == null) return "NO_SERVICE";
+            if (!text.isEmpty()) {
+                mainHandler.post(() -> {
+                    try {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("DSHA", text));
+                    } catch (Throwable ignored) {
+                    }
+                });
+                return "OK: 已写入剪贴板（" + text.length() + " 字）";
+            }
+            // 读：Android 10+ 只有前台应用能读剪贴板，后台一律拿不到
+            if (MainActivity.current == null) {
+                return "[APP_BACKGROUND] 系统限制：只有 App 在前台时才能读剪贴板，"
+                        + "可先用 /app/notify 提醒用户打开 DSHA";
+            }
+            android.content.ClipData cd = cm.getPrimaryClip();
+            if (cd == null || cd.getItemCount() == 0) return "（剪贴板为空）";
+            CharSequence cs = cd.getItemAt(0).coerceToText(ctx);
+            String s = cs == null ? "" : cs.toString();
+            if (s.length() > 8192) s = s.substring(0, 8192) + "…（已截断）";
+            return s;
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/share?text=... 或 /app/share?path=/sdcard/x.txt ：调起系统分享面板 */
+    private String appShare(String path) {
+        try {
+            String q = queryOf(path);
+            String text = getParam(q, "text", "");
+            String file = getParam(q, "path", "");
+            android.content.Intent send = new android.content.Intent(android.content.Intent.ACTION_SEND);
+            if (!file.isEmpty()) {
+                java.io.File f = new java.io.File(file);
+                if (!f.isFile()) return "NOT_FOUND: " + file;
+                // 只允许分享外部存储里的文件（App 私有目录需要 FileProvider 授权）
+                String canon = f.getCanonicalPath();
+                if (!canon.startsWith("/sdcard") && !canon.startsWith("/storage/emulated/0")) {
+                    return "FORBIDDEN: 只能分享 /sdcard 下的文件";
+                }
+                send.setType("*/*");
+                send.putExtra(android.content.Intent.EXTRA_STREAM, android.net.Uri.fromFile(f));
+                send.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                if (!text.isEmpty()) send.putExtra(android.content.Intent.EXTRA_TEXT, text);
+            } else {
+                if (text.isEmpty()) return "NO_CONTENT";
+                send.setType("text/plain");
+                send.putExtra(android.content.Intent.EXTRA_TEXT, text);
+            }
+            android.content.Intent chooser = android.content.Intent.createChooser(send, "分享");
+            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(chooser);
+            return "OK: 已弹出分享面板";
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/open?url=... ：用系统默认应用打开链接（http/https/geo/tel…） */
+    private String appOpen(String path) {
+        try {
+            String url = getParam(queryOf(path), "url", "");
+            if (url.isEmpty()) return "NO_URL";
+            String low = url.toLowerCase();
+            // 只放行常见安全 scheme：file:// 会把 App 私有文件暴露给任意应用
+            if (!low.startsWith("http://") && !low.startsWith("https://")
+                    && !low.startsWith("geo:") && !low.startsWith("tel:")
+                    && !low.startsWith("mailto:") && !low.startsWith("market://")) {
+                return "FORBIDDEN: 只支持 http/https/geo/tel/mailto/market 链接";
+            }
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse(url));
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(i);
+            return "OK: 已打开 " + url;
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/vibrate?ms=300 ：震动提醒（长任务跑完叫醒用户） */
+    private String appVibrate(String path) {
+        try {
+            long ms = 300;
+            try {
+                ms = Math.max(30, Math.min(2000, Long.parseLong(getParam(queryOf(path), "ms", "300"))));
+            } catch (Exception ignored) {
+            }
+            android.os.Vibrator v;
+            if (Build.VERSION.SDK_INT >= 31) {
+                android.os.VibratorManager vm =
+                        (android.os.VibratorManager) ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                v = vm == null ? null : vm.getDefaultVibrator();
+            } else {
+                v = (android.os.Vibrator) ctx.getSystemService(Context.VIBRATOR_SERVICE);
+            }
+            if (v == null) return "NO_VIBRATOR";
+            v.vibrate(android.os.VibrationEffect.createOneShot(ms,
+                    android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+            return "OK: 震动 " + ms + "ms";
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/ask?q=问题&options=选项A|选项B|选项C ：弹窗问用户，阻塞等回答（最多 3 个选项，120 秒超时） */
+    private String appAsk(String path) {
+        String q = getParam(queryOf(path), "q", "");
+        String optRaw = getParam(queryOf(path), "options", "");
+        if (q.isEmpty()) return "NO_QUESTION";
+        if (askBusy) return "[BUSY] 已有一个提问在等用户回答";
+        final MainActivity act = MainActivity.current;
+        if (act == null) {
+            return "[APP_BACKGROUND] App 不在前台，弹不出提问 —— 可先 /app/notify 提醒用户打开 DSHA";
+        }
+        String[] parts = optRaw.isEmpty() ? new String[] { "好" } : optRaw.split("\\|");
+        final String[] opts = parts.length <= 3 ? parts : new String[] { parts[0], parts[1], parts[2] };
+        askBusy = true;
+        try {
+            final CountDownLatch latch = new CountDownLatch(1);
+            askLatch = latch;
+            askAnswer = "";
+            act.runOnUiThread(() -> {
+                try {
+                    androidx.appcompat.app.AlertDialog.Builder b =
+                            new androidx.appcompat.app.AlertDialog.Builder(act)
+                                    .setTitle("助手提问").setMessage(q);
+                    b.setPositiveButton(opts[0], (d, w) -> {
+                        askAnswer = opts[0];
+                        latch.countDown();
+                    });
+                    if (opts.length > 1) {
+                        b.setNegativeButton(opts[1], (d, w) -> {
+                            askAnswer = opts[1];
+                            latch.countDown();
+                        });
+                    }
+                    if (opts.length > 2) {
+                        b.setNeutralButton(opts[2], (d, w) -> {
+                            askAnswer = opts[2];
+                            latch.countDown();
+                        });
+                    }
+                    b.setOnCancelListener(d -> latch.countDown());
+                    b.setOnDismissListener(d -> latch.countDown());
+                    b.show();
+                } catch (Throwable e) {
+                    latch.countDown();
+                }
+            });
+            boolean answered = latch.await(120, TimeUnit.SECONDS);
+            if (!answered) return "[TIMEOUT] 用户 120 秒内没有回答";
+            return askAnswer.isEmpty() ? "[DISMISSED] 用户关掉了提问框" : askAnswer;
+        } catch (InterruptedException e) {
+            return "[INTERRUPTED]";
+        } finally {
+            askBusy = false;
+            askLatch = null;
+        }
+    }
+
+    /** /app/export?path=/root/x.md&name=x.md ：把文件导出到 Download/DSHA（走 MediaStore，用户可直接在文件管理器看到） */
+    private String appExport(String path) {
+        try {
+            String q = queryOf(path);
+            String src = getParam(q, "path", "");
+            if (src.isEmpty()) return "NO_PATH";
+            String name = getParam(q, "name", "");
+            java.io.File f = new java.io.File(src);
+            if (!f.isFile()) {
+                // 允许传 rootfs 内的 guest 路径（/root/... → 映射到 App 私有目录）
+                try {
+                    HarnessController hc = HarnessController.get(ctx);
+                    java.io.File guess = new java.io.File(hc.getProot().getRootfsDir(),
+                            src.startsWith("/") ? src.substring(1) : src);
+                    if (guess.isFile()) f = guess;
+                } catch (Throwable ignored) {
+                }
+            }
+            if (!f.isFile()) return "NOT_FOUND: " + src;
+            if (f.length() > 64L * 1024 * 1024) return "TOO_LARGE: " + f.length();
+            if (name.isEmpty()) name = f.getName();
+            if (name.contains("/") || name.contains("..")) return "BAD_NAME";
+            String out = BackupManager.exportToDownloads(ctx, f, name);
+            return out == null ? "ERROR: 导出失败（存储权限或空间不足）" : "OK: " + out;
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+/** 从（仅含 query 的）查询串提取参数。调用方务必先截取 '?' 之后的内容。 */
+    private static String getParam(String q, String key, String def) {
+        try {
+            int i = q.indexOf(key + "=");
+            if (i < 0) return def;
+            String v = q.substring(i + key.length() + 1);
+            int amp = v.indexOf('&');
+            if (amp >= 0) v = v.substring(0, amp);
+            int frag = v.indexOf('#');
+            if (frag >= 0) v = v.substring(0, frag);
+            return URLDecoder.decode(v, "UTF-8");
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    // 便捷包装：路径中取 query 部分
+    private static String queryOf(String path) {
+        int i = path.indexOf('?');
+        return i >= 0 ? path.substring(i + 1) : "";
     }
 
     private boolean confirmEnabled() {
-        return ctx.getSharedPreferences(Constants.PREFS, Context.MODE_PRIVATE)
-                .getBoolean(Constants.KEY_CONFIRM_SHELL, true);
+        return ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
+                .getBoolean("confirm_shell", true);
     }
 
-    /** 危险命令：挂起等待用户确认（弹窗 + 通知），超时默认拒绝 */
+    /** 危险命令：挂起等待用户确认（前台弹窗 / 后台通知），超时默认拒绝 */
     private String awaitConfirm(String cmd) {
         return requestUserConfirm(cmd) ? ShizukuShell.exec(cmd) : "[USER_REJECTED]";
     }
 
     /** 只请求用户确认（不执行命令），返回是否允许；/confirm 端点用。
-     *  弹窗与通知同时发：只走弹窗的话，Activity 一被 pause 用户就再也看不见，
-     *  只能干等 60s 超时（这正是"弹窗出现与否不稳定"的由来）。 */
+     *  通知与弹窗同时发：只走弹窗的话，Activity 一被 pause 用户就再也看不见，
+     *  只能干等 60s 超时——这正是「弹窗有时不出现」的由来。（吸收上游 PR#24） */
     private boolean requestUserConfirm(String cmd) {
         if (!confirmBusy.compareAndSet(false, true)) {
             return false; // 已有确认在进行：拒绝新的（避免 pendingLatch 互相覆盖）
         }
         try {
             CountDownLatch latch = new CountDownLatch(1);
-            // epoch 先递增：上一轮残留的弹窗/通知按钮带的是旧 epoch，会被丢弃，
-            // 不会把授权决定打到这个新请求上。
+            // epoch 先递增：上一轮残留的弹窗/通知按钮带的是旧 epoch，会被丢弃
             final long myEpoch = confirmEpoch.incrementAndGet();
             pendingAllow = false;   // 先写标志，再发布 latch
             pendingLatch = latch;
@@ -380,28 +867,28 @@ public final class HttpShellService {
             if (act != null) {
                 final String prompt = "模型试图在设备上执行：\n" + cmd + "\n\n是否允许？";
                 act.runOnUiThread(() -> {
-                    // .show() 在正在 finishing 的 Activity 上会抛 BadTokenException，
-                    // 这里是主线程，异常不在 handle() 的 catch 范围内 → 会崩 App
+                    // 正在 finishing 的 Activity 上 show() 会抛 BadTokenException，
+                    // 而这里是主线程，异常不在 handle() 的 catch 范围内 → 会崩 App
                     try {
                         if (act.isFinishing() || act.isDestroyed()) return;
                         pendingDialog = new androidx.appcompat.app.AlertDialog.Builder(act)
                                 .setTitle("DSHA 安全确认")
                                 .setMessage(prompt)
                                 // 必须明确选一个：误触关闭不再被当作拒绝。也不要在
-                                // OnDismiss/OnCancel 里 countDown——Activity 被 pause
-                                // 导致的 dismiss 会误判成"用户拒绝"，而用户还能从通知里点。
+                                // OnDismiss/OnCancel 里 countDown —— Activity 被 pause
+                                // 导致的 dismiss 会误判成「用户拒绝」，而用户还能从通知里点。
                                 .setCancelable(false)
                                 .setPositiveButton("允许", (d, w) -> resolveConfirm(true, myEpoch))
                                 .setNegativeButton("拒绝", (d, w) -> resolveConfirm(false, myEpoch))
                                 .show();
                     } catch (Throwable t) {
-                        android.util.Log.w(TAG, "确认弹窗弹出失败，仍可从通知确认：" + t);
+                        android.util.Log.w("DSHA", "确认弹窗弹出失败，仍可从通知确认：" + t);
                     }
                 });
             } else if (!notificationsEnabled()) {
                 // 后台 + 通知被拒 = 用户看不到任何提示，只能干等 60s 超时被拒。
-                // 至少留下日志，别让这变成无从排查的"命令莫名被拒"。
-                android.util.Log.w(TAG, "无前台界面且通知权限被拒，确认必然超时拒绝：" + cmd);
+                // 至少留下日志，别让这变成无从排查的「命令莫名被拒」。
+                android.util.Log.w("DSHA", "无前台界面且通知权限被拒，确认必然超时拒绝：" + cmd);
             }
 
             try {
@@ -411,9 +898,9 @@ public final class HttpShellService {
                 return false;
             }
         } finally {
-            // 顺序要紧：清理必须全部做完，最后才放开 confirmBusy。
-            // 反过来的话，下一个请求会在这之前抢进来发新通知，而
-            // cancelConfirmNotification() 用的是固定通知 ID，会把它刚发的通知取消掉。
+            // 顺序要紧：清理全部做完，最后才放开 confirmBusy。反过来的话，
+            // 下一个请求会抢在清理前发出新通知，而 cancelConfirmNotification()
+            // 用的是固定通知 ID，会把它刚发的那条取消掉。
             pendingLatch = null;
             dismissConfirmDialog();
             cancelConfirmNotification();
@@ -435,7 +922,7 @@ public final class HttpShellService {
      *  epoch 校验 + latch 认领：丢弃迟到的、属于上一个请求的点击。 */
     public void resolveConfirm(boolean allow, long epoch) {
         if (epoch != confirmEpoch.get()) {
-            android.util.Log.i(TAG, "忽略过期的确认点击（epoch " + epoch + "）");
+            android.util.Log.i("DSHA", "忽略过期的确认点击（epoch " + epoch + "）");
             return;
         }
         CountDownLatch l = pendingLatch;
@@ -467,16 +954,14 @@ public final class HttpShellService {
     private void showConfirmNotification(String cmd, long epoch) {
         createConfirmChannel();
         String shortCmd = cmd.length() > 100 ? cmd.substring(0, 100) + "…" : cmd;
+        // epoch 随 Intent 带回：残留通知上的旧按钮会因 epoch 过期被丢弃
         Intent allowI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_ALLOW)
                 .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
         Intent denyI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_DENY)
                 .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
-        // requestCode 必须随 epoch 变化：固定 code + FLAG_UPDATE_CURRENT 会把旧
-        // PendingIntent 的 extras 覆盖成新 epoch，残留通知的按钮照样能打到新请求上。
-        int base = (int) (epoch & 0x3FFFFFFFL) * 2;
-        PendingIntent allowPi = PendingIntent.getBroadcast(ctx, base, allowI,
+        PendingIntent allowPi = PendingIntent.getBroadcast(ctx, 31, allowI,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        PendingIntent denyPi = PendingIntent.getBroadcast(ctx, base + 1, denyI,
+        PendingIntent denyPi = PendingIntent.getBroadcast(ctx, 32, denyI,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification n = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                 .setSmallIcon(R.drawable.ic_launch)
@@ -509,12 +994,8 @@ public final class HttpShellService {
         }
     }
 
-    /** 转成合法 JSON 字符串（含外层双引号）。
-     *  原实现只转义、不加引号，输出 {"result":YES} 并不是合法 JSON——
-     *  用 JSON 解析器的客户端会解析失败、走异常分支放行，确认因此形同虚设。 */
-    private static String jsonQuote(String s) {
-        StringBuilder sb = new StringBuilder(s.length() + 2);
-        sb.append('"');
+    private static String jsonEscape(String s) {
+        StringBuilder sb = new StringBuilder();
         for (char ch : s.toCharArray()) {
             switch (ch) {
                 case '"': sb.append("\\\""); break;
@@ -527,7 +1008,6 @@ public final class HttpShellService {
                     else sb.append(ch);
             }
         }
-        sb.append('"');
         return sb.toString();
     }
 }

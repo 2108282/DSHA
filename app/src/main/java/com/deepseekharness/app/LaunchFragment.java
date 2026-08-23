@@ -16,7 +16,12 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+// GeckoView（内置浏览器内核兜底：系统 WebView 过旧时前端 JS 崩 → 白屏转圈）
+import org.mozilla.geckoview.GeckoRuntime;
+import org.mozilla.geckoview.GeckoSession;
+import org.mozilla.geckoview.GeckoView;
 import android.widget.FrameLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -40,6 +45,10 @@ public class LaunchFragment extends Fragment {
     private TextView runDot, runState, statusText, lanAddrText, logText;
     private ScrollView logScroll;
     private Button startBtn;
+    /** 启动等待期的细进度条（不确定式）：让用户知道在动，而不是以为点了没反应 */
+    private ProgressBar busyBar;
+    /** 本次「启动/重启」按下的时刻，用于显示已等待秒数；0=不在等待中 */
+    private long startingAt = 0;
     private View homePane, webPane;
     private FrameLayout webBox;
     private WebView webView;
@@ -49,6 +58,9 @@ public class LaunchFragment extends Fragment {
     private boolean enterWhenReady = false;
     private boolean insideWeb = false;
     private String lastLog = "";
+    /** 日志文件指纹（size+mtime），未变化则跳过重读（每 1.5s 轮询时省一次文件 IO） */
+    private long lastLogSize = -1;
+    private long lastLogMtime = -1;
 
     private ValueCallback<Uri[]> filePathCallback;
 
@@ -87,6 +99,7 @@ public class LaunchFragment extends Fragment {
         runDot = view.findViewById(R.id.launch_run_dot);
         runState = view.findViewById(R.id.launch_run_state);
         statusText = view.findViewById(R.id.launch_status);
+        busyBar = view.findViewById(R.id.launch_busy);
         lanAddrText = view.findViewById(R.id.lan_addr);
         logText = view.findViewById(R.id.launch_log);
         logScroll = view.findViewById(R.id.launch_log_scroll);
@@ -126,6 +139,7 @@ public class LaunchFragment extends Fragment {
             }
             starting = true;
             enterWhenReady = true;
+            startingAt = System.currentTimeMillis();
             applyRunUi(false);
             statusText.setText("正在启动，起来后直接进入…");
             Intent i = new Intent(requireContext(), HarnessService.class);
@@ -141,6 +155,7 @@ public class LaunchFragment extends Fragment {
             closeWeb();
             starting = true;
             enterWhenReady = true; // 重启完成后自动回到预览页
+            startingAt = System.currentTimeMillis();
             applyRunUi(false);
             statusText.setText("正在重启…");
             Intent i = new Intent(requireContext(), HarnessService.class)
@@ -157,6 +172,7 @@ public class LaunchFragment extends Fragment {
             starting = false;
             enterWhenReady = false;
             webReady = false;
+            startingAt = 0;
             applyRunUi(false);
             Intent i = new Intent(requireContext(), HarnessService.class)
                     .setAction(HarnessService.ACTION_STOP);
@@ -183,9 +199,13 @@ public class LaunchFragment extends Fragment {
             if (!isAdded()) return;
             mainHandler.post(() -> {
                 if (!isAdded()) return;
-                if (up) starting = false;
+                if (up) {
+                    starting = false;
+                    startingAt = 0;
+                }
                 webReady = up;
                 applyRunUi(up);
+                refreshHint(); // 每次心跳刷新一次状态行（启动等待期的秒数在这里走字）
                 if (up && enterWhenReady && !insideWeb) {
                     enterWhenReady = false;
                     openWeb();
@@ -214,6 +234,10 @@ public class LaunchFragment extends Fragment {
             runState.setText("DSH 未运行");
             startBtn.setText("启动");
         }
+        // 等待期才显示细进度条（跑起来/未运行都收起，界面不留噪声）
+        if (busyBar != null) {
+            busyBar.setVisibility(!up && starting ? View.VISIBLE : View.GONE);
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -226,11 +250,64 @@ public class LaunchFragment extends Fragment {
         if (getActivity() instanceof MainActivity) {
             ((MainActivity) getActivity()).setBottomNavVisible(false);
         }
+        boolean useGecko = requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("gecko_core", false);
+        // 自动检测：系统 WebView 过旧（Chrome < 118，前端需要 AbortSignal.any/timeout）
+        // → 强制用 GeckoView（内置内核，版本新）。用户也可手动开 gecko_core。
+        if (!useGecko) {
+            try {
+                String ua = WebSettings.getDefaultUserAgent(requireContext());
+                java.util.regex.Matcher cm = java.util.regex.Pattern.compile("Chrome/(\\d+)").matcher(ua);
+                if (cm.find() && Integer.parseInt(cm.group(1)) < 118) {
+                    android.util.Log.w("DSHA", "系统 WebView 过旧 (Chrome/" + cm.group(1)
+                            + " < 118)，自动切换 GeckoView");
+                    useGecko = true;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        if (useGecko) {
+            // GeckoView 兜底：系统 WebView 过旧（Chrome<118）时前端 JS 崩
+            try {
+                // 已有 GeckoView（child>0）→ 复用并刷新；否则新建
+                GeckoView gv = null;
+                for (int i = 0; i < webBox.getChildCount(); i++) {
+                    if (webBox.getChildAt(i) instanceof GeckoView) {
+                        gv = (GeckoView) webBox.getChildAt(i);
+                        break;
+                    }
+                }
+                if (gv == null) {
+                    GeckoRuntime runtime = GeckoRuntime.getDefault(requireContext());
+                    gv = new GeckoView(requireContext());
+                    webBox.addView(gv, new FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                }
+                GeckoSession gs = gv.getSession() != null
+                        ? gv.getSession() : new GeckoSession();
+                if (gv.getSession() == null) {
+                    gs.open(GeckoRuntime.getDefault(requireContext()));
+                    gv.setSession(gs);
+                }
+                gs.loadUri(uiUrl());
+                return; // GeckoView 加载，不走 WebView
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "GeckoView 启动失败，回退 WebView: " + e);
+            }
+        }
         if (webView == null) {
             webView = new WebView(requireContext());
             WebSettings ws = webView.getSettings();
             ws.setJavaScriptEnabled(true);
             ws.setDomStorageEnabled(true);
+            // 现代前端特性：混合内容（http 页面加载资源）+ 数据库 + 多窗口
+            ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            ws.setDatabaseEnabled(true);
+            ws.setSupportMultipleWindows(false);
+            ws.setLoadWithOverviewMode(true);
+            ws.setUseWideViewPort(true);
+            ws.setCacheMode(WebSettings.LOAD_DEFAULT);
             boolean desktop = requireContext()
                     .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                     .getBoolean("desktop_mode", false);
@@ -270,13 +347,34 @@ public class LaunchFragment extends Fragment {
 
     private void refreshHint() {
         if (!isAdded() || statusText == null) return;
+        String line = statusLine();
+        if (!line.isEmpty()) statusText.setText(line);
+    }
+
+    /** 组装状态行：错误/进度消息优先，启动等待期在最前面附一行「已等待 N 秒」，
+     *  让用户知道进程在动（之前只有一句静态的「正在启动…」，等 40 秒会以为卡死）。 */
+    private String statusLine() {
+        String base = "";
         if (c.getError() != null && !c.getError().isEmpty()) {
-            statusText.setText(c.getError());
+            base = c.getError();
         } else if (c.getMessage() != null && !c.getMessage().isEmpty()) {
-            statusText.setText(c.getMessage());
+            base = c.getMessage();
         } else if (c.isBusy()) {
-            statusText.setText(c.getStage());
+            base = c.getStage();
         }
+        if (starting && !webReady && startingAt > 0) {
+            long sec = (System.currentTimeMillis() - startingAt) / 1000;
+            String wait = "正在启动… 已等待 " + sec + " 秒"
+                    + (sec >= 45 ? "（偏慢了，可看下方日志尾部）" : "（通常 20~60 秒）");
+            base = base.isEmpty() ? wait : wait + "\n" + base;
+        }
+        // 没填 key 也允许安装和启动，但要给个明确去处，否则用户会卡在「为什么不能对话」
+        if (webReady && c.getApiKey().isEmpty()) {
+            String tip = "未配置 API key —— 在 WebUI 的设置里选服务商并填入密钥即可开始对话"
+                    + "（可用第三方接口地址）";
+            base = base.isEmpty() ? tip : base + "\n" + tip;
+        }
+        return base;
     }
 
     private String uiUrl() {
@@ -296,7 +394,11 @@ public class LaunchFragment extends Fragment {
             lanAddrText.setVisibility(View.GONE);
             return;
         }
-        final String copyAddr = "http://" + ip + ":" + c.getPort() + "/";
+        // 注意：局域网访问走 App 侧 LanProxyService 桥（端口 3081 → 后端 3080），
+        // 不是直连 3080（直连需要 lan-bind 补丁成功且 CLI 放行 0.0.0.0，不可靠）
+        // LAN 访问带 token（鉴权：防同 WiFi 任意设备访问 dsh）
+        final String lanTok = LanProxyService.getLanToken(requireContext());
+        final String copyAddr = "http://" + ip + ":" + LanProxyService.LAN_PORT + "/?token=" + lanTok;
         lanAddrText.setText("局域网访问: " + copyAddr + "  （同 WiFi 设备可打开）");
         lanAddrText.setVisibility(View.VISIBLE);
         lanAddrText.setOnClickListener(v -> {
@@ -336,13 +438,23 @@ public class LaunchFragment extends Fragment {
         try {
             File f = new File(c.getProot().getRootfsDir(), "root/dsh-web.log");
             if (!f.isFile() || f.length() == 0) return "";
+            // 指纹未变：跳过重读（省 IO；日志不写时每 1.5s 轮询零成本）
+            if (f.lastModified() == lastLogMtime && f.length() == lastLogSize) return lastLog;
+            lastLogMtime = f.lastModified();
+            lastLogSize = f.length();
             long len = f.length();
             long start = Math.max(0, len - 24000);
             try (RandomAccessFile raf = new RandomAccessFile(f, "r")) {
                 raf.seek(start);
                 byte[] buf = new byte[(int) (len - start)];
-                raf.readFully(buf);
-                String s = new String(buf, java.nio.charset.StandardCharsets.UTF_8);
+                // readFully 可能因日志被截断抛 EOF：改用尽力读
+                int off = 0;
+                while (off < buf.length) {
+                    int n = raf.read(buf, off, buf.length - off);
+                    if (n < 0) break;
+                    off += n;
+                }
+                String s = new String(buf, 0, off, java.nio.charset.StandardCharsets.UTF_8);
                 if (start > 0) {
                     int nl = s.indexOf('\n');
                     if (nl >= 0 && nl + 1 < s.length()) s = s.substring(nl + 1);

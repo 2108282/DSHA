@@ -24,7 +24,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bundle/offline-rootfs.tar.gz
-          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/webui-origin-port-patch.sh', 'app/src/main/assets/*.patch') }}
+          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'scripts/provision-builtin-plugins.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/webui-origin-port-patch.sh', 'app/src/main/assets/*.patch', 'app/src/main/assets/mobile-adapt/**', 'app/src/main/assets/device-shell-guide/**', 'app/src/main/assets/task-notifier/**') }}
 
       - name: Build offline rootfs bundle
         if: steps.cache.outputs.cache-hit != 'true'
@@ -35,11 +35,25 @@ jobs:
           test -s bundle/offline-rootfs.tar.gz
           ls -lh bundle/offline-rootfs.tar.gz
 
+# 离线包版本标记：与 App 内置包同步 bump（可用 OFFLINE_VERSION env 覆盖）。
+# 默认 1 = 首次 CI 重建离线包（含预置内置插件）→ 老用户（rootfs 无标记=0）
+# 会收到一次升级提示；之后内容再变时 bump 2、3… 才再次提示。
+# 注意：本地 build.sh 不重建离线包，assets 里默认 version=0 保证不误弹。
+# 缓存命中时也要生成（缓存只存 tar.gz，version 需每次生成）。
+      - name: Write offline version
+        run: |
+          set -euo pipefail
+          VER="${OFFLINE_VERSION:-1}"
+          printf '%s\n' "$VER" > bundle/offline-rootfs.version
+          echo "offline-rootfs.version=$VER"
+
       - name: Upload offline bundle
         uses: actions/upload-artifact@v4
         with:
           name: offline-rootfs-bundle
-          path: bundle/offline-rootfs.tar.gz
+          path: |
+            bundle/offline-rootfs.tar.gz
+            bundle/offline-rootfs.version
           if-no-files-found: error
           retention-days: 14
 
@@ -64,7 +78,11 @@ jobs:
           test -s bundle/offline-rootfs.tar.gz
           mkdir -p app/src/main/assets
           cp bundle/offline-rootfs.tar.gz app/src/main/assets/offline-rootfs.tar.gz
-          ls -lh app/src/main/assets/offline-rootfs.tar.gz
+          # 离线包版本标记（App 启动时对比 rootfs 已解压版本，发现新版提示升级）
+          if [ -f bundle/offline-rootfs.version ]; then
+            cp bundle/offline-rootfs.version app/src/main/assets/offline-rootfs.version
+          fi
+          ls -lh app/src/main/assets/offline-rootfs.tar.gz app/src/main/assets/offline-rootfs.version
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -85,6 +103,27 @@ jobs:
         with:
           gradle-version: '8.5'
 
+      - name: Prepare shared signing key (optional)
+        env:
+          KS_B64: ${{ secrets.DSHA_KEYSTORE_B64 }}
+          KS_PWD: ${{ secrets.DSHA_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.DSHA_KEY_ALIAS }}
+          KEY_PWD: ${{ secrets.DSHA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # 没配 secret 时保持原样（AGP 默认 debug keystore），只是包与旧版签名不同、
+          # 用户升级要卸载重装；配了就所有构建共用一把，覆盖安装无缝。
+          if [ -n "${KS_B64:-}" ]; then
+            printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/dsha.keystore"
+            echo "DSHA_KEYSTORE=$RUNNER_TEMP/dsha.keystore" >> "$GITHUB_ENV"
+            echo "DSHA_KEYSTORE_PASSWORD=${KS_PWD:-android}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_ALIAS=${KS_ALIAS:-androiddebugkey}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_PASSWORD=${KEY_PWD:-android}" >> "$GITHUB_ENV"
+            echo "已启用统一签名（与历史发布包一致，可直接覆盖安装）"
+          else
+            echo "未配置 DSHA_KEYSTORE_B64：使用默认 debug 签名（升级可能需要卸载重装）"
+          fi
+
       - name: Build debug APK
         run: |
           set -euo pipefail
@@ -92,6 +131,14 @@ jobs:
           sed -i '/aapt2FromMavenOverride/d' gradle.properties
           gradle :app:assembleDebug --no-daemon
           ls -lh app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Report signing fingerprint
+        run: |
+          set -euo pipefail
+          # 把证书指纹打进日志：发布前肉眼比一眼，就能确认没换签名
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk \
+            | grep -i "SHA-256 digest" || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
