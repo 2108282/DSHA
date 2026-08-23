@@ -2530,7 +2530,7 @@ public class HarnessController {
                             + "      description: |+\n"
                             + "        Run commands in a bash shell\n"
                             + "        * 设备操作：/root/dsh-bin/adb-shell \"命令\"（唯一可用通道，uid=2000，已配对）\n"
-                            + "        * 不要用裸 adb（守卫脚本，会失败）；Shizuku 桥备用 curl 127.0.0.1:3090/exec\n"
+                            + "        * 不要用裸 adb（守卫脚本，会失败）；Shizuku 桥备用 curl -s \"http://127.0.0.1:3090/exec?cmd=...&token=$(cat /root/.dsh/.bridge_token)\"（漏 token 一律 UNAUTHORIZED）\n"
                             + "        * 与用户交流请用中文回复\n";
                     hpText += patchBlock;
                     java.nio.file.Files.write(hp.toPath(), hpText.getBytes(StandardCharsets.UTF_8));
@@ -2694,7 +2694,7 @@ public class HarnessController {
     // 注意：GUARD_VERSION 必须与 assets/rootfs-confirm-install.sh 末尾写入的
     // /root/dsh-bin/.version 数字一致！曾出现 8 vs 9 不匹配 → 每次启动都强制
     // rm -rf 重装守卫（幂等但白干 + 可能打断进行中的命令）。
-    private static final String GUARD_VERSION = "10";
+    private static final String GUARD_VERSION = "11";
     /** 步骤⑥整体版本号：内置插件/补丁/极简 preset 任一变更时 +1，
      *  启动时对比 rootfs 标记（step6.version），不符则自动重跑⑥（防"改了不生效"）。
      *  由 installGuard 末尾的 runStep 写入（先删 marker 后写版本 → 中途失败

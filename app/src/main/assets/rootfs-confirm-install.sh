@@ -21,10 +21,20 @@ TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
 RES=""
 for H in 127.0.0.1 '[::1]'; do
   RES=$(curl -s -m 65 -G "http://$H:3090/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
+  # 严格匹配 {"result":"YES"}：宽松的 grep YES 会被响应里的其它字段或命令回显
+  # 带偏（吸收上游 PR#24）
+  case "$RES" in
+    *'"result":"YES"'*) exit 0 ;;
+    *'"result":"NO"'*)  echo "已拒绝: $CMD（用户点了拒绝）" >&2; exit 1 ;;
+    *'"result":YES'*)   exit 0 ;;  # 兼容老版 App 的非法 JSON 响应
+  esac
   [ -n "$RES" ] && break
 done
 if [ -n "$RES" ]; then
-  echo "$RES" | grep -q YES && exit 0 || exit 1
+  # 有响应但既不是 YES 也不是 NO：桥说了别的（如 Shizuku 未就绪），一律拒绝
+  echo "已拒绝: $CMD" >&2
+  echo "  桥返回：$RES" >&2
+  exit 1
 fi
 # 3090 不可达（终端场景未启动服务）：终端内交互确认，10 秒超时默认拒绝
 if [ -n "$DSH_INTERACTIVE" ]; then
@@ -34,7 +44,14 @@ if [ -n "$DSH_INTERACTIVE" ]; then
     y|Y) exit 0 ;;
   esac
 fi
+# 静默拒绝最难排查 —— 把原因写清楚（吸收上游 PR#24）
 echo "已拒绝: $CMD" >&2
+if [ -z "$TOKEN" ]; then
+  echo "  原因：读不到 /root/.dsh/.bridge_token（App 未生成鉴权令牌）" >&2
+else
+  echo "  原因：3090 确认桥不可达（127.0.0.1 与 [::1] 都连不上）" >&2
+fi
+echo "  处理：在 App「配置」页启用 ADB 设备通道，确认桥运行后重试" >&2
 exit 1
 EOF
 chmod +x /root/dsh-confirm.sh
@@ -128,4 +145,4 @@ chmod +x "$DSH_BIN/$C"
 done
 
 echo "OK dsh-bin: $(ls "$DSH_BIN" | tr '\n' ' ')"
-echo 10 > "$DSH_BIN/.version"
+echo 11 > "$DSH_BIN/.version"
