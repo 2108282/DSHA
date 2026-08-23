@@ -763,7 +763,8 @@ public class HarnessController {
                     + " --step6 " + STEP6_VERSION
                     + " --assets " + BUILTIN_ASSET_VERSION
                     + " --guide-ver " + builtinGuideVersion()
-                    + " --adb-on " + (prefs.getBoolean(Constants.KEY_ADB_ENABLED, false) ? "1" : "0");
+                    + " --adb-on " + (prefs.getBoolean(Constants.KEY_ADB_ENABLED, false) ? "1" : "0")
+                    + " --battery-opt " + (batteryOptWhitelisted() ? "1" : "0");
             String out = proot.execAndRead(
                     "python3 /root/dsha-selftest.py" + args
                             + " 2>&1; rm -f /root/dsha-selftest.py", 180_000);
@@ -773,6 +774,17 @@ public class HarnessController {
             return out.trim();
         } catch (Throwable e) {
             return "自检失败：" + describe(e);
+        }
+    }
+
+    /** 是否已加入电池优化白名单（自检据此判断保活能不能真正生效） */
+    private boolean batteryOptWhitelisted() {
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager)
+                    appContext.getSystemService(android.content.Context.POWER_SERVICE);
+            return pm != null && pm.isIgnoringBatteryOptimizations(appContext.getPackageName());
+        } catch (Throwable e) {
+            return false;
         }
     }
 

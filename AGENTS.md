@@ -162,6 +162,26 @@ Users install by tapping an APK, so **签名一致是能否覆盖安装的唯一
 - New permissions must be install-time (`normal`) ones — `QUERY_ALL_PACKAGES` / `VIBRATE` are,
   so覆盖安装不会弹权限询问也不会失败.
 
+## ADB keep-alive (layered, `DeviceBridgeService`)
+
+The wireless-debugging port is random and changes on every reboot / toggle, Doze freezes background
+networking, and a plain background service can be reclaimed at any time — so keep-alive is layered:
+
+| Layer | Mechanism |
+|---|---|
+| Probe schedule | Adaptive: 60s while connected, `3/6/12/24/45s` backoff right after a drop, 120s once it keeps failing |
+| Event triggers | `registerDefaultNetworkCallback` (network back), `ACTION_SCREEN_ON` / `ACTION_USER_PRESENT`, config page open, app foreground — all funnel through `kick(reason)` with a 1.5s debounce and single-flight guard |
+| Doze fallback | `AdbKeepAliveReceiver` + `setAndAllowWhileIdle` (~9 min in practice); `Handler.postDelayed` alone gets deferred indefinitely in deep sleep |
+| Service survival | `START_STICKY`; the **foreground** `HarnessService` also re-`apply()`s the bridge service every 15s if the ADB switch is on but the service is gone; `BootReceiver` restarts it and re-arms the alarm |
+| Self-heal ladder | probe → mDNS re-discover port → retry → auto re-enable wireless debugging (`WRITE_SECURE_SETTINGS`, else Shizuku) → wait 5s → retry |
+| Port fallbacks | `connect_port` → mDNS → **`connect_port_history` (last 5 successful ports)** → `5555`; every success is remembered |
+| Failure classes | `ok` / `reconnecting` / `installing` / `need_pair` (pairing invalid) / `need_manual` (wireless debugging off) / `network_lost`; only notifies after 3 consecutive failures and cancels the notification on recovery |
+| Visibility | State mirrored to `/root/.dsh/adb-status` (`state/detail/failures/last_ok/updated`) — read by the self-test and readable from the container; config page shows it live |
+| Battery whitelist | Config page has a one-tap `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` button; without it Doze freezes the socket and no amount of retrying helps. The self-test fails this check explicitly |
+
+When touching this code: keep every probe on a background thread (it shells into proot), keep the
+single-flight guard, and never lower `SCRIPT_VERSION` — old installs keep their stale scripts otherwise.
+
 ## Build & CI
 
 - Two-stage Actions workflow (`.github/workflows/android-build.yml`):

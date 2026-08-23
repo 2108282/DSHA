@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# DSHA_ADB_SCRIPT_VERSION=9
+# DSHA_ADB_SCRIPT_VERSION=11
 """
 DSHA 设备 shell 工具（ADB 无线通道，免 Shizuku）。
 用法：
@@ -132,6 +132,36 @@ def run_on_port(device_cls, signer_cls, cmd, port):
             pass
 
 
+def load_port_history():
+    """最近成功过的连接端口（新→旧）。"""
+    try:
+        with open(KEYDIR + '/connect_port_history') as f:
+            out = []
+            for tok in f.read().split():
+                if tok.strip().isdigit():
+                    v = int(tok)
+                    if 1 <= v <= 65535 and v not in out:
+                        out.append(v)
+            return out[:5]
+    except Exception:
+        return []
+
+
+def remember_port(port):
+    """记住成功过的端口。无线调试端口重启后会变，但常在少数几个值之间轮换；
+    mDNS 不可用时（WiFi 刚连上、组播被路由器拦、省电模式限制多播）这份历史就是救命的。
+    """
+    try:
+        if not port or not (1 <= int(port) <= 65535):
+            return
+        hist = [p for p in load_port_history() if p != int(port)]
+        hist.insert(0, int(port))
+        with open(KEYDIR + '/connect_port_history', 'w') as f:
+            f.write('\n'.join(str(p) for p in hist[:5]) + '\n')
+    except Exception:
+        pass
+
+
 def connect_with_retry(device_cls, signer_cls, cmd, port):
     """连接执行 + 端口自愈。
 
@@ -145,7 +175,9 @@ def connect_with_retry(device_cls, signer_cls, cmd, port):
     for p in [port] if port else []:
         tried.append(p)
         try:
-            return run_on_port(device_cls, signer_cls, cmd, p)
+            out = run_on_port(device_cls, signer_cls, cmd, p)
+            remember_port(p)
+            return out
         except Exception as e:
             last = e
     # 端口过期/未知：mDNS 重发现（discover_conn_port 内部会回写 connect_port）
@@ -153,14 +185,34 @@ def connect_with_retry(device_cls, signer_cls, cmd, port):
     if fresh and fresh not in tried:
         tried.append(fresh)
         try:
-            return run_on_port(device_cls, signer_cls, cmd, fresh)
+            out = run_on_port(device_cls, signer_cls, cmd, fresh)
+            remember_port(fresh)
+            return out
+        except Exception as e:
+            last = e
+    # mDNS 也没戏（组播被拦/省电模式限制多播）→ 翻历史端口，往往还在用同一个
+    for p in load_port_history():
+        if p in tried:
+            continue
+        tried.append(p)
+        try:
+            out = run_on_port(device_cls, signer_cls, cmd, p)
+            remember_port(p)
+            try:
+                with open(KEYDIR + '/connect_port', 'w') as f:
+                    f.write(str(p))
+            except Exception:
+                pass
+            return out
         except Exception as e:
             last = e
     # 最后兜底：老式 `adb tcpip 5555` 固定端口（无线调试随机端口场景几乎不命中）
     if 5555 not in tried:
         tried.append(5555)
         try:
-            return run_on_port(device_cls, signer_cls, cmd, 5555)
+            out = run_on_port(device_cls, signer_cls, cmd, 5555)
+            remember_port(5555)
+            return out
         except Exception as e:
             last = e
     raise ConnectFail('%s (%s) 已尝试端口=%s' % (last, type(last).__name__, tried))

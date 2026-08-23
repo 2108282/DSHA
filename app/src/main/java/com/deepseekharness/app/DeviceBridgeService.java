@@ -34,6 +34,8 @@ public class DeviceBridgeService extends Service {
     public static final String PREF_ADB = "adb_enabled";
 
     private static volatile boolean running = false;
+    /** 当前服务实例（供外部事件直接触发探测） */
+    private static volatile DeviceBridgeService current = null;
 
     /** 最近一次发现的配对端口（供 AdbPairReceiver 秒级直用） */
     public static volatile int pairPort = 0;
@@ -83,6 +85,7 @@ public class DeviceBridgeService extends Service {
             return;
         }
         running = true;
+        current = this;
         try {
             new HttpShellService(this).start();
         } catch (Throwable ignored) {
@@ -93,17 +96,32 @@ public class DeviceBridgeService extends Service {
         }
         prewarmAdb();
         startPairWatcher();
-        startConnWatcher(); // ADB 连接看门狗：掉线自动重连（参考 Shizuku 生态看门狗）
+        startKeepAlive(); // ADB 保活：自适应周期 + 网络/屏幕事件触发 + Doze 下 Alarm 兜底
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        return START_NOT_STICKY; // 被系统回收不自动重启（避免后台复活合规问题）
+        // 用户主动开启的通道，被系统回收后应当恢复（否则 ADB 能力静默消失）
+        return START_STICKY;
     }
 
     @Override
     public void onDestroy() {
         running = false;
+        current = null;
+        watchHandler.removeCallbacksAndMessages(null);
+        try {
+            if (netCallback != null) {
+                android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                        getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null) cm.unregisterNetworkCallback(netCallback);
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (screenReceiver != null) unregisterReceiver(screenReceiver);
+        } catch (Throwable ignored) {
+        }
         try {
             // 联动关闭 HTTP shell 桥（否则 3090 端口残留监听）
             HttpShellService hs = HttpShellService.instance();
@@ -140,84 +158,261 @@ public class DeviceBridgeService extends Service {
         }
     }
 
-    /**
-     * ADB 连接看门狗：周期探测 adb-shell 是否可用（参考 Shizuku 生态看门狗思路）。
-     * 掉线自动重连：Nsd 重新发现 _adb-tls-connect 连接端口 → 用已有 adbkey 直连（无需重新配对）。
-     * 无线调试被系统关闭（_adb-tls-connect 找不到）→ 尝试 Shizuku 自动重开 → 失败通知用户。
-     */
-    private void startConnWatcher() {
-        final android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
-        final Runnable check = new Runnable() {
-            @Override
-            public void run() {
-                if (!running || !isAdbEnabled(DeviceBridgeService.this)) return;
-                new Thread(() -> {
-                    try {
-                        HarnessController c = HarnessController.get(DeviceBridgeService.this);
-                        if (c == null || !c.getProot().isInstalled()) return;
-                        // 1. 探测当前连接是否可用
-                        String r = c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py id 2>&1 | head -3");
-                        if (r != null && r.contains("uid=")) return; // 连接正常
-                        // 库缺失（setup 未完成）→ 触发 setup 自愈（注入脚本+装依赖+装包装命令）
-                        if (r != null && r.contains("DEPS_MISSING")) {
-                            AdbBridge.ensureReady(DeviceBridgeService.this, c.getProot());
-                            return;
-                        }
-                        // 2. 掉线：重新发现 _adb-tls-connect 连接端口
-                        int connPort = discoverConnPortSync();
-                        if (connPort > 0) {
-                            saveConnectPort(connPort);
-                            // 3. 用新端口再测一次
-                            String r2 = c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py --port " + connPort + " id 2>&1 | head -3");
-                            if (r2 != null && r2.contains("uid=")) {
-                                android.util.Log.i("DSHA-ADB", "看门狗：已自动重连端口 " + connPort);
-                                return;
-                            }
-                        }
-                        // 4. 无线调试可能被关：优先用 WRITE_SECURE_SETTINGS 权限直接开
-                        //    （thedjchi/Shizuku 机制，无需 Shizuku）；无权限再试 Shizuku
-                        boolean opened = false;
-                        try {
-                            boolean hasSecure = checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS)
-                                    == android.content.pm.PackageManager.PERMISSION_GRANTED;
-                            if (hasSecure) {
-                                int cur = Settings.Global.getInt(getContentResolver(), "adb_wifi_enabled", 0);
-                                if (cur != 1) {
-                                    Settings.Global.putInt(getContentResolver(), "adb_wifi_enabled", 1);
-                                    android.util.Log.i("DSHA-ADB", "看门狗：WRITE_SECURE_SETTINGS 自动开启无线调试");
-                                    opened = true;
-                                } else {
-                                    opened = true; // 本来就开着
-                                }
-                            }
-                        } catch (Throwable ignored) {
-                        }
-                        if (!opened && ShizukuShell.isAvailable()) {
-                            String out = ShizukuShell.exec("settings put global adb_wifi_enabled 1 2>&1; adb tcpip 5555 2>&1");
-                            android.util.Log.i("DSHA-ADB", "看门狗：Shizuku 尝试重开无线调试 → " + out);
-                            if (out != null && !out.contains("[NO_") && !out.contains("ERROR")) {
-                                opened = true;
-                            }
-                        }
-                        if (opened) {
-                            // 等 5s 让 adbd 起来，再重试一次
-                            try { Thread.sleep(5000); } catch (InterruptedException ignored) { }
-                            int p2 = discoverConnPortSync();
-                            if (p2 > 0) {
-                                saveConnectPort(p2);
-                                c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py --port " + p2 + " id 2>&1 | head -1");
-                            }
-                            return;
-                        }
-                        // 5. 都失败：低频通知用户手动开（45s 冷却已有）
-                        notifyNeedManual(this);
-                    } catch (Throwable ignored) {
-                    }
-                }, "dsha-adb-watchdog").start();
-                h.postDelayed(this, 30000); // 30s 周期
+    // ===================== ADB 保活（自适应看门狗 + 事件触发 + Doze 兜底） =====================
+
+    private final android.os.Handler watchHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    /** 连续失败次数：决定下一次探测多久之后（越早失败越快重试，长期失败则降频省电） */
+    private volatile int consecutiveFailures = 0;
+    private volatile long lastOkAt = 0;
+    /** 单飞：事件触发与周期触发可能同时到，探测本身要串行 */
+    private final java.util.concurrent.atomic.AtomicBoolean probing =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile long lastKickAt = 0;
+    /** 对外可读的连接状态（配置页/自检/诊断用） */
+    public static volatile String adbState = "unknown";
+    public static volatile String adbDetail = "";
+
+    private static final long OK_INTERVAL_MS = 60_000L;
+    /** 刚断开时的快速退避阶梯 */
+    private static final long[] BACKOFF_MS = { 3_000L, 6_000L, 12_000L, 24_000L, 45_000L };
+    private static final long LONG_FAIL_INTERVAL_MS = 120_000L;
+    private static final long KICK_DEBOUNCE_MS = 1_500L;
+
+    private android.net.ConnectivityManager.NetworkCallback netCallback;
+    private android.content.BroadcastReceiver screenReceiver;
+
+    /** 启动保活：周期探测 + 网络恢复/屏幕解锁即时触发 + AlarmManager 在 Doze 下兜底 */
+    private void startKeepAlive() {
+        watchHandler.postDelayed(periodicProbe, 15_000L);
+        startNetworkWatcher();
+        startScreenWatcher();
+        AdbKeepAliveReceiver.schedule(this);
+    }
+
+    private final Runnable periodicProbe = new Runnable() {
+        @Override
+        public void run() {
+            if (!running || !isAdbEnabled(DeviceBridgeService.this)) return;
+            probeAsync("周期");
+            watchHandler.postDelayed(this, nextDelayMs());
+        }
+    };
+
+    private long nextDelayMs() {
+        if (consecutiveFailures == 0) return OK_INTERVAL_MS;
+        if (consecutiveFailures <= BACKOFF_MS.length) return BACKOFF_MS[consecutiveFailures - 1];
+        return LONG_FAIL_INTERVAL_MS;
+    }
+
+    /** 外部事件触发一次立即探测（网络恢复、屏幕解锁、Alarm 唤醒、用户回到 App） */
+    void kick(String reason) {
+        long now = System.currentTimeMillis();
+        if (now - lastKickAt < KICK_DEBOUNCE_MS) return; // 多个事件同时到只跑一次
+        lastKickAt = now;
+        probeAsync(reason);
+    }
+
+    /** 供 App 内其它组件（配置页、Alarm 接收器）触发 */
+    public static void kickNow(Context ctx, String reason) {
+        DeviceBridgeService svc = current;
+        if (svc != null) {
+            svc.kick(reason);
+        } else {
+            apply(ctx); // 服务不在了：先按开关拉起来
+        }
+    }
+
+    private void probeAsync(final String reason) {
+        if (!probing.compareAndSet(false, true)) return;
+        new Thread(() -> {
+            try {
+                runProbe(reason);
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA-ADB", "保活探测异常: " + e);
+            } finally {
+                probing.set(false);
             }
-        };
-        h.postDelayed(check, 15000); // 启动 15s 后首查
+        }, "dsha-adb-watchdog").start();
+    }
+
+    /**
+     * 一轮探测/自愈：
+     *  1. 连接可用 → 记录 ok，清零失败计数
+     *  2. 依赖缺失 → 触发 setup 自愈
+     *  3. 掉线 → mDNS 重发现连接端口，用新端口重试
+     *  4. 仍不行 → 无线调试可能被关：WRITE_SECURE_SETTINGS 直接开，其次 Shizuku
+     *  5. 都失败 → 分类记录状态，低频通知用户
+     */
+    private void runProbe(String reason) {
+        HarnessController c = HarnessController.get(this);
+        if (c == null || !c.getProot().isInstalled()) {
+            setAdbState("no_env", "环境未安装");
+            return;
+        }
+        String r = c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py id 2>&1 | head -3");
+        if (r != null && r.contains("uid=")) {
+            onProbeOk(reason);
+            return;
+        }
+        if (r != null && r.contains("DEPS_MISSING")) {
+            setAdbState("installing", "正在补装 ADB 依赖");
+            AdbBridge.ensureReady(this, c.getProot());
+            consecutiveFailures++;
+            return;
+        }
+        setAdbState("reconnecting", "触发原因：" + reason);
+        int connPort = discoverConnPortSync();
+        if (connPort > 0) {
+            saveConnectPort(connPort);
+            String r2 = c.getProot().execAndRead(
+                    "python3 /root/.dsh/adb-shell.py --port " + connPort + " id 2>&1 | head -3");
+            if (r2 != null && r2.contains("uid=")) {
+                android.util.Log.i("DSHA-ADB", "保活：已重连端口 " + connPort + "（" + reason + "）");
+                onProbeOk("重连端口 " + connPort);
+                return;
+            }
+            // 端口在、连不上 → 多半是配对信息失效（换过手机/清过数据）
+            if (r2 != null && (r2.contains("Unauthorized") || r2.contains("unauthorized")
+                    || r2.contains("认证") || r2.contains("AUTH"))) {
+                consecutiveFailures++;
+                setAdbState("need_pair", "配对已失效，需要重新配对");
+                notifyAdbProblem("需要重新配对", "配对信息已失效，请到「配置」页点「ADB 无线配对」重新配一次");
+                return;
+            }
+        }
+        boolean opened = tryReopenWirelessDebug();
+        if (opened) {
+            try {
+                Thread.sleep(5000); // 等 adbd 起来
+            } catch (InterruptedException ignored) {
+            }
+            int p2 = discoverConnPortSync();
+            if (p2 > 0) {
+                saveConnectPort(p2);
+                String r3 = c.getProot().execAndRead(
+                        "python3 /root/.dsh/adb-shell.py --port " + p2 + " id 2>&1 | head -1");
+                if (r3 != null && r3.contains("uid=")) {
+                    onProbeOk("自动重开无线调试后重连");
+                    return;
+                }
+            }
+            consecutiveFailures++;
+            setAdbState("reconnecting", "已重开无线调试，等待 adbd 就绪");
+            return;
+        }
+        consecutiveFailures++;
+        setAdbState("need_manual", "无线调试似乎已关闭（失败 " + consecutiveFailures + " 次）");
+        // 连续失败到一定次数才打扰用户：偶发一两次会自己好
+        if (consecutiveFailures >= 3) {
+            notifyAdbProblem("ADB 连接已断开",
+                    "自动重连未成功。打开手机「开发者选项 → 无线调试」后会自动恢复");
+        }
+    }
+
+    private void onProbeOk(String detail) {
+        consecutiveFailures = 0;
+        lastOkAt = System.currentTimeMillis();
+        setAdbState("ok", detail);
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.cancel(WATCH_NOTIF_ID); // 恢复了就把提醒收走
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 尝试自动重开无线调试：先用 WRITE_SECURE_SETTINGS（无需 Shizuku），再退 Shizuku */
+    private boolean tryReopenWirelessDebug() {
+        try {
+            boolean hasSecure = checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS)
+                    == PackageManager.PERMISSION_GRANTED;
+            if (hasSecure) {
+                int cur = Settings.Global.getInt(getContentResolver(), "adb_wifi_enabled", 0);
+                if (cur != 1) {
+                    Settings.Global.putInt(getContentResolver(), "adb_wifi_enabled", 1);
+                    android.util.Log.i("DSHA-ADB", "保活：WRITE_SECURE_SETTINGS 已开启无线调试");
+                }
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (ShizukuShell.isAvailable()) {
+                String out = ShizukuShell.exec(
+                        "settings put global adb_wifi_enabled 1 2>&1; adb tcpip 5555 2>&1");
+                android.util.Log.i("DSHA-ADB", "保活：Shizuku 重开无线调试 → " + out);
+                return out != null && !out.contains("[NO_") && !out.contains("ERROR");
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /** 状态同时落盘到 rootfs，容器内 cat /root/.dsh/adb-status 即可看，自检也读它 */
+    private void setAdbState(String state, String detail) {
+        adbState = state;
+        adbDetail = detail == null ? "" : detail;
+        try {
+            HarnessController c = HarnessController.get(this);
+            if (c == null || c.getProot() == null) return;
+            java.io.File f = new java.io.File(c.getProot().getRootfsDir(), "root/.dsh/adb-status");
+            if (f.getParentFile() != null && !f.getParentFile().isDirectory()
+                    && !f.getParentFile().mkdirs()) {
+                return;
+            }
+            String body = "state=" + state + "\n"
+                    + "detail=" + adbDetail.replace("\n", " ") + "\n"
+                    + "failures=" + consecutiveFailures + "\n"
+                    + "last_ok=" + (lastOkAt > 0
+                            ? new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                                    .format(new java.util.Date(lastOkAt))
+                            : "never") + "\n"
+                    + "updated=" + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
+                            java.util.Locale.US).format(new java.util.Date()) + "\n";
+            java.nio.file.Files.write(f.toPath(), body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 网络恢复立刻重连（不然要等下一个周期，WiFi 切换后能白等半分钟） */
+    private void startNetworkWatcher() {
+        try {
+            final android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                    getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return;
+            netCallback = new android.net.ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onAvailable(android.net.Network network) {
+                    kick("网络恢复");
+                }
+
+                @Override
+                public void onLost(android.net.Network network) {
+                    setAdbState("network_lost", "网络断开，等待恢复");
+                }
+            };
+            cm.registerDefaultNetworkCallback(netCallback);
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA-ADB", "网络监听注册失败: " + e);
+        }
+    }
+
+    /** 屏幕点亮/解锁时探一次：用户开始用手机的时刻，正是最需要连接就绪的时刻 */
+    private void startScreenWatcher() {
+        try {
+            screenReceiver = new android.content.BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    kick("屏幕点亮/解锁");
+                }
+            };
+            android.content.IntentFilter f = new android.content.IntentFilter();
+            f.addAction(Intent.ACTION_USER_PRESENT);
+            f.addAction(Intent.ACTION_SCREEN_ON);
+            registerReceiver(screenReceiver, f);
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA-ADB", "屏幕广播注册失败: " + e);
+        }
     }
 
     /** 同步发现 _adb-tls-connect 连接端口（0=没发现） */
@@ -260,8 +455,8 @@ public class DeviceBridgeService extends Service {
         } catch (Throwable ignored) { }
     }
 
-    /** 通知用户需要手动开无线调试（低频） */
-    private void notifyNeedManual(Runnable self) {
+    /** 通知用户 ADB 出了什么问题（10 分钟节流，恢复后自动收走） */
+    private void notifyAdbProblem(String title, String text) {
         try {
             long now = System.currentTimeMillis();
             if (now - lastManualNotifyAt < 600000) return; // 10 分钟一次
@@ -279,8 +474,9 @@ public class DeviceBridgeService extends Service {
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             NotificationCompat.Builder b = new NotificationCompat.Builder(this, WATCH_CHANNEL)
                     .setSmallIcon(R.drawable.ic_launch)
-                    .setContentTitle("🔌 ADB 连接已断开")
-                    .setContentText("已尝试自动重连失败。请打开手机「无线调试」（开发者选项），将自动恢复连接")
+                    .setContentTitle("🔌 " + title)
+                    .setContentText(text)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
                     .setContentIntent(pi)
                     .setAutoCancel(true)
                     .setPriority(NotificationCompat.PRIORITY_DEFAULT);

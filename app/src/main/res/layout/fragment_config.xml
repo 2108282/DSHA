@@ -296,6 +296,25 @@
                 android:textColor="@color/text_secondary"
                 android:textSize="@dimen/text_body" />
 
+            <Button
+                android:id="@+id/config_battery_opt"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/btn_height"
+                android:layout_marginTop="@dimen/gap_control"
+                android:background="@drawable/bg_btn"
+                android:text="🔋 关闭电池优化（保活必做）"
+                android:textAllCaps="false"
+                android:textColor="@color/text_secondary"
+                android:textSize="@dimen/text_body" />
+
+            <TextView
+                android:id="@+id/config_battery_opt_hint"
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/gap_hair"
+                android:text="系统休眠会冻结后台网络，ADB 连接因此断掉且无法自动恢复。加入白名单后保活才真正生效。" />
+
             <TextView
                 style="@style/DshaText.Caption"
                 android:layout_width="match_parent"

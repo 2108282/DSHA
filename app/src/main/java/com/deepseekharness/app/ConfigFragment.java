@@ -72,6 +72,11 @@ public class ConfigFragment extends Fragment {
                             .commit());
         }
 
+        Button batteryBtn = view.findViewById(R.id.config_battery_opt);
+        if (batteryBtn != null) {
+            refreshBatteryOptState(view);
+            batteryBtn.setOnClickListener(v -> requestIgnoreBatteryOpt());
+        }
         Button adbPairBtn = view.findViewById(R.id.config_adb_pair);
         if (adbPairBtn != null) {
             adbPairBtn.setOnClickListener(v -> {
@@ -157,10 +162,68 @@ public class ConfigFragment extends Fragment {
         }, "adb-status-poll").start();
     }
 
+    /** 电池优化白名单：系统休眠会冻结后台网络，不放行的话 ADB 保活等于白做 */
+    private void refreshBatteryOptState(View root) {
+        if (root == null) return;
+        Button btn = root.findViewById(R.id.config_battery_opt);
+        TextView hint = root.findViewById(R.id.config_battery_opt_hint);
+        if (btn == null) return;
+        boolean ignoring = false;
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager)
+                    requireContext().getSystemService(android.content.Context.POWER_SERVICE);
+            ignoring = pm != null
+                    && pm.isIgnoringBatteryOptimizations(requireContext().getPackageName());
+        } catch (Throwable ignored) {
+        }
+        if (ignoring) {
+            btn.setText("🔋 已关闭电池优化 ✓");
+            if (hint != null) {
+                hint.setText("已在白名单内：系统休眠不会再冻结 ADB 连接与后台自愈。");
+                hint.setTextColor(requireContext().getColor(R.color.ok));
+            }
+        } else {
+            btn.setText("🔋 关闭电池优化（保活必做）");
+            if (hint != null) {
+                hint.setText("系统休眠会冻结后台网络，ADB 连接因此断掉且无法自动恢复。加入白名单后保活才真正生效。");
+                hint.setTextColor(requireContext().getColor(R.color.warn));
+            }
+        }
+    }
+
+    private void requestIgnoreBatteryOpt() {
+        String pkg = requireContext().getPackageName();
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager)
+                    requireContext().getSystemService(android.content.Context.POWER_SERVICE);
+            if (pm != null && pm.isIgnoringBatteryOptimizations(pkg)) {
+                // 已放行：跳系统列表页，用户可以自己核对或撤销
+                startActivity(new android.content.Intent(
+                        android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                return;
+            }
+            startActivity(new android.content.Intent(
+                    android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(android.net.Uri.parse("package:" + pkg)));
+        } catch (Throwable e) {
+            // 部分 ROM 屏蔽了直接申请：退回系统电池设置页
+            try {
+                startActivity(new android.content.Intent(
+                        android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Throwable ignored) {
+                Toast.makeText(requireContext(),
+                        "请手动到系统设置 → 电池 → 应用耗电管理里放行 DSHA", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
     @Override
     public void onResume() {
         super.onResume();
         startAdbStatusPolling();
+        refreshBatteryOptState(getView());
+        // 回到配置页顺手催一次 ADB 探测：用户往往就是来看连上没有的
+        DeviceBridgeService.kickNow(requireContext(), "打开配置页");
     }
 
     @Override

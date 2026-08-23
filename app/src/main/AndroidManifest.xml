@@ -14,6 +14,9 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- ADB 保活：系统休眠会冻结后台网络，加入电池优化白名单后连接才能长期在线。
+         一次性弹窗申请（本 App 不上架 Play，不受该权限的商店政策限制）。 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- agent 通过 3090 桥查已装应用/启动应用（App 层能力，不需要 ADB 或 Shizuku）。
          Android 11+ 不声明它 getInstalledPackages 只能看到极少数应用。 -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
@@ -80,6 +83,11 @@
 
         <receiver
             android:name=".ConfirmReceiver"
+            android:exported="false" />
+
+        <!-- ADB 保活的 Doze 兜底闹钟接收器 -->
+        <receiver
+            android:name=".AdbKeepAliveReceiver"
             android:exported="false" />
 
         <receiver

@@ -99,6 +99,16 @@ public class HarnessService extends Service {
                     break;
                 }
                 if (!keepAliveRunning) break;
+                // 顺手守着设备桥：ADB 通道开着、但那个普通后台服务被系统回收时把它拉回来。
+                // 前台服务的存活率高得多，用它当靠山最稳（否则 ADB 能力会静默消失）。
+                try {
+                    if (DeviceBridgeService.isAdbEnabled(HarnessService.this)
+                            && !DeviceBridgeService.isRunning()) {
+                        android.util.Log.w("DSHA", "[保活] 设备桥服务不在了，重新拉起");
+                        DeviceBridgeService.apply(HarnessService.this);
+                    }
+                } catch (Throwable ignored) {
+                }
                 if (isWebUp()) {
                     fail = 0;
                     continue;

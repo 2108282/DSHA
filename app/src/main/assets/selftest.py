@@ -188,6 +188,46 @@ def check_adb(want_ver):
         add("FAIL", "ADB 只读白名单", "加载 adb-shell.py 失败：%s" % e)
 
 
+# ===================== 3.5 ADB 保活状态 =====================
+def check_adb_keepalive(adb_on, battery_ok):
+    """看门狗自己记的状态（App 侧每轮探测都会写 /root/.dsh/adb-status）。"""
+    if not adb_on:
+        add("SKIP", "ADB 保活", "未启用 ADB 设备通道")
+        return
+    raw = read(DSH_HOME + "/adb-status")
+    if not raw.strip():
+        add("SKIP", "ADB 保活", "还没有状态记录（App 需运行一会儿，或本次是旧版 App）")
+        return
+    st = {}
+    for line in raw.split("\n"):
+        if "=" in line:
+            k, v = line.split("=", 1)
+            st[k.strip()] = v.strip()
+    state = st.get("state", "?")
+    detail = st.get("detail", "")
+    fails = st.get("failures", "0")
+    last_ok = st.get("last_ok", "never")
+    if state == "ok":
+        add("PASS", "ADB 保活", "连接正常（最近成功 %s）" % last_ok)
+    elif state in ("reconnecting", "installing"):
+        add("SKIP", "ADB 保活", "正在自愈：%s（失败 %s 次，最近成功 %s）" % (detail, fails, last_ok))
+    elif state == "need_pair":
+        add("FAIL", "ADB 保活", "配对已失效 —— 到「配置」页点「ADB 无线配对」重配一次")
+    elif state == "need_manual":
+        add("FAIL", "ADB 保活",
+            "自动重连失败 %s 次 —— 打开手机「开发者选项 → 无线调试」即会自动恢复" % fails)
+    elif state == "network_lost":
+        add("SKIP", "ADB 保活", "网络断开，等恢复后会自动重连")
+    else:
+        add("SKIP", "ADB 保活", "state=%s %s" % (state, detail))
+    # 电池优化没放行的话，休眠中后台网络会被冻结，保活等于白做
+    if battery_ok == "0":
+        add("FAIL", "电池优化白名单",
+            "未放行 —— 到「配置」页点「关闭电池优化」，否则休眠后 ADB 必掉且无法自动恢复")
+    elif battery_ok == "1":
+        add("PASS", "电池优化白名单", "已放行，休眠不会冻结后台网络")
+
+
 # ===================== 4. 设备引导插件（会话损坏根因） =====================
 def check_guide(want_ver):
     pkg = os.path.join(GUIDE_DIR, "package.json")
@@ -368,6 +408,7 @@ def main():
         (check_tools, ()),
         (check_bridge, ()),
         (check_adb, (arg("script-ver"),)),
+        (check_adb_keepalive, (arg("adb-on", "1") == "1", arg("battery-opt", ""))),
         (check_guide, (arg("guide-ver"),)),
         (check_write_patch, ()),
         (check_sessions, ()),

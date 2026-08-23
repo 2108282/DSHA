@@ -210,6 +210,13 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        // 用户回到 App 时催一次 ADB 探测：这一刻往往正要用它（内部有防抖与单飞）
+        try {
+            if (DeviceBridgeService.isAdbEnabled(this)) {
+                DeviceBridgeService.kickNow(this, "回到 App");
+            }
+        } catch (Throwable ignored) {
+        }
         current = this;
         TaskNotifier.appInForeground = true;
     }
