@@ -16,8 +16,14 @@ CMD="$*"
 # 3090 桥有 token 鉴权（防其他 App 冒充 agent 弹确认框）：
 # 必须带 X-Token 头（= /root/.dsh/.bridge_token 内容），否则一律 [UNAUTHORIZED] 被拒
 TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
-RES=$(curl -s -m 65 -G "http://127.0.0.1:3090/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
-if [ $? -eq 0 ] && [ -n "$RES" ]; then
+# 桥的监听地址随 App 版本不同（新版绑 127.0.0.1 并附加 [::1]，旧版只绑 [::1]）：
+# 两个地址族都试，避免「桥活着但连不上 → 确认弹窗永不出现」。
+RES=""
+for H in 127.0.0.1 '[::1]'; do
+  RES=$(curl -s -m 65 -G "http://$H:3090/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
+  [ -n "$RES" ] && break
+done
+if [ -n "$RES" ]; then
   echo "$RES" | grep -q YES && exit 0 || exit 1
 fi
 # 3090 不可达（终端场景未启动服务）：终端内交互确认，10 秒超时默认拒绝
@@ -33,7 +39,8 @@ exit 1
 EOF
 chmod +x /root/dsh-confirm.sh
 
-# BASH_ENV 函数级守卫：agent 每次 bash -c 执行前自动加载（非交互 bash 必读 BASH_ENV）
+# 函数级守卫：由 bash 工具 lib 补丁（ensureBashGuardPatch）在每条命令前 source 加载。
+# 不用 BASH_ENV —— 它会污染插件初始化时的子 shell，导致 dsh web 加载插件失败。
 # 函数优先于 PATH 查找，PATH 被覆盖/哈希缓存都无法绕过命令名拦截
 cat > /root/dsh-guard.sh <<'EOF'
 # DSHA 危险命令守卫（由 BASH_ENV 注入，勿手动删除）
@@ -121,4 +128,4 @@ chmod +x "$DSH_BIN/$C"
 done
 
 echo "OK dsh-bin: $(ls "$DSH_BIN" | tr '\n' ' ')"
-echo 9 > "$DSH_BIN/.version"
+echo 10 > "$DSH_BIN/.version"

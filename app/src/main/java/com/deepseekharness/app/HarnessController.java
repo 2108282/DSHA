@@ -741,6 +741,37 @@ public class HarnessController {
      *  老版本 Android System WebView（< Chrome 116）没有 AbortSignal.any/timeout，
      *  dsh 前端在选择工作区等带取消的 remote 调用上会抛 "AbortSignal.any is not a function"。
      *  RC6 / 源码构建通用；失败不阻塞启动。 */
+    /** 后台静默补 write 发布补丁（开 App 即跑，不必等点「启动」——
+     *  agent 在已运行的 WebUI 里就可能用 write 工具，等启动就晚了）。 */
+    public void maybeFixFsWrite() {
+        IO.execute(() -> {
+            try {
+                if (!proot.isInstalled()) return;
+                ensureFsWritePatch();
+            } catch (Throwable ignored) {
+            }
+        });
+    }
+
+    /** 启动前自愈：dsh 的 write 工具在 proot 下新建文件会变悬空链接
+     *  （dsh 用 link(临时文件,目标) 发布 + 删临时目录，撞上 proot 的 --link2symlink）。
+     *  给 fs-local 打「目标不存在改用 rename 发布」的补丁，幂等，命中已打过时 0.05 秒返回。 */
+    public void ensureFsWritePatch() {
+        try {
+            String sh = readAsset("fs-write-patch.sh");
+            if (sh == null || sh.isEmpty()) return;
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-fs-write-patch.sh");
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), sh.getBytes(StandardCharsets.UTF_8));
+            String r = proot.execAndRead(
+                    "bash /root/dsha-fs-write-patch.sh; rm -f /root/dsha-fs-write-patch.sh", 90_000);
+            android.util.Log.i("DSHA", "write 发布补丁: " + (r == null ? "无输出" : r.trim()));
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "write 发布补丁失败（不影响启动）: " + e);
+        }
+    }
+
+    /** 启动前自愈：老 WebView 兼容补丁（AbortSignal.any/timeout polyfill，幂等） */
     private void ensureWebUiPolyfill() {
         try {
             String script = readAsset("webui-polyfill.sh");
@@ -1112,6 +1143,10 @@ public class HarnessController {
             ensureWebUiOriginPatch(); // 外部浏览器 /api 403 修复（Chrome 150+ Origin 省略端口）
         } catch (Throwable ignored) {
         }
+        try {
+            ensureFsWritePatch(); // write 工具悬空链接（重装 dsh 后补丁会丢，⑥ 里补回）
+        } catch (Throwable ignored) {
+        }
         // ===== 原生内置移动端 UI 适配（免第三方插件） =====
         // 把 dsh-client-ui-mobile-adapt 的 client 产物直接注入 web-app 前端，
         // 手机端单栏/抽屉/汉堡/全屏设置开箱即用。幂等，失败不阻塞安装。
@@ -1298,6 +1333,61 @@ public class HarnessController {
         if (bytes >= 1024)
             return String.format(java.util.Locale.US, "%.1fKB", bytes / 1024.0);
         return bytes + "B";
+    }
+
+    /** 速率文案：3.2MB/s、850KB/s；未知/为零时给 "—"（别让界面显示 0.0MB/s 让人以为卡死） */
+    public static String fmtRate(double bytesPerSec) {
+        if (bytesPerSec <= 1) return "—";
+        return fmtBytes((long) bytesPerSec) + "/s";
+    }
+
+    /** 剩余时间文案：45 秒 / 2 分 10 秒 / 1 小时 5 分（负数或算不出给 "—"） */
+    public static String fmtEta(long seconds) {
+        if (seconds < 0) return "—";
+        if (seconds < 60) return seconds + " 秒";
+        long m = seconds / 60;
+        long s = seconds % 60;
+        if (m < 60) return s == 0 ? m + " 分" : m + " 分 " + s + " 秒";
+        long h = m / 60;
+        m %= 60;
+        return m == 0 ? h + " 小时" : h + " 小时 " + m + " 分";
+    }
+
+    /** 进度采样器：把「已完成字节」序列换算成平滑速率与剩余时间。
+     *  指数平滑（EMA）避免数字每次刷新都乱跳；解压页/下载共用一套算法。 */
+    public static final class RateMeter {
+        private long lastBytes = -1;
+        private long lastAt = 0;
+        private double rate = 0; // 字节/秒
+
+        /** 喂入最新的累计字节数，返回当前平滑速率（字节/秒，未知为 0） */
+        public synchronized double feed(long done) {
+            long now = System.currentTimeMillis();
+            if (lastBytes < 0) {
+                lastBytes = done;
+                lastAt = now;
+                return 0;
+            }
+            long dt = now - lastAt;
+            if (dt < 200) return rate; // 采样太密：噪声大，沿用上次
+            double inst = (done - lastBytes) * 1000.0 / dt;
+            if (inst < 0) inst = 0; // 断点续传等导致回退：忽略
+            rate = rate <= 0 ? inst : rate * 0.7 + inst * 0.3;
+            lastBytes = done;
+            lastAt = now;
+            return rate;
+        }
+
+        /** 当前平滑速率（字节/秒） */
+        public synchronized double rate() {
+            return rate;
+        }
+
+        /** 剩余秒数（算不出返回 -1） */
+        public synchronized long eta(long done, long total) {
+            if (total <= 0 || done >= total || rate <= 1) return -1;
+            return (long) ((total - done) / rate);
+        }
     }
 
     private void installHarnessRc6() throws Exception {
@@ -1585,13 +1675,21 @@ public class HarnessController {
         boolean ok = false;
         String lastErr = "";
         for (String url : ordered) {
+            final RateMeter meter = new RateMeter();
             try {
                 proot.downloadRootfs(url, dest, (down, total) -> {
+                    double rate = meter.feed(down);
                     if (total <= 0) {
-                        setProgress(what + "…（源未提供大小，请耐心等待）", Math.min(99, pBase + 1));
+                        // 源没给 Content-Length：至少把已下大小与速率显示出来，别让用户以为卡死
+                        setProgress(what + "… " + fmtBytes(down) + " · " + fmtRate(rate)
+                                + "（源未提供大小 · " + hostOf(url) + "）", Math.min(99, pBase + 1));
                     } else {
                         int pct = (int) (down * 100 / total);
-                        setProgress(what + " " + fmtBytes(down) + "/" + fmtBytes(total) + "（" + pct + "%）（源：" + hostOf(url) + "）",
+                        long eta = meter.eta(down, total);
+                        setProgress(what + " " + fmtBytes(down) + "/" + fmtBytes(total)
+                                        + "（" + pct + "%）· " + fmtRate(rate)
+                                        + (eta >= 0 ? " · 剩余 " + fmtEta(eta) : "")
+                                        + " · 源 " + hostOf(url),
                                 Math.min(99, pBase + 1 + pct / pDiv));
                     }
                 });
@@ -1765,6 +1863,11 @@ public class HarnessController {
         // 启动前自愈：外部浏览器 /api 403 修复（Chrome 150+ Origin 省略端口，幂等）
         try {
             ensureWebUiOriginPatch();
+        } catch (Throwable ignored) {
+        }
+        // 启动前自愈：write 工具新建文件变悬空链接（proot l2s 与 dsh link 发布冲突，幂等）
+        try {
+            ensureFsWritePatch();
         } catch (Throwable ignored) {
         }
         // 启动前自愈：内置插件（mobile-adapt/device-shell-guide）注册校验，
@@ -2453,17 +2556,17 @@ public class HarnessController {
     // 注意：GUARD_VERSION 必须与 assets/rootfs-confirm-install.sh 末尾写入的
     // /root/dsh-bin/.version 数字一致！曾出现 8 vs 9 不匹配 → 每次启动都强制
     // rm -rf 重装守卫（幂等但白干 + 可能打断进行中的命令）。
-    private static final String GUARD_VERSION = "9";
+    private static final String GUARD_VERSION = "10";
     /** 步骤⑥整体版本号：内置插件/补丁/极简 preset 任一变更时 +1，
      *  启动时对比 rootfs 标记（step6.version），不符则自动重跑⑥（防"改了不生效"）。
      *  由 installGuard 末尾的 runStep 写入（先删 marker 后写版本 → 中途失败
      *  版本未写，下次启动版本不一致仍会重跑，自愈闭环不中断）。 */
-    private static final String STEP6_VERSION = "3";
+    private static final String STEP6_VERSION = "4";
     /** 内置插件资产版本：mobile-adapt / device-shell-guide 的 client.js 等
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
      *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
      *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
-    private static final String BUILTIN_ASSET_VERSION = "6";
+    private static final String BUILTIN_ASSET_VERSION = "7";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
      *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，
@@ -2852,13 +2955,6 @@ public class HarnessController {
             java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-heal-session.sh");
             f.getParentFile().mkdirs();
             java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
-            // 注入会话修复脚本（heal-session.sh 调用它补缺失 message.id）
-            String fixer = readAsset("fix-session.py");
-            if (fixer != null && !fixer.isEmpty()) {
-                java.io.File fx = new java.io.File(proot.getRootfsDir(), "root/.dsh/fix-session.py");
-                if (fx.getParentFile() != null) fx.getParentFile().mkdirs();
-                java.nio.file.Files.write(fx.toPath(), fixer.getBytes(StandardCharsets.UTF_8));
-            }
             // 注入 Python 自愈主程序（os.walk 扫描，不依赖 find/bash glob）
             String healPy = readAsset("heal-sessions.py");
             if (healPy != null && !healPy.isEmpty()) {
@@ -3129,10 +3225,18 @@ public class HarnessController {
         try {
             File dir = new File(android.os.Environment.getExternalStoragePublicDirectory(
                     android.os.Environment.DIRECTORY_DOWNLOADS), "DSHA");
-            File[] fs = dir.listFiles((d, n) -> n.startsWith("DSHA-backup-") && n.endsWith(".tar.gz"));
+            // 宽容：手动/自动备份（DSHA-backup-*）与升级迁移包（DSHA-migration-*）都认，
+            // .tgz 后缀也接受（用户手工改名/其他工具打的包）
+            File[] fs = dir.listFiles((d, n) -> {
+                if (n == null) return false;
+                String low = n.toLowerCase();
+                boolean nameOk = low.startsWith("dsha-backup-") || low.startsWith("dsha-migration-");
+                return nameOk && (low.endsWith(".tar.gz") || low.endsWith(".tgz"));
+            });
             if (fs == null || fs.length == 0) return null;
             File best = null;
             for (File f : fs) {
+                if (f.length() <= 0) continue; // 跳过空/半截文件
                 if (best == null || f.lastModified() > best.lastModified()) best = f;
             }
             return best;
@@ -3141,21 +3245,153 @@ public class HarnessController {
         }
     }
 
-    /** 从外部备份 tar.gz 恢复 .dsh + .env 到 rootfs；返回结果文案。
-     *  备份 tar 内为相对路径（.dsh / <wd>/.env / dsh-web.log），解压到 rootfs/root 即还原。
-     *  使用宽松解压（文件名含逗号/引号不误判损坏，issue#9 第2条）。 */
+    /** 从外部备份 tar.gz 恢复：宽容优先——能恢复多少就恢复多少，绝不因一处不认识就整包失败。
+     *
+     *  流程：宽松解压到 stage → restore-merge.py 做布局识别 / 工作目录重映射 /
+     *  本机路径插件重建 / bundle 预检（解析不了的先摘掉，保证 dsh web 能启动）。
+     *  脚本不可用（老 rootfs 无 python3 等）时退回「整包直接铺到 /root」的老行为。
+     *  兼容：.dsh 在包里任意层级、备份工作目录名与本机不同、无清单的老备份。 */
     public String restoreFromBackup(File backup) {
         try {
             if (!proot.isInstalled()) return "环境未就绪，请先完成环境解压/安装后再恢复";
-            File tmp = rootfsFile("root/.dsha-restore.tar.gz");
-            copyFile(backup, tmp);
-            TarGzipExtractor.extractLenient(tmp, new File(proot.getRootfsDir(), "root"));
+            File rootDir = new File(proot.getRootfsDir(), "root");
+            File stage = new File(rootDir, ".dsha-restore-stage");
+            deleteRecursively(stage);
             //noinspection ResultOfMethodCallIgnored
-            tmp.delete();
-            return "恢复完成（配置 + 对话记录），重启 WebUI 生效";
+            stage.mkdirs();
+            File tmp = rootfsFile("root/.dsha-restore.tar.gz");
+            File src = backup;
+            boolean copied = false;
+            // 调用方可能已经把包放在 rootfs 内（工作区页的恢复）：同路径就别自己拷自己
+            if (!backup.getAbsolutePath().equals(tmp.getAbsolutePath())) {
+                copyFile(backup, tmp);
+                src = tmp;
+                copied = true;
+            }
+            try {
+                TarGzipExtractor.extractLenient(src, stage);
+            } finally {
+                if (copied) {
+                    //noinspection ResultOfMethodCallIgnored
+                    tmp.delete();
+                }
+            }
+            String script = readAsset("restore-merge.py");
+            String out = null;
+            if (script != null && !script.isEmpty()) {
+                java.io.File sf = new java.io.File(rootDir, ".dsha-restore-merge.py");
+                java.nio.file.Files.write(sf.toPath(), script.getBytes(StandardCharsets.UTF_8));
+                out = proot.execAndRead("python3 /root/.dsha-restore-merge.py"
+                        + " --stage /root/.dsha-restore-stage --root /root --workdir "
+                        + shellArg(getWorkdir())
+                        + " 2>&1; rm -f /root/.dsha-restore-merge.py", 240_000);
+            }
+            boolean ok = out != null && out.contains("RESTORE_OK");
+            boolean partial = out != null && out.contains("RESTORE_PARTIAL");
+            if (!ok && !partial) {
+                // 兜底（宽容）：整理脚本没跑成 → 老行为，把包内容直接铺到 /root
+                proot.execAndRead("cp -a /root/.dsha-restore-stage/. /root/ 2>/dev/null; "
+                        + "rm -rf /root/.dsha-restore-stage; echo DONE");
+                deleteRecursively(stage);
+                return "恢复完成（基础模式：整包还原）\n"
+                        + "若启动报插件缺失，可到「市场」重新安装该插件。重启 WebUI 生效";
+            }
+            String body = out.replace("RESTORE_OK", "").replace("RESTORE_PARTIAL", "")
+                    .replace("RESTORE_EMPTY", "").trim();
+            // 解压阶段跳过的异常条目也如实告知（宽容 ≠ 悄悄丢东西）
+            if (TarGzipExtractor.lastSkipped > 0) {
+                body += "\n· 备份里有 " + TarGzipExtractor.lastSkipped
+                        + " 个异常条目已跳过：" + TarGzipExtractor.lastSkipNote;
+            }
+            // 缺失插件：后台静默补装（不阻塞恢复结果返回，失败无感）
+            java.util.List<String> missing = parseMissingPlugins(out);
+            body = stripMachineLines(body);
+            if (!missing.isEmpty()) {
+                autoInstallPluginsSilently(missing);
+                body += "\n· " + missing.size() + " 个插件正在后台补装，装好后重启 WebUI 即回到启用状态";
+            }
+            deleteRecursively(stage);
+            invalidateSteps();
+            return (ok ? "恢复完成" : "恢复完成（部分内容已跳过，详见下方）")
+                    + (body.isEmpty() ? "" : "\n" + body)
+                    + "\n重启 WebUI 生效";
         } catch (Exception e) {
             return "恢复失败: " + e.getMessage();
         }
+    }
+
+    /** 从整理脚本输出里取出可自动补装的插件名（机器可读行 `MISSING_PLUGINS: a,b`） */
+    private static java.util.List<String> parseMissingPlugins(String out) {
+        java.util.List<String> list = new java.util.ArrayList<>();
+        if (out == null) return list;
+        for (String line : out.split("\n")) {
+            String s = line.trim();
+            if (!s.startsWith("MISSING_PLUGINS:")) continue;
+            for (String raw : s.substring("MISSING_PLUGINS:".length()).split(",")) {
+                String name = raw.trim();
+                if (!name.isEmpty() && isValidPluginSpec(name) && !list.contains(name)) {
+                    list.add(name);
+                }
+            }
+        }
+        return list;
+    }
+
+    /** 去掉给程序看的行，只留给用户看的报告正文 */
+    private static String stripMachineLines(String body) {
+        if (body == null || body.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (String line : body.split("\n")) {
+            if (line.trim().startsWith("MISSING_PLUGINS:")) continue;
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(line);
+        }
+        return sb.toString().trim();
+    }
+
+    /** 恢复后台静默补装缺失插件：逐个 dsh plugin add，不弹窗不打扰；
+     *  结果写 logcat 与 .dsh/restore-report.txt。装不上也不影响已恢复的数据。 */
+    private void autoInstallPluginsSilently(final java.util.List<String> names) {
+        Thread t = new Thread(() -> {
+            StringBuilder log = new StringBuilder("== 后台补装插件 ==\n");
+            int ok = 0;
+            for (String name : names) {
+                try {
+                    String r = installPlugin(name);
+                    boolean good = r != null && r.contains("INSTALL_EXIT=0");
+                    if (good) ok++;
+                    log.append(good ? "✓ " : "✗ ").append(name).append("：")
+                            .append(r == null ? "无输出" : tail(r.trim(), 200)).append('\n');
+                } catch (Throwable e) {
+                    log.append("✗ ").append(name).append("：").append(describe(e)).append('\n');
+                }
+            }
+            log.append("小结：成功 ").append(ok).append('/').append(names.size()).append('\n');
+            android.util.Log.i("DSHA", "恢复后补装插件完成 " + ok + "/" + names.size());
+            try {
+                ensureBuiltinBundles(); // 顺带把内置插件校验补回
+            } catch (Throwable ignored) {
+            }
+            try {
+                java.io.File rp = rootfsFile("root/.dsh/restore-report.txt");
+                if (rp.getParentFile() != null && rp.getParentFile().isDirectory()) {
+                    java.nio.file.Files.write(rp.toPath(),
+                            log.toString().getBytes(StandardCharsets.UTF_8),
+                            java.nio.file.StandardOpenOption.CREATE,
+                            java.nio.file.StandardOpenOption.APPEND);
+                }
+            } catch (Throwable ignored) {
+            }
+        }, "dsha-restore-plugins");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** 取字符串尾部 n 个字符（日志用，避免把整段安装输出塞进报告） */
+    private static String tail(String s, int n) {
+        if (s == null) return "";
+        String one = s.replace("\n", " ");
+        return one.length() <= n ? one : "…" + one.substring(one.length() - n);
     }
 
     /**

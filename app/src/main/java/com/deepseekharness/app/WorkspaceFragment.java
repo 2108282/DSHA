@@ -231,7 +231,7 @@ public class WorkspaceFragment extends Fragment {
         }
         new Thread(() -> {
             try {
-                File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-restore.tar.gz");
+                File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-restore-src.tar.gz");
                 if (tmp.getParentFile() != null) tmp.getParentFile().mkdirs();
                 // 显式判空：openInputStream 返回 null（权限/文件损坏）时给友好提示
                 InputStream in = appCtx.getContentResolver().openInputStream(uri);
@@ -247,26 +247,33 @@ public class WorkspaceFragment extends Fragment {
                 // 统一走 Java 宽松解压器（与 HarnessController.restoreFromBackup 一致）：
                 // GNU tar 会把文件名含逗号/引号的正常备份误判损坏（issue#9），
                 // extractLenient 只拦真正的路径穿越
-                TarGzipExtractor.extractLenient(tmp, new File(c.getProot().getRootfsDir(), "root"));
+                // 统一交给 HarnessController.restoreFromBackup（宽容恢复）：
+                // 布局识别（.dsh 在包内任意层级）、工作目录名重映射、本机路径插件重建、
+                // bundle 预检（解析不了的先摘掉，保证 dsh web 能启动）。
+                final String result = c.restoreFromBackup(tmp);
                 //noinspection ResultOfMethodCallIgnored
                 tmp.delete();
                 // 同步 API key：恢复的 .env 写回 App 配置，避免下次启动被覆盖
                 String env = c.getProot().execAndRead(
                         "cat /root/" + c.getWorkdir() + "/.env 2>/dev/null");
+                boolean keySynced = false;
                 if (env != null) {
                     for (String line : env.split("\n")) {
                         if (line.startsWith("DEEPSEEK_API_KEY=")) {
                             String key = line.substring("DEEPSEEK_API_KEY=".length()).trim();
-                            if (!key.isEmpty()) c.setApiKey(key);
+                            if (!key.isEmpty()) {
+                                c.setApiKey(key);
+                                keySynced = true;
+                            }
                             break;
                         }
                     }
                 }
                 if (getActivity() == null) return;
+                final String msg = result + (keySynced ? "\n· API key 已同步到配置页" : "");
                 getActivity().runOnUiThread(() -> {
                     // 用 appCtx（Fragment 可能已 detach，requireContext 会抛）
-                    Toast.makeText(appCtx, "恢复完成（API key 已同步）",
-                            Toast.LENGTH_LONG).show();
+                    Toast.makeText(appCtx, msg, Toast.LENGTH_LONG).show();
                 });
             } catch (Exception e) {
                 if (getActivity() != null) {

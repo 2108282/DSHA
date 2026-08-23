@@ -25,14 +25,23 @@ public final class TarGzipExtractor {
     /** 单次解压总输出上限：给足 rootfs/备份空间，同时拦截无限增长。 */
     private static final long MAX_TOTAL_BYTES = 64L * 1024 * 1024 * 1024;
 
+    /** 最近一次宽松解压跳过的条目数（0=全部恢复） */
+    public static volatile int lastSkipped = 0;
+    /** 最近一次宽松解压跳过的条目名摘要（截断，用于给用户看） */
+    public static volatile String lastSkipNote = "";
+
     private TarGzipExtractor() {}
 
     public static void extract(File tarball, File dest) throws IOException {
         extract(tarball, dest, 0);
     }
 
-    /** 恢复备份用：宽松模式（只拦路径穿越，不拦逗号/引号等正常文件名） */
+    /** 恢复备份用：宽松模式（只拦路径穿越，不拦逗号/引号等正常文件名）。
+     *  宽容策略：可疑/超大条目只跳过并计入 {@link #lastSkipped}，绝不让一条坏记录
+     *  废掉整份备份 —— 用户宁可少恢复一个文件，也不要「恢复失败」四个字。 */
     public static void extractLenient(File tarball, File dest) throws IOException {
+        lastSkipped = 0;
+        lastSkipNote = "";
         try (InputStream raw = new FileInputStream(tarball)) {
             extractAuto(raw, dest, 0, true);
         }
@@ -177,6 +186,12 @@ public final class TarGzipExtractor {
             if (name == null || name.isEmpty()
                     || traversal
                     || (!lenient && (name.contains("..") || name.contains("\\\"") || name.contains(",")))) {
+                if (lenient) {
+                    // 宽容恢复：跳过这一条，继续恢复其余文件（备份里出现异常条目不致命）
+                    noteSkip(name);
+                    skipEntry(in, size);
+                    continue;
+                }
                 throw new IOException("预构建包损坏（非法文件条目: " + safeName(name)
                         + "），请重新下载或改用「直连源码构建」");
             }
@@ -186,6 +201,12 @@ public final class TarGzipExtractor {
                 case 0:
                 case '7':
                     if (size > MAX_FILE_BYTES || totalBytes + size > MAX_TOTAL_BYTES) {
+                        if (lenient) {
+                            // 单个超大文件/总量超限：跳过它，剩下的照常恢复
+                            noteSkip(name + "(过大)");
+                            skipEntry(in, size);
+                            continue;
+                        }
                         throw new IOException("预构建包损坏（文件过大 size=" + size + "）");
                     }
                     writeFile(in, out, size, mode, buf);
@@ -271,6 +292,30 @@ public final class TarGzipExtractor {
             Os.chmod(f.getAbsolutePath(), mode & 0777);
         } catch (Throwable ignored) {
         }
+    }
+
+    /** 记录一个被跳过的条目（宽容恢复用） */
+    private static void noteSkip(String name) {
+        lastSkipped++;
+        String note = lastSkipNote;
+        if (note.length() < 400) {
+            lastSkipNote = note.isEmpty() ? safeName(name) : note + ", " + safeName(name);
+        }
+    }
+
+    /** 跳过整个条目（数据体 + 块对齐填充） */
+    private static void skipEntry(InputStream in, long size) throws IOException {
+        long remaining = size;
+        while (remaining > 0) {
+            long skipped = in.skip(remaining);
+            if (skipped <= 0) {
+                if (in.read() < 0) return;
+                remaining--;
+            } else {
+                remaining -= skipped;
+            }
+        }
+        skipPadding(in, size);
     }
 
     private static void skipPadding(InputStream in, long size) throws IOException {

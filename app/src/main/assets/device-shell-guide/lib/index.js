@@ -15,6 +15,9 @@
  * dsh.profile.bundles + dependencies（file: 指向本机目录，零网络）。
  */
 
+/** 消息身份：dsh 持久化回放时强校验 message.id（缺 id → 整个会话历史拒绝加载） */
+import { randomUUID } from 'node:crypto'
+
 /** 依赖的服务：systemPrompt（标准模式）+ agent 核心（极简模式走 pre-step） */
 export const inject = ['systemPrompt']
 
@@ -98,6 +101,11 @@ export function apply(ctx) {
     }
     if (lastUser < 0) return decision
     const guide = {
+      // 关键：dsh 持久化会话时强校验每条消息带非空 id
+      // （assertMessageEventShape → "lacks an identified message"）。
+      // 手搓消息绕过了官方 createUserMessage() 工厂，必须自己补 id，
+      // 否则这条引导消息会把整个会话历史写成「加载失败」的损坏状态。
+      id: randomUUID(),
       role: 'user',
       content: [{ type: 'text', text: PROMPT }],
       source: { kind: 'dsh-device-guide', plugin: 'dsh-device-shell-guide' },

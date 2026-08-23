@@ -47,6 +47,8 @@ public final class HttpShellService {
     private volatile boolean confirmBusy = false;
 
     private ServerSocket server;
+    /** IPv6 回环监听（兼容脚本用 localhost 解析成 ::1 的场景；绑不上则忽略） */
+    private ServerSocket server6;
     private volatile boolean running;
     /** 连接处理线程池（请求可能阻塞等用户确认 60s，必须并发处理，否则一个确认卡死全部请求） */
     private java.util.concurrent.ExecutorService pool;
@@ -134,26 +136,53 @@ public final class HttpShellService {
         });
         Thread t = new Thread(() -> {
             try {
-                // 安全：仅绑定 127.0.0.1（loopback），外部网络无法访问！
-                // （原来 new ServerSocket(PORT) 默认绑 0.0.0.0 = 局域网可访问 → 严重漏洞）
+                // 安全：仅绑定回环（loopback），外部网络无法访问！
+                // 关键：必须显式绑 IPv4 127.0.0.1 —— InetAddress.getLoopbackAddress()
+                // 在 Android（IPv6 优先）上返回 ::1，桥只监听 [::1]:3090，而 rootfs 内
+                // 所有客户端（adb-shell.py / dsh-confirm.sh / 内置插件）都连 127.0.0.1
+                // → Connection refused → 确认弹窗永不出现，命令被判 USER_REJECTED。
                 server = new ServerSocket();
                 server.setReuseAddress(true);
                 server.bind(new java.net.InetSocketAddress(
-                        java.net.InetAddress.getLoopbackAddress(), PORT));
-                while (running) {
-                    try {
-                        Socket client = server.accept();
-                        client.setSoTimeout(120_000);
-                        pool.execute(() -> handle(client));
-                    } catch (IOException e) {
-                        if (!running) break;
-                    }
-                }
+                        java.net.InetAddress.getByName("127.0.0.1"), PORT));
+                acceptLoop(server);
             } catch (IOException ignored) {
             }
         }, "http-shell-accept");
         t.setDaemon(true);
         t.start();
+        // 附加监听 [::1]:3090：脚本/插件若用 localhost（可能解析成 IPv6）也能命中。
+        // 绑不上（无 IPv6 栈/被占）时静默跳过，IPv4 主监听已足够。
+        Thread t6 = new Thread(() -> {
+            try {
+                server6 = new ServerSocket();
+                server6.setReuseAddress(true);
+                server6.bind(new java.net.InetSocketAddress(
+                        java.net.InetAddress.getByName("::1"), PORT));
+                acceptLoop(server6);
+            } catch (Throwable ignored) {
+            }
+        }, "http-shell-accept6");
+        t6.setDaemon(true);
+        t6.start();
+    }
+
+    /** 接受连接并分发到线程池（IPv4/IPv6 两个监听共用） */
+    private void acceptLoop(ServerSocket ss) {
+        while (running) {
+            try {
+                Socket client = ss.accept();
+                client.setSoTimeout(120_000);
+                java.util.concurrent.ExecutorService p = pool;
+                if (p == null) {
+                    try { client.close(); } catch (IOException ignored) { }
+                    return;
+                }
+                p.execute(() -> handle(client));
+            } catch (IOException e) {
+                if (!running) return;
+            }
+        }
     }
 
     public void stop() {
@@ -161,6 +190,10 @@ public final class HttpShellService {
         instance = null;
         try {
             if (server != null) server.close();
+        } catch (IOException ignored) {
+        }
+        try {
+            if (server6 != null) server6.close();
         } catch (IOException ignored) {
         }
         if (pool != null) {
@@ -263,7 +296,10 @@ public final class HttpShellService {
             } else {
                 result = ShizukuShell.exec(cmd);
             }
-            String body = "{\"result\":" + jsonEscape(result) + "}";
+            // 关键：result 必须包引号 —— 旧实现输出 {"result":YES} 是非法 JSON，
+            // 客户端（adb-shell.py 判 '"YES"' in body / agent 用 json 解析）全部失效：
+            // 用户点「允许」也会被当成拒绝。
+            String body = "{\"result\":\"" + jsonEscape(result) + "\"}";
             byte[] bodyBytes = body.getBytes("UTF-8");
             String head = "HTTP/1.1 200 OK\r\n"
                     + "Content-Type: application/json; charset=utf-8\r\n"

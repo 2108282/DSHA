@@ -55,11 +55,19 @@ public final class BackupManager {
             // - dsh-web.log 仅当存在时加入，不存在不失败（旧实现 tar 会因缺文件退出非零）
             String wd = c.getWorkdir();
             String dshEsc = wd.replace("'", "'\\''");
+            // 备份前置整理（宽容：失败也照常备份）：
+            //  · 生成 .dsha-backup-manifest.json（App/dsh 版本、workdir、bundles、link 依赖）
+            //  · 把 link:/file: 本机路径插件的源码内联到 .dsha-plugin-src/
+            // 目的：换设备/换版本恢复时不再因「link:/root/plugin-src/x 不存在」起不来。
+            runBackupPrepare(c, wd);
             c.getProot().execChecked("cd /root && rm -f .dsha-backup.tar.gz && "
                     + "[ -d .dsh ] || { echo 'NO_DSH_DIR'; exit 1; } && "
                     + "ARGS=\".dsh\"; "
                     + "if [ -f '" + dshEsc + "'/.env ]; then ARGS=\"$ARGS '" + dshEsc + "'/.env\"; fi; "
                     + "[ -f dsh-web.log ] && ARGS=\"$ARGS dsh-web.log\"; "
+                    // 清单与内联插件源码（存在才带，名字固定，不拼接外部输入）
+                    + "[ -f .dsha-backup-manifest.json ] && ARGS=\"$ARGS .dsha-backup-manifest.json\"; "
+                    + "[ -d .dsha-plugin-src ] && ARGS=\"$ARGS .dsha-plugin-src\"; "
                     + "tar -czf .dsha-backup.tar.gz $ARGS 2>/dev/null || { echo TAR_FAIL; exit 1; } && "
                     + "test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }; echo OK");
             File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-backup.tar.gz");
@@ -88,8 +96,29 @@ public final class BackupManager {
         }
     }
 
-    /** Android 10+：MediaStore Downloads 集合，无需存储权限。overwrite=true 时先删同名旧条目。 */
-    private static String writeViaMediaStore(Context ctx, File src, String name, boolean overwrite) throws Exception {
+    /** 备份前置整理：注入并执行 backup-prepare.py。全程宽容——任何失败都只记日志，
+     *  备份本体照常进行（老包格式仍可恢复，只是少了清单与内联插件）。 */
+    private static void runBackupPrepare(HarnessController c, String workdir) {
+        try {
+            String script = c.readAsset("backup-prepare.py");
+            if (script == null || script.isEmpty()) return;
+            File dst = new File(c.getProot().getRootfsDir(), "root/.dsha-backup-prepare.py");
+            if (dst.getParentFile() != null) dst.getParentFile().mkdirs();
+            java.nio.file.Files.write(dst.toPath(),
+                    script.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String wdEsc = workdir.replace("'", "'\\''");
+            String verEsc = c.getVersionNameForUa().replace("'", "");
+            String out = c.getProot().execAndRead(
+                    "python3 /root/.dsha-backup-prepare.py --app-version '" + verEsc
+                            + "' --workdir '" + wdEsc + "' 2>&1; rm -f /root/.dsha-backup-prepare.py",
+                    120_000);
+            android.util.Log.i("DSHA", "备份前置整理: " + (out == null ? "无输出" : out.trim()));
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "备份前置整理失败（不影响备份）: " + e);
+        }
+    }
+
+    /** Android 10+：MediaStore Downloads 集合，无需存储权限。overwrite=true 时先删同名旧条目。 */    private static String writeViaMediaStore(Context ctx, File src, String name, boolean overwrite) throws Exception {
         if (overwrite) {
             // 删除同名的旧自动备份（MediaStore 同名会新建条目，必须先清旧的）
             try {

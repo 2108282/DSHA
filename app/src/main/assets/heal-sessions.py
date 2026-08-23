@@ -22,6 +22,8 @@ import time
 SESSIONS_ROOT = "/root/.dsh/sessions"
 CORRUPT_ROOT = "/root/.dsh/corrupt-backup"
 LOG_PATH = "/root/.dsh/heal.log"
+# 会话文件名（精确匹配，不含任何备份/隔离产物）
+SESSION_FILENAMES = ("session.jsonl", "session.jsonl.zstd")
 
 try:
     import zstandard as zstd
@@ -39,12 +41,11 @@ def zstd_load(raw, max_size=512 * 1024 * 1024):
     """
     if raw[:4] != ZSTD_MAGIC:
         return raw  # 明文 JSONL
-    import io as _io
     # 注意：绝不能用 decompress() 短路——dsh 文件是多帧拼接，decompress 只解
     # 首帧（首帧带 content size 时会“成功”返回 1 行），必须 stream_reader 跨帧全读。
     out = io.BytesIO()
     try:
-        r = zstd.ZstdDecompressor().stream_reader(_io.BytesIO(raw), read_size=131072)
+        r = zstd.ZstdDecompressor().stream_reader(io.BytesIO(raw), read_size=131072)
         while True:
             try:
                 ch = r.read(262144)
@@ -58,6 +59,74 @@ def zstd_load(raw, max_size=512 * 1024 * 1024):
     except Exception:
         pass
     return out.getvalue()
+
+def scan_zstd_frames(buf):
+    """结构扫描拼接的 zstd 帧（照 dsh 的 scanZstdFrames 算法，不解压 payload）。
+
+    返回 (frames, torn_start)：frames=[(start, end)] 完整帧区间，
+    torn_start=末尾不完整帧的起点（无则 None）。结构非法抛 ValueError。
+    """
+    frames = []
+    off = 0
+    n = len(buf)
+    while off < n:
+        start = off
+        if n - off < 4:
+            return frames, start
+        if buf[off:off + 4] != ZSTD_MAGIC:
+            raise ValueError("invalid frame magic at %d" % off)
+        off += 4
+        if off >= n:
+            return frames, start
+        desc = buf[off]
+        off += 1
+        if desc & 0x18:
+            raise ValueError("reserved frame-header bit at %d" % (off - 1))
+        csize_flag = desc >> 6
+        single = bool(desc & 0x20)
+        checksum = bool(desc & 0x04)
+        dict_flag = desc & 0x03
+        dict_bytes = 4 if dict_flag == 3 else dict_flag
+        csize_bytes = (1 if single else 0) if csize_flag == 0 else (1 << csize_flag)
+        rest = (0 if single else 1) + dict_bytes + csize_bytes
+        if n - off < rest:
+            return frames, start
+        off += rest
+        while True:
+            if n - off < 3:
+                return frames, start
+            bh = int.from_bytes(buf[off:off + 3], "little")
+            off += 3
+            last = bh & 1
+            btype = (bh >> 1) & 0x03
+            bsize = bh >> 3
+            if btype == 0x03:
+                raise ValueError("reserved block type at %d" % (off - 3))
+            payload = 1 if btype == 0x01 else bsize
+            if n - off < payload:
+                return frames, start
+            off += payload
+            if last:
+                break
+        if checksum:
+            if n - off < 4:
+                return frames, start
+            off += 4
+        frames.append((start, off))
+    return frames, None
+
+
+def header_frame_ok(raw, frames):
+    """dsh 的 assertZstdHeaderFrame：第 1 帧解压后必须恰好一行（唯一 \\n 在末尾）。"""
+    if not frames:
+        return False
+    s, e = frames[0]
+    try:
+        head = zstd.ZstdDecompressor().stream_reader(io.BytesIO(raw[s:e])).read()
+    except Exception:
+        return False
+    return len(head) > 0 and head.find(b"\n") == len(head) - 1
+
 
 def log(msg):
     try:
@@ -172,17 +241,35 @@ def fix_file(path):
         kept.append(json.dumps(ev, ensure_ascii=False))
     if need_isolate:
         return "isolate", "存在无法安全修复的事件"
-    if fixed == 0 and len(kept) > 1 and is_zstd:
-        # 无缺 id 问题，但格式可能不对（旧版本修回的单帧有多行→dsh 拒绝）
-        # 继续往下走，重写成多帧格式（第一帧 = 仅 header 行）
-        fixed = 0  # 不计数，但仍写回以规范化格式
-        need_format_fix = True
-    else:
-        need_format_fix = False
+    # 是否需要「格式规范化重写」：只在文件真的不符合 dsh 期望的多帧布局时才重写。
+    # 关键：绝不能因为「没找到可修问题」就重写健康会话 —— 旧实现每次启动都
+    # 重写全部会话 + 留一份备份，磁盘和扫描量都会滚雪球。
+    need_format_fix = False
+    fmt_reason = ""
+    if is_zstd:
+        try:
+            frames, torn = scan_zstd_frames(raw)
+        except ValueError as e:
+            return "isolate", "zstd 帧结构损坏（%s）" % e
+        if len(frames) < 2 and len(kept) > 1:
+            need_format_fix = True
+            fmt_reason = "单帧多行（dsh 要求第 1 帧只含 header）"
+        elif not header_frame_ok(raw, frames):
+            need_format_fix = True
+            fmt_reason = "首帧不是恰好一行 header"
+        # 末尾撕裂帧（torn）不重写：dsh 自己会按「已提交前缀」语义容忍并续写
     if fixed == 0 and not need_format_fix:
-        return "no_fix", "未发现缺 id 等可修问题 (检=%d行 消息事件=%d 缺id=%d)" % (len(kept), diag_msg_events, diag_missing_id)
-    bak = path + ".corrupt-" + time.strftime("%Y%m%d-%H%M%S")
+        return "no_fix", "无需修复 (检=%d行 消息事件=%d 缺id=%d)" % (len(kept), diag_msg_events, diag_missing_id)
+    # 备份放到 sessions 目录之外（corrupt-backup 下）：留在原地会被下一轮
+    # 扫描当成会话再修再备份 → 文件数指数膨胀。
+    ts = time.strftime("%Y%m%d-%H%M%S")
     try:
+        rel = os.path.relpath(path, SESSIONS_ROOT)
+    except Exception:
+        rel = os.path.basename(path)
+    bak = os.path.join(CORRUPT_ROOT, rel + ".pre-fix-" + ts)
+    try:
+        os.makedirs(os.path.dirname(bak), exist_ok=True)
         os.rename(path, bak)
     except Exception:
         return "bake_fail", "备份失败"
@@ -190,16 +277,17 @@ def fix_file(path):
         # dsh v0.1.1-rc.2+ 会话文件必须是多帧 zstd：第 1 帧 = 仅 header 行，
         # 后续帧 = 剩余事件行（assertZstdHeaderFrame 要求第一帧解压后恰好一行）。
         if is_zstd:
-            cctx = zstd.ZstdCompressor()
-            frames = []
+            # write_checksum 与 dsh 的 compressZstdFrame（ZSTD_c_checksumFlag=1）一致
+            cctx = zstd.ZstdCompressor(write_checksum=True)
+            out_frames = []
             # 帧 1: header（第一行）
             if kept and kept[0]:
-                frames.append(cctx.compress((kept[0] + "\n").encode("utf-8")))
+                out_frames.append(cctx.compress((kept[0] + "\n").encode("utf-8")))
             # 帧 2: 剩余事件行
             if len(kept) > 1:
                 rest = "\n".join(kept[1:]) + "\n"
-                frames.append(cctx.compress(rest.encode("utf-8")))
-            new_data = b"".join(frames)
+                out_frames.append(cctx.compress(rest.encode("utf-8")))
+            new_data = b"".join(out_frames)
         else:
             new_data = ("\n".join(kept) + "\n").encode("utf-8")
         with open(path, "wb") as f:
@@ -210,7 +298,12 @@ def fix_file(path):
         except Exception:
             pass
         return "write_fail", "写回失败（已还原）"
-    return "fixed", "已补 %d 处（备份 %s）" % (fixed, os.path.basename(bak))
+    what = []
+    if fixed:
+        what.append("补 %d 处" % fixed)
+    if need_format_fix:
+        what.append("规范化帧格式(%s)" % fmt_reason)
+    return "fixed", "%s（备份 %s）" % ("、".join(what) or "重写", os.path.basename(bak))
 
 
 def isolate_file(path, reason):
@@ -235,12 +328,15 @@ def main():
     scanned = fixed = isolated = 0
     if os.path.isdir(SESSIONS_ROOT):
         for root, dirs, files in os.walk(SESSIONS_ROOT):
-            # 跳过 corrupt-backup 本身
-            if CORRUPT_ROOT.startswith(root):
+            # 跳过隔离区（万一它被配置到 sessions 内部）
+            if root == CORRUPT_ROOT or root.startswith(CORRUPT_ROOT + os.sep):
                 dirs[:] = []
                 continue
             for fn in files:
-                if fn.startswith("session.jsonl"):
+                # 精确匹配会话文件名：旧实现用 startswith("session.jsonl")，
+                # 会把自己产生的备份（session.jsonl.zstd.corrupt-*）当会话反复
+                # 重修再备份 → 每次启动文件数翻倍。
+                if fn in SESSION_FILENAMES:
                     p = os.path.join(root, fn)
                     scanned += 1
                     try:

@@ -62,6 +62,8 @@ public class MainActivity extends AppCompatActivity {
         HarnessController.get(this).maybeAdbSelfHeal();
         // dsh 子包依赖完整性自愈（npmmirror 镜像元数据不一致导致 Cannot find module）
         HarnessController.get(this).maybeHealDshDeps();
+        // write 工具悬空链接自愈（proot l2s 与 dsh 的 link 发布冲突；幂等秒回）
+        HarnessController.get(this).maybeFixFsWrite();
         // 空 pets 目录清理（deepseek-pet 插件空目录会崩插件树）
         HarnessController.get(this).maybeCleanEmptyPets();
         // 会话损坏自愈（中途强杀导致 SQLite 写一半 → 历史加载失败）

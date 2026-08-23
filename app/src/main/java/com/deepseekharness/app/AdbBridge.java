@@ -22,14 +22,15 @@ public final class AdbBridge {
     private AdbBridge() {
     }
 
-    /** assets 脚本是否已注入 rootfs（校验版本标记，防止旧脚本残留不更新） */
+    /** assets 脚本是否已注入 rootfs（校验版本标记，防止旧脚本残留不更新）。
+     *  精确比较：contains 会让 "9" 误命中 "19"，将来版本号进两位数就静默失效。 */
     public static boolean injected(ProotBootstrap proot) {
         String r = proot.execAndRead("test -f /root/.dsh/script-version && cat /root/.dsh/script-version || echo NO");
-        return r != null && r.trim().contains(SCRIPT_VERSION);
+        return r != null && SCRIPT_VERSION.equals(r.trim());
     }
 
     /** 当前 assets 脚本版本：每次改脚本 +1，旧版 APK 的残留脚本会因版本不符被强制重注入 */
-    private static final String SCRIPT_VERSION = "8";
+    private static final String SCRIPT_VERSION = "9";
 
     /** 幂等注入：把三个 assets 脚本 base64 写入 /root/.dsh/ 并加执行位 + 写版本标记 */
     public static String inject(Context ctx, ProotBootstrap proot) {
