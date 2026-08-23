@@ -618,8 +618,13 @@ public final class HttpShellService {
             } catch (Exception e) {
                 return "FORBIDDEN: 路径无法解析（" + p + "）";
             }
-            boolean external = canon.startsWith("/sdcard/") || canon.startsWith("/storage/emulated/0/");
-            if (!external && !canon.startsWith("/sdcard") && !canon.startsWith("/storage/emulated/0")) {
+            // 前缀匹配必须带路径分隔符，否则 /sdcardEVIL/x、/storage/emulated/0abc/x
+            // 这类路径会被当成外部存储放行。原实现算了 external 又不用它，
+            // 实际生效的是下面那个不带斜杠的宽松判断 —— 等于白名单形同虚设。
+            // （TarGzipExtractor.linkSafeWithin 里的同类校验就做对了：前缀 + 分隔符）
+            boolean external = canon.equals("/sdcard") || canon.startsWith("/sdcard/")
+                    || canon.equals("/storage/emulated/0") || canon.startsWith("/storage/emulated/0/");
+            if (!external) {
                 return "FORBIDDEN: 仅允许读取 /sdcard 外部存储（" + p + "）";
             }
             if (!f.isFile()) return "NOT_FOUND: " + p;

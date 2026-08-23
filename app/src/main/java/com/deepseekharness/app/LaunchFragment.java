@@ -302,7 +302,13 @@ public class LaunchFragment extends Fragment {
             ws.setJavaScriptEnabled(true);
             ws.setDomStorageEnabled(true);
             // 现代前端特性：混合内容（http 页面加载资源）+ 数据库 + 多窗口
-            ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            // 我们只加载 http://127.0.0.1:<port>，不需要混合内容全放行。
+            // ALWAYS_ALLOW 会让页面内任何 https 框架都能拉 http 资源（可被中间人注入）。
+            ws.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+            // API 29 及以下 allowFileAccess 默认为 true：显式关掉。
+            // WebUI 全部走 http，用不到 file://，留着只是多一条攻击面。
+            ws.setAllowFileAccess(false);
+            ws.setAllowContentAccess(false);
             ws.setDatabaseEnabled(true);
             ws.setSupportMultipleWindows(false);
             ws.setLoadWithOverviewMode(true);
