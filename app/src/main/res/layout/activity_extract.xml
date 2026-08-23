@@ -5,49 +5,69 @@
     android:background="@color/surface"
     android:gravity="center"
     android:orientation="vertical"
-    android:padding="40dp">
+    android:padding="@dimen/page_pad_wide">
 
     <FrameLayout
         android:layout_width="92dp"
         android:layout_height="92dp"
-        android:layout_marginBottom="30dp"
+        android:layout_marginBottom="@dimen/gap_section"
         android:background="@drawable/bg_card">
 
         <ProgressBar
             android:id="@+id/extract_bar"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
             android:layout_gravity="center"
             android:indeterminateTint="@color/primary" />
     </FrameLayout>
 
     <TextView
         android:id="@+id/extract_title"
+        style="@style/DshaText.Display"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="正在准备运行环境"
-        android:textColor="@color/text"
-        android:textSize="21sp"
-        android:textStyle="bold" />
+        android:text="正在准备运行环境" />
 
     <TextView
         android:id="@+id/extract_status"
-        android:layout_width="wrap_content"
+        style="@style/DshaText.Label"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="@dimen/gap_tight"
         android:gravity="center"
-        android:text="首次启动需要解压内置环境，请稍候…"
-        android:textColor="@color/text_secondary"
-        android:textSize="13sp" />
+        android:text="首次启动需要解压内置环境，请稍候…" />
+
+    <ProgressBar
+        android:id="@+id/extract_progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/progress_bold"
+        android:layout_marginTop="@dimen/gap_section"
+        android:max="1000"
+        android:progress="0"
+        android:progressDrawable="@drawable/progress_determinate"
+        android:visibility="invisible" />
+
+    <TextView
+        android:id="@+id/extract_detail"
+        style="@style/DshaText.Caption"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/gap_tight"
+        android:fontFamily="monospace"
+        android:gravity="center"
+        android:visibility="invisible" />
 
     <TextView
         android:id="@+id/extract_error"
+        style="@style/DshaText.Label"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:gravity="center"
+        android:layout_marginTop="@dimen/gap_section"
+        android:background="@drawable/bg_error_box"
+        android:gravity="start"
+        android:padding="@dimen/card_pad"
         android:textColor="@color/err"
         android:textIsSelectable="true"
-        android:textSize="13sp"
         android:visibility="gone" />
 </LinearLayout>

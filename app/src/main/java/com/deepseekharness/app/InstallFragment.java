@@ -308,6 +308,15 @@ public class InstallFragment extends Fragment {
         for (int s = HarnessController.STEP_ROOTFS; s <= HarnessController.STEP_GUARD; s++) {
             if (s < done.length && done[s]) cnt++;
         }
+        // 正在跑安装/自动重跑⑥时，别报"全部安装完成"——步骤标记是上一轮留下的，
+        // 后台其实还在更新守卫和内置插件，此时说完成会让人以为可以直接开 WebUI。
+        if (c != null && c.isBusy()) {
+            String stage = c.getStage() == null ? "" : c.getStage();
+            statusText.setText("🔄 正在安装/更新" + (stage.isEmpty() ? "" : "：" + stage)
+                    + "\n\n完成前请勿启动 Web UI。");
+            installBtn.setText("安装中…");
+            return;
+        }
         if (cnt == 6) {
             statusText.setText("✅ 全部安装完成\n\n可到「启动」页启动 Web UI。");
             installBtn.setText("重新安装（补装缺失步骤）");

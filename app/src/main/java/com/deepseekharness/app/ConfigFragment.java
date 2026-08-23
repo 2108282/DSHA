@@ -271,7 +271,10 @@ public class ConfigFragment extends Fragment {
     private void setupCommonControls() {
         String[] modes = {"danger-full-access", "workspace-write", "read-only"};
         ArrayAdapter<String> adapter = new ArrayAdapter<>(requireContext(),
-                android.R.layout.simple_spinner_dropdown_item, modes);
+                android.R.layout.simple_spinner_item, modes);
+        // 关闭态用 simple_spinner_item、展开态才用 dropdown_item：
+        // 两处都传 dropdown_item 会让关闭态也带上勾选标记的留白，和右侧箭头挤在一起
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         modeSpinner.setAdapter(adapter);
 
         loadConfig();

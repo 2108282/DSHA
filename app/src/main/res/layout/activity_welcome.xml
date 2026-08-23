@@ -15,9 +15,9 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:paddingStart="26dp"
-        android:paddingEnd="26dp"
-        android:paddingBottom="30dp">
+        android:paddingStart="@dimen/page_pad"
+        android:paddingEnd="@dimen/page_pad"
+        android:paddingBottom="@dimen/gap_section">
 
         <Button
             android:id="@+id/welcome_btn"

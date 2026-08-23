@@ -41,6 +41,18 @@ public class PluginFragment extends Fragment {
     private PluginAdapter adapter;
     private HarnessController c;
     private TextView status;
+    /** 底部细进度条：文案含「正在」时自动亮起，操作结束自动收起（见 {@link #say}） */
+    private android.widget.ProgressBar busyBar;
+
+    /** 统一设置状态文案：市场拉取/插件安装/卸载动辄几十秒，只有静态文字容易让人以为卡死，
+     *  这里按文案自动联动底部细进度条，所有调用点无需各自管理可见性。 */
+    private void say(String s) {
+        if (status != null) status.setText(s);
+        if (busyBar != null) {
+            boolean busy = s != null && (s.contains("正在") || s.contains("加载中"));
+            busyBar.setVisibility(busy ? View.VISIBLE : View.GONE);
+        }
+    }
     /** 当前排序：0 star / 1 名称 */
     private int sortMode = 0;
     /** 仅显示兼容插件（过滤 ❌不兼容） */
@@ -64,6 +76,7 @@ public class PluginFragment extends Fragment {
         rv.setLayoutManager(new LinearLayoutManager(requireContext()));
         rv.setAdapter(adapter);
         status = view.findViewById(R.id.statusText);
+        busyBar = view.findViewById(R.id.pluginBusy);
 
         TextView btnMarket = view.findViewById(R.id.btnMarket);
         TextView btnInstalled = view.findViewById(R.id.btnInstalled);
@@ -86,15 +99,15 @@ public class PluginFragment extends Fragment {
                     parsedRef.set(null);
                     adapter.setData(new ArrayList<>(), true);
                     if (mode == Mode.MARKET) showMarket();
-                    status.setText("已恢复插件市场");
+                    say("已恢复插件市场");
                     return;
                 }
                 String[] info = c.parseGithubUrl(u);
                 if (info == null) {
-                    status.setText("无法解析链接：" + u);
+                    say("无法解析链接：" + u);
                     return;
                 }
-                status.setText("正在解析 " + info[1] + " …");
+                say("正在解析 " + info[1] + " …");
                 // 后台拉 npm 名（fetchNpmName 走网络）
                 new Thread(() -> {
                     String npmName = c.fetchNpmName(
@@ -112,7 +125,7 @@ public class PluginFragment extends Fragment {
                         one.add(new String[]{info[1], "0", owner2, "⏳待定",
                                 npmName != null ? npmName : "仅GitHub仓库", "来自仓库链接：\n" + info[2], info[2]});
                         adapter.setData(one, true);
-                        status.setText(npmName != null
+                        say(npmName != null
                                 ? "✅ 解析成功：" + npmName + "（点「安装」装到已装插件）"
                                 : "⚠️ 未发布 npm，仅支持 GitHub 仓库方式安装");
                     });
@@ -161,7 +174,7 @@ public class PluginFragment extends Fragment {
                         if (q.isEmpty() || it[0].toLowerCase().contains(q)) filtered.add(it);
                     }
                     adapter.setData(filtered, false);
-                    status.setText("已装 " + filtered.size() + " 个插件 · 开关启用/禁用" + (q.isEmpty() ? "" : "（搜索：" + q + "）"));
+                    say("已装 " + filtered.size() + " 个插件 · 开关启用/禁用" + (q.isEmpty() ? "" : "（搜索：" + q + "）"));
                 }
             }
 
@@ -192,7 +205,7 @@ public class PluginFragment extends Fragment {
         TextView btnRefresh = view.findViewById(R.id.btnRefresh);
         if (btnRefresh != null) {
             btnRefresh.setOnClickListener(v -> {
-                status.setText("已清除缓存，正在重新拉取…");
+                say("已清除缓存，正在重新拉取…");
                 c.refreshMarketIndex();
                 items.clear();
                 showMarket();
@@ -301,7 +314,7 @@ public class PluginFragment extends Fragment {
         if (!q.isEmpty()) hint += "（搜索：\"" + q + "\"）";
         if (filterIncompat) hint += " · 仅显示兼容（已滤 " + skipped + " 条不兼容）";
         hint += " · 点击查看详情/安装" + cacheHint();
-        status.setText(hint);
+        say(hint);
     }
 
     /** 线程回调安全切主线程（Fragment detach 后不再崩溃）：未 attach 则丢弃 */
@@ -317,13 +330,13 @@ public class PluginFragment extends Fragment {
             refreshMarketView();
             return;
         }
-        status.setText("正在拉取插件市场…");
+        say("正在拉取插件市场…");
         new Thread(() -> {
             String json = c.fetchMarketIndex();
             List<String[]> list = json == null ? new ArrayList<>() : HarnessController.parseMarketTable(json);
             runOnUiThreadSafely(() -> {
                 if (list.isEmpty()) {
-                    status.setText("市场拉取失败（网络不通？）");
+                    say("市场拉取失败（网络不通？）");
                     return;
                 }
                 items.clear();
@@ -342,30 +355,30 @@ public class PluginFragment extends Fragment {
             runOnUiThreadSafely(() -> {
                 installed.clear();
                 if (pl == null || pl.length == 0) {
-                    status.setText("未发现已装插件（目录 " + String.join("/", HarnessController.PLUGIN_DIRS) + "）");
+                    say("未发现已装插件（目录 " + String.join("/", HarnessController.PLUGIN_DIRS) + "）");
                     adapter.setData(new ArrayList<>(), false);
                     return;
                 }
                 for (String[] p : pl) installed.add(p);
                 adapter.setData(installed, false);
-                status.setText("已装 " + installed.size() + " 个插件 · 开关启用/禁用");
+                say("已装 " + installed.size() + " 个插件 · 开关启用/禁用");
             });
         }).start();
     }
 
     private void exportPlugins() {
-        status.setText("正在导出插件…");
+        say("正在导出插件…");
         new Thread(() -> {
             String path = c.exportPlugins();
             runOnUiThreadSafely(() -> {
                 if (path == null) {
-                    status.setText("导出失败（打包出错）");
+                    say("导出失败（打包出错）");
                     Toast.makeText(requireContext(), "导出失败：打包出错", Toast.LENGTH_LONG).show();
                 } else if ("NO_PLUGINS".equals(path)) {
-                    status.setText("没有已启用的插件可导出（先去市场安装或确认插件已启用）");
+                    say("没有已启用的插件可导出（先去市场安装或确认插件已启用）");
                     Toast.makeText(requireContext(), "没有可导出的插件", Toast.LENGTH_LONG).show();
                 } else {
-                    status.setText("已导出：" + path);
+                    say("已导出：" + path);
                     Toast.makeText(requireContext(), "插件包已导出到 " + path, Toast.LENGTH_LONG).show();
                 }
             });
@@ -385,7 +398,7 @@ public class PluginFragment extends Fragment {
         if (requestCode == 1001 && resultCode == android.app.Activity.RESULT_OK && data != null) {
             android.net.Uri uri = data.getData();
             if (uri == null) return;
-            status.setText("正在导入插件…");
+            say("正在导入插件…");
             new Thread(() -> {
                 try {
                     File tmp = new File(requireContext().getCacheDir(), "plugin-import.tar.gz");
@@ -525,12 +538,12 @@ public class PluginFragment extends Fragment {
     /** 一键安装：点一下就全自动（解析 npm 名 → 安装 → 提示），无二次确认 */
     private void startAutoInstall(String[] it, String owner, String repo) {
         final String display = it[0];
-        status.setText("正在解析并安装 " + display + " …");
+        say("正在解析并安装 " + display + " …");
         new Thread(() -> {
             String npmName = c.fetchNpmName(owner, repo);
             if (npmName == null) {
                 runOnUiThreadSafely(() -> {
-                    status.setText("无法安装 " + display + "（未发布 npm）");
+                    say("无法安装 " + display + "（未发布 npm）");
                     new android.app.AlertDialog.Builder(requireContext())
                             .setTitle("无法安装：" + display)
                             .setMessage("未在该仓库找到 package.json / npm 包名，可能未发布 npm，只能源码安装。\n\n仓库：\n" + it[6])
@@ -545,7 +558,7 @@ public class PluginFragment extends Fragment {
                 });
                 return;
             }
-            status.setText("正在安装 " + npmName + " …");
+            say("正在安装 " + npmName + " …");
             // npm 名找不到时自动回退 github:owner/repo（市场条目多为仅 GitHub 发布的仓库插件）
             String out = c.installPlugin(npmName, "github:" + owner + "/" + repo);
             final String fOut = out;
@@ -556,7 +569,7 @@ public class PluginFragment extends Fragment {
     /** 安装结果（成功/失败）弹窗 + 重启 WebUI 按钮 */
     private void showInstallResult(String pkg, String display, String out) {
         boolean ok = out != null && out.contains("INSTALL_EXIT=0");
-        status.setText((ok ? "✅ 安装成功 " : "❌ 安装失败 ") + display + (ok ? "，重启 WebUI 生效" : ""));
+        say((ok ? "✅ 安装成功 " : "❌ 安装失败 ") + display + (ok ? "，重启 WebUI 生效" : ""));
         new android.app.AlertDialog.Builder(requireContext())
                 .setTitle((ok ? "✅ 安装成功：" : "❌ 安装失败：") + display)
                 .setMessage(out == null ? "无输出" : out)
@@ -574,7 +587,7 @@ public class PluginFragment extends Fragment {
                         } else {
                             app.startService(i);
                         }
-                        if (isAdded()) status.setText("WebUI 已重启");
+                        if (isAdded()) say("WebUI 已重启");
                     }, 1500);
                 })
                 .setNegativeButton("关闭", null)
@@ -583,11 +596,11 @@ public class PluginFragment extends Fragment {
 
 
     private void doInstall(String pkg) {
-        status.setText("正在安装 " + pkg + " …");
+        say("正在安装 " + pkg + " …");
         new Thread(() -> {
             String out = c.installPlugin(pkg);
             runOnUiThreadSafely(() -> {
-                status.setText("安装结果：" + (out == null ? "无输出" : out.replace("\n", " ").substring(0, Math.min(200, out.length()))));
+                say("安装结果：" + (out == null ? "无输出" : out.replace("\n", " ").substring(0, Math.min(200, out.length()))));
                 new android.app.AlertDialog.Builder(requireContext())
                         .setTitle("安装完成")
                         .setMessage(out == null ? "无输出" : out)
@@ -657,11 +670,11 @@ public class PluginFragment extends Fragment {
                             .setTitle("卸载插件：" + it[0])
                             .setMessage("将执行：dsh plugin --profile web remove " + it[0] + "\n\n确定卸载？")
                             .setPositiveButton("卸载", (d, w) -> {
-                                status.setText("正在卸载 " + it[0] + " …");
+                                say("正在卸载 " + it[0] + " …");
                                 new Thread(() -> {
                                     String out = c.removePlugin(it[0]);
                                     runOnUiThreadSafely(() -> {
-                                        status.setText("卸载结果：" + (out == null ? "无输出" : out.replace("\n", " ").substring(0, Math.min(150, out.length()))));
+                                        say("卸载结果：" + (out == null ? "无输出" : out.replace("\n", " ").substring(0, Math.min(150, out.length()))));
                                         Toast.makeText(requireContext(), "卸载完成，重启 WebUI 生效", Toast.LENGTH_SHORT).show();
                                         showInstalled();
                                     });

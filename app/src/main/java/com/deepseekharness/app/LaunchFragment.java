@@ -21,6 +21,7 @@ import org.mozilla.geckoview.GeckoRuntime;
 import org.mozilla.geckoview.GeckoSession;
 import org.mozilla.geckoview.GeckoView;
 import android.widget.FrameLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -44,6 +45,10 @@ public class LaunchFragment extends Fragment {
     private TextView runDot, runState, statusText, lanAddrText, logText;
     private ScrollView logScroll;
     private Button startBtn;
+    /** 启动等待期的细进度条（不确定式）：让用户知道在动，而不是以为点了没反应 */
+    private ProgressBar busyBar;
+    /** 本次「启动/重启」按下的时刻，用于显示已等待秒数；0=不在等待中 */
+    private long startingAt = 0;
     private View homePane, webPane;
     private FrameLayout webBox;
     private WebView webView;
@@ -94,6 +99,7 @@ public class LaunchFragment extends Fragment {
         runDot = view.findViewById(R.id.launch_run_dot);
         runState = view.findViewById(R.id.launch_run_state);
         statusText = view.findViewById(R.id.launch_status);
+        busyBar = view.findViewById(R.id.launch_busy);
         lanAddrText = view.findViewById(R.id.lan_addr);
         logText = view.findViewById(R.id.launch_log);
         logScroll = view.findViewById(R.id.launch_log_scroll);
@@ -133,6 +139,7 @@ public class LaunchFragment extends Fragment {
             }
             starting = true;
             enterWhenReady = true;
+            startingAt = System.currentTimeMillis();
             applyRunUi(false);
             statusText.setText("正在启动，起来后直接进入…");
             Intent i = new Intent(requireContext(), HarnessService.class);
@@ -148,6 +155,7 @@ public class LaunchFragment extends Fragment {
             closeWeb();
             starting = true;
             enterWhenReady = true; // 重启完成后自动回到预览页
+            startingAt = System.currentTimeMillis();
             applyRunUi(false);
             statusText.setText("正在重启…");
             Intent i = new Intent(requireContext(), HarnessService.class)
@@ -164,6 +172,7 @@ public class LaunchFragment extends Fragment {
             starting = false;
             enterWhenReady = false;
             webReady = false;
+            startingAt = 0;
             applyRunUi(false);
             Intent i = new Intent(requireContext(), HarnessService.class)
                     .setAction(HarnessService.ACTION_STOP);
@@ -190,9 +199,13 @@ public class LaunchFragment extends Fragment {
             if (!isAdded()) return;
             mainHandler.post(() -> {
                 if (!isAdded()) return;
-                if (up) starting = false;
+                if (up) {
+                    starting = false;
+                    startingAt = 0;
+                }
                 webReady = up;
                 applyRunUi(up);
+                refreshHint(); // 每次心跳刷新一次状态行（启动等待期的秒数在这里走字）
                 if (up && enterWhenReady && !insideWeb) {
                     enterWhenReady = false;
                     openWeb();
@@ -220,6 +233,10 @@ public class LaunchFragment extends Fragment {
             runDot.setTextColor(requireContext().getColor(R.color.text_muted));
             runState.setText("DSH 未运行");
             startBtn.setText("启动");
+        }
+        // 等待期才显示细进度条（跑起来/未运行都收起，界面不留噪声）
+        if (busyBar != null) {
+            busyBar.setVisibility(!up && starting ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -330,13 +347,28 @@ public class LaunchFragment extends Fragment {
 
     private void refreshHint() {
         if (!isAdded() || statusText == null) return;
+        String line = statusLine();
+        if (!line.isEmpty()) statusText.setText(line);
+    }
+
+    /** 组装状态行：错误/进度消息优先，启动等待期在最前面附一行「已等待 N 秒」，
+     *  让用户知道进程在动（之前只有一句静态的「正在启动…」，等 40 秒会以为卡死）。 */
+    private String statusLine() {
+        String base = "";
         if (c.getError() != null && !c.getError().isEmpty()) {
-            statusText.setText(c.getError());
+            base = c.getError();
         } else if (c.getMessage() != null && !c.getMessage().isEmpty()) {
-            statusText.setText(c.getMessage());
+            base = c.getMessage();
         } else if (c.isBusy()) {
-            statusText.setText(c.getStage());
+            base = c.getStage();
         }
+        if (starting && !webReady && startingAt > 0) {
+            long sec = (System.currentTimeMillis() - startingAt) / 1000;
+            String wait = "正在启动… 已等待 " + sec + " 秒"
+                    + (sec >= 45 ? "（偏慢了，可看下方日志尾部）" : "（通常 20~60 秒）");
+            base = base.isEmpty() ? wait : wait + "\n" + base;
+        }
+        return base;
     }
 
     private String uiUrl() {

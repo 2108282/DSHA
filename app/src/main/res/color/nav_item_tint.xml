@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 底栏图标/文字着色：选中主色、未选中静音灰。
+     旧版把 itemIconTint 和 itemTextColor 直接写成 @color/primary，四个 tab 全是蓝的，
+     根本看不出当前在哪一页。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true" android:color="@color/primary" />
+    <item android:color="@color/text_muted" />
+</selector>
