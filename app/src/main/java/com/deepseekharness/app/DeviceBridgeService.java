@@ -206,11 +206,22 @@ public class DeviceBridgeService extends Service {
             public void run() {
                 if (!running || !isAdbEnabled(DeviceBridgeService.this)) return;
                 new Thread(() -> {
+                    // 3090 桥自愈：HarnessService 也会 new 一个 HttpShellService，
+                    // 谁抢到端口谁持有；它在停止 Web 时把桥关掉后，ADB 开关还开着，
+                    // agent 的确认请求就会全部 fail-closed 被拒。这里补起来。
+                    // 放在工作线程：start() 里要读写 rootfs 的 token 文件。
+                    try {
+                        if (HttpShellService.instance() == null) {
+                            new HttpShellService(DeviceBridgeService.this).start();
+                        }
+                    } catch (Throwable ignored) {
+                    }
                     try {
                         HarnessController c = HarnessController.get(DeviceBridgeService.this);
                         if (c == null || !c.getProot().isInstalled()) return;
-                        // 1. 探测当前连接是否可用
-                        String r = c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py id 2>&1 | head -3");
+                        // 1. 探测当前连接是否可用（DSH_INTERNAL=1 跳过确认关卡：
+                        //    App 自己的探活不该弹窗问用户）
+                        String r = c.getProot().execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py id 2>&1 | head -3");
                         if (r != null && r.contains("uid=")) return; // 连接正常
                         // 库缺失（setup 未完成）→ 触发 setup 自愈（注入脚本+装依赖+装包装命令）
                         if (r != null && r.contains("DEPS_MISSING")) {
@@ -222,7 +233,7 @@ public class DeviceBridgeService extends Service {
                         if (connPort > 0) {
                             saveConnectPort(connPort);
                             // 3. 用新端口再测一次
-                            String r2 = c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py --port " + connPort + " id 2>&1 | head -3");
+                            String r2 = c.getProot().execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py --port " + connPort + " id 2>&1 | head -3");
                             if (r2 != null && r2.contains("uid=")) {
                                 android.util.Log.i("DSHA-ADB", "看门狗：已自动重连端口 " + connPort);
                                 return;
@@ -259,7 +270,7 @@ public class DeviceBridgeService extends Service {
                             int p2 = discoverConnPortSync();
                             if (p2 > 0) {
                                 saveConnectPort(p2);
-                                c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py --port " + p2 + " id 2>&1 | head -1");
+                                c.getProot().execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py --port " + p2 + " id 2>&1 | head -1");
                             }
                             return;
                         }

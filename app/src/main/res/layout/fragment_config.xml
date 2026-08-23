@@ -94,6 +94,15 @@
             android:layout_marginTop="16dp"
             android:text="危险 Shell 操作需确认（删除/格式化/卸载/重启等）" />
 
+        <TextView
+            android:id="@+id/config_guard_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="32dp"
+            android:layout_marginTop="4dp"
+            android:textSize="12sp"
+            android:visibility="gone" />
+
         <CheckBox
             android:id="@+id/config_check_update"
             android:layout_width="match_parent"
