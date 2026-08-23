@@ -162,7 +162,12 @@ public class WorkspaceFragment extends Fragment {
         if (!isAdded() || getActivity() == null) return;
         getActivity().runOnUiThread(() -> {
             if (path == null) {
-                Toast.makeText(requireContext(), "备份失败：环境可能未安装", Toast.LENGTH_LONG).show();
+                String why = BackupManager.lastError();
+                new AlertDialog.Builder(requireContext())
+                        .setTitle("备份失败")
+                        .setMessage(why.isEmpty() ? "未知原因，请查看 logcat" : why)
+                        .setPositiveButton("知道了", null)
+                        .show();
                 return;
             }
             new AlertDialog.Builder(requireContext())

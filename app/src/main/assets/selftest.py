@@ -419,6 +419,9 @@ def check_backup():
     if not packs:
         add("SKIP", "备份", "Download/DSHA 里没有备份包")
         return
+    err = read(DSH_HOME + "/backup-last-error").strip()
+    if err:
+        add("FAIL", "上次备份失败", err[:160])
     latest = max(packs, key=os.path.getmtime)
     listing = sh("tar -tzf %s 2>/dev/null | head -80" % latest.replace(" ", "\\ "), timeout=60)
     has_dsh = ".dsh/" in listing

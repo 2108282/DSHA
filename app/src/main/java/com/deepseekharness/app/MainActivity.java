@@ -340,7 +340,13 @@ public class MainActivity extends AppCompatActivity {
             String path = BackupManager.backupToExternal(this, HarnessController.get(this));
             runOnUiThread(() -> {
                 if (path == null) {
-                    Toast.makeText(this, "备份失败：环境可能未安装或空间不足", Toast.LENGTH_LONG).show();
+                    // 别再猜原因：BackupManager 已经把真实失败原因记下来了
+                    String why = BackupManager.lastError();
+                    new AlertDialog.Builder(this)
+                            .setTitle("备份失败")
+                            .setMessage(why.isEmpty() ? "未知原因，请查看 logcat" : why)
+                            .setPositiveButton("知道了", null)
+                            .show();
                     return;
                 }
                 new AlertDialog.Builder(this)

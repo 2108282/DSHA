@@ -46,9 +46,39 @@ public final class BackupManager {
     }
 
     /** 内部实现。name=null 表示手动备份（时间戳命名，每次独立保留）；否则固定名覆盖。 */
+    /** 最近一次备份失败的原因（UI 直接展示，别再让用户看「环境可能未安装」这种猜测） */
+    private static volatile String lastError = "";
+
+    public static String lastError() {
+        return lastError;
+    }
+
+    /** 失败原因落到 rootfs（/root/.dsh/backup-last-error），自检直接读它 —— 
+     *  用户报「备份没反应」时不必再猜。成功则清掉该文件。 */
+    private static void recordError(HarnessController c, String why) {
+        try {
+            if (c == null || c.getProot() == null) return;
+            File f = new File(c.getProot().getRootfsDir(), "root/.dsh/backup-last-error");
+            if (why == null || why.isEmpty()) {
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+                return;
+            }
+            if (f.getParentFile() != null && !f.getParentFile().isDirectory()
+                    && !f.getParentFile().mkdirs()) {
+                return;
+            }
+            String body = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date())
+                    + "  " + why.replace("\n", " ") + "\n";
+            java.nio.file.Files.write(f.toPath(), body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Throwable ignored) {
+        }
+    }
+
     private static String backup(Context ctx, HarnessController c, String fixedName) {
         synchronized (BACKUP_LOCK) { // 串行备份（防中转文件互相覆盖）
         try {
+            lastError = "";
             // rootfs 内打包：
             // - .dsh（配置+对话）为必选项，缺失视为备份失败；
             // - <workdir>/.env 在自定义工作目录存在时加入；
@@ -60,18 +90,32 @@ public final class BackupManager {
             //  · 把 link:/file: 本机路径插件的源码内联到 .dsha-plugin-src/
             // 目的：换设备/换版本恢复时不再因「link:/root/plugin-src/x 不存在」起不来。
             runBackupPrepare(c, wd);
-            c.getProot().execChecked("cd /root && rm -f .dsha-backup.tar.gz && "
-                    + "[ -d .dsh ] || { echo 'NO_DSH_DIR'; exit 1; } && "
-                    + "ARGS=\".dsh\"; "
-                    + "if [ -f '" + dshEsc + "'/.env ]; then ARGS=\"$ARGS '" + dshEsc + "'/.env\"; fi; "
-                    + "[ -f dsh-web.log ] && ARGS=\"$ARGS dsh-web.log\"; "
+            // 文件清单用位置参数（set --）攒，不要攒进字符串再无引号展开 ——
+            // 那样 ARGS 里的引号不会被二次解析，tar 收到的是字面量 '工作目录'/.env，
+            // 结果 Cannot stat → TAR_FAIL → 备份整个失败（还被报成「环境可能未安装」）。
+            // 工作目录名通过 WD 变量传，赋值语境里只需一次单引号转义。
+            String script = "cd /root || exit 1\n"
+                    + "rm -f .dsha-backup.tar.gz\n"
+                    + "[ -d .dsh ] || { echo NO_DSH_DIR; exit 1; }\n"
+                    + "WD='" + dshEsc + "'\n"
+                    + "set -- .dsh\n"
+                    + "[ -f \"$WD/.env\" ] && set -- \"$@\" \"$WD/.env\"\n"
+                    + "[ -f dsh-web.log ] && set -- \"$@\" dsh-web.log\n"
                     // 清单与内联插件源码（存在才带，名字固定，不拼接外部输入）
-                    + "[ -f .dsha-backup-manifest.json ] && ARGS=\"$ARGS .dsha-backup-manifest.json\"; "
-                    + "[ -d .dsha-plugin-src ] && ARGS=\"$ARGS .dsha-plugin-src\"; "
-                    + "tar -czf .dsha-backup.tar.gz $ARGS 2>/dev/null || { echo TAR_FAIL; exit 1; } && "
-                    + "test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }; echo OK");
+                    + "[ -f .dsha-backup-manifest.json ] && set -- \"$@\" .dsha-backup-manifest.json\n"
+                    + "[ -d .dsha-plugin-src ] && set -- \"$@\" .dsha-plugin-src\n"
+                    + "echo \"打包: $*\"\n"
+                    // 不再 2>/dev/null：tar 的报错正是排查依据（execChecked 会带回输出）
+                    + "tar -czf .dsha-backup.tar.gz \"$@\" || { echo TAR_FAIL; exit 1; }\n"
+                    + "test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n"
+                    + "echo OK\n";
+            c.getProot().execChecked(script);
             File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-backup.tar.gz");
-            if (!tmp.isFile() || tmp.length() == 0) return null;
+            if (!tmp.isFile() || tmp.length() == 0) {
+                lastError = "打包文件没生成（rootfs 内 tar 未产出 .dsha-backup.tar.gz）";
+                recordError(c, lastError);
+                return null;
+            }
 
             String name = fixedName != null
                     ? fixedName
@@ -86,14 +130,38 @@ public final class BackupManager {
                 //noinspection ResultOfMethodCallIgnored
                 tmp.delete();
             }
-            if (path == null) return null; // 导出失败：不残留 half 备份
+            if (path == null) {
+                lastError = "导出到 Download/DSHA 失败（存储权限、空间不足或 MediaStore 拒绝）";
+                recordError(c, lastError);
+                return null; // 导出失败：不残留 half 备份
+            }
             // 手动备份保留最近 MAX_MANUAL_KEEP 份，删最旧（防无限膨胀）
             if (fixedName == null) pruneOldManual(ctx, name);
+            recordError(c, null); // 成功：清掉历史错误
             return path;
         } catch (Exception e) {
+            // execChecked 失败会带回 rootfs 内的真实输出（NO_DSH_DIR / TAR_FAIL / tar 报错原文）
+            String msg = e.getMessage() == null ? e.toString() : e.getMessage();
+            if (msg.contains("NO_DSH_DIR")) {
+                lastError = "/root/.dsh 不存在：环境确实没装好，或工作目录被改过";
+            } else if (msg.contains("TAR_FAIL")) {
+                lastError = "rootfs 内打包失败：" + tail(msg, 300);
+            } else if (msg.contains("EMPTY")) {
+                lastError = "打包产物为空（磁盘可能已满）";
+            } else {
+                lastError = tail(msg, 300);
+            }
+            android.util.Log.w("DSHA", "备份失败: " + lastError);
+            recordError(c, lastError);
             return null;
         }
         }
+    }
+
+    private static String tail(String s, int n) {
+        if (s == null) return "";
+        s = s.trim();
+        return s.length() <= n ? s : "…" + s.substring(s.length() - n);
     }
 
     /** 通用导出：把任意文件放进 Download/DSHA 并返回用户可见路径。
