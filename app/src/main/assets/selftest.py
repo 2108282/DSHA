@@ -316,6 +316,48 @@ def check_write_patch():
         add("SKIP", "硬链接支持", "不支持（Android 私有目录常态）：%s" % mark[:90])
 
 
+# ===================== 5.5 proot l2s 残留 =====================
+def check_l2s():
+    """proot 的 .l2s 链会让 tar 失败 —— 备份 100% 挂在这里。
+
+    机制：Android 私有目录禁真硬链接，proot 用 --link2symlink 把 link() 模拟成
+    「目标 → .l2s.<名>.<hash>.tmp0001 → ….0001」，同时劫持了 stat/lstat（伪造
+    st_nlink）。tar 必须 lstat 判断类型，于是报 ELOOP / EPERM。
+    写入侧已由 fs-write-patch.sh 治本（一律 rename），这里查存量。
+    注意：不能用 os.path.islink 判断 —— 它内部走 lstat，对这些链恒返回 False。
+    """
+    if not os.path.isdir(DSH_HOME):
+        add("SKIP", "l2s 残留", "还没有 .dsh 目录")
+        return
+    total, dangling = 0, 0
+    for root, dirs, files in os.walk(DSH_HOME):
+        if "corrupt-backup" in root:
+            continue
+        for n in files + dirs:
+            p = os.path.join(root, n)
+            try:
+                tgt = os.readlink(p)
+            except OSError:
+                if ".l2s." in n:
+                    total += 1
+                continue
+            if ".l2s." in tgt or ".l2s." in n:
+                total += 1
+                try:
+                    with open(p, "rb") as f:
+                        f.read(1)
+                except OSError:
+                    dangling += 1
+    if dangling:
+        add("FAIL", "l2s 悬空链",
+            "%d 个悬空 / 共 %d 个 .l2s 条目 —— 备份会因 tar 报错失败；"
+            "备份一次即会自动摊平并把悬空的挪进 corrupt-backup" % (dangling, total))
+    elif total:
+        add("SKIP", "l2s 残留", "%d 个 .l2s 条目（内容完好，备份时会自动摊平成真实文件）" % total)
+    else:
+        add("PASS", "l2s 残留", "无（写入侧已改为 rename 发布）")
+
+
 # ===================== 6. 会话健康（只统计，不修） =====================
 def check_sessions():
     if not os.path.isdir(SESSIONS):
@@ -464,6 +506,7 @@ def main():
         (check_adb_keepalive, (arg("adb-on", "1") == "1", arg("battery-opt", ""))),
         (check_guide, (arg("guide-ver"),)),
         (check_write_patch, ()),
+        (check_l2s, ()),
         (check_sessions, ()),
         (check_bundles, ()),
         (check_backup, ()),

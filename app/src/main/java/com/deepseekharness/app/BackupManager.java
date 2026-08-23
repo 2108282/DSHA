@@ -89,6 +89,8 @@ public final class BackupManager {
             //  · 生成 .dsha-backup-manifest.json（App/dsh 版本、workdir、bundles、link 依赖）
             //  · 把 link:/file: 本机路径插件的源码内联到 .dsha-plugin-src/
             // 目的：换设备/换版本恢复时不再因「link:/root/plugin-src/x 不存在」起不来。
+            // 顺序要紧：先把 .l2s 链摊平（不然下面的 tar 直接失败），再生成清单
+            runFlattenL2s(c);
             runBackupPrepare(c, wd);
             // 文件清单用位置参数（set --）攒，不要攒进字符串再无引号展开 ——
             // 那样 ARGS 里的引号不会被二次解析，tar 收到的是字面量 '工作目录'/.env，
@@ -106,7 +108,10 @@ public final class BackupManager {
                     + "[ -d .dsha-plugin-src ] && set -- \"$@\" .dsha-plugin-src\n"
                     + "echo \"打包: $*\"\n"
                     // 不再 2>/dev/null：tar 的报错正是排查依据（execChecked 会带回输出）
-                    + "tar -czf .dsha-backup.tar.gz \"$@\" || { echo TAR_FAIL; exit 1; }\n"
+                    // --ignore-failed-read：万一还有漏网的坏符号链接，只跳过它，
+                    // 别让整包备份失败（数据本身已丢，留着也恢复不了）
+                    + "tar -czf .dsha-backup.tar.gz --ignore-failed-read \"$@\" "
+                    + "|| { echo TAR_FAIL; exit 1; }\n"
                     + "test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n"
                     + "echo OK\n";
             c.getProot().execChecked(script);
@@ -179,6 +184,33 @@ public final class BackupManager {
 
     /** 备份前置整理：注入并执行 backup-prepare.py。全程宽容——任何失败都只记日志，
      *  备份本体照常进行（老包格式仍可恢复，只是少了清单与内联插件）。 */
+    /** 备份前把 proot 的 .l2s 链实体化，并隔离悬空链。
+     *
+     *  必须做，否则备份 100% 失败：Android 私有目录禁真硬链接，proot 用
+     *  --link2symlink 把 link() 模拟成「目标 → .l2s.<名>.<hash>.tmp0001 → ….0001」，
+     *  而它同时劫持了 stat/lstat（为了伪造 st_nlink）。tar 必须 lstat 判断文件类型，
+     *  于是遇到这些链就报错 —— 用户机上是 ELOOP（Too many levels of symbolic links），
+     *  容器里是 EPERM。cat/cp -L 反而正常，因为 open 不走那条路径。
+     *
+     *  写入侧已由 fs-write-patch.sh 治本（一律 rename，不再产生新链），这里处理存量。
+     *  返回机器可读的一行结果，仅用于日志。 */
+    private static void runFlattenL2s(HarnessController c) {
+        try {
+            String script = c.readAsset("flatten-l2s.py");
+            if (script == null || script.isEmpty()) return;
+            File dst = new File(c.getProot().getRootfsDir(), "root/.dsha-flatten-l2s.py");
+            if (dst.getParentFile() != null) dst.getParentFile().mkdirs();
+            java.nio.file.Files.write(dst.toPath(),
+                    script.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String out = c.getProot().execAndRead(
+                    "python3 /root/.dsha-flatten-l2s.py --root /root/.dsh 2>&1 | tail -20; "
+                            + "rm -f /root/.dsha-flatten-l2s.py", 180_000);
+            android.util.Log.i("DSHA", "l2s 实体化: " + (out == null ? "无输出" : out.trim()));
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "l2s 实体化失败（备份可能因此失败）: " + e);
+        }
+    }
+
     private static void runBackupPrepare(HarnessController c, String workdir) {
         try {
             String script = c.readAsset("backup-prepare.py");
