@@ -36,7 +36,7 @@ android {
         applicationId "com.dsh.client"
         minSdk 26
         targetSdk 34
-        versionCode 26
+        versionCode 29
         versionName "1.1.5"
         ndk {
             abiFilters 'arm64-v8a'
@@ -83,6 +83,8 @@ android {
 
     buildFeatures {
         aidl = true
+        // AGP 8 默认不生成 BuildConfig；UpdateChecker 用它取版本号做 UA
+        buildConfig = true
     }
 
     sourceSets {
