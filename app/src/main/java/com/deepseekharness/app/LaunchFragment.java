@@ -368,6 +368,12 @@ public class LaunchFragment extends Fragment {
                     + (sec >= 45 ? "（偏慢了，可看下方日志尾部）" : "（通常 20~60 秒）");
             base = base.isEmpty() ? wait : wait + "\n" + base;
         }
+        // 没填 key 也允许安装和启动，但要给个明确去处，否则用户会卡在「为什么不能对话」
+        if (webReady && c.getApiKey().isEmpty()) {
+            String tip = "未配置 API key —— 在 WebUI 的设置里选服务商并填入密钥即可开始对话"
+                    + "（可用第三方接口地址）";
+            base = base.isEmpty() ? tip : base + "\n" + tip;
+        }
         return base;
     }
 

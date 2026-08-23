@@ -1482,7 +1482,6 @@ public class HarnessController {
             return;
         }
         String wd = getWorkdir();
-        String apiKey = effectiveApiKey();
 
         // 已装环境不会重跑 setupResolvConf：这里强制重写 DNS（223.5.5.5 等国内源），
         // 否则 git clone / curl 全域名解析失败
@@ -1665,8 +1664,8 @@ public class HarnessController {
         setProgress("构建 deepseek-harness", 97);
         runStep("构建 pnpm run build", 97, "cd /root/" + wd + " && pnpm run build");
 
-        runStep("写入 API key", 99,
-                "cd /root/" + wd + " && printf 'DEEPSEEK_API_KEY=%s\\n' '" + escShell(apiKey) + "' > .env");
+        runStep(effectiveApiKey().isEmpty() ? "写入配置（API key 留空）" : "写入 API key", 99,
+                "cd /root/" + wd + " && " + envWriteCommand());
         setProgress("deepseek-harness 构建完成", 99);
     }
 
@@ -1869,6 +1868,30 @@ public class HarnessController {
         }
     }
 
+    /** .env 写入命令。没填 key 就只写一行注释——写 DEEPSEEK_API_KEY= 空值的话，
+     *  dsh 会认为「配了一个无效 key」而直接报错；变量完全不存在它才会回退到
+     *  自己的设置（WebUI 里可以配官方或第三方服务商）。 */
+    private String envWriteCommand() {
+        String k = effectiveApiKey();
+        if (k.isEmpty()) {
+            return "printf '%s\\n' "
+                    + "'# DEEPSEEK_API_KEY 未配置：可在 WebUI 的设置里配置官方或第三方 API' > .env";
+        }
+        return "printf 'DEEPSEEK_API_KEY=%s\\n' '" + escShell(k) + "' > .env";
+    }
+
+    /** 启动命令里的 key 导出片段（含尾部 " && "）；未配置则返回空串，不导出空值 */
+    private String apiKeyExportChain() {
+        String k = effectiveApiKey();
+        return k.isEmpty() ? "" : "export DEEPSEEK_API_KEY='" + escShell(k) + "' && ";
+    }
+
+    /** 重启脚本里的 key 导出行（含换行）；未配置则返回空串 */
+    private String apiKeyExportLine() {
+        String k = effectiveApiKey();
+        return k.isEmpty() ? "" : "export DEEPSEEK_API_KEY='" + escShell(k) + "'\n";
+    }
+
     private String buildInstallScript() {
         String s = readAsset("install.sh");
         return s.replace("@@API_KEY@@", effectiveApiKey())
@@ -1910,7 +1933,7 @@ public class HarnessController {
         boolean lanReady = lan && tryEnableLanBind();
         StringBuilder sb = new StringBuilder();
         sb.append("export DSH_HOME=/root/.dsh && ")
-          .append("export DEEPSEEK_API_KEY='").append(escShell(effectiveApiKey())).append("' && ")
+          .append(apiKeyExportChain())
           .append("export DSH_PERMISSION_MODE=").append(shellArg(getPermissionMode())).append(" && ")
           // 危险命令确认：agent 在 rootfs 内的 rm/dd 等操作需用户确认
           // PATH 包装器 + bash 工具 lib 补丁加载守卫（双保险；不设 BASH_ENV——它会污染
@@ -2016,7 +2039,7 @@ public class HarnessController {
             String restart =
                     "#!/bin/bash\n" +
                     "export DSH_HOME=/root/.dsh\n" +
-                    "export DEEPSEEK_API_KEY='" + escShell(effectiveApiKey()) + "'\n" +
+                    apiKeyExportLine() +
                     "export DSH_PERMISSION_MODE=" + shellArg(getPermissionMode()) + "\n" +
                     "export DSH_CONFIRM=1\n" +
                     // 工作区目录先于 cd 创建：RC6 模式没有源码树，不建目录的话

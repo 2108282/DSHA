@@ -59,6 +59,13 @@
                 android:layout_marginTop="@dimen/gap_control"
                 android:text="DeepSeek API Key" />
 
+            <TextView
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/gap_hair"
+                android:text="可留空 —— 装好后在 WebUI 的设置里也能配置官方或第三方 API（自定义接口地址与模型）" />
+
             <EditText
                 android:id="@+id/config_api_key"
                 style="@style/DshaText.Body"

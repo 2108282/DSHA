@@ -62,7 +62,23 @@ public class InstallFragment extends Fragment {
 
         installBtn.setOnClickListener(v -> {
             if (c.getApiKey().isEmpty()) {
-                Toast.makeText(requireContext(), "请先在「配置」模块填入 API key", Toast.LENGTH_LONG).show();
+                // 允许跳过：dsh 的 WebUI 自己就能配服务商（官方或第三方 base_url），
+                // 在这里硬拦着反而让「只想先装环境」的用户走不下去
+                new AlertDialog.Builder(requireContext())
+                        .setTitle("还没填 API key")
+                        .setMessage("可以直接跳过。\n\n"
+                                + "装好之后打开 DeepSeek Harness 的 WebUI，"
+                                + "在里面的设置里可以自行配置官方或第三方 API"
+                                + "（自定义接口地址、模型名、密钥都行）。\n\n"
+                                + "跳过时 .env 不会写入 key，一切交给 WebUI 里的设置。")
+                        .setPositiveButton("跳过，直接安装", (d, w) -> c.install())
+                        .setNeutralButton("去填 key", (d, w) ->
+                                requireActivity().getSupportFragmentManager().beginTransaction()
+                                        .replace(R.id.fragment_container, new ConfigFragment())
+                                        .addToBackStack("config")
+                                        .commit())
+                        .setNegativeButton("取消", null)
+                        .show();
                 return;
             }
             c.install();
