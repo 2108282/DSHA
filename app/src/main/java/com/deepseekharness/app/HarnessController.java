@@ -597,7 +597,7 @@ public class HarnessController {
                     "order: 3\n").getBytes(StandardCharsets.UTF_8));
             String guide = "你正运行在用户 Android 手机的容器里，可以直接干预这台实体手机：\n"
                     + "- 主通道（ADB 无线，已配对）：/root/dsh-bin/adb-shell \"命令\"（shell级）；--su 提权（需root）：/root/dsh-bin/adb-shell --su \"命令\"；若不存在则用 python3 /root/.dsh/adb-shell.py \"命令\"\n"
-                    + "- 备选通道（Shizuku 桥，可能未就绪）：curl -s \"http://127.0.0.1:3090/exec?cmd=...\"\n"
+                    + "- 备选通道（Shizuku 桥，可能未就绪）：curl -s \"http://127.0.0.1:3090/exec?cmd=...&token=$(cat /root/.dsh/.bridge_token)\"（漏 token 会返回 UNAUTHORIZED）\n"
                     + "- ⚠️ 不要用 /root/dsh-bin/adb 或裸 adb 命令——那是守卫包装脚本，会失败\n"
                     + "- 常用操作：查设备信息 getprop；查前台 dumpsys window | grep mCurrentFocus；启动应用 am start -n 包名/Activity；抓日志 dumpsys/logcat；读写 /sdcard\n"
                     + "- 权限边界：shell 级（非 root），需提权操作会失败，如实告知即可\n"
@@ -674,7 +674,7 @@ public class HarnessController {
                             + "      description: |+\n"
                             + "        Run commands in a bash shell\n"
                             + "        * 设备操作：/root/dsh-bin/adb-shell \"命令\"（唯一可用通道，uid=2000，已配对）\n"
-                            + "        * 不要用裸 adb（守卫脚本，会失败）；Shizuku 桥备用 curl 127.0.0.1:3090/exec\n"
+                            + "        * 不要用裸 adb（守卫脚本，会失败）；Shizuku 桥备用 curl -s \"http://127.0.0.1:3090/exec?cmd=...&token=$(cat /root/.dsh/.bridge_token)\"\n"
                             + "        * 与用户交流请用中文回复\n";
                     hpText += patchBlock;
                     java.nio.file.Files.write(hp.toPath(), hpText.getBytes(StandardCharsets.UTF_8));
@@ -2127,7 +2127,10 @@ public class HarnessController {
     }
 
     // ================= 启动 / 停止 =================
-    private static final String GUARD_VERSION = "8";
+    /** 危险命令守卫版本：必须与 rootfs-confirm-install.sh 尾行 `echo N` 完全一致。
+     *  曾经这里是 8、脚本写 9，equals 永远为假 → 每次 startWeb/开终端都
+     *  rm -rf /root/dsh-bin 全量重装（顺带删掉 adb-shell 包装）。改一处必须改两处。 */
+    private static final String GUARD_VERSION = "10";
     /** 步骤⑥整体版本号：内置插件/补丁/极简 preset 任一变更时 +1，
      *  启动时对比 rootfs 标记，不符则自动重跑⑥（防"改了不生效"）。 */
     private static final String STEP6_VERSION = "3";
@@ -2153,21 +2156,69 @@ public class HarnessController {
         }
     }
 
-    /** 给已构建的 bash 工具 lib 直接打补丁（强制每次执行前加载守卫，不依赖重新 build）
-     *  失败时写 /root/dsh-guard-patch.log（不影响启动，日志可查） */
+    /** bash 守卫补丁状态的 prefs 键：ok / no_lib / patch_failed / unknown */
+    private static final String KEY_GUARD_PATCH = "guard_patch_state";
+
+    /** bash 守卫补丁状态（供配置页展示）。"ok" 表示补丁在位；其余表示这层保险已降级——
+     *  PATH 包装器（/root/dsh-bin）仍在拦截、3090 确认弹窗照常，只是少一层兜底。 */
+    public String guardPatchState() {
+        return prefs.getString(KEY_GUARD_PATCH, "unknown");
+    }
+
+    /** 给已构建的 bash 工具 lib 直接打补丁（强制每次执行前加载守卫，不依赖重新 build）。
+     *
+     *  这是全项目对 dsh 内部实现最脆弱的耦合：sed 匹配的是 dsh 已构建代码里的字面串
+     *  `command: request.command`，而 dsh 走"始终最新 RC"自动升级（见 installDshCommand）。
+     *  上游一改这行代码补丁就静默失配，所以结果必须记进 prefs 让配置页可见，
+     *  不能像以前那样只写一个用户永远看不到的日志文件。 */
     public void ensureBashGuardPatch() {
+        String state = "unknown";
         try {
             // RC6（npm 全局安装，依赖可能是嵌套或扁平布局，用 find 通配兼容两种）；
             // 源码版：packages/shell/bash-local
+            // 各分支都 echo 到 stdout（tee 同时留档），否则 Java 侧无法判断成败
             String wd = getWorkdir();
-            proot.execAndRead(
+            String out = proot.execAndRead(
                     "F=$(find /usr/local/lib/node_modules -path '*/@deepseek-ai/dsh-bash-local/lib/index.js' 2>/dev/null | head -1); " +
                     "if [ -z \"$F\" ]; then F=/root/" + wd + "/packages/shell/bash-local/lib/index.js; fi; " +
-                    "if [ ! -f \"$F\" ]; then echo \"守卫补丁: 未找到 bash 工具 lib\" > /root/dsh-guard-patch.log; " +
+                    "if [ ! -f \"$F\" ]; then echo '守卫补丁 NO_LIB: 未找到 bash 工具 lib' | tee /root/dsh-guard-patch.log; " +
                     "elif grep -q 'dsh-guard' \"$F\"; then echo LIB_ALREADY; " +
                     "else sed -i 's|command: request\\.command|command: `source /root/dsh-guard.sh 2>/dev/null; ${request.command}`|' \"$F\" " +
-                    "&& grep -q 'dsh-guard' \"$F\" && echo LIB_PATCHED || echo \"守卫补丁: patch 失败\" > /root/dsh-guard-patch.log; fi");
+                    "&& grep -q 'dsh-guard' \"$F\" && echo LIB_PATCHED || " +
+                    "echo '守卫补丁 PATCH_FAILED: sed 未匹配（dsh 可能已升级改动代码）' | tee /root/dsh-guard-patch.log; fi");
+            if (out != null) {
+                if (out.contains("LIB_ALREADY") || out.contains("LIB_PATCHED")) state = "ok";
+                else if (out.contains("NO_LIB")) state = "no_lib";
+                else if (out.contains("PATCH_FAILED")) state = "patch_failed";
+            }
         } catch (Exception ignored) {
+        }
+        reportGuardPatchState(state);
+    }
+
+    /** 记录补丁状态；只在状态发生变化时提示，避免每次启动 Web 都弹一次 */
+    private void reportGuardPatchState(String state) {
+        try {
+            if (state.equals(prefs.getString(KEY_GUARD_PATCH, ""))) return;
+            prefs.edit().putString(KEY_GUARD_PATCH, state).apply();
+            if ("ok".equals(state)) {
+                android.util.Log.i("DSHA", "bash 守卫补丁已就位");
+                return;
+            }
+            android.util.Log.w("DSHA", "bash 守卫补丁未生效(" + state
+                    + ")：PATH 包装器仍在拦截，但 bash 函数级守卫这层已降级");
+            final MainActivity act = MainActivity.current;
+            if (act == null) return; // 没有前台界面就只留日志，配置页照样能看到
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    android.widget.Toast.makeText(act,
+                            "⚠️ bash 守卫补丁未生效（dsh 可能已升级）\n"
+                                    + "危险命令仍会拦截并弹确认，只是少一层兜底。详见配置页",
+                            android.widget.Toast.LENGTH_LONG).show();
+                } catch (Throwable ignored) {
+                }
+            });
+        } catch (Throwable ignored) {
         }
     }
 
@@ -2446,8 +2497,9 @@ public class HarnessController {
                         android.util.Log.i("DSHA-ADB", "启动自愈 setup: " + setup);
                     }
                     // 4) 有密钥有依赖 → 探一次连接（失败交给看门狗周期重连）
+                    //    DSH_INTERNAL=1：App 自己的探活不走用户确认关卡
                     if (AdbBridge.keyPresent(proot) && AdbBridge.depsOk(proot)) {
-                        String r = proot.execAndRead("python3 /root/.dsh/adb-shell.py id 2>&1 | head -2");
+                        String r = proot.execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py id 2>&1 | head -2");
                         if (r != null && r.contains("uid=")) {
                             android.util.Log.i("DSHA-ADB", "启动体检：ADB 连接正常");
                         } else {

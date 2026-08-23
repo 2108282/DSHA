@@ -7,20 +7,41 @@ mkdir -p "$DSH_BIN"
 
 cat > /root/dsh-confirm.sh <<'EOF'
 #!/bin/bash
+# DSHA 危险命令确认（走 App 3090 桥）。退出码：0=用户允许，1=拒绝/不可达
 CMD="$*"
-RES=$(curl -s -m 65 -G "http://127.0.0.1:3090/confirm" --data-urlencode "cmd=$CMD" 2>/dev/null)
-if [ $? -eq 0 ] && [ -n "$RES" ]; then
-  echo "$RES" | grep -q YES && exit 0 || exit 1
+# 桥要求 token 鉴权：不带的话一律 [UNAUTHORIZED]，所有守卫命令都会被拒
+TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
+if [ -n "$TOKEN" ]; then
+  # 双地址：App 桥可能只监听 IPv6 回环（Android 上 localhost 解析优先 ::1）
+  for BASE in "http://127.0.0.1:3090" "http://[::1]:3090"; do
+    # -m 70 必须大于 App 侧 60s 确认超时，否则客户端先断、用户点了也白点
+    RES=$(curl -s -m 70 -G "$BASE/confirm" \
+            --data-urlencode "cmd=$CMD" --data-urlencode "token=$TOKEN" 2>/dev/null)
+    # 严格匹配 {"result":"YES"}：宽松的 grep YES 会被命令内容或其它字段带偏
+    case "$RES" in
+      *'"result":"YES"'*) exit 0 ;;
+      *'"result":"NO"'*)  echo "已拒绝: $CMD（用户点了拒绝）" >&2; exit 1 ;;
+    esac
+  done
 fi
-# 3090 不可达（终端场景未启动服务）：终端内交互确认，10 秒超时默认拒绝
+# 桥不可达或没有 token：终端场景交互确认，10 秒超时默认拒绝
 if [ -n "$DSH_INTERACTIVE" ]; then
   echo -n "确认执行 [$CMD] ? [y/N] " >&2
   read -t 10 ans
   case "$ans" in
     y|Y) exit 0 ;;
   esac
+  echo "已拒绝: $CMD" >&2
+  exit 1
 fi
+# 静默拒绝最难排查——把原因写清楚（用户报的 USER_REJECTED 就是卡在这里）
 echo "已拒绝: $CMD" >&2
+if [ -z "$TOKEN" ]; then
+  echo "  原因：读不到 /root/.dsh/.bridge_token（App 未生成鉴权令牌）" >&2
+else
+  echo "  原因：3090 确认桥不可达（127.0.0.1 与 [::1] 都连不上）" >&2
+fi
+echo "  处理：在 App「配置」页开启 ADB 开关，确认桥运行后重试" >&2
 exit 1
 EOF
 chmod +x /root/dsh-confirm.sh
@@ -113,4 +134,6 @@ chmod +x "$DSH_BIN/$C"
 done
 
 echo "OK dsh-bin: $(ls "$DSH_BIN" | tr '\n' ' ')"
-echo 9 > "$DSH_BIN/.version"
+# 版本号必须与 HarnessController.GUARD_VERSION 完全一致，否则 ensureDangerGuard()
+# 的 equals 永远为假 → 每次启动 Web / 开终端都 rm -rf 重装守卫（顺带删掉 adb-shell）
+echo 10 > "$DSH_BIN/.version"

@@ -125,7 +125,8 @@ public class ConfigFragment extends Fragment {
         new Thread(() -> {
             try {
                 // 探测 adb 是否真实可用（用 rootfs 里的 adb-shell 实际跑一下，最准）
-                String r = c.getProot().execAndRead("python3 /root/.dsh/adb-shell.py id 2>&1 | head -2");
+                // DSH_INTERNAL=1：App 自己的探活不走用户确认关卡
+                String r = c.getProot().execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py id 2>&1 | head -2");
                 final boolean connected = r != null && r.contains("uid=");
                 final String detail = r == null ? "" : r.replace("\n", " ").trim();
                 if (isAdded()) requireActivity().runOnUiThread(() -> {
@@ -149,6 +150,32 @@ public class ConfigFragment extends Fragment {
     public void onResume() {
         super.onResume();
         startAdbStatusPolling();
+        showGuardStatus(); // 上次启动 Web 时补丁可能已失配，切回本页就刷新
+    }
+
+    /** 危险命令守卫的完整性提示。
+     *  bash 工具补丁靠 sed 匹配 dsh 已构建代码，而 dsh 走"始终最新 RC"自动升级，
+     *  上游一改代码这层保险就静默降级——必须让用户看得见，
+     *  否则会以为确认仍是「PATH 包装器 + 函数级守卫」双保险。 */
+    private void showGuardStatus() {
+        View v = getView();
+        TextView tv = v == null ? null : v.findViewById(R.id.config_guard_status);
+        if (tv == null || c == null) return;
+        String st = c.guardPatchState();
+        if ("unknown".equals(st)) {
+            tv.setVisibility(View.GONE); // 还没启动过 Web，无从判断，不必吓人
+            return;
+        }
+        tv.setVisibility(View.VISIBLE);
+        if ("ok".equals(st)) {
+            tv.setTextColor(requireContext().getColor(R.color.ok));
+            tv.setText("● 守卫完整：PATH 包装器 + bash 工具补丁");
+        } else {
+            tv.setTextColor(requireContext().getColor(R.color.warn));
+            tv.setText("○ bash 工具补丁未生效（dsh 可能已升级改动代码）\n"
+                    + "危险命令仍会被 PATH 包装器拦截并弹确认，只是少一层兜底。\n"
+                    + "详情见容器内 /root/dsh-guard-patch.log");
+        }
     }
 
     @Override
@@ -284,6 +311,7 @@ public class ConfigFragment extends Fragment {
         confirmShellCb.setChecked(requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("confirm_shell", true));
+        showGuardStatus();
         checkUpdateCb.setChecked(requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("check_update", true));
