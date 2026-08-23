@@ -143,6 +143,13 @@ public class ConfigFragment extends Fragment {
                         tv.setTextColor(requireContext().getColor(R.color.warn));
                         tv.setText("○ ADB 未连接（无线调试可能未开启）\n点下方「无线配对」或查看手机「开发者选项→无线调试」");
                     }
+                    // 3090 桥绑定失败（端口被别的应用占了）时一并摊开说——否则表现出来
+                    // 只是「确认弹窗不出现 / agent 调什么都超时」，很难定位
+                    String bridgeErr = HttpShellService.bindError();
+                    if (bridgeErr != null && !bridgeErr.isEmpty()) {
+                        tv.setTextColor(requireContext().getColor(R.color.err));
+                        tv.setText(tv.getText() + "\n⚠ 命令桥未启动：" + bridgeErr);
+                    }
                 });
             } catch (Throwable ignored) {
             }

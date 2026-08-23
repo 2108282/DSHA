@@ -139,7 +139,14 @@ public final class LanProxyService {
             try {
                 server = new ServerSocket();
                 server.setReuseAddress(true);
-                server.bind(new InetSocketAddress("0.0.0.0", LAN_PORT));
+                try {
+                    server.bind(new InetSocketAddress("0.0.0.0", LAN_PORT));
+                } catch (java.net.BindException be) {
+                    // 端口被占时说清是谁的问题，否则表现成「局域网打不开」很难查
+                    log("LAN 桥启动失败：端口 " + LAN_PORT + " 已被其它应用占用（" + be.getMessage() + "）");
+                    android.util.Log.e("DSHA", "LAN 桥端口 " + LAN_PORT + " 被占用: " + be);
+                    return;
+                }
                 log("LAN 桥已就绪 ✓ 访问地址: http://" + (lanIp.isEmpty() ? "<手机IP>" : lanIp) + ":" + LAN_PORT + "/");
                 while (running) {
                     try {

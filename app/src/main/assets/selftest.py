@@ -91,9 +91,17 @@ def check_bridge():
     if not ok_hosts:
         # 没开 ADB 设备通道时桥本来就不会启动，这种情况不算失败
         adb_on = arg("adb-on", "1") == "1"
-        add("FAIL" if adb_on else "SKIP", "3090 桥连通",
-            "两个回环地址都连不上 —— App 需在运行中，且「配置」页勾过「启用 ADB 设备通道」并保存"
-            if adb_on else "未启用 ADB 设备通道，桥不启动（正常）")
+        status = read(DSH_HOME + "/.bridge_status").strip()
+        if status.startswith("fail"):
+            # App 侧记下了绑定失败的真实原因（端口被占等），直接摊开说
+            add("FAIL", "3090 桥启动", status[5:].strip() or "绑定失败（原因未记录）")
+        elif status == "stopped":
+            add("SKIP" if not adb_on else "FAIL", "3090 桥",
+                "桥已停止（设备桥服务没在跑）—— 重开 App，或在「配置」页勾选 ADB 设备通道并保存")
+        else:
+            add("FAIL" if adb_on else "SKIP", "3090 桥连通",
+                "两个回环地址都连不上 —— App 需在运行中，且「配置」页勾过「启用 ADB 设备通道」并保存"
+                if adb_on else "未启用 ADB 设备通道，桥不启动（正常）")
         return
     body = bodies[0]
     if '"result"' not in body:

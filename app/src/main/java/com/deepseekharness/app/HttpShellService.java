@@ -127,6 +127,39 @@ public final class HttpShellService {
         }
     }
 
+    /** 最近一次绑定结果：空 = 正常；非空 = 失败原因（自检与诊断读它）。
+     *  端口被别的应用占掉时，症状和当年那个「只绑 ::1」的 bug 一模一样
+     *  （agent 调什么都超时、确认弹窗不出现），所以必须留下明确的失败原因。 */
+    private static volatile String bindError = "";
+
+    public static String bindError() {
+        return bindError;
+    }
+
+    private void noteBindOk() {
+        bindError = "";
+        writeBridgeStatus("ok port=" + PORT);
+    }
+
+    private void noteBindError(String why) {
+        bindError = why;
+        android.util.Log.e("DSHA", "3090 桥绑定失败：" + why);
+        writeBridgeStatus("fail " + why);
+    }
+
+    /** 桥状态落到 rootfs 的 /root/.dsh/.bridge_status，容器里 cat 一下就知道桥为什么不通 */
+    private void writeBridgeStatus(String s) {
+        try {
+            java.io.File tf = tokenFileIfPossible();
+            if (tf == null || tf.getParentFile() == null) return;
+            java.io.File f = new java.io.File(tf.getParentFile(), ".bridge_status");
+            if (!f.getParentFile().isDirectory() && !f.getParentFile().mkdirs()) return;
+            java.nio.file.Files.write(f.toPath(),
+                    (s + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Throwable ignored) {
+        }
+    }
+
     public void start() {
         if (running) return;
         running = true;
@@ -149,8 +182,13 @@ public final class HttpShellService {
                 server.setReuseAddress(true);
                 server.bind(new java.net.InetSocketAddress(
                         java.net.InetAddress.getByName("127.0.0.1"), PORT));
+                noteBindOk();
                 acceptLoop(server);
-            } catch (IOException ignored) {
+            } catch (java.net.BindException e) {
+                noteBindError("端口 " + PORT + " 已被其它应用占用（" + e.getMessage()
+                        + "）—— 关掉占用它的应用，或重启手机后重开 DSHA");
+            } catch (IOException e) {
+                noteBindError(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         }, "http-shell-accept");
         t.setDaemon(true);
@@ -164,7 +202,9 @@ public final class HttpShellService {
                 server6.bind(new java.net.InetSocketAddress(
                         java.net.InetAddress.getByName("::1"), PORT));
                 acceptLoop(server6);
-            } catch (Throwable ignored) {
+            } catch (Throwable e) {
+                // IPv6 绑不上不算故障（有些设备没有 IPv6 栈），IPv4 那条是主通道
+                android.util.Log.i("DSHA", "3090 的 [::1] 附加监听未启用: " + e);
             }
         }, "http-shell-accept6");
         t6.setDaemon(true);
@@ -191,6 +231,7 @@ public final class HttpShellService {
 
     public void stop() {
         running = false;
+        writeBridgeStatus("stopped");
         instance = null;
         try {
             if (server != null) server.close();
