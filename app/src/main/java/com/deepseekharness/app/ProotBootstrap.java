@@ -145,6 +145,23 @@ public class ProotBootstrap {
         }
     }
 
+    /** proot 运行环境（两个 exec 入口共用，避免两处漂移） */
+    private void applyProotEnv(ProcessBuilder pb) {
+        pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
+        applyL2sEnv(pb);
+        pb.environment().put("PROOT_LOADER", findNativeLib("libprootloader.so").getAbsolutePath());
+        pb.environment().put("PROOT_LOADER_32", findNativeLib("libprootloader32.so").getAbsolutePath());
+        pb.environment().put("LD_LIBRARY_PATH",
+                libDir.getAbsolutePath() + ":" + findNativeLib("libproot.so").getParent());
+        pb.environment().put("HOME", "/root");
+        // guest 的 PATH（否则继承 Android 的 /system/bin，找不到 tail/apt 等）；
+        // 前置 /root/dsh-bin = 危险命令确认包装器（DSH_CONFIRM=1 时拦截）
+        pb.environment().put("PATH", "/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+        // TMPDIR 必须指向 guest 的 /tmp（否则 mktemp 会用 Android 的 cache 目录而失败）
+        pb.environment().put("TMPDIR", "/tmp");
+        pb.environment().put("DEBIAN_FRONTEND", "noninteractive");
+    }
+
     /** 组装 proot 公共参数（两个 exec 入口共用，避免两处漂移） */
     private java.util.List<String> baseProotArgv() {
         java.util.List<String> argv = new java.util.ArrayList<>();
@@ -334,18 +351,7 @@ public class ProotBootstrap {
         argv.add(bashCommand);
         ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
         pb.redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null")));
-        pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
-        applyL2sEnv(pb);
-        pb.environment().put("PROOT_LOADER", findNativeLib("libprootloader.so").getAbsolutePath());
-        pb.environment().put("PROOT_LOADER_32", findNativeLib("libprootloader32.so").getAbsolutePath());
-        pb.environment().put("LD_LIBRARY_PATH", libDir.getAbsolutePath() + ":" + findNativeLib("libproot.so").getParent());
-        pb.environment().put("HOME", "/root");
-        // 关键：guest 的 PATH（否则继承 Android 的 /system/bin，找不到 tail/apt 等）
-        // 前置 /root/dsh-bin：危险命令确认包装器（DSH_CONFIRM=1 时拦截）
-        pb.environment().put("PATH", "/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
-        // 关键：TMPDIR 必须指向 guest 的 /tmp（否则 mktemp 用 Android 的 cache 目录而失败）
-        pb.environment().put("TMPDIR", "/tmp");
-        pb.environment().put("DEBIAN_FRONTEND", "noninteractive");
+        applyProotEnv(pb);
         return pb.start();
     }
 
@@ -354,15 +360,7 @@ public class ProotBootstrap {
         java.util.List<String> argv = baseProotArgv();
         argv.add("/bin/bash");
         ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
-        pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
-        applyL2sEnv(pb);
-        pb.environment().put("PROOT_LOADER", findNativeLib("libprootloader.so").getAbsolutePath());
-        pb.environment().put("PROOT_LOADER_32", findNativeLib("libprootloader32.so").getAbsolutePath());
-        pb.environment().put("LD_LIBRARY_PATH", libDir.getAbsolutePath() + ":" + findNativeLib("libproot.so").getParent());
-        pb.environment().put("HOME", "/root");
-        pb.environment().put("PATH", "/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
-        pb.environment().put("TMPDIR", "/tmp");
-        pb.environment().put("DEBIAN_FRONTEND", "noninteractive");
+        applyProotEnv(pb);
         // 交互终端：危险命令启用确认（App 弹窗优先，交互输入兜底）
         pb.environment().put("DSH_CONFIRM", "1");
         pb.environment().put("DSH_INTERACTIVE", "1");

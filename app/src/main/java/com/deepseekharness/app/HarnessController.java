@@ -699,15 +699,7 @@ public class HarnessController {
     /** 确保前端"插件失败降级"热补丁已应用（对编译产物打，幂等，RC6/源码通用）：
      *  坏插件不再卡死整个 WebUI 启动。 */
     private void ensureWebUiDegrade() {
-        try {
-            String script = readAsset("webui-degrade-patch.sh");
-            if (script == null || script.isEmpty()) return;
-            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-degrade.sh");
-            f.getParentFile().mkdirs();
-            java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
-            proot.execAndRead("bash /root/dsha-degrade.sh; rm -f /root/dsha-degrade.sh");
-        } catch (Throwable ignored) {
-        }
+        runAssetScript("webui-degrade-patch.sh", "dsha-degrade.sh", 60_000);
     }
 
     /**
@@ -757,31 +749,13 @@ public class HarnessController {
      *  （dsh 用 link(临时文件,目标) 发布 + 删临时目录，撞上 proot 的 --link2symlink）。
      *  给 fs-local 打「目标不存在改用 rename 发布」的补丁，幂等，命中已打过时 0.05 秒返回。 */
     public void ensureFsWritePatch() {
-        try {
-            String sh = readAsset("fs-write-patch.sh");
-            if (sh == null || sh.isEmpty()) return;
-            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-fs-write-patch.sh");
-            if (f.getParentFile() != null) f.getParentFile().mkdirs();
-            java.nio.file.Files.write(f.toPath(), sh.getBytes(StandardCharsets.UTF_8));
-            String r = proot.execAndRead(
-                    "bash /root/dsha-fs-write-patch.sh; rm -f /root/dsha-fs-write-patch.sh", 90_000);
-            android.util.Log.i("DSHA", "write 发布补丁: " + (r == null ? "无输出" : r.trim()));
-        } catch (Throwable e) {
-            android.util.Log.w("DSHA", "write 发布补丁失败（不影响启动）: " + e);
-        }
+        String r = runAssetScript("fs-write-patch.sh", "dsha-fs-write-patch.sh", 90_000);
+        android.util.Log.i("DSHA", "write 发布补丁: " + (r == null ? "无输出" : r.trim()));
     }
 
     /** 启动前自愈：老 WebView 兼容补丁（AbortSignal.any/timeout polyfill，幂等） */
     private void ensureWebUiPolyfill() {
-        try {
-            String script = readAsset("webui-polyfill.sh");
-            if (script == null || script.isEmpty()) return;
-            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-webui-polyfill.sh");
-            f.getParentFile().mkdirs();
-            java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
-            proot.execAndRead("bash /root/dsha-webui-polyfill.sh; rm -f /root/dsha-webui-polyfill.sh");
-        } catch (Throwable ignored) {
-        }
+        runAssetScript("webui-polyfill.sh", "dsha-webui-polyfill.sh", 60_000);
     }
 
     /** 确保外部浏览器 /api 403 修复已应用（Chrome 150+ Origin 省略端口，幂等）。
@@ -790,15 +764,7 @@ public class HarnessController {
      *  导致 127.0.0.1:3080 页面所有 /api 请求被 403 拒绝，表现为外部浏览器无法连接网络。
      *  修复为只比较 hostname；失败不阻塞启动。 */
     private void ensureWebUiOriginPatch() {
-        try {
-            String script = readAsset("webui-origin-port-patch.sh");
-            if (script == null || script.isEmpty()) return;
-            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-origin-port-patch.sh");
-            f.getParentFile().mkdirs();
-            java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
-            proot.execAndRead("bash /root/dsha-origin-port-patch.sh; rm -f /root/dsha-origin-port-patch.sh");
-        } catch (Throwable ignored) {
-        }
+        runAssetScript("webui-origin-port-patch.sh", "dsha-origin-port-patch.sh", 60_000);
     }
 
     public void maybePrewarmWeb() {
@@ -1819,6 +1785,23 @@ public class HarnessController {
     }
 
     // ================= 脚本与命令 =================
+    /** 注入并执行 assets 里的一次性 bash 脚本（跑完即删），返回合并输出；出错静默返回 null。
+     *  这些补丁/自愈脚本的调用模式完全一致，集中在这里，省掉六份复制粘贴。 */
+    private String runAssetScript(String assetName, String remoteName, long timeoutMs) {
+        try {
+            String script = readAsset(assetName);
+            if (script == null || script.isEmpty()) return null;
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/" + remoteName);
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
+            return proot.execAndRead(
+                    "bash /root/" + remoteName + "; rm -f /root/" + remoteName, timeoutMs);
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "脚本 " + assetName + " 执行失败（不影响主流程）: " + e);
+            return null;
+        }
+    }
+
     public String readAsset(String name) {
         try (BufferedReader r = new BufferedReader(new InputStreamReader(
                 appContext.getAssets().open(name), StandardCharsets.UTF_8))) {
@@ -1877,15 +1860,7 @@ public class HarnessController {
         } catch (Throwable ignored) {
         }
         // 启动前自愈：清理无法解析的 stale bundle（防 cannot resolve profile bundle 启动崩溃）
-        try {
-            String fix = readAsset("fix-stale-bundles.sh");
-            if (!fix.isEmpty()) {
-                java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-fix-stale-bundles.sh");
-                java.nio.file.Files.write(f.toPath(), fix.getBytes(StandardCharsets.UTF_8));
-                proot.execAndRead("bash /root/dsha-fix-stale-bundles.sh; rm -f /root/dsha-fix-stale-bundles.sh");
-            }
-        } catch (Throwable ignored) {
-        }
+        runAssetScript("fix-stale-bundles.sh", "dsha-fix-stale-bundles.sh", 60_000);
         // 局域网访问：deepseek-harness 官方 CLI 默认拒绝 --host 0.0.0.0，
         // 需先打 lan-bind-patch.sh 放行（失败则回落到 127.0.0.1，服务保证能起）。
         boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
