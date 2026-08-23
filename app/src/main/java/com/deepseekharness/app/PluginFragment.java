@@ -696,6 +696,11 @@ public class PluginFragment extends Fragment {
                         h.status.setText(checked ? "已启用" : "已禁用");
                         Toast.makeText(requireContext(), it[0] + (checked ? " 已启用（重启 WebUI 生效）" : " 已禁用"), Toast.LENGTH_SHORT).show();
                     } else {
+                        // 把真实原因摊开：以前一律显示「操作失败」，用户无从下手
+                        String why = c.getLastToggleError();
+                        if (!why.isEmpty()) {
+                            Toast.makeText(requireContext(), why, Toast.LENGTH_LONG).show();
+                        }
                         btn.setChecked(!checked);
                         Toast.makeText(requireContext(), "操作失败", Toast.LENGTH_SHORT).show();
                     }

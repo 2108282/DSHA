@@ -194,6 +194,28 @@ public class DshaAccessibilityService extends AccessibilityService {
             "[ERR] 无障碍服务未开启。请让用户在 DSHA「配置」页点「屏幕操作权限」，"
                     + "或到系统设置 → 无障碍 → DSHA 配对助手 打开。";
 
+    /** 当前前台窗口的应用包名；取不到返回空串。授权闸门用它识别支付/银行类应用。 */
+    public static String currentPackage() {
+        DshaAccessibilityService s = instance;
+        if (s == null) return "";
+        AccessibilityNodeInfo root = null;
+        try {
+            root = s.getRootInActiveWindow();
+            if (root == null) return "";
+            CharSequence p = root.getPackageName();
+            return p == null ? "" : p.toString();
+        } catch (Throwable t) {
+            return "";
+        } finally {
+            if (root != null) {
+                try {
+                    root.recycle();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    }
+
     /** 读当前屏幕：输出带序号、文本、可点击性与坐标的清单，供 agent 决定下一步点哪个。 */
     public static String uiDump() {
         DshaAccessibilityService s = instance;

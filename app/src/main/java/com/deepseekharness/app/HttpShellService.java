@@ -460,30 +460,99 @@ public final class HttpShellService {
      *
      *  这条通道不需要 ADB 也不需要 Shizuku —— 绝大多数用户两者都没有，
      *  而无障碍是一次授权长期可用，这才是 agent 能真正「操作手机」的现实路径。 */
+    // ==================== 屏幕操作的授权闸门 ====================
+    //
+    // 为什么必须有这道闸：/app/ui/* 能读屏、点按、输入，破坏力其实**超过** shell 命令 ——
+    // 它直接操作用户**已经登录**的应用，绕过所有应用层权限。agent 一旦被 prompt
+    // injection 诱导（读到网页或文件里夹带的指令），就能在支付软件里点按、把私信
+    // 截屏留到磁盘。而 /exec 一直有危险命令守卫，UI 操作在我加完那六个端点之后
+    // 一道闸都没有 —— 这是自查时发现的最大缺口。
+    //
+    // 可用性上的平衡：GUI 自动化要连续操作，每一步都弹窗根本没法用。所以做成
+    // 「一次授权 + 时间窗」：首次弹确认，允许后十分钟内不再问；但前台是支付/银行/
+    // 密码管理类应用时无视时间窗，每次都要确认。
+    private static volatile long uiGrantUntil = 0L;
+    private static final long UI_GRANT_MS = 10 * 60 * 1000L;
+
+    /** 涉钱、涉密的应用：宁可多问一次。取不到包名也按敏感处理。 */
+    private static boolean isSensitiveApp(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return true;
+        String p = pkg.toLowerCase(java.util.Locale.ROOT);
+        String[] keys = {
+                "alipay", "tencent.mm", "unionpay", "jdpay", "wallet", "paypal",
+                "bank", "icbc", "ccb", "abchina", "bankofchina", "cmbchina",
+                "bankcomm", "psbc", "cebbank", "cmbc", "spdb", "citic", "hxb",
+                "keepass", "bitwarden", "lastpass", "1password", "authenticator",
+                "com.android.settings",   // 系统设置：能改权限、开无障碍、卸载应用
+        };
+        for (String k : keys) {
+            if (p.contains(k)) return true;
+        }
+        return false;
+    }
+
+    /** @param action 给用户看的具体动作描述 —— 弹窗必须说清 AI 要干什么，
+     *               而不是笼统一句「操作屏幕」，否则用户等于盲签。 */
+    private boolean uiAuthorized(String action) {
+        String pkg = DshaAccessibilityService.currentPackage();
+        boolean sensitive = isSensitiveApp(pkg);
+        if (!sensitive && System.currentTimeMillis() < uiGrantUntil) {
+            return true;
+        }
+        String where = pkg.isEmpty() ? "当前界面" : pkg;
+        String why = sensitive
+                ? "在【" + where + "】里：" + action
+                + "  # 这类应用涉及支付或隐私，每次都需要你确认"
+                : action + "  # 允许后 10 分钟内的屏幕操作不再询问";
+        boolean ok = requestUserConfirm(why);
+        if (ok && !sensitive) {
+            uiGrantUntil = System.currentTimeMillis() + UI_GRANT_MS;
+        }
+        return ok;
+    }
+
+    private static String shortText(String s) {
+        if (s == null) return "";
+        String t = s.replace('\n', ' ').trim();
+        return t.length() > 24 ? t.substring(0, 24) + "…" : t;
+    }
+
     private String appUi(String path) {
         String q = queryOf(path);
         try {
             if (path.startsWith("/app/ui/dump")) {
+                if (!uiAuthorized("读取当前屏幕上的文字与控件")) return "[ERR] 你拒绝了这次屏幕读取";
                 return DshaAccessibilityService.uiDump();
             }
             if (path.startsWith("/app/ui/tap")) {
                 String text = getParam(q, "text", "");
                 // 有文字就按文字点：控件位置会随滚动和动画变，文字不会
-                if (!text.isEmpty()) return DshaAccessibilityService.uiTapText(text);
+                if (!text.isEmpty()) {
+                    if (!uiAuthorized("点击「" + shortText(text) + "」")) return "[ERR] 你拒绝了这次点击";
+                    return DshaAccessibilityService.uiTapText(text);
+                }
                 int x = intParam(q, "x", -1);
                 int y = intParam(q, "y", -1);
                 if (x < 0 || y < 0) return "[ERR] 需要 ?text=要点的文字 或 ?x=&y=坐标";
+                if (!uiAuthorized("点击坐标 (" + x + "," + y + ")")) return "[ERR] 你拒绝了这次点击";
                 return DshaAccessibilityService.uiTap(x, y);
             }
             if (path.startsWith("/app/ui/input")) {
                 String text = getParam(q, "text", "");
                 if (text.isEmpty()) return "[ERR] 需要 ?text=";
+                if (!uiAuthorized("在输入框里填入「" + shortText(text) + "」")) {
+                    return "[ERR] 你拒绝了这次输入";
+                }
                 return DshaAccessibilityService.uiInput(text);
             }
             if (path.startsWith("/app/ui/key")) {
-                return DshaAccessibilityService.uiKey(getParam(q, "name", ""));
+                String k = getParam(q, "name", "");
+                if (!uiAuthorized("按下系统按键 " + shortText(k))) return "[ERR] 你拒绝了这次按键";
+                return DshaAccessibilityService.uiKey(k);
             }
             if (path.startsWith("/app/ui/screenshot") || path.startsWith("/app/ui/shot")) {
+                // 截屏会把当前画面留到磁盘，等于一份可被后续读取的隐私快照
+                if (!uiAuthorized("截取当前屏幕并保存为图片")) return "[ERR] 你拒绝了这次截屏";
                 return DshaAccessibilityService.uiScreenshot();
             }
             if (path.startsWith("/app/ui/swipe")) {
@@ -493,6 +562,9 @@ public final class HttpShellService {
                 int y2 = intParam(q, "y2", -1);
                 if (x1 < 0 || y1 < 0 || x2 < 0 || y2 < 0) {
                     return "[ERR] 需要 ?x1=&y1=&x2=&y2=（可选 &ms=时长）";
+                }
+                if (!uiAuthorized("滑动屏幕 (" + x1 + "," + y1 + ")→(" + x2 + "," + y2 + ")")) {
+                    return "[ERR] 你拒绝了这次滑动";
                 }
                 return DshaAccessibilityService.uiSwipe(x1, y1, x2, y2, intParam(q, "ms", 300));
             }

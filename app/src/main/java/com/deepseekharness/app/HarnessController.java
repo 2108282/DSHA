@@ -4072,7 +4072,15 @@ public class HarnessController {
     /** 启用/禁用插件：禁用=从 dependencies+bundles 移除声明并改名；启用=还原（避开引号嵌套：用 heredoc 临时脚本）。
      *  注意：禁用/启用状态由链接条目决定（含悬空链接）——实体缺失时 File.exists()
      *  返回 false 会导致「操作失败」，必须用 existsOrBrokenLink 判断。 */
+    /** 上一次 togglePlugin 失败的原因（供 UI 展示；成功时清空） */
+    private volatile String lastToggleError = "";
+
+    public String getLastToggleError() {
+        return lastToggleError == null ? "" : lastToggleError;
+    }
+
     public boolean togglePlugin(String name, boolean enable) {
+        lastToggleError = "";
         try {
             final String PKG = "/root/.dsh/profiles/web/package.json";
             for (String d : PLUGIN_DIRS) {
@@ -4081,6 +4089,32 @@ public class HarnessController {
                 java.io.File on = new java.io.File(dir, name);
                 java.io.File off = new java.io.File(dir, name + ".disabled");
                 if (enable && existsOrBrokenLink(off)) {
+                    // 上次禁用时若 mv 失败（实体已丢失或链接悬空），代码会 touch 一个空文件
+                    // 占位来记下「用户已禁用」。此刻若把这个空文件改名回去，就造出一个
+                    // 「看起来在、其实加载不了」的幽灵插件 —— 更糟的是 ensureBuiltinBundles
+                    // 会被它骗过，认为实体已存在而不再补回。issue #9 报的「新装插件关闭后
+                    // 无法再次开启」「卸载显示成功但 UI 永久存在」就是这么来的。
+                    if (off.isFile() && off.length() == 0) {
+                        boolean builtin = isBuiltinPlugin(name);
+                        if (!off.delete()) {
+                            lastToggleError = "删不掉残留的禁用标记，请重启 App 再试";
+                            return false;
+                        }
+                        if (builtin) {
+                            // 内置插件的实体在 APK 里，直接补回
+                            try {
+                                ensureBuiltinBundles();
+                                lastToggleError = name + " 的实体之前丢了，已从内置资源补回；"
+                                        + "请再点一次开关启用";
+                            } catch (Throwable t) {
+                                lastToggleError = name + " 的实体已丢失，补回失败：" + t;
+                            }
+                        } else {
+                            lastToggleError = name + " 的实体已丢失（只剩一个禁用标记），"
+                                    + "无法直接启用 —— 请到市场重新安装";
+                        }
+                        return false;
+                    }
                     String src = readPluginSrc(name);
                     // 源记录缺失：内置插件（dsh-client-ui-mobile-adapt / dsh-device-shell-guide，
                     // 注意名字不带 dsha- 前缀！旧判断 name.startsWith("dsha-") 永远不命中）
@@ -4098,10 +4132,17 @@ public class HarnessController {
                             toggleScript() +
                             "node /root/dsha-toggle.js " + shellArg(PKG) + " " + shellArg(name)
                                     + " on " + shellArg(src) + " && " +
-                            "rm -f /root/dsha-toggle.js && ( mv " + shellArg(d + "/" + name + ".disabled")
-                                    + " " + shellArg(d + "/" + name) + " 2>/dev/null || touch "
-                                    + shellArg(d + "/" + name) + " ) && echo OK");
-                    return r != null && r.contains("OK");
+                            // 这里过去有个 `|| touch <name>` 兜底：mv 失败就凭空造一个空文件，
+                            // 于是插件「启用成功」但根本加载不了。宁可如实失败。
+                            "rm -f /root/dsha-toggle.js && mv " + shellArg(d + "/" + name + ".disabled")
+                                    + " " + shellArg(d + "/" + name) + " && echo OK");
+                    boolean okOn = r != null && r.contains("OK");
+                    if (!okOn) {
+                        lastToggleError = "启用失败：实体改名没成功（输出："
+                                + (r == null ? "无" : r.trim()) + "）";
+                        android.util.Log.w("DSHA", "启用插件失败 " + name + ": " + r);
+                    }
+                    return okOn;
                 } else if (!enable) {
                     // 禁用：不依赖 on 存在（链接缺失/悬空也执行）——
                     // 移除声明 + 改名；改名失败（链接缺失）则 touch .disabled 占位，
@@ -4119,7 +4160,15 @@ public class HarnessController {
                     return ok;
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            lastToggleError = "开关插件时出错：" + e;
+            android.util.Log.w("DSHA", "togglePlugin 异常 " + name + ": " + e);
+            return false;
+        }
+        if (lastToggleError.isEmpty()) {
+            lastToggleError = enable
+                    ? "找不到 " + name + " 的禁用标记，可能已经是启用状态"
+                    : "在 profile 里找不到 " + name;
         }
         return false;
     }
