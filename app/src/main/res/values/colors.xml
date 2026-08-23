@@ -2,7 +2,6 @@
 <resources>
     <color name="primary">#3D6FD4</color>
     <color name="primary_dark">#2E5BB8</color>
-    <color name="accent">#3D6FD4</color>
     <color name="accent_on">#FFFFFF</color>
     <color name="surface">#F7F8FB</color>
     <color name="card">#FFFFFF</color>
@@ -21,9 +20,6 @@
     <color name="ripple">#233D6FD4</color>
     <!-- 禁用态：按钮变灰 + 文字降到可读下限（不可点却外观照旧最让人困惑） -->
     <color name="disabled">#E9ECF2</color>
-    <color name="text_disabled">#A9B2C0</color>
     <!-- 状态色的浅底（用于状态条/标签背景，不刺眼） -->
-    <color name="ok_bg">#1A2F9E64</color>
-    <color name="warn_bg">#1AC48A1A</color>
     <color name="err_bg">#14C45A5A</color>
 </resources>

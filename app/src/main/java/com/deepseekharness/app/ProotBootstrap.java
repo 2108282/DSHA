@@ -998,8 +998,4 @@ public class ProotBootstrap {
         }
     }
 
-    /** 默认工作目录名（deepseek-harness 源码树）；历史遗留，现数据保护遍历 /root 所有工作目录 */
-    private String getWorkdirDefault() {
-        return "deepseek-harness";
-    }
 }

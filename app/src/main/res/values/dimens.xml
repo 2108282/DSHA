@@ -46,7 +46,6 @@
     <!-- 主按钮高度（拇指友好，48dp 是无障碍最小触达） -->
     <dimen name="btn_height">48dp</dimen>
     <!-- 次级/小按钮 -->
-    <dimen name="btn_height_small">40dp</dimen>
     <!-- 输入框高度 -->
     <dimen name="input_height">46dp</dimen>
     <!-- 可点行/复选框的最小触达高度（无障碍下限） -->

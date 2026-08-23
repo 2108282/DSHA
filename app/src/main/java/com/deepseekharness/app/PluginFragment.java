@@ -598,36 +598,6 @@ public class PluginFragment extends Fragment {
     }
 
 
-    private void doInstall(String pkg) {
-        say("正在安装 " + pkg + " …");
-        new Thread(() -> {
-            String out = c.installPlugin(pkg);
-            runOnUiThreadSafely(() -> {
-                say("安装结果：" + (out == null ? "无输出" : out.replace("\n", " ").substring(0, Math.min(200, out.length()))));
-                new android.app.AlertDialog.Builder(requireContext())
-                        .setTitle("安装完成")
-                        .setMessage(out == null ? "无输出" : out)
-                        .setPositiveButton("重启 WebUI", (d, w) -> {
-                            // 同 showInstallResult：延迟回调用 applicationContext，防 detach 后闪退
-                            final android.content.Context app = requireContext().getApplicationContext();
-                            android.content.Intent stop = new android.content.Intent(app, HarnessService.class)
-                                    .setAction(HarnessService.ACTION_STOP);
-                            app.startService(stop);
-                            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-                                android.content.Intent i = new android.content.Intent(app, HarnessService.class);
-                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                    app.startForegroundService(i);
-                                } else {
-                                    app.startService(i);
-                                }
-                                android.widget.Toast.makeText(app, "正在重启 Web UI…", android.widget.Toast.LENGTH_SHORT).show();
-                            }, 1500);
-                        })
-                        .setNegativeButton("关闭", null)
-                        .show();
-            });
-        }).start();
-    }
 
     private class PluginAdapter extends RecyclerView.Adapter<PluginAdapter.VH> {
 

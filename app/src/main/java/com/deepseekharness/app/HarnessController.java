@@ -1145,23 +1145,6 @@ public class HarnessController {
         }
     }
 
-    /** 第 4 步完成判定：已装 + node-pty 就绪。RC6 用一次 proot 进程查完（省一次子进程，降低卡顿） */
-    private boolean isHarnessReady() {
-        if (useRc6()) {
-            try {
-                String r = proot.execAndRead(
-                        "command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | head -1 || echo NONE");
-                if (r == null || r.startsWith("ERROR") || r.contains("NONE")) return false;
-                String v = r.trim();
-                // 最低要求：0.1.0-rc.8（含）以上。完整版本比较（只看 rc 号会把
-                // 0.1.1-rc.2 误判旧版 → 永远重装循环）
-                return dshVersionScore(v) >= dshVersionScore("0.1.0-rc.8");
-            } catch (Exception e) {
-                return false;
-            }
-        }
-        return proot.isHarnessInstalled(getWorkdir()) && hasPtyNode();
-    }
 
     /** 检查 node-pty 编译产物（pty.node）是否就绪（RC6 模式查 npm 包，源码模式查项目目录） */
     private boolean hasPtyNode() {
@@ -1198,14 +1181,6 @@ public class HarnessController {
         }
     }
 
-    /** 检查文件是否为有效的 gzip 包（校验魔数 0x1f 0x8b） */
-    private boolean validGzip(File f) {
-        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
-            return in.read() == 0x1f && in.read() == 0x8b;
-        } catch (Exception e) {
-            return false;
-        }
-    }
 
     /** rootfs 内基础工具是否齐备 */
     private boolean toolsInstalled() {
@@ -1264,16 +1239,6 @@ public class HarnessController {
         setProgress("Node 附加工具就绪", 100);
     }
 
-    /** ④ pnpm / node-gyp 是否就绪 */
-    private boolean pnpmExtrasReady() {
-        try {
-            String r = proot.execAndRead(
-                    "command -v pnpm >/dev/null 2>&1 && command -v node-gyp >/dev/null 2>&1 && echo OK || echo NO");
-            return r != null && !r.startsWith("ERROR") && r.contains("OK");
-        } catch (Exception e) {
-            return false;
-        }
-    }
 
     /** ⑥ 安全与补丁：守卫包装器 + bash 守卫补丁 + 运行环境补丁 + 看门狗文件（全幂等） */
     private void installGuard() throws Exception {
@@ -1355,16 +1320,6 @@ public class HarnessController {
         setProgress("安全守卫与补丁就绪", 100);
     }
 
-    /** ⑥ 守卫是否就绪（包装器 + dsh-guard.sh） */
-    private boolean guardReady() {
-        try {
-            String r = proot.execAndRead(
-                    "test -f /root/dsh-guard.sh && test -d /root/dsh-bin && test -f /root/dsh-bin/.version && echo OK || echo NO");
-            return r != null && !r.startsWith("ERROR") && r.contains("OK");
-        } catch (Exception e) {
-            return false;
-        }
-    }
 
     private void installRootfs() throws Exception {
         setProgress("准备 proot 运行时", 2);
@@ -2075,13 +2030,6 @@ public class HarnessController {
         return k.isEmpty() ? "" : "export DEEPSEEK_API_KEY='" + escShell(k) + "'\n";
     }
 
-    private String buildInstallScript() {
-        String s = readAsset("install.sh");
-        return s.replace("@@API_KEY@@", effectiveApiKey())
-                .replace("@@PORT@@", getPort())
-                .replace("@@MODEL@@", getModel())
-                .replace("@@PERMISSION_MODE@@", getPermissionMode());
-    }
 
     public String startWebCommand() {
         // 启动前自愈：确保配置修复脚本已就位（钳制超限 timeoutMs）
@@ -3372,10 +3320,6 @@ public class HarnessController {
         return score * 1000; // rc 段视为 0（stable 高于同版本 rc）
     }
 
-    /** 兼容旧调用（rcNewer 改名保留，内部走完整比较） */
-    private static boolean rcNewer(String a, String b) {
-        return dshVersionNewer(a, b);
-    }
 
     /** 启动时检测 dsh 新版本：主动查 npm 最新 rc，比已装新 → 自动【重装⑤+⑥】；
      *  兼容被动场景（离线包/手动重装导致已装版本变化 → 同样适配）。
@@ -3918,78 +3862,8 @@ public class HarnessController {
         }
     }
 
-    /** 读 profile package.json 声明：dsh.profile.bundles + dependencies 中插件特征包 */
-    private java.util.Set<String> readDeclaredPlugins() {
-        java.util.Set<String> set = new java.util.LinkedHashSet<>();
-        try {
-            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
-            if (!pf.isFile()) return set;
-            String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()),
-                    java.nio.charset.StandardCharsets.UTF_8);
-            org.json.JSONObject root = new org.json.JSONObject(txt);
-            // dsh.profile.bundles（官方插件层列表，最权威）
-            try {
-                org.json.JSONObject dshObj2 = root.optJSONObject("dsh");
-                org.json.JSONObject profObj2 = dshObj2 == null ? null : dshObj2.optJSONObject("profile");
-                org.json.JSONArray bundles = profObj2 == null ? null : profObj2.optJSONArray("bundles");
-                if (bundles != null) for (int i = 0; i < bundles.length(); i++) {
-                    String v = bundles.optString(i, "").trim();
-                    if (!v.isEmpty()) set.add(v);
-                }
-            } catch (Exception ignored) {
-            }
-            // dependencies 全键（dsh profile 的依赖即插件清单，与 dsh/WebUI 统计口径一致）
-            org.json.JSONObject deps = root.optJSONObject("dependencies");
-            if (deps != null) {
-                java.util.Iterator<String> it = deps.keys();
-                while (it.hasNext()) {
-                    String k = it.next();
-                    if (k != null && !k.trim().isEmpty()) set.add(k);
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return set;
-    }
 
-    /** 扫描 node_modules 顶层实体（目录/文件，排除隐藏项） */
-    private java.util.Set<String> scanNodeModulesTop() {
-        java.util.Set<String> set = new java.util.LinkedHashSet<>();
-        for (String d : PLUGIN_DIRS) {
-            java.io.File dir = new java.io.File(proot.getRootfsDir(), d.substring(1));
-            java.io.File[] files = dir.isDirectory() ? dir.listFiles() : null;
-            if (files == null) continue;
-            for (java.io.File f : files) {
-                String n = f.getName();
-                if (!n.startsWith(".")) set.add(n);
-            }
-        }
-        return set;
-    }
 
-    /** 扫描 .pnpm/ 虚拟目录里的插件包实体（pnpm 把所有包塞这里，App 之前漏掉了） */
-    private java.util.Set<String> scanPnpmStore() {
-        java.util.Set<String> set = new java.util.LinkedHashSet<>();
-        for (String d : PLUGIN_DIRS) {
-            java.io.File pnpm = new java.io.File(proot.getRootfsDir(), d.substring(1) + "/.pnpm");
-            if (!pnpm.isDirectory()) continue;
-            java.io.File[] entries = pnpm.listFiles();
-            if (entries == null) continue;
-            for (java.io.File e : entries) {
-                if (!e.isDirectory()) continue;
-                // 形如 <name>@<ver> 或 @scope+name@<ver>
-                java.io.File nm = new java.io.File(e, "node_modules");
-                if (!nm.isDirectory()) continue;
-                java.io.File[] pkgs = nm.listFiles();
-                if (pkgs == null) continue;
-                for (java.io.File p : pkgs) {
-                    String n = p.getName();
-                    if (!n.startsWith(".")) set.add(n);
-                }
-            }
-        }
-        return set;
-    }
 
     /** 判断插件当前启用/禁用：存在 <name>.disabled 则禁用（顶层或 .pnpm 内精确匹配）。
      *  注意：必须用 existsOrBrokenLink（悬空链接的 File.exists() 返回 false，
