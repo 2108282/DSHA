@@ -255,11 +255,21 @@ public class ConfigFragment extends Fragment {
         View v = getView();
         TextView tv = v == null ? null : v.findViewById(R.id.config_a11y_status);
         if (tv == null) return;
-        boolean on = DshaAccessibilityService.enabled(requireContext());
-        tv.setTextColor(requireContext().getColor(on ? R.color.ok : R.color.text_secondary));
-        tv.setText(on
-                ? "● 已开启：AI 可读屏/点按/输入/截屏，配对码也能自动读"
-                : "○ 未开启：AI 只能靠 ADB 或 Shizuku 操作手机（多数人没配）");
+        // 三态：读不到设置时说「读不到」，别把不确定说成未开启 ——
+        // 各家 ROM 的 ENABLED_ACCESSIBILITY_SERVICES 格式不一，解析失败很常见，
+        // 报「未开启」会让已经开好的用户反复去开
+        String st = DshaAccessibilityService.enabledState(requireContext());
+        if ("YES".equals(st)) {
+            tv.setTextColor(requireContext().getColor(R.color.ok));
+            tv.setText("● 已开启：AI 可读屏/点按/输入/截屏，配对码也能自动读");
+        } else if ("NO".equals(st)) {
+            tv.setTextColor(requireContext().getColor(R.color.text_secondary));
+            tv.setText("○ 未开启：AI 只能靠 ADB 或 Shizuku 操作手机（多数人没配）");
+        } else {
+            tv.setTextColor(requireContext().getColor(R.color.warn));
+            tv.setText("？读不到无障碍设置（系统没返回）——如果你已经开过，忽略这行即可；"
+                    + "让 AI 调一次屏幕操作就能确认");
+        }
     }
 
     /** 危险命令守卫的完整性提示（吸收上游 PR#24）。

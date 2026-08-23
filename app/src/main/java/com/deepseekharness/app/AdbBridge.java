@@ -25,8 +25,21 @@ public final class AdbBridge {
     /** assets 脚本是否已注入 rootfs（校验版本标记，防止旧脚本残留不更新）。
      *  精确比较：contains 会让 "9" 误命中 "19"，将来版本号进两位数就静默失效。 */
     public static boolean injected(ProotBootstrap proot) {
-        String r = proot.execAndRead("test -f /root/.dsh/script-version && cat /root/.dsh/script-version || echo NO");
-        return r != null && SCRIPT_VERSION.equals(r.trim());
+        return "YES".equals(injectedState(proot));
+    }
+
+    /** 三态：YES 已注入且版本一致 / NO 确认没有或版本不符 / UNKNOWN 查不了。
+     *  execAndRead 拿不到输出（proot 没起来、超时）时以前直接算「没注入」，
+     *  于是会去重复注入，甚至把状态显示成「ADB 通道异常」—— 那是查询失败，
+     *  不是注入失败。 */
+    public static String injectedState(ProotBootstrap proot) {
+        String r = proot.execAndRead(
+                "test -f /root/.dsh/script-version && cat /root/.dsh/script-version || echo NO");
+        if (r == null) return "UNKNOWN";
+        String v = r.trim();
+        if (v.isEmpty()) return "UNKNOWN";   // 命令没回话，同样不构成证据
+        if (SCRIPT_VERSION.equals(v)) return "YES";
+        return "NO";
     }
 
     /** 当前 assets 脚本版本：每次改脚本 +1，旧版 APK 的残留脚本会因版本不符被强制重注入 */
@@ -169,12 +182,17 @@ public final class AdbBridge {
      *  开启无线调试（Settings.Global.adb_wifi_enabled=1），实现"永不掉"。 */
     public static void grantSecureSettings(ProotBootstrap proot) {
         try {
-            String pkg = "com.dsh.client";
-            // 先查是否已授权，避免每次配对都重复 grant
+            // 用 BuildConfig 而不是写死字符串：applicationId 一改，写死的那个会静默失效，
+            // 表现成「开机自动开无线调试」莫名不工作，却查不到原因
+            String pkg = BuildConfig.APPLICATION_ID;
+            // pm grant 是幂等的，重复执行无害，所以不必先查一次
             String r = proot.execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py pm grant " + pkg
                     + " android.permission.WRITE_SECURE_SETTINGS 2>&1 | head -2");
             android.util.Log.i("DSHA-ADB", "WRITE_SECURE_SETTINGS 授权结果: " + r);
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            // 别静默：这一步失败会让「开机自动开无线调试」整条链失效，
+            // 而现象出现在很久之后，没有这条日志就无从追溯
+            android.util.Log.w("DSHA-ADB", "WRITE_SECURE_SETTINGS 授权失败: " + t);
         }
     }
 

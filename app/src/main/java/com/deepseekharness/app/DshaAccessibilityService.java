@@ -41,6 +41,34 @@ public class DshaAccessibilityService extends AccessibilityService {
     private static volatile long watchUntil = 0L;
     private static volatile PairInfoListener listener;
 
+    /** 三态：YES 确认已开 / NO 确认未开 / UNKNOWN 读不到设置（别当成未开）。
+     *
+     *  服务实例存在是最硬的证据 —— 系统能把它连起来，就一定是开着的。
+     *  只在拿不到实例时才去解析 Settings 字符串，而那串在各家 ROM 上格式不一，
+     *  解析失败时必须承认「不知道」，不能报「未开启」害用户反复去开。 */
+    public static String enabledState(Context ctx) {
+        if (instance != null) return "YES";
+        try {
+            String cls = DshaAccessibilityService.class.getName();
+            String want = ctx.getPackageName() + "/" + cls;
+            String on = Settings.Secure.getString(ctx.getContentResolver(),
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            if (on == null) return "UNKNOWN";   // 读不到这一项，不代表用户没开
+            if (on.isEmpty()) return "NO";      // 明确是空串 = 一个无障碍服务都没开
+            for (String e0 : on.split(":")) {
+                String e = e0.trim();
+                if (e.equalsIgnoreCase(want)) return "YES";
+                if (e.startsWith(ctx.getPackageName() + "/")
+                        && cls.endsWith(e.substring(e.indexOf('/') + 1))) {
+                    return "YES";
+                }
+            }
+            return "NO";
+        } catch (Throwable e) {
+            return "UNKNOWN";
+        }
+    }
+
     /** 用户是否已在系统设置里开启本服务 */
     public static boolean enabled(Context ctx) {
         try {

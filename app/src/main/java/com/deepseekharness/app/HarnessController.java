@@ -109,13 +109,26 @@ public class HarnessController {
     public void releaseWebRestartLock() { webRestartLock.set(false); }
 
     /** 端口探测：ms 超时内是否可连接 Web 端口 */
-    private boolean isWebPortUp(int timeoutMs) {
+    /** 端口探测的三态结果：UP / DOWN / UNKNOWN。
+     *
+     *  以前一律 catch 成 false，把「不知道」当成了「没起来」：连接被拒确实说明
+     *  端口上没人听，但超时可能只是启动慢或系统正忙 —— 两者混在一起，UI 就会
+     *  在服务其实正在起的时候报「启动失败」，用户白白重试。 */
+    private String probeWebPort(int timeoutMs) {
         try (java.net.Socket s = new java.net.Socket()) {
             s.connect(new java.net.InetSocketAddress("127.0.0.1", parsePort()), timeoutMs);
-            return true;
+            return "UP";
+        } catch (java.net.ConnectException e) {
+            return "DOWN";     // 明确被拒 = 这个端口上确实没有人在监听
+        } catch (java.net.SocketTimeoutException e) {
+            return "UNKNOWN";  // 超时：可能还在启动，也可能系统正忙
         } catch (Exception e) {
-            return false;
+            return "UNKNOWN";  // 其它异常同样不构成「没起来」的证据
         }
+    }
+
+    private boolean isWebPortUp(int timeoutMs) {
+        return "UP".equals(probeWebPort(timeoutMs));
     }
 
     /** 轮询等待 Web 端口彻底关闭；maxMs 内仍被占用返回 false */
@@ -269,10 +282,21 @@ public class HarnessController {
             int nl = tail.lastIndexOf('\n');
             if (nl >= 0) tail = tail.substring(nl + 1);
             if (log.contains("dsh web:")) {
-                boolean up = isWebPortUp(600);
-                return up
-                        ? "Web 服务正在运行但页面探测失败，可点「打开预览」或「重启」再试。"
-                        : "Web 启动过（已打印 URL）但端口 3080 未就绪：\n可能原因：启动中 / 端口被占 / 依赖加载卡住。\n请稍等或「重启」；仍不行请查看 ~/dsh-web.log 完整内容。";
+                // 探测结果分三种，措辞也要分三种 —— 以前「超时」被说成「未就绪」，
+                // 而那时候服务往往正在起，用户被引导去做多余的重启
+                String probe = probeWebPort(600);
+                if ("UP".equals(probe)) {
+                    return "Web 服务正在运行但页面探测失败，可点「打开预览」或「重启」再试。";
+                }
+                if ("UNKNOWN".equals(probe)) {
+                    return "Web 已打印启动地址，但探测端口超时（没被拒绝，也没连上）——"
+                            + "通常是还在加载依赖或系统正忙。\n先等十几秒再点「打开预览」；"
+                            + "一直这样再看 ~/dsh-web.log。";
+                }
+                return "Web 启动过（已打印 URL），但端口 " + parsePort()
+                        + " 上没有服务在监听（连接被拒）：\n"
+                        + "多为进程随后退出、端口被别的应用占用，或依赖加载失败。\n"
+                        + "点「重启」再试；仍不行请查看 ~/dsh-web.log 完整内容。";
             }
             return tail.isEmpty() ? "WebUI 异常退出（日志为空）" : "WebUI 异常退出：\n" + tail;
         } catch (Exception e) {
