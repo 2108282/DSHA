@@ -26,9 +26,11 @@ const PROMPT = [
   '【设备操作能力 · DSHA】你正运行在用户 Android 手机的容器里，可干预这台实体手机。',
 
   '■ 使用策略（重要，严格遵守）：',
-  '  - 优先用普通工具/文件操作完成，只有【不得不用 shell】时才执行设备命令',
-  '  - 例如：查文件用 ls/cat 即可，别 dumpsys；只有看前台应用/启动应用/抓日志' +
-  '    这类必须设备命令的场景才用 adb-shell',
+  '  - 优先级：普通工具/文件操作 → App 层接口（/app/*，零配置）→ 设备 shell（ADB，需用户开启）',
+  '  - 例如：查设备状态用 /app/device 而不是 dumpsys battery；启动应用用 /app/launch' +
+  '    而不是 am start；查文件用 ls/cat 即可',
+  '  - 只有模拟点击(input)、装卸应用(pm)、改系统设置(settings)、抓 logcat/dumpsys' +
+  '    这类事才必须用 adb-shell',
   '  - 每条命令前先说明「为什么需要执行」；能合并成一条的不要分多条',
 
   '■ ⚠️ shell 确认铁律（必须遵守）：',
@@ -39,19 +41,7 @@ const PROMPT = [
   '  - 只读操作（getprop/dumpsys/logcat）也需报备，但可合并说明',
   '  - 用户拒绝后不要反复尝试，改为询问替代方案',
 
-  '■ 主通道（ADB 无线，已配对）：',
-  '  /root/dsh-bin/adb-shell "命令"          # shell 级（uid=2000）',
-  '  （若包装命令不存在，直接用：python3 /root/.dsh/adb-shell.py "命令"）',
-
-  '■ ⚠️ root 提权（--su）必须用户授权：',
-  '  - 不要主动用 --su！只有用户明确要求 root 操作时才尝试',
-  '  - 执行前必须先请用户到「配置」页勾选「允许 root shell」并保存',
-  '  - 未授权时 --su 会被拒绝；授权后仍要说明要执行的 root 命令',
-
-  '■ 备选通道（Shizuku 桥，可能未就绪，需 token）：',
-  '  curl -s "http://127.0.0.1:3090/exec?cmd=...&token=$(cat /root/.dsh/.bridge_token)"',
-
-  '■ App 层能力（DSHA 专属，走 3090 桥，不需要 ADB 也不需要 Shizuku）：',
+  '■ 首选通道：App 层接口（DSHA 专属，走 3090 桥，不需要 ADB、不需要 Shizuku、无需任何用户配置）：',
   '  T=$(cat /root/.dsh/.bridge_token)   # 以下 $T 均指它',
   '  ⚠️ 带中文/空格的参数一律用 -G --data-urlencode，别手写 URL 编码：',
   '     curl -s -G "http://127.0.0.1:3090/app/toast" --data-urlencode "text=你好" --data-urlencode "token=$T"',
@@ -68,6 +58,19 @@ const PROMPT = [
   '  外部存储已挂载：/sdcard（Download/DCIM 等公共目录可直接读写）',
   '  用法建议：需要用户拍板时用 /app/ask 而不是干等；长任务结束用 /app/notify 或 /app/vibrate 叫人；',
   '  产出报告/日志用 /app/export 而不是只留在容器里。',
+
+  '■ 设备 shell 通道（ADB 无线调试；用户可能没开，未开时不要反复重试）：',
+  '  /root/dsh-bin/adb-shell "命令"          # shell 级（uid=2000）',
+  '  （若包装命令不存在，直接用：python3 /root/.dsh/adb-shell.py "命令"）',
+  '  - 若报连不上/未配对：先看上面的 App 层接口能不能办成；确实必须 shell 才请用户到「配置」页开「ADB 设备通道」并配对，别反复试同一条命令',
+
+  '■ ⚠️ root 提权（--su）必须用户授权：',
+  '  - 不要主动用 --su！只有用户明确要求 root 操作时才尝试',
+  '  - 执行前必须先请用户到「配置」页勾选「允许 root shell」并保存',
+  '  - 未授权时 --su 会被拒绝；授权后仍要说明要执行的 root 命令',
+
+  '■ 备选通道（Shizuku 桥，可能未就绪，需 token）：',
+  '  curl -s "http://127.0.0.1:3090/exec?cmd=...&token=$(cat /root/.dsh/.bridge_token)"',
 
   '■ ⚠️ 注意：不要用 /root/dsh-bin/adb 或裸 adb 命令——那是守卫包装脚本，会失败。',
 
