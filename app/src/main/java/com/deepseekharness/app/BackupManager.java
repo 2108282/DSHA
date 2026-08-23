@@ -92,6 +92,31 @@ public final class BackupManager {
             // 顺序要紧：先把 .l2s 链摊平（不然下面的 tar 直接失败），再生成清单
             runFlattenL2s(c);
             runBackupPrepare(c, wd);
+            // issue #22：离线包安装的用户从来不会有 <workdir>/.env —— .env 只在「在线安装
+            // harness」的最后一步写入，离线包路径不执行那步；启动 Web 时 key 由 export
+            // DEEPSEEK_API_KEY 直接注入进程，不落盘。而 key 本体存在 App 的 SharedPreferences，
+            // 卸载即清空。于是这类用户备份→卸载→恢复之后 key 必然为空。
+            // 修法：备份前把当前 key 写进 .dsh/.dsha-apikey —— tar 清单第一项就是 .dsh，
+            // 会自动带上，不必改打包参数；key 为空则跳过。
+            String bkKey = c.getApiKey();
+            if (bkKey != null && !bkKey.isEmpty()) {
+                try {
+                    File kf = new File(c.getProot().getRootfsDir(), "root/.dsh/.dsha-apikey");
+                    if (kf.getParentFile() != null) {
+                        //noinspection ResultOfMethodCallIgnored
+                        kf.getParentFile().mkdirs();
+                    }
+                    java.nio.file.Files.write(kf.toPath(),
+                            bkKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    try {
+                        java.nio.file.Files.setPosixFilePermissions(kf.toPath(),
+                                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+                    } catch (Throwable ignored) {
+                    }
+                } catch (Throwable e) {
+                    android.util.Log.w("DSHA", "写 API key 备份文件失败（备份继续）: " + e);
+                }
+            }
             // 文件清单用位置参数（set --）攒，不要攒进字符串再无引号展开 ——
             // 那样 ARGS 里的引号不会被二次解析，tar 收到的是字面量 '工作目录'/.env，
             // 结果 Cannot stat → TAR_FAIL → 备份整个失败（还被报成「环境可能未安装」）。

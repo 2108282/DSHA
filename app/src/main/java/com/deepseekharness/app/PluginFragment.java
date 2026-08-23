@@ -84,8 +84,8 @@ public class PluginFragment extends Fragment {
         android.widget.EditText searchBox = view.findViewById(R.id.pluginSearch);
         // ===== GitHub 仓库链接解析（市场顶部）：输入链接 → 列表切换为解析结果 =====
         final android.widget.EditText githubInput = view.findViewById(R.id.githubInstallInput);
-        TextView btnGithubInstall = view.findViewById(R.id.btnGithubInstall);
-        if (githubInput != null && btnGithubInstall != null) {
+        // 没有「解析」按钮：输入停顿 600ms 自动解析，回车也能立刻解析，按钮纯属多余
+        if (githubInput != null) {
             // 当前解析结果缓存（null=非解析模式）
             final java.util.concurrent.atomic.AtomicReference<String[]> parsedRef =
                     new java.util.concurrent.atomic.AtomicReference<>(null);
@@ -146,8 +146,6 @@ public class PluginFragment extends Fragment {
                 }
                 @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
             });
-            // 按钮 = 立即解析
-            btnGithubInstall.setOnClickListener(v -> doParse.accept(githubInput.getText().toString()));
             // 回车 = 立即解析
             githubInput.setOnEditorActionListener((v, actionId, event) -> {
                 if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_GO

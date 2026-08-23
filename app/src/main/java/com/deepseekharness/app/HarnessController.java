@@ -4578,8 +4578,8 @@ public class HarnessController {
         for (String u : urls) {
             try {
                 java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
-                // 5 个源串行回退，超时必须短：原来 8s+10s 一路走到底最坏要等 90 秒，
-                // 界面上就表现为「点了解析没反应」
+                // 5 个源串行回退，超时必须短：原来 8s+10s 走到底最坏要等 90 秒，
+                // 界面上就表现为「点了解析没反应」（issue #4）
                 conn.setConnectTimeout(4000);
                 conn.setReadTimeout(5000);
                 conn.setRequestProperty("User-Agent", "DSHA/" + getVersionName());
