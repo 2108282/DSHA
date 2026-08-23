@@ -281,6 +281,18 @@ public final class HttpShellService {
     }
 
     /** 校验查询串/头中的 token（常量时间比较 + URL 解码容错） */
+    /** 当前桥 token；桥还没起来时返回空串（调用方按「不带 token」处理）。
+     *  WebView 首帧 URL 与局域网代理都要用它 —— dsh 的 Web 服务已加 token 鉴权
+     *  （webserver-auth-patch.sh），不带 token 会 403。 */
+    public static String currentToken() {
+        try {
+            String t = authToken.isEmpty() ? ensureToken() : authToken;
+            return t == null ? "" : t;
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
     private static boolean tokenMatch(String presented) {
         String token = authToken.isEmpty() ? ensureToken() : authToken;
         return token != null && !token.isEmpty() && constantTimeEquals(token, presented);
@@ -359,6 +371,8 @@ public final class HttpShellService {
                 result = appReadFile(path);
             } else if (path.startsWith("/health")) {
                 result = "OK"; // 存活探测（仍需 token）：客户端可据此区分「桥没起」与「命令失败」
+            } else if (path.startsWith("/app/ui/")) {
+                result = appUi(path);
             } else if (path.startsWith("/app/device")) {
                 result = appDevice();
             } else if (path.startsWith("/app/apps")) {
@@ -442,6 +456,60 @@ public final class HttpShellService {
     }
 
     /** /app/toast?text= ：弹 App 内 Toast */
+    /** 屏幕操作（走无障碍服务）：读屏 / 点按 / 输入 / 按键 / 滑动。
+     *
+     *  这条通道不需要 ADB 也不需要 Shizuku —— 绝大多数用户两者都没有，
+     *  而无障碍是一次授权长期可用，这才是 agent 能真正「操作手机」的现实路径。 */
+    private String appUi(String path) {
+        String q = queryOf(path);
+        try {
+            if (path.startsWith("/app/ui/dump")) {
+                return DshaAccessibilityService.uiDump();
+            }
+            if (path.startsWith("/app/ui/tap")) {
+                String text = getParam(q, "text", "");
+                // 有文字就按文字点：控件位置会随滚动和动画变，文字不会
+                if (!text.isEmpty()) return DshaAccessibilityService.uiTapText(text);
+                int x = intParam(q, "x", -1);
+                int y = intParam(q, "y", -1);
+                if (x < 0 || y < 0) return "[ERR] 需要 ?text=要点的文字 或 ?x=&y=坐标";
+                return DshaAccessibilityService.uiTap(x, y);
+            }
+            if (path.startsWith("/app/ui/input")) {
+                String text = getParam(q, "text", "");
+                if (text.isEmpty()) return "[ERR] 需要 ?text=";
+                return DshaAccessibilityService.uiInput(text);
+            }
+            if (path.startsWith("/app/ui/key")) {
+                return DshaAccessibilityService.uiKey(getParam(q, "name", ""));
+            }
+            if (path.startsWith("/app/ui/screenshot") || path.startsWith("/app/ui/shot")) {
+                return DshaAccessibilityService.uiScreenshot();
+            }
+            if (path.startsWith("/app/ui/swipe")) {
+                int x1 = intParam(q, "x1", -1);
+                int y1 = intParam(q, "y1", -1);
+                int x2 = intParam(q, "x2", -1);
+                int y2 = intParam(q, "y2", -1);
+                if (x1 < 0 || y1 < 0 || x2 < 0 || y2 < 0) {
+                    return "[ERR] 需要 ?x1=&y1=&x2=&y2=（可选 &ms=时长）";
+                }
+                return DshaAccessibilityService.uiSwipe(x1, y1, x2, y2, intParam(q, "ms", 300));
+            }
+            return "[ERR] 未知端点（可用：dump/tap/input/key/swipe）";
+        } catch (Throwable t) {
+            return "[ERR] " + t;
+        }
+    }
+
+    private int intParam(String q, String k, int def) {
+        try {
+            return Integer.parseInt(getParam(q, k, String.valueOf(def)).trim());
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
     private String appToast(String path) {
         try {
             final String text = getParam(queryOf(path), "text", "");

@@ -109,13 +109,26 @@ public class HarnessController {
     public void releaseWebRestartLock() { webRestartLock.set(false); }
 
     /** 端口探测：ms 超时内是否可连接 Web 端口 */
-    private boolean isWebPortUp(int timeoutMs) {
+    /** 端口探测的三态结果：UP / DOWN / UNKNOWN。
+     *
+     *  以前一律 catch 成 false，把「不知道」当成了「没起来」：连接被拒确实说明
+     *  端口上没人听，但超时可能只是启动慢或系统正忙 —— 两者混在一起，UI 就会
+     *  在服务其实正在起的时候报「启动失败」，用户白白重试。 */
+    private String probeWebPort(int timeoutMs) {
         try (java.net.Socket s = new java.net.Socket()) {
             s.connect(new java.net.InetSocketAddress("127.0.0.1", parsePort()), timeoutMs);
-            return true;
+            return "UP";
+        } catch (java.net.ConnectException e) {
+            return "DOWN";     // 明确被拒 = 这个端口上确实没有人在监听
+        } catch (java.net.SocketTimeoutException e) {
+            return "UNKNOWN";  // 超时：可能还在启动，也可能系统正忙
         } catch (Exception e) {
-            return false;
+            return "UNKNOWN";  // 其它异常同样不构成「没起来」的证据
         }
+    }
+
+    private boolean isWebPortUp(int timeoutMs) {
+        return "UP".equals(probeWebPort(timeoutMs));
     }
 
     /** 轮询等待 Web 端口彻底关闭；maxMs 内仍被占用返回 false */
@@ -240,6 +253,24 @@ public class HarnessController {
                 }
                 return "缺少模块：" + mod + "\n（依赖安装不完整，已自动重装；仍失败请重跑步骤⑤）";
             }
+            // 一类会把用户锁在外面的死锁：dsh 的插件列表里会列出它自己的依赖
+            // cordis-plugin-hmr（热重载），而那个插件要求 node 带 --expose-internals。
+            // 用户在 WebUI 里手一点启用，重启后整个 profile 加载失败 → Web 起不来
+            // → 进不去 WebUI → 也就没法把它关掉。自动在 patch 层禁用它。
+            if (log.contains("--expose-internals is required")
+                    || (log.contains("failed to apply loader entry") && log.contains("plugin-hmr"))) {
+                String heal = runHealProfileBoot();
+                if (heal != null && heal.contains("HEAL_PROFILE_OK: 禁用")) {
+                    return "已自动关闭热重载插件（cordis-plugin-hmr）—— 它需要 Node 的 "
+                            + "--expose-internals 启动参数，缺了会让整个 profile 加载失败。\n"
+                            + "点「重启」即可正常进入。普通使用不需要热重载；想恢复可编辑 "
+                            + "~/.dsh/profiles/web/cordis.patch.yml 删掉那几行。";
+                }
+                return "WebUI 启动失败：启用了需要 Node --expose-internals 的插件"
+                        + "（cordis-plugin-hmr 热重载）。\n自动关闭没成功，可手动编辑 "
+                        + "~/.dsh/profiles/web/cordis.patch.yml，在末尾加：\n"
+                        + "- id: <日志里 entry 后面那串 id>\n  disabled: true";
+            }
             if (log.contains("MODULE_NOT_FOUND")) {
                 return "MODULE_NOT_FOUND：入口依赖缺失，请重跑安装步骤⑤（应用已自动尝试自愈）";
             }
@@ -251,16 +282,49 @@ public class HarnessController {
             int nl = tail.lastIndexOf('\n');
             if (nl >= 0) tail = tail.substring(nl + 1);
             if (log.contains("dsh web:")) {
-                boolean up = isWebPortUp(600);
-                return up
-                        ? "Web 服务正在运行但页面探测失败，可点「打开预览」或「重启」再试。"
-                        : "Web 启动过（已打印 URL）但端口 3080 未就绪：\n可能原因：启动中 / 端口被占 / 依赖加载卡住。\n请稍等或「重启」；仍不行请查看 ~/dsh-web.log 完整内容。";
+                // 探测结果分三种，措辞也要分三种 —— 以前「超时」被说成「未就绪」，
+                // 而那时候服务往往正在起，用户被引导去做多余的重启
+                String probe = probeWebPort(600);
+                if ("UP".equals(probe)) {
+                    return "Web 服务正在运行但页面探测失败，可点「打开预览」或「重启」再试。";
+                }
+                if ("UNKNOWN".equals(probe)) {
+                    return "Web 已打印启动地址，但探测端口超时（没被拒绝，也没连上）——"
+                            + "通常是还在加载依赖或系统正忙。\n先等十几秒再点「打开预览」；"
+                            + "一直这样再看 ~/dsh-web.log。";
+                }
+                return "Web 启动过（已打印 URL），但端口 " + parsePort()
+                        + " 上没有服务在监听（连接被拒）：\n"
+                        + "多为进程随后退出、端口被别的应用占用，或依赖加载失败。\n"
+                        + "点「重启」再试；仍不行请查看 ~/dsh-web.log 完整内容。";
             }
             return tail.isEmpty() ? "WebUI 异常退出（日志为空）" : "WebUI 异常退出：\n" + tail;
         } catch (Exception e) {
             return "无法解析 WebUI 日志：" + e.getMessage();
         }
     }
+    /** 启动失败自愈：把「启用了却跑不起来」的 loader entry 在 profile 的 patch 层禁用。
+     *  只针对已知需要特殊 node 标志的插件；别的失败原因（缺依赖、配置错）不该靠禁用掩盖。 */
+    private String runHealProfileBoot() {
+        try {
+            String script = readAsset("heal-profile-boot.py");
+            if (script == null || script.isEmpty()) return null;
+            java.io.File dst = new java.io.File(proot.getRootfsDir(), "root/.dsha-heal-profile.py");
+            if (dst.getParentFile() != null) dst.getParentFile().mkdirs();
+            java.nio.file.Files.write(dst.toPath(),
+                    script.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String out = proot.execAndRead(
+                    "python3 /root/.dsha-heal-profile.py --log /root/dsh-web.log"
+                            + " --profile /root/.dsh/profiles/web 2>&1; "
+                            + "rm -f /root/.dsha-heal-profile.py", 60_000);
+            android.util.Log.i("DSHA", "profile 启动自愈: " + (out == null ? "无输出" : out.trim()));
+            return out;
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "profile 启动自愈失败: " + e);
+            return null;
+        }
+    }
+
     /** 局域网 0.0.0.0 放行补丁是否已就绪（防重复打补丁） */
     private volatile boolean lanBindReady = false;
     /** 进度持久化节流用时间戳 */
@@ -884,6 +948,10 @@ public class HarnessController {
 
     /** 启动前自愈：老 WebView 兼容补丁（AbortSignal.any/timeout polyfill，幂等） */
     private void ensureWebUiPolyfill() {
+        // dsh 的 Web 服务本身没有鉴权（上游只绑 127.0.0.1，而 Android 上任何 App
+        // 都能访问回环且不需要权限）→ 给它加 token 校验，否则随便一个应用就能读走
+        // 全部会话、建会话让 agent 执行 bash。
+        runAssetScript("webserver-auth-patch.sh", "dsha-webserver-auth.sh", 60_000);
         runAssetScript("webui-polyfill.sh", "dsha-webui-polyfill.sh", 60_000);
     }
 
@@ -1696,14 +1764,25 @@ public class HarnessController {
                 // Ubuntu 24.04 无 /usr/bin/python（只有 python3），部分构建工具死认 python 命令
                 "(command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python || true)");
 
+        // 先把 pnpm 的硬链接导入关掉：proot 下 link() 只是 symlink 模拟，
+        // 留下的悬空链会让后续安装报各种莫名的 ENOENT
+        runAssetScript("pnpm-env-fix.sh", "dsha-pnpm-env-fix.sh", 60_000);
         setProgress("安装依赖 pnpm install（npmmirror 源）", 95);
         try {
             // 注意：npm 11 的 `npm config set disturl` 会报 "not a valid npm option"，
             // 所以直接写 .npmrc 文件 + 环境变量（不经过 npm 配置校验）
+            // pnpm 会持续打印进度，五分钟一声不吭基本就是网络挂了
             runStep("安装依赖 pnpm install", 95,
                     "cd /root/" + wd + " && " +
-                    "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc && " +
-                    "pnpm install");
+                    // 三项一次写全。以前只写 registry 且用 > 覆盖，会把
+                    // pnpm-env-fix.sh 刚配好的 package-import-method 冲掉 ——
+                    // 于是 pnpm 又回去用硬链接，proot 下就是 .l2s 悬空链那套老问题
+                    "printf 'registry=https://registry.npmmirror.com\\n"
+                    + "package-import-method=copy\\nside-effects-cache=false\\n'"
+                    + " > /root/.npmrc && " +
+                    "pnpm install",
+                    // pnpm 会持续打印包名，五分钟一声不吭基本就是网络挂了
+                    300_000L);
         } catch (Exception e) {
             throw new Exception(e.getMessage() + "\n\n[原生模块编译失败提示]\n"
                     + "1. Node headers 已预下载到 node-gyp 缓存（npmmirror 源），不依赖 nodejs.org\n"
@@ -1906,10 +1985,27 @@ public class HarnessController {
      * 失败时输出日志尾部以便定位。
      */
     private void runStep(String stage, int percent, String cmd) throws Exception {
+        runStep(stage, percent, cmd, 0L);
+    }
+
+    /** @param stallMs 大于 0 时启用静默看门狗：这么久一个字都不吐就判卡死。
+     *                 只给会持续打印进度的命令用（pnpm/apt/npm）；tar、xz 正常
+     *                 也会长时间静默，传 0 走无超时的老路，免得误杀。 */
+    private void runStep(String stage, int percent, String cmd, long stallMs) throws Exception {
         setProgress(stage, percent);
-        String fullCmd = "(" + cmd + ") >/root/dsh-step.log 2>&1"
+        // 输出重定向到日志、失败时回吐尾部 —— 但这样一来标准输出就没内容了，
+        // 静默看门狗看不到进度。所以启用看门狗时改成 tee：日志照留，同时有输出可判活。
+        String fullCmd = stallMs > 0
+                ? "(" + cmd + ") 2>&1 | tee /root/dsh-step.log; "
+                + "test ${PIPESTATUS[0]} -eq 0 || { echo '--- 日志尾部 ---'; "
+                + "tail -100 /root/dsh-step.log; exit 1; }"
+                : "(" + cmd + ") >/root/dsh-step.log 2>&1"
                 + " || { echo '--- 日志尾部 ---'; tail -100 /root/dsh-step.log; exit 1; }";
-        proot.execChecked(fullCmd);
+        if (stallMs > 0) {
+            proot.execCheckedStall(fullCmd, stallMs);
+        } else {
+            proot.execChecked(fullCmd);
+        }
     }
 
     // ================= 脚本与命令 =================
@@ -2072,14 +2168,21 @@ public class HarnessController {
                 // 判定源码模式必须认启动入口 bin.js：RC6 模式下工作区目录也存在（只是没有源码），
                 // 只认 -d 会把空工作区误判成源码树 → 启动失败
                 + "if [ -f /root/" + wd + "/apps/cli/lib/bin.js ]; then cd /root/" + wd + "; " + depsSelfHeal()
-                + "exec node apps/cli/lib/bin.js web" + opts + " > ~/dsh-web.log 2>&1; "
+                + "exec node --expose-internals apps/cli/lib/bin.js web" + opts + " > ~/dsh-web.log 2>&1; "
                 + "else "
                 + "if command -v dsh >/dev/null 2>&1 && test -f \"$(command -v dsh)\"; then "
                 // RC6 模式没有源码树，但工作区目录必须存在并作为运行目录：
                 // 1) 否则用户在 MT/工作区页看不到 deepseek-harness 文件夹（"下载完没有工作区"）
                 // 2) agent 产物/上传文件有固定落点，备份功能才能带上
                 + "mkdir -p /root/" + wd + " && cd /root/" + wd + " && "
-                + "exec dsh web" + opts + " > ~/dsh-web.log 2>&1; "
+                // 必须带 --expose-internals：dsh 的 profile-boot 会无条件创建
+                // @deepseek-ai/cordis-plugin-hmr（它要靠 HMR 去监听用户 patch 文件），
+                // 而那个插件第一行就检查 loader.internal，没有这个标志直接抛
+                // 「--expose-internals is required for HMR service」把整个启动带崩。
+                // NODE_OPTIONS 传不了这个标志（node 明确拒绝），只能作为命令行参数；
+                // 而 dsh 是个 wrapper，所以先 readlink 出真正的 bin.js 再交给 node。
+                + "DSH_REAL=$(readlink -f \"$(command -v dsh)\" 2>/dev/null || command -v dsh); "
+                + "exec node --expose-internals \"$DSH_REAL\" web" + opts + " > ~/dsh-web.log 2>&1; "
                 + "else echo '[DSHA] 全局 dsh 不可用（悬空链接或未安装），请到分步安装页重装 ⑤ deepseek-harness'; exit 1; fi; fi";
     }
 
@@ -2704,7 +2807,7 @@ public class HarnessController {
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
      *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
      *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
-    private static final String BUILTIN_ASSET_VERSION = "9";
+    private static final String BUILTIN_ASSET_VERSION = "10";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
      *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，
@@ -4665,6 +4768,33 @@ public class HarnessController {
         return installPlugin(pkg, null);
     }
 
+    /** 已经内置在 APK 里的插件（用 link: 指向本地目录注册，不走网络）。
+     *  再从 GitHub 装一份同名的，只会和内置版本抢同一个包名，还得走 git-hosted
+     *  那条最容易出错的路（clone → 跑 prepare → 硬链接进 store）。 */
+    private static final String[] BUILTIN_PLUGIN_NAMES = {
+            "dsh-client-ui-mobile-adapt",
+            "dsh-device-shell-guide",
+            "dsh-task-notifier",
+    };
+
+    private static String builtinPluginHit(String spec) {
+        if (spec == null || spec.isEmpty()) return null;
+        String s = spec.toLowerCase(java.util.Locale.ROOT);
+        for (String n : BUILTIN_PLUGIN_NAMES) {
+            if (s.contains(n)) return n;
+        }
+        return null;
+    }
+
+    /** pnpm 在容器里最常见的一类失败：git-hosted 包在 store 的临时目录里
+     *  clone/prepare 时 ENOENT。根子是 proot 下硬链接只能靠 --link2symlink 模拟。 */
+    private static boolean isPnpmEnvFailure(String out) {
+        if (out == null) return false;
+        if (out.contains("Failed to prepare git-hosted package")) return true;
+        boolean storePath = out.contains("pnpm/store") || out.contains("/store/v");
+        return storePath && (out.contains("ENOENT") || out.contains("EEXIST"));
+    }
+
     /**
      * 安装插件（带 GitHub 兜底）：先按 pkg 装（npm 名），若 404/找不到包 且给了 fallbackSpec，
      * 自动用 github:owner/repo 重试一次（市场条目多为仅 GitHub 发布的仓库插件）。
@@ -4673,7 +4803,23 @@ public class HarnessController {
         if (!isValidPluginSpec(pkg)) {
             return "安装失败：非法插件名/来源：" + (pkg == null ? "null" : pkg);
         }
+        // 内置插件直接劝退：装了只会打架，而且白踩一次 git-hosted 的坑
+        String builtin = builtinPluginHit(pkg);
+        if (builtin == null) builtin = builtinPluginHit(fallbackSpec);
+        if (builtin != null) {
+            return "无需安装：" + builtin + " 已经内置在 DSHA 里。\n\n"
+                    + "它每次启动都会自动注册（本地 link:，不走网络），再从 GitHub 装一份"
+                    + "同名插件会和内置版本抢同一个包名。\n"
+                    + "如果市场里显示它未安装，去「配置」页点「重启 Web」让内置版本生效即可。";
+        }
         String r = runPluginInstall(pkg);
+        // ENOENT 这类是环境问题而不是包的问题：修掉硬链接配置与残留后重试一次，
+        // 多数情况这一次就过了（dsh 那句「去改 allowBuilds」是误导，跟本错无关）
+        if (isPnpmEnvFailure(r)) {
+            String fix = runAssetScript("pnpm-env-fix.sh", "dsha-pnpm-env-fix.sh", 60_000);
+            r = r + "\n\n[检测到 pnpm 环境问题（proot 下硬链接只能模拟），已修复并重试]\n"
+                    + (fix == null ? "" : fix.trim() + "\n") + runPluginInstall(pkg);
+        }
         if (r != null && fallbackSpec != null && !fallbackSpec.equals(pkg)
                 && isPkgNotFound(r)) {
             if (!isValidPluginSpec(fallbackSpec)) {

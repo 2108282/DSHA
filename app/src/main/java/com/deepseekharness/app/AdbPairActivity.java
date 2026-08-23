@@ -77,6 +77,11 @@ public class AdbPairActivity extends Activity {
         statusText.setPadding(0, (int) (10 * getResources().getDisplayMetrics().density), 0, 0);
         root.addView(statusText);
 
+        Button autoBtn = new Button(this);
+        autoBtn.setText("⚡ 免手抄：自动读配对码");
+        autoBtn.setOnClickListener(v -> onAutoReadClick());
+        root.addView(autoBtn);
+
         Button advanced = new Button(this);
         advanced.setText("手动填端口（高级）");
         advanced.setAllCaps(false);
@@ -85,6 +90,65 @@ public class AdbPairActivity extends Activity {
         root.addView(advanced);
 
         return root;
+    }
+
+    /** 「自动读配对码」：让无障碍服务从系统配对弹窗里直接读码，省掉手抄这一步。
+     *  配对码只有两分钟有效期，抄错一位就得从头再来 —— 这是整条 ADB 通道最劝退的地方。 */
+    private void onAutoReadClick() {
+        if (!DshaAccessibilityService.enabled(this)) {
+            new androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("需要先开启无障碍服务")
+                    .setMessage("开启后 DSHA 能直接读出配对弹窗里的 6 位码并自动配对。\n\n"
+                            + "隐私：可读范围在清单里已限定为系统「设置」应用，其他应用的画面"
+                            + "系统不会投递给我们；而且只在你点过这个按钮之后的两分钟内才读取，"
+                            + "读到配对码立即停止，不保存、不上传任何屏幕内容。\n\n"
+                            + "在接下来的列表里找到「DSHA 配对助手」并打开即可。")
+                    .setPositiveButton("去开启", (d, w) -> {
+                        try {
+                            startActivity(new android.content.Intent(
+                                    android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                        } catch (Throwable t) {
+                            setStatus("打不开无障碍设置：" + t.getMessage());
+                        }
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
+            return;
+        }
+        DshaAccessibilityService.startWatch((code, ip, port) -> runOnUiThread(() -> {
+            codeEt.setText(code);
+            if (port != null && !port.isEmpty()) {
+                try {
+                    discoveredPairPort = Integer.parseInt(port);
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            setStatus("已自动读到配对码 " + code
+                    + (port == null || port.isEmpty() ? "" : "（配对端口 " + port + "）")
+                    + "，正在配对…");
+            startPair();
+        }));
+        setStatus("已开始监听（两分钟内有效）。请在系统页面点「使用配对码配对设备」，"
+                + "弹窗一出现就会自动读码配对，不用回到这里。");
+        try {
+            // 直接跳无线调试页；个别机型没有这个 action，退回开发者选项
+            startActivity(new android.content.Intent("android.settings.WIRELESS_DEBUGGING_SETTINGS")
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Throwable t) {
+            try {
+                startActivity(new android.content.Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
+            } catch (Throwable t2) {
+                setStatus("请手动打开：设置 → 开发者选项 → 无线调试");
+            }
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        // 离开页面就关掉监听窗口，别让它白白挂着两分钟
+        DshaAccessibilityService.stopWatch();
+        super.onDestroy();
     }
 
     private void showManualPorts() {

@@ -69,6 +69,23 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- 无障碍服务：只用来读系统「无线调试」弹窗里的配对码（配对码 2 分钟失效，
+             手抄错一位就得重来）。可读范围由 accessibility_service_config.xml 里的
+             packageNames 限定为 com.android.settings —— 系统层面就不会把其他应用的
+             画面投给我们，用户在无障碍详情页也能看到这个限制。 -->
+        <service
+            android:name=".DshaAccessibilityService"
+            android:exported="false"
+            android:label="DSHA 配对助手"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
         <!-- 关键修复：Shizuku UserService 必须注册，否则 bindUserService 永久失败。
              lint 的 Instantiatable 检查在这里是误报：Shizuku 的 UserService 不继承
              android.app.Service，而是实现 AIDL 接口（IShellService.Stub），由 Shizuku
