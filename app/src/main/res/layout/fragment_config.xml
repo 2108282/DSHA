@@ -196,6 +196,15 @@
                 android:text="电脑模式（预览用桌面浏览器标识）" />
 
             <CheckBox
+                android:id="@+id/config_backup_key"
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/touch_min"
+                android:paddingStart="@dimen/gap_tight"
+                android:text="备份包含 API key（关掉更安全，恢复后需重填）" />
+
+            <CheckBox
                 android:id="@+id/config_gecko_core"
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"

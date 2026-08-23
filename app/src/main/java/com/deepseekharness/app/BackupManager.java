@@ -98,7 +98,24 @@ public final class BackupManager {
             // 卸载即清空。于是这类用户备份→卸载→恢复之后 key 必然为空。
             // 修法：备份前把当前 key 写进 .dsh/.dsha-apikey —— tar 清单第一项就是 .dsh，
             // 会自动带上，不必改打包参数；key 为空则跳过。
-            String bkKey = c.getApiKey();
+            // 备份落在 Download/DSHA（公共目录）：任何拿到存储权限的应用都读得到，
+            // 而备份里有全部会话历史。把 key 也塞进去是方便，但也是把凭据摊在公共区，
+            // 所以给用户一个关掉的开关（默认开，保持原有行为不变）。
+            boolean includeKey = ctx
+                    .getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
+                    .getBoolean("backup_include_key", true);
+            String bkKey = includeKey ? c.getApiKey() : "";
+            if (!includeKey) {
+                // 上次备份可能留过这个文件，关掉开关后要真的清掉，否则形同没关
+                try {
+                    File old = new File(c.getProot().getRootfsDir(), "root/.dsh/.dsha-apikey");
+                    if (old.isFile()) {
+                        //noinspection ResultOfMethodCallIgnored
+                        old.delete();
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
             if (bkKey != null && !bkKey.isEmpty()) {
                 try {
                     File kf = new File(c.getProot().getRootfsDir(), "root/.dsh/.dsha-apikey");

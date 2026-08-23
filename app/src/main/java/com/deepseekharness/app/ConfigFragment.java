@@ -31,6 +31,7 @@ public class ConfigFragment extends Fragment {
     private EditText apiKeyEdit, portEdit, modelEdit;
     private Spinner modeSpinner;
     private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb, rootShellCb;
+    private CheckBox backupKeyCb;
     private EditText autoBackupEdit;
     private Button saveBtn;
     private TextView repoLink;
@@ -52,6 +53,7 @@ public class ConfigFragment extends Fragment {
         confirmShellCb = view.findViewById(R.id.config_confirm_shell);
         checkUpdateCb = view.findViewById(R.id.config_check_update);
         desktopModeCb = view.findViewById(R.id.config_desktop_mode);
+        backupKeyCb = view.findViewById(R.id.config_backup_key);
         lanModeCb = view.findViewById(R.id.config_lan_mode);
         rc6Cb = view.findViewById(R.id.config_rc6);
         autoBackupEdit = view.findViewById(R.id.config_auto_backup);
@@ -431,6 +433,12 @@ public class ConfigFragment extends Fragment {
 
         loadConfig();
         if (rootShellCb != null) rootShellCb.setChecked(c.isRootShellAllowed());
+        if (backupKeyCb != null) {
+            // 默认开：这是别人为「离线包用户恢复后 key 为空」加的功能，不能默默关掉
+            backupKeyCb.setChecked(requireContext()
+                    .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .getBoolean("backup_include_key", true));
+        }
 
         saveBtn.setOnClickListener(v -> {
             c.setApiKey(apiKeyEdit.getText().toString().trim());
@@ -441,6 +449,8 @@ public class ConfigFragment extends Fragment {
                     .edit().putBoolean("confirm_shell", confirmShellCb.isChecked())
                     .putBoolean("check_update", checkUpdateCb.isChecked())
                     .putBoolean("desktop_mode", desktopModeCb.isChecked())
+                    .putBoolean("backup_include_key",
+                            backupKeyCb == null || backupKeyCb.isChecked())
                     .putBoolean("lan_mode", lanModeCb.isChecked())
                     .putBoolean("use_rc6", rc6Cb.isChecked())
                     .putBoolean("gecko_core", geckoCb != null && geckoCb.isChecked())
