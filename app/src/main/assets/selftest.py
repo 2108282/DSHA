@@ -22,6 +22,11 @@ FS_LOCAL_CANDIDATES = (
     "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js",
     "/usr/local/lib/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js",
 )
+SESSION_PKG_CANDIDATES = (
+    "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/"
+    "@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
+    "/usr/local/lib/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
+)
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 rows = []          # (状态, 标题, 说明)
@@ -294,6 +299,16 @@ def check_write_patch():
         add("PASS", "write 补丁", "已生效（新建文件走 rename，不会变悬空链接）")
     else:
         add("FAIL", "write 补丁", "未打 —— 重开一次 App（启动自愈会补），或到启动页点一次启动")
+    # 会话日志发布补丁：没打的话每轮对话结束就 ENOENT（会话文件发布后即悬空）
+    starget = next((p for p in SESSION_PKG_CANDIDATES if os.path.isfile(p)), None)
+    if starget is None:
+        add("SKIP", "会话发布补丁", "找不到 dsh-session-persistence-jsonl")
+    elif "DSHA_L2S_FIX2" in read(starget, 400000):
+        add("PASS", "会话发布补丁", "已生效（会话日志走 rename 发布，不会悬空）")
+    else:
+        add("FAIL", "会话发布补丁",
+            "未打 —— 会话写完即失效（ENOENT ... session.jsonl.zstd）；"
+            "重开一次 App 会自动补，或到启动页点一次启动")
     mark = read("/root/.dsha-hardlink").strip()
     if mark.startswith("ok"):
         add("PASS", "硬链接支持", "文件系统支持真实硬链接，proot 未启用 link2symlink")
