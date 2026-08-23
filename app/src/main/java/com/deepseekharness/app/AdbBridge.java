@@ -32,6 +32,11 @@ public final class AdbBridge {
     /** 当前 assets 脚本版本：每次改脚本 +1，旧版 APK 的残留脚本会因版本不符被强制重注入 */
     private static final String SCRIPT_VERSION = "9";
 
+    /** 供自检/诊断读取期望版本（包内可见，避免把常量再抄一份） */
+    static String scriptVersion() {
+        return SCRIPT_VERSION;
+    }
+
     /** 幂等注入：把三个 assets 脚本 base64 写入 /root/.dsh/ 并加执行位 + 写版本标记 */
     public static String inject(Context ctx, ProotBootstrap proot) {
         StringBuilder cmds = new StringBuilder("set -e; mkdir -p /root/.dsh; ");

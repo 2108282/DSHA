@@ -61,6 +61,49 @@ public class SettingsFragment extends Fragment {
         updateSub.setText("当前 v" + version + " · 从 GitHub Releases 检查");
         view.findViewById(R.id.settings_about).setOnClickListener(v -> AboutDialog.show(requireContext()));
         view.findViewById(R.id.settings_update).setOnClickListener(v -> checkUpdate());
+        View selfTest = view.findViewById(R.id.settings_selftest);
+        if (selfTest != null) selfTest.setOnClickListener(v -> runSelfTest());
+    }
+
+    /** 一键自检：后台跑只读检查，结果用可滚动弹窗展示（可一键复制发给开发者） */
+    private void runSelfTest() {
+        Toast.makeText(requireContext(), "正在自检，约 10~30 秒…", Toast.LENGTH_SHORT).show();
+        final android.content.Context app = requireContext().getApplicationContext();
+        new Thread(() -> {
+            final String report = HarnessController.get(app).runSelfTest();
+            if (getActivity() == null) return;
+            requireActivity().runOnUiThread(() -> {
+                if (isAdded()) showSelfTestDialog(report);
+            });
+        }, "dsha-selftest").start();
+    }
+
+    private void showSelfTestDialog(final String report) {
+        TextView body = new TextView(requireContext());
+        body.setText(report);
+        body.setTypeface(android.graphics.Typeface.MONOSPACE);
+        body.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        body.setTextColor(requireContext().getColor(R.color.text));
+        body.setTextIsSelectable(true);
+        body.setPadding(dp(16), dp(8), dp(16), dp(8));
+        android.widget.ScrollView scroll = new android.widget.ScrollView(requireContext());
+        scroll.addView(body);
+        // 弹窗高度设上限，报告长了也不会把按钮顶出屏幕
+        scroll.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(420)));
+        new AlertDialog.Builder(requireContext())
+                .setTitle("自检结果")
+                .setView(scroll)
+                .setPositiveButton("复制", (d, w) -> {
+                    android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                            requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                    if (cm != null) {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("DSHA 自检", report));
+                        Toast.makeText(requireContext(), "已复制自检结果", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("关闭", null)
+                .show();
     }
 
     private LinearLayout buildRow(final int index) {

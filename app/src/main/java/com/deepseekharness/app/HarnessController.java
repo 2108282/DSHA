@@ -745,6 +745,48 @@ public class HarnessController {
         });
     }
 
+    /** 一键自检：注入 selftest.py 跑一遍**只读**检查（环境/3090 桥/ADB/引导插件/
+     *  write 补丁/会话/bundles/备份/守卫/版本标记），返回给用户看的报告。
+     *  期望版本由这里传进脚本，避免版本号在两边各写一份。 */
+    public String runSelfTest() {
+        if (!proot.isInstalled()) {
+            return "环境未就绪：请先完成内置环境的解压/安装，再运行自检。";
+        }
+        try {
+            String py = readAsset("selftest.py");
+            if (py == null || py.isEmpty()) return "自检脚本缺失（APK 资源异常）";
+            java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-selftest.py");
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), py.getBytes(StandardCharsets.UTF_8));
+            String args = " --script-ver " + AdbBridge.scriptVersion()
+                    + " --guard-ver " + GUARD_VERSION
+                    + " --step6 " + STEP6_VERSION
+                    + " --assets " + BUILTIN_ASSET_VERSION
+                    + " --guide-ver " + builtinGuideVersion()
+                    + " --adb-on " + (prefs.getBoolean(Constants.KEY_ADB_ENABLED, false) ? "1" : "0");
+            String out = proot.execAndRead(
+                    "python3 /root/dsha-selftest.py" + args
+                            + " 2>&1; rm -f /root/dsha-selftest.py", 180_000);
+            if (out == null || out.trim().isEmpty()) {
+                return "自检没有输出：rootfs 内的 python3 可能不可用（可重跑步骤②安装基础工具）。";
+            }
+            return out.trim();
+        } catch (Throwable e) {
+            return "自检失败：" + describe(e);
+        }
+    }
+
+    /** assets 里内置引导插件的版本号（自检据此对账 rootfs 内已装的那份） */
+    private String builtinGuideVersion() {
+        try {
+            String json = readAsset("device-shell-guide/package.json");
+            if (json == null || json.isEmpty()) return "";
+            return new org.json.JSONObject(json).optString("version", "");
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
     /** 启动前自愈：dsh 的 write 工具在 proot 下新建文件会变悬空链接
      *  （dsh 用 link(临时文件,目标) 发布 + 删临时目录，撞上 proot 的 --link2symlink）。
      *  给 fs-local 打「目标不存在改用 rename 发布」的补丁，幂等，命中已打过时 0.05 秒返回。 */
