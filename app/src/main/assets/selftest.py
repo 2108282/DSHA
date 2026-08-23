@@ -110,6 +110,16 @@ def check_bridge():
         json_ok = False
     add("PASS" if json_ok else "FAIL", "3090 桥",
         "可达地址 %s；响应%s合法 JSON" % ("+".join(ok_hosts), "是" if json_ok else "不是"))
+    # 顺带抽查 App 层接口（agent 能直接调的那批能力）
+    try:
+        url = "http://127.0.0.1:3090/app/device?token=" + urllib.parse.quote(token)
+        with urllib.request.urlopen(url, timeout=8) as r:
+            d = json.loads(r.read().decode("utf-8", "replace")).get("result", "")
+        first = d.split("\n")[0] if d else ""
+        add("PASS" if "model=" in d else "FAIL", "App 层接口",
+            first if "model=" in d else "/app/device 返回异常：%s" % d[:80])
+    except Exception as e:
+        add("FAIL", "App 层接口", "/app/device 调不通：%s（旧版 App 没有这些端点）" % e)
 
 
 # ===================== 3. ADB 通道脚本 =====================

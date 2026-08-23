@@ -45,6 +45,10 @@ public final class HttpShellService {
     private volatile boolean pendingAllow;
     /** 确认进行中标志：并发确认请求直接拒绝（避免 latch 覆盖导致"点了允许却拒绝"） */
     private volatile boolean confirmBusy = false;
+    /** /app/ask 的一次性问答状态（同一时刻只允许一个提问在等待） */
+    private volatile CountDownLatch askLatch;
+    private volatile String askAnswer = "";
+    private volatile boolean askBusy = false;
 
     private ServerSocket server;
     /** IPv6 回环监听（兼容脚本用 localhost 解析成 ::1 的场景；绑不上则忽略） */
@@ -283,6 +287,24 @@ public final class HttpShellService {
             } else if (path.startsWith("/app/readfile")) {
                 // agent 读外部文件（rootfs 挂载 /sdcard 的补充；支持路径参数）
                 result = appReadFile(path);
+            } else if (path.startsWith("/app/device")) {
+                result = appDevice();
+            } else if (path.startsWith("/app/apps")) {
+                result = appList(path);
+            } else if (path.startsWith("/app/launch")) {
+                result = appLaunch(path);
+            } else if (path.startsWith("/app/clip")) {
+                result = appClip(path);
+            } else if (path.startsWith("/app/share")) {
+                result = appShare(path);
+            } else if (path.startsWith("/app/open")) {
+                result = appOpen(path);
+            } else if (path.startsWith("/app/vibrate")) {
+                result = appVibrate(path);
+            } else if (path.startsWith("/app/ask")) {
+                result = appAsk(path);
+            } else if (path.startsWith("/app/export")) {
+                result = appExport(path);
             } else if (cmd.isEmpty()) {
                 result = "[NO_CMD]";
             } else if (path.startsWith("/confirm")) {
@@ -402,6 +424,322 @@ public final class HttpShellService {
             return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Throwable e) {
             return "ERROR: " + e.getMessage();
+        }
+    }
+
+    // ================= App 层能力（不需要 ADB / Shizuku，agent 直接调） =================
+
+    /** /app/device ：设备状态一览（机型/系统/电量/网络/屏幕/存储/内存） */
+    private String appDevice() {
+        StringBuilder sb = new StringBuilder();
+        try {
+            sb.append("model=").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n');
+            sb.append("android=").append(Build.VERSION.RELEASE)
+                    .append(" (SDK ").append(Build.VERSION.SDK_INT).append(")\n");
+            try {
+                android.os.BatteryManager bm =
+                        (android.os.BatteryManager) ctx.getSystemService(Context.BATTERY_SERVICE);
+                android.content.Intent st = ctx.registerReceiver(null,
+                        new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+                int status = st == null ? -1 : st.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+                boolean charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING
+                        || status == android.os.BatteryManager.BATTERY_STATUS_FULL;
+                int level = bm == null ? -1
+                        : bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY);
+                sb.append("battery=").append(level).append("% charging=").append(charging).append('\n');
+            } catch (Throwable ignored) {
+            }
+            try {
+                android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                        ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+                String net = "none";
+                if (cm != null) {
+                    android.net.Network n = cm.getActiveNetwork();
+                    android.net.NetworkCapabilities nc = n == null ? null : cm.getNetworkCapabilities(n);
+                    if (nc != null) {
+                        if (nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) net = "wifi";
+                        else if (nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)) net = "cellular";
+                        else if (nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)) net = "ethernet";
+                        else net = "other";
+                    }
+                }
+                sb.append("network=").append(net).append('\n');
+            } catch (Throwable ignored) {
+            }
+            try {
+                android.os.PowerManager pm = (android.os.PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+                sb.append("screen=").append(pm != null && pm.isInteractive() ? "on" : "off").append('\n');
+            } catch (Throwable ignored) {
+            }
+            sb.append("app_foreground=").append(MainActivity.current != null).append('\n');
+            try {
+                android.os.StatFs fs = new android.os.StatFs(
+                        android.os.Environment.getExternalStorageDirectory().getPath());
+                long free = fs.getAvailableBytes(), total = fs.getTotalBytes();
+                sb.append("storage_free=").append(HarnessController.fmtBytes(free))
+                        .append(" total=").append(HarnessController.fmtBytes(total)).append('\n');
+            } catch (Throwable ignored) {
+            }
+            try {
+                android.app.ActivityManager am =
+                        (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+                android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+                if (am != null) {
+                    am.getMemoryInfo(mi);
+                    sb.append("memory_free=").append(HarnessController.fmtBytes(mi.availMem))
+                            .append(" total=").append(HarnessController.fmtBytes(mi.totalMem)).append('\n');
+                }
+            } catch (Throwable ignored) {
+            }
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+        return sb.toString().trim();
+    }
+
+    /** /app/apps?q=关键字&limit=50 ：已装应用列表（每行「包名<TAB>应用名」） */
+    private String appList(String path) {
+        try {
+            String q = getParam(queryOf(path), "q", "").toLowerCase();
+            int limit = 50;
+            try {
+                limit = Math.max(1, Math.min(300, Integer.parseInt(getParam(queryOf(path), "limit", "50"))));
+            } catch (Exception ignored) {
+            }
+            boolean userOnly = !"0".equals(getParam(queryOf(path), "user", "1")); // 默认只列第三方应用
+            android.content.pm.PackageManager pm = ctx.getPackageManager();
+            java.util.List<android.content.pm.PackageInfo> all = pm.getInstalledPackages(0);
+            StringBuilder sb = new StringBuilder();
+            int n = 0;
+            for (android.content.pm.PackageInfo pi : all) {
+                if (pi.applicationInfo == null) continue;
+                boolean sys = (pi.applicationInfo.flags
+                        & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0;
+                if (userOnly && sys) continue;
+                String label = String.valueOf(pm.getApplicationLabel(pi.applicationInfo));
+                if (!q.isEmpty() && !pi.packageName.toLowerCase().contains(q)
+                        && !label.toLowerCase().contains(q)) {
+                    continue;
+                }
+                sb.append(pi.packageName).append('\t').append(label).append('\n');
+                if (++n >= limit) break;
+            }
+            if (n == 0) return "（没有匹配的应用）";
+            return sb.append("共 ").append(n).append(" 个").toString();
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/launch?pkg=包名 ：启动应用（App 层，不需要 ADB） */
+    private String appLaunch(String path) {
+        try {
+            String pkg = getParam(queryOf(path), "pkg", "");
+            if (pkg.isEmpty()) return "NO_PKG";
+            android.content.Intent i = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
+            if (i == null) return "NOT_FOUND: " + pkg + "（该应用没有启动入口或未安装）";
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(i);
+            return "OK: 已启动 " + pkg;
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/clip 读剪贴板；/app/clip?text=xxx 写剪贴板 */
+    private String appClip(String path) {
+        final String text = getParam(queryOf(path), "text", "");
+        try {
+            final android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                    ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm == null) return "NO_SERVICE";
+            if (!text.isEmpty()) {
+                mainHandler.post(() -> {
+                    try {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("DSHA", text));
+                    } catch (Throwable ignored) {
+                    }
+                });
+                return "OK: 已写入剪贴板（" + text.length() + " 字）";
+            }
+            // 读：Android 10+ 只有前台应用能读剪贴板，后台一律拿不到
+            if (MainActivity.current == null) {
+                return "[APP_BACKGROUND] 系统限制：只有 App 在前台时才能读剪贴板，"
+                        + "可先用 /app/notify 提醒用户打开 DSHA";
+            }
+            android.content.ClipData cd = cm.getPrimaryClip();
+            if (cd == null || cd.getItemCount() == 0) return "（剪贴板为空）";
+            CharSequence cs = cd.getItemAt(0).coerceToText(ctx);
+            String s = cs == null ? "" : cs.toString();
+            if (s.length() > 8192) s = s.substring(0, 8192) + "…（已截断）";
+            return s;
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/share?text=... 或 /app/share?path=/sdcard/x.txt ：调起系统分享面板 */
+    private String appShare(String path) {
+        try {
+            String q = queryOf(path);
+            String text = getParam(q, "text", "");
+            String file = getParam(q, "path", "");
+            android.content.Intent send = new android.content.Intent(android.content.Intent.ACTION_SEND);
+            if (!file.isEmpty()) {
+                java.io.File f = new java.io.File(file);
+                if (!f.isFile()) return "NOT_FOUND: " + file;
+                // 只允许分享外部存储里的文件（App 私有目录需要 FileProvider 授权）
+                String canon = f.getCanonicalPath();
+                if (!canon.startsWith("/sdcard") && !canon.startsWith("/storage/emulated/0")) {
+                    return "FORBIDDEN: 只能分享 /sdcard 下的文件";
+                }
+                send.setType("*/*");
+                send.putExtra(android.content.Intent.EXTRA_STREAM, android.net.Uri.fromFile(f));
+                send.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                if (!text.isEmpty()) send.putExtra(android.content.Intent.EXTRA_TEXT, text);
+            } else {
+                if (text.isEmpty()) return "NO_CONTENT";
+                send.setType("text/plain");
+                send.putExtra(android.content.Intent.EXTRA_TEXT, text);
+            }
+            android.content.Intent chooser = android.content.Intent.createChooser(send, "分享");
+            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(chooser);
+            return "OK: 已弹出分享面板";
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/open?url=... ：用系统默认应用打开链接（http/https/geo/tel…） */
+    private String appOpen(String path) {
+        try {
+            String url = getParam(queryOf(path), "url", "");
+            if (url.isEmpty()) return "NO_URL";
+            String low = url.toLowerCase();
+            // 只放行常见安全 scheme：file:// 会把 App 私有文件暴露给任意应用
+            if (!low.startsWith("http://") && !low.startsWith("https://")
+                    && !low.startsWith("geo:") && !low.startsWith("tel:")
+                    && !low.startsWith("mailto:") && !low.startsWith("market://")) {
+                return "FORBIDDEN: 只支持 http/https/geo/tel/mailto/market 链接";
+            }
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse(url));
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(i);
+            return "OK: 已打开 " + url;
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/vibrate?ms=300 ：震动提醒（长任务跑完叫醒用户） */
+    private String appVibrate(String path) {
+        try {
+            long ms = 300;
+            try {
+                ms = Math.max(30, Math.min(2000, Long.parseLong(getParam(queryOf(path), "ms", "300"))));
+            } catch (Exception ignored) {
+            }
+            android.os.Vibrator v;
+            if (Build.VERSION.SDK_INT >= 31) {
+                android.os.VibratorManager vm =
+                        (android.os.VibratorManager) ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                v = vm == null ? null : vm.getDefaultVibrator();
+            } else {
+                v = (android.os.Vibrator) ctx.getSystemService(Context.VIBRATOR_SERVICE);
+            }
+            if (v == null) return "NO_VIBRATOR";
+            v.vibrate(android.os.VibrationEffect.createOneShot(ms,
+                    android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+            return "OK: 震动 " + ms + "ms";
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
+    /** /app/ask?q=问题&options=选项A|选项B|选项C ：弹窗问用户，阻塞等回答（最多 3 个选项，120 秒超时） */
+    private String appAsk(String path) {
+        String q = getParam(queryOf(path), "q", "");
+        String optRaw = getParam(queryOf(path), "options", "");
+        if (q.isEmpty()) return "NO_QUESTION";
+        if (askBusy) return "[BUSY] 已有一个提问在等用户回答";
+        final MainActivity act = MainActivity.current;
+        if (act == null) {
+            return "[APP_BACKGROUND] App 不在前台，弹不出提问 —— 可先 /app/notify 提醒用户打开 DSHA";
+        }
+        String[] parts = optRaw.isEmpty() ? new String[] { "好" } : optRaw.split("\\|");
+        final String[] opts = parts.length <= 3 ? parts : new String[] { parts[0], parts[1], parts[2] };
+        askBusy = true;
+        try {
+            final CountDownLatch latch = new CountDownLatch(1);
+            askLatch = latch;
+            askAnswer = "";
+            act.runOnUiThread(() -> {
+                try {
+                    androidx.appcompat.app.AlertDialog.Builder b =
+                            new androidx.appcompat.app.AlertDialog.Builder(act)
+                                    .setTitle("助手提问").setMessage(q);
+                    b.setPositiveButton(opts[0], (d, w) -> {
+                        askAnswer = opts[0];
+                        latch.countDown();
+                    });
+                    if (opts.length > 1) {
+                        b.setNegativeButton(opts[1], (d, w) -> {
+                            askAnswer = opts[1];
+                            latch.countDown();
+                        });
+                    }
+                    if (opts.length > 2) {
+                        b.setNeutralButton(opts[2], (d, w) -> {
+                            askAnswer = opts[2];
+                            latch.countDown();
+                        });
+                    }
+                    b.setOnCancelListener(d -> latch.countDown());
+                    b.setOnDismissListener(d -> latch.countDown());
+                    b.show();
+                } catch (Throwable e) {
+                    latch.countDown();
+                }
+            });
+            boolean answered = latch.await(120, TimeUnit.SECONDS);
+            if (!answered) return "[TIMEOUT] 用户 120 秒内没有回答";
+            return askAnswer.isEmpty() ? "[DISMISSED] 用户关掉了提问框" : askAnswer;
+        } catch (InterruptedException e) {
+            return "[INTERRUPTED]";
+        } finally {
+            askBusy = false;
+            askLatch = null;
+        }
+    }
+
+    /** /app/export?path=/root/x.md&name=x.md ：把文件导出到 Download/DSHA（走 MediaStore，用户可直接在文件管理器看到） */
+    private String appExport(String path) {
+        try {
+            String q = queryOf(path);
+            String src = getParam(q, "path", "");
+            if (src.isEmpty()) return "NO_PATH";
+            String name = getParam(q, "name", "");
+            java.io.File f = new java.io.File(src);
+            if (!f.isFile()) {
+                // 允许传 rootfs 内的 guest 路径（/root/... → 映射到 App 私有目录）
+                try {
+                    HarnessController hc = HarnessController.get(ctx);
+                    java.io.File guess = new java.io.File(hc.getProot().getRootfsDir(),
+                            src.startsWith("/") ? src.substring(1) : src);
+                    if (guess.isFile()) f = guess;
+                } catch (Throwable ignored) {
+                }
+            }
+            if (!f.isFile()) return "NOT_FOUND: " + src;
+            if (f.length() > 64L * 1024 * 1024) return "TOO_LARGE: " + f.length();
+            if (name.isEmpty()) name = f.getName();
+            if (name.contains("/") || name.contains("..")) return "BAD_NAME";
+            String out = BackupManager.exportToDownloads(ctx, f, name);
+            return out == null ? "ERROR: 导出失败（存储权限或空间不足）" : "OK: " + out;
+        } catch (Throwable e) {
+            return "ERROR: " + e;
         }
     }
 

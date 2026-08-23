@@ -96,6 +96,19 @@ public final class BackupManager {
         }
     }
 
+    /** 通用导出：把任意文件放进 Download/DSHA 并返回用户可见路径。
+     *  供 3090 桥的 /app/export 用——agent 产出的报告/日志可以一键交到用户手上。 */
+    public static String exportToDownloads(Context ctx, File src, String name) {
+        try {
+            return Build.VERSION.SDK_INT >= 29
+                    ? writeViaMediaStore(ctx, src, name, true)
+                    : writeDirect(src, name);
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "导出到 Download 失败: " + e);
+            return null;
+        }
+    }
+
     /** 备份前置整理：注入并执行 backup-prepare.py。全程宽容——任何失败都只记日志，
      *  备份本体照常进行（老包格式仍可恢复，只是少了清单与内联插件）。 */
     private static void runBackupPrepare(HarnessController c, String workdir) {

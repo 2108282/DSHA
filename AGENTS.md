@@ -116,6 +116,29 @@ Rule: **restore as much as possible, never fail the whole archive over one unkno
 - Backgrounds are `ripple` + `selector` drawables: press feedback **and** a disabled state. Inputs highlight their stroke on focus. Bottom-nav tint must stay `@color/nav_item_tint` (a flat `@color/primary` makes all four tabs look selected).
 - `themes.xml` sets the M3 semantic colors (`colorSurface`/`colorSurfaceVariant`/`colorOutline`/`colorSecondaryContainer`/…) so Switch/CheckBox/Spinner/AlertDialog follow the app palette instead of Material's default purple. `alertDialogTheme` needs a full Dialog theme, `materialAlertDialogTheme` needs a ThemeOverlay — passing the wrong kind crashes the dialog.
 
+## 3090 bridge endpoints (what the agent can call)
+
+`HttpShellService` listens on `127.0.0.1:3090` (plus `[::1]`), token in `/root/.dsh/.bridge_token`, every request must carry `?token=` or `X-Token`. The rootfs side is steered by the `device-shell-guide` prompt.
+
+| Endpoint | Purpose |
+|---|---|
+| `/exec?cmd=` | Shizuku shell (may be unavailable; ADB channel is the primary one) |
+| `/confirm?cmd=&force=1` | Ask the user to approve a command; blocks, 60s timeout ⇒ deny |
+| `/app/device` | Model, Android version, battery, network, screen, foreground flag, storage, memory |
+| `/app/apps?q=&limit=&user=1` | Installed packages (`pkg<TAB>label`); needs `QUERY_ALL_PACKAGES` on Android 11+ |
+| `/app/launch?pkg=` | Launch an app through `PackageManager` — no ADB needed |
+| `/app/clip` / `/app/clip?text=` | Read (foreground only, OS restriction) / write the clipboard |
+| `/app/ask?q=&options=a\|b\|c` | Modal question, **blocks up to 120s**, returns the chosen label |
+| `/app/notify?title=&text=` | Notification (suppressed while the app is foreground) |
+| `/app/toast?text=` | In-app toast |
+| `/app/share?text=` \| `?path=` | System share sheet (files must live under `/sdcard`) |
+| `/app/open?url=` | Open a link (http/https/geo/tel/mailto/market only) |
+| `/app/vibrate?ms=` | Haptic ping when a long task finishes |
+| `/app/export?path=&name=` | Copy a file into `Download/DSHA` via MediaStore (accepts guest paths like `/root/x.md`) |
+| `/app/readfile?path=` | Read a text file under `/sdcard` (credential files are refused) |
+
+Rules when adding endpoints: keep them **token-gated**, refuse paths outside `/sdcard` for file access, never expose credential files, and return plain text — `handle()` wraps whatever you return in `{"result":"…"}`, so nested JSON gets double-escaped. Blocking endpoints must have a timeout and a single-flight guard (see `askBusy`).
+
 ## Build & CI
 
 - Two-stage Actions workflow (`.github/workflows/android-build.yml`):

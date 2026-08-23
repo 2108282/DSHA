@@ -13,6 +13,11 @@
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- agent 通过 3090 桥查已装应用/启动应用（App 层能力，不需要 ADB 或 Shizuku）。
+         Android 11+ 不声明它 getInstalledPackages 只能看到极少数应用。 -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- thedjchi/Shizuku 式开机自启：授权后可在开机时自动开启无线调试（无需手动操作） -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
