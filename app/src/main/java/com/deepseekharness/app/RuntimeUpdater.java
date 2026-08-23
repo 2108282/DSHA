@@ -1,0 +1,343 @@
+package com.deepseekharness.app;
+
+import android.content.Context;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 脚本层的增量更新。
+ *
+ * 为什么需要：这一批修复里 fs-write-patch.sh、flatten-l2s.py、webserver-auth-patch.sh、
+ * adb-shell.py、引导插件……全都是几 KB 的脚本，却要用户重下 384MB 的 APK 才能拿到。
+ * 全部脚本加起来不到 200KB，实际更新通常只有几个文件、几十 KB。
+ *
+ * 定位（别把它做成第二套安装器）：
+ * - **不替代内置离线包**。装机仍然是 APK 自带 306MB rootfs、装完即用、不依赖网络 ——
+ *   网差的用户一次下载就能跑，这是我们相对同类项目的优势，不能拿去换体积。
+ * - 只覆盖脚本层：assets 里的 .py/.sh/.js/.json 与内置插件源码。
+ *   .so、rootfs、APK 本体一概不在范围内。
+ * - 纯可选：默认不自动跑，用户手动触发；全部失败也只是维持现状，不影响任何已有功能。
+ *
+ * 落地方式：下载到 filesDir/runtime-overlay/，HarnessController.readAsset() 优先读
+ * 覆盖层、没有才读 APK 内置。于是「回退到内置版本」只需删掉覆盖文件。
+ *
+ * 信任边界（务必看清楚，这是一条远程代码通道）：
+ * - 下载地址只认写死的三个域名，不接受清单里出现的其他主机；
+ * - 每个文件下载后校验 sha256，与清单不符即丢弃；
+ * - 清单自身靠 HTTPS 保护完整性。
+ * - **尚未做的**：清单签名。如果仓库本身被攻破，攻击者可以推送带正确 sha256 的
+ *   恶意脚本 —— HTTPS 挡不住这种情况。要根治需要用 release 私钥签清单、
+ *   APK 内置公钥验签。在那之前，这个功能保持「手动触发 + 展示变更清单 + 只动脚本」
+ *   三条约束，不做自动静默更新。
+ */
+public final class RuntimeUpdater {
+
+    private RuntimeUpdater() {
+    }
+
+    /** 清单地址（多源，按顺序尝试）。与 tools/gen-runtime-manifest.py 的产出对应。 */
+    private static final String[] MANIFEST_URLS = {
+            "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/runtime-manifest.json",
+            "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/runtime-manifest.json",
+            "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/runtime-manifest.json",
+    };
+
+    /** 只允许从这些主机下载。清单被篡改成指向别处时，这一层能挡住。 */
+    private static final String[] ALLOWED_HOSTS = {
+            "raw.githubusercontent.com", "cdn.jsdelivr.net", "ghproxy.net",
+    };
+
+    /** 覆盖层目录：readAsset 优先读这里 */
+    public static File overlayDir(Context ctx) {
+        return new File(ctx.getFilesDir(), "runtime-overlay");
+    }
+
+    /** 覆盖层里某个资产的落点。名字里的 / 会被保留（内置插件是多级路径）。 */
+    public static File overlayFile(Context ctx, String asset) {
+        return new File(overlayDir(ctx), asset);
+    }
+
+    public static final class Item {
+        public String asset;
+        public String sha256;
+        public int size;
+        public List<String> urls = new ArrayList<>();
+    }
+
+    public static final class Result {
+        public boolean ok;
+        public String message = "";
+        public int updated;
+        public int skipped;
+        public int failed;
+        public final List<String> changed = new ArrayList<>();
+    }
+
+    /** 拉清单 → 比对 → 下载有差异的。返回给 UI 直接展示的结果。 */
+    public static Result checkAndApply(Context ctx, HarnessController c, boolean dryRun) {
+        Result r = new Result();
+        String json = null;
+        String from = "";
+        for (String u : MANIFEST_URLS) {
+            json = httpGet(u, 8000, 15000);
+            if (json != null && json.contains("\"files\"")) {
+                from = hostOf(u);
+                break;
+            }
+        }
+        if (json == null) {
+            r.message = "拉不到更新清单（三个源都失败）——网络不通时这个功能直接跳过，不影响使用";
+            return r;
+        }
+        List<Item> items = parse(json);
+        if (items.isEmpty()) {
+            r.message = "清单为空或格式无法识别（来源 " + from + "）";
+            return r;
+        }
+
+        for (Item it : items) {
+            String localHash = localSha256(ctx, c, it.asset);
+            if (it.sha256.equalsIgnoreCase(localHash)) {
+                r.skipped++;
+                continue;
+            }
+            if (dryRun) {
+                r.changed.add(it.asset);
+                r.updated++;
+                continue;
+            }
+            if (download(ctx, it)) {
+                r.changed.add(it.asset);
+                r.updated++;
+            } else {
+                r.failed++;
+            }
+        }
+        r.ok = r.failed == 0;
+        if (r.updated == 0 && r.failed == 0) {
+            r.message = "脚本已是最新（比对 " + items.size() + " 个文件，来源 " + from + "）";
+        } else if (dryRun) {
+            r.message = "有 " + r.updated + " 个脚本可更新（共 " + items.size() + " 个）";
+        } else {
+            r.message = "已更新 " + r.updated + " 个脚本"
+                    + (r.failed > 0 ? "，" + r.failed + " 个失败（保留原版本）" : "")
+                    + "。重启 Web 后生效";
+        }
+        return r;
+    }
+
+    /** 本地当前生效版本的 sha256：覆盖层优先，其次 APK 内置 assets。 */
+    private static String localSha256(Context ctx, HarnessController c, String asset) {
+        File over = overlayFile(ctx, asset);
+        if (over.isFile()) {
+            try (InputStream in = new java.io.FileInputStream(over)) {
+                return sha256(in);
+            } catch (Throwable ignored) {
+            }
+        }
+        try (InputStream in = ctx.getAssets().open(asset)) {
+            return sha256(in);
+        } catch (Throwable e) {
+            return "";   // 内置里也没有 → 视为需要下载（清单里新增的文件）
+        }
+    }
+
+    /** 下载单个文件：多源尝试 → 校验 sha256 → 同目录临时文件 + 原子改名。 */
+    private static boolean download(Context ctx, Item it) {
+        File dst = overlayFile(ctx, it.asset);
+        File parent = dst.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+            return false;
+        }
+        for (String u : it.urls) {
+            if (!hostAllowed(u)) {
+                continue;   // 清单指向未授权主机：跳过，不是下载失败而是拒绝
+            }
+            byte[] body = httpGetBytes(u, 8000, 20000, Math.max(it.size * 4, 1 << 20));
+            if (body == null) {
+                continue;
+            }
+            String got = sha256(body);
+            if (!got.equalsIgnoreCase(it.sha256)) {
+                continue;   // 内容与清单不符：可能是镜像缓存了旧版，换下一个源
+            }
+            File tmp = new File(parent, "." + dst.getName() + ".part");
+            try (FileOutputStream fo = new FileOutputStream(tmp)) {
+                fo.write(body);
+                fo.getFD().sync();   // 先落盘再改名，防断电留半个文件
+            } catch (Throwable e) {
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+                continue;
+            }
+            if (tmp.renameTo(dst)) {
+                return true;
+            }
+            // 目标已存在时某些机型 rename 会失败：删掉再试一次
+            //noinspection ResultOfMethodCallIgnored
+            dst.delete();
+            if (tmp.renameTo(dst)) {
+                return true;
+            }
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+        }
+        return false;
+    }
+
+    /** 把覆盖层整个清掉，回到 APK 内置版本。出问题时的退路。 */
+    public static boolean resetOverlay(Context ctx) {
+        return deleteRecursively(overlayDir(ctx));
+    }
+
+    /** 覆盖层里现有多少个文件（配置页展示用） */
+    public static int overlayCount(Context ctx) {
+        return countFiles(overlayDir(ctx));
+    }
+
+    // ==================== 内部工具 ====================
+
+    private static boolean hostAllowed(String url) {
+        String h = hostOf(url);
+        for (String a : ALLOWED_HOSTS) {
+            if (h.equalsIgnoreCase(a)) return true;
+        }
+        return false;
+    }
+
+    private static String hostOf(String url) {
+        try {
+            return new URL(url).getHost();
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
+    /** 极简清单解析：只认我们自己生成的结构，不引第三方 JSON 库。 */
+    private static List<Item> parse(String json) {
+        List<Item> out = new ArrayList<>();
+        try {
+            org.json.JSONObject root = new org.json.JSONObject(json);
+            org.json.JSONArray arr = root.optJSONArray("files");
+            if (arr == null) return out;
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                Item it = new Item();
+                it.asset = o.optString("asset", "");
+                it.sha256 = o.optString("sha256", "");
+                it.size = o.optInt("size", 0);
+                org.json.JSONArray us = o.optJSONArray("urls");
+                if (us != null) {
+                    for (int j = 0; j < us.length(); j++) {
+                        it.urls.add(us.optString(j, ""));
+                    }
+                }
+                // 缺字段的条目直接丢：宁可少更新，不要写入来源不明的内容
+                if (!it.asset.isEmpty() && it.sha256.length() == 64 && !it.urls.isEmpty()) {
+                    out.add(it);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    private static String httpGet(String url, int connMs, int readMs) {
+        byte[] b = httpGetBytes(url, connMs, readMs, 1 << 20);
+        return b == null ? null : new String(b, StandardCharsets.UTF_8);
+    }
+
+    private static byte[] httpGetBytes(String url, int connMs, int readMs, int maxBytes) {
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setConnectTimeout(connMs);
+            conn.setReadTimeout(readMs);
+            conn.setInstanceFollowRedirects(true);
+            conn.setRequestProperty("User-Agent", "DSHA/" + BuildConfig.VERSION_NAME);
+            if (conn.getResponseCode() != 200) return null;
+            try (InputStream in = conn.getInputStream()) {
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                int total = 0;
+                while ((n = in.read(buf)) != -1) {
+                    total += n;
+                    if (total > maxBytes) return null;   // 防超大响应把内存吃光
+                    bos.write(buf, 0, n);
+                }
+                return bos.toByteArray();
+            }
+        } catch (Throwable e) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static String sha256(byte[] data) {
+        try {
+            return hex(MessageDigest.getInstance("SHA-256").digest(data));
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
+    private static String sha256(InputStream in) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                md.update(buf, 0, n);
+            }
+            return hex(md.digest());
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
+    private static String hex(byte[] b) {
+        StringBuilder sb = new StringBuilder(b.length * 2);
+        for (byte x : b) {
+            sb.append(Character.forDigit((x >> 4) & 0xf, 16));
+            sb.append(Character.forDigit(x & 0xf, 16));
+        }
+        return sb.toString();
+    }
+
+    private static boolean deleteRecursively(File f) {
+        if (f == null || !f.exists()) return true;
+        if (f.isDirectory()) {
+            File[] kids = f.listFiles();
+            if (kids != null) {
+                for (File k : kids) {
+                    deleteRecursively(k);
+                }
+            }
+        }
+        return f.delete();
+    }
+
+    private static int countFiles(File f) {
+        if (f == null || !f.exists()) return 0;
+        if (f.isFile()) return 1;
+        int n = 0;
+        File[] kids = f.listFiles();
+        if (kids != null) {
+            for (File k : kids) {
+                n += countFiles(k);
+            }
+        }
+        return n;
+    }
+}

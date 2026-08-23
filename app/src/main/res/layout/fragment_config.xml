@@ -344,6 +344,25 @@
                 android:layout_marginStart="@dimen/gap_tight"
                 android:layout_marginTop="@dimen/gap_hair" />
 
+            <Button
+                android:id="@+id/config_runtime_update"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/btn_height"
+                android:layout_marginTop="@dimen/gap_control"
+                android:background="@drawable/bg_btn"
+                android:text="🔄 检查脚本更新（几十 KB，不用重下整包）"
+                android:textAllCaps="false"
+                android:textColor="@color/text_secondary"
+                android:textSize="@dimen/text_body" />
+
+            <TextView
+                android:id="@+id/config_runtime_status"
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/gap_tight"
+                android:layout_marginTop="@dimen/gap_hair" />
+
             <TextView
                 android:id="@+id/config_battery_opt_hint"
                 style="@style/DshaText.Caption"

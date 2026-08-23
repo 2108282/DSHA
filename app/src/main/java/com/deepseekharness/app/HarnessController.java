@@ -1982,6 +1982,17 @@ public class HarnessController {
     }
 
     public String readAsset(String name) {
+        // 增量更新的覆盖层优先：脚本层的修复（几 KB）不必等下一个 384MB 的 APK。
+        // 覆盖层为空或读失败就回落到 APK 内置版本 —— 删掉覆盖文件即回退。
+        try {
+            java.io.File over = RuntimeUpdater.overlayFile(appContext, name);
+            if (over.isFile() && over.length() > 0) {
+                byte[] b = java.nio.file.Files.readAllBytes(over.toPath());
+                return new String(b, StandardCharsets.UTF_8);
+            }
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "读覆盖层脚本失败，回落内置版本: " + name + " " + e);
+        }
         try (BufferedReader r = new BufferedReader(new InputStreamReader(
                 appContext.getAssets().open(name), StandardCharsets.UTF_8))) {
             StringBuilder sb = new StringBuilder();
