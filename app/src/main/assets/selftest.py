@@ -358,6 +358,38 @@ def check_l2s():
         add("PASS", "l2s 残留", "无（写入侧已改为 rename 发布）")
 
 
+# ===================== 5.6 dsh Web 服务鉴权 =====================
+def check_web_auth():
+    """dsh 的 Web 服务（3080）必须有 token 鉴权。
+
+    上游只做了「绑定 127.0.0.1」，请求处理里没有任何鉴权 —— 它自己在
+    client-connection 里写明 /api 那层 browser-trust fence「is not an auth layer」，
+    非浏览器客户端经回环即可通过。而 Android 上任何应用访问 localhost 都不需要
+    声明权限，于是随便一个 App 就能读走全部会话、建会话让 agent 执行 bash。
+    补丁由 webserver-auth-patch.sh 在每次启动 Web 前打。
+    """
+    import glob
+    cands = glob.glob("/usr/local/lib/node_modules/@deepseek-ai/**/dsh-host-webserver/lib/index.js",
+                      recursive=True)
+    if not cands:
+        cands = glob.glob("/root/**/dsh-host-webserver/lib/index.js", recursive=True)
+    if not cands:
+        add("SKIP", "Web 服务鉴权", "没找到 webserver（dsh 未安装？）")
+        return
+    try:
+        with open(cands[0], encoding="utf-8", errors="replace") as f:
+            src = f.read()
+    except OSError as e:
+        add("SKIP", "Web 服务鉴权", "读不到 webserver：%s" % e)
+        return
+    if "DSHA_WEB_AUTH" in src:
+        add("PASS", "Web 服务鉴权", "已启用 token 校验（URL / Cookie / X-Dsha-Token 三种放行）")
+    else:
+        add("FAIL", "Web 服务鉴权",
+            "未启用 —— 本机任意应用都能读会话、让 agent 执行命令；"
+            "在 App 里「重启 Web」会自动补上（dsh 升级后补丁可能失配）")
+
+
 # ===================== 6. 会话健康（只统计，不修） =====================
 def check_sessions():
     if not os.path.isdir(SESSIONS):
@@ -507,6 +539,7 @@ def main():
         (check_guide, (arg("guide-ver"),)),
         (check_write_patch, ()),
         (check_l2s, ()),
+        (check_web_auth, ()),
         (check_sessions, ()),
         (check_bundles, ()),
         (check_backup, ()),

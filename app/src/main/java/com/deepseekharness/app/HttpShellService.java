@@ -281,6 +281,18 @@ public final class HttpShellService {
     }
 
     /** 校验查询串/头中的 token（常量时间比较 + URL 解码容错） */
+    /** 当前桥 token；桥还没起来时返回空串（调用方按「不带 token」处理）。
+     *  WebView 首帧 URL 与局域网代理都要用它 —— dsh 的 Web 服务已加 token 鉴权
+     *  （webserver-auth-patch.sh），不带 token 会 403。 */
+    public static String currentToken() {
+        try {
+            String t = authToken.isEmpty() ? ensureToken() : authToken;
+            return t == null ? "" : t;
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
     private static boolean tokenMatch(String presented) {
         String token = authToken.isEmpty() ? ensureToken() : authToken;
         return token != null && !token.isEmpty() && constantTimeEquals(token, presented);

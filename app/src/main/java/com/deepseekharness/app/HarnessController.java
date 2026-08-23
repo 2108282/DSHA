@@ -884,6 +884,10 @@ public class HarnessController {
 
     /** 启动前自愈：老 WebView 兼容补丁（AbortSignal.any/timeout polyfill，幂等） */
     private void ensureWebUiPolyfill() {
+        // dsh 的 Web 服务本身没有鉴权（上游只绑 127.0.0.1，而 Android 上任何 App
+        // 都能访问回环且不需要权限）→ 给它加 token 校验，否则随便一个应用就能读走
+        // 全部会话、建会话让 agent 执行 bash。
+        runAssetScript("webserver-auth-patch.sh", "dsha-webserver-auth.sh", 60_000);
         runAssetScript("webui-polyfill.sh", "dsha-webui-polyfill.sh", 60_000);
     }
 

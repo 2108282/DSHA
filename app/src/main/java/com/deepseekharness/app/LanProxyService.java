@@ -446,6 +446,17 @@ public final class LanProxyService {
                             }
             }
             if (!hostDone) sb.insert(0, "Host: 127.0.0.1:" + backendPort + "\r\n");
+            // 后端 dsh 现在要求 token（webserver-auth-patch.sh）。局域网来的请求
+            // 自带的是本代理的鉴权 token（已在上面剥离），这里补上后端要的那个。
+            String bt = HttpShellService.currentToken();
+            if (!bt.isEmpty() && !containsIgnoreCase(sb.toString(), "X-Dsha-Token")) {
+                int end = sb.lastIndexOf("\r\n\r\n");
+                if (end >= 0) {
+                    sb.insert(end + 2, "X-Dsha-Token: " + bt + "\r\n");
+                } else {
+                    sb.append("X-Dsha-Token: ").append(bt).append("\r\n");
+                }
+            }
             return sb.toString();
         }
 

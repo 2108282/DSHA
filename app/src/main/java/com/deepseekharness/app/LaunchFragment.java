@@ -378,7 +378,12 @@ public class LaunchFragment extends Fragment {
     }
 
     private String uiUrl() {
-        return "http://127.0.0.1:" + c.getPort() + "/";
+        String base = "http://127.0.0.1:" + c.getPort() + "/";
+        // dsh 的 Web 服务加了 token 鉴权（本机任何 App 都能访问 127.0.0.1，
+        // 上游只绑回环、没有鉴权层）。首帧带上 token，服务端回设 Cookie，
+        // 之后的静态资源、XHR 与 WebSocket 都自动带，页面里不必到处拼。
+        String t = HttpShellService.currentToken();
+        return t.isEmpty() ? base : base + "?dsha_t=" + android.net.Uri.encode(t);
     }
 
     private void updateLanAddr() {
