@@ -75,6 +75,7 @@ public class ConfigFragment extends Fragment {
         Button batteryBtn = view.findViewById(R.id.config_battery_opt);
         if (batteryBtn != null) {
             refreshBatteryOptState(view);
+        bindA11yEntry(view);
             batteryBtn.setOnClickListener(v -> requestIgnoreBatteryOpt());
         }
         Button adbPairBtn = view.findViewById(R.id.config_adb_pair);
@@ -217,6 +218,50 @@ public class ConfigFragment extends Fragment {
         }
     }
 
+    /** 「屏幕操作权限」= 无障碍服务。它是免 ADB / 免 Shizuku 操作手机的唯一现实路径：
+     *  绝大多数用户既没开无线调试也没装 Shizuku，而无障碍一次授权就长期可用。 */
+    private void bindA11yEntry(View view) {
+        Button btn = view == null ? null : view.findViewById(R.id.config_a11y);
+        if (btn == null) return;
+        btn.setOnClickListener(v -> {
+            boolean on = DshaAccessibilityService.enabled(requireContext());
+            new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                    .setTitle(on ? "屏幕操作权限（已开启）" : "开启屏幕操作权限")
+                    .setMessage(on
+                            ? "AI 现在可以读屏、点按、输入、按键、滑动、截屏，也能自动读取"
+                              + "无线调试的配对码。\n\n要关闭的话，在系统设置 → 无障碍 → "
+                              + "「DSHA 配对助手」里关掉即可。"
+                            : "开启后 AI 不需要 ADB 或 Shizuku 就能操作手机：读屏、点按、输入、"
+                              + "按键、滑动、截屏；配对无线调试时也能自动读出配对码，省掉手抄。\n\n"
+                              + "隐私：DSHA 不做任何后台屏幕记录 —— 读屏只发生在 AI 明确请求的"
+                              + "那一刻，结果直接回到对话里，不落盘也不上传；配对码只在你点过"
+                              + "「自动读配对码」之后的两分钟内读取。\n\n"
+                              + "在接下来的列表里找到「DSHA 配对助手」并打开。")
+                    .setPositiveButton(on ? "去系统设置" : "去开启", (d, w) -> {
+                        try {
+                            startActivity(new android.content.Intent(
+                                    android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                        } catch (Throwable t) {
+                            Toast.makeText(requireContext(), "打不开无障碍设置：" + t.getMessage(),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
+        });
+    }
+
+    private void refreshA11yStatus() {
+        View v = getView();
+        TextView tv = v == null ? null : v.findViewById(R.id.config_a11y_status);
+        if (tv == null) return;
+        boolean on = DshaAccessibilityService.enabled(requireContext());
+        tv.setTextColor(requireContext().getColor(on ? R.color.ok : R.color.text_secondary));
+        tv.setText(on
+                ? "● 已开启：AI 可读屏/点按/输入/截屏，配对码也能自动读"
+                : "○ 未开启：AI 只能靠 ADB 或 Shizuku 操作手机（多数人没配）");
+    }
+
     /** 危险命令守卫的完整性提示（吸收上游 PR#24）。
      *  bash 工具补丁靠 sed 匹配 dsh 已构建的代码，而 dsh 走「始终最新 RC」自动升级，
      *  上游一改代码这层保险就静默降级 —— 必须让用户看得见，
@@ -248,6 +293,7 @@ public class ConfigFragment extends Fragment {
         startAdbStatusPolling();
         refreshBatteryOptState(getView());
         showGuardStatus(); // 上次启动 Web 时补丁可能已失配，切回本页就刷新
+        refreshA11yStatus(); // 用户可能刚从系统设置里开/关了无障碍
         // 回到配置页顺手催一次 ADB 探测：用户往往就是来看连上没有的
         DeviceBridgeService.kickNow(requireContext(), "打开配置页");
     }
