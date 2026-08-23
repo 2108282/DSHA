@@ -240,6 +240,24 @@ public class HarnessController {
                 }
                 return "缺少模块：" + mod + "\n（依赖安装不完整，已自动重装；仍失败请重跑步骤⑤）";
             }
+            // 一类会把用户锁在外面的死锁：dsh 的插件列表里会列出它自己的依赖
+            // cordis-plugin-hmr（热重载），而那个插件要求 node 带 --expose-internals。
+            // 用户在 WebUI 里手一点启用，重启后整个 profile 加载失败 → Web 起不来
+            // → 进不去 WebUI → 也就没法把它关掉。自动在 patch 层禁用它。
+            if (log.contains("--expose-internals is required")
+                    || (log.contains("failed to apply loader entry") && log.contains("plugin-hmr"))) {
+                String heal = runHealProfileBoot();
+                if (heal != null && heal.contains("HEAL_PROFILE_OK: 禁用")) {
+                    return "已自动关闭热重载插件（cordis-plugin-hmr）—— 它需要 Node 的 "
+                            + "--expose-internals 启动参数，缺了会让整个 profile 加载失败。\n"
+                            + "点「重启」即可正常进入。普通使用不需要热重载；想恢复可编辑 "
+                            + "~/.dsh/profiles/web/cordis.patch.yml 删掉那几行。";
+                }
+                return "WebUI 启动失败：启用了需要 Node --expose-internals 的插件"
+                        + "（cordis-plugin-hmr 热重载）。\n自动关闭没成功，可手动编辑 "
+                        + "~/.dsh/profiles/web/cordis.patch.yml，在末尾加：\n"
+                        + "- id: <日志里 entry 后面那串 id>\n  disabled: true";
+            }
             if (log.contains("MODULE_NOT_FOUND")) {
                 return "MODULE_NOT_FOUND：入口依赖缺失，请重跑安装步骤⑤（应用已自动尝试自愈）";
             }
@@ -261,6 +279,28 @@ public class HarnessController {
             return "无法解析 WebUI 日志：" + e.getMessage();
         }
     }
+    /** 启动失败自愈：把「启用了却跑不起来」的 loader entry 在 profile 的 patch 层禁用。
+     *  只针对已知需要特殊 node 标志的插件；别的失败原因（缺依赖、配置错）不该靠禁用掩盖。 */
+    private String runHealProfileBoot() {
+        try {
+            String script = readAsset("heal-profile-boot.py");
+            if (script == null || script.isEmpty()) return null;
+            java.io.File dst = new java.io.File(proot.getRootfsDir(), "root/.dsha-heal-profile.py");
+            if (dst.getParentFile() != null) dst.getParentFile().mkdirs();
+            java.nio.file.Files.write(dst.toPath(),
+                    script.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String out = proot.execAndRead(
+                    "python3 /root/.dsha-heal-profile.py --log /root/dsh-web.log"
+                            + " --profile /root/.dsh/profiles/web 2>&1; "
+                            + "rm -f /root/.dsha-heal-profile.py", 60_000);
+            android.util.Log.i("DSHA", "profile 启动自愈: " + (out == null ? "无输出" : out.trim()));
+            return out;
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "profile 启动自愈失败: " + e);
+            return null;
+        }
+    }
+
     /** 局域网 0.0.0.0 放行补丁是否已就绪（防重复打补丁） */
     private volatile boolean lanBindReady = false;
     /** 进度持久化节流用时间戳 */
@@ -2079,14 +2119,21 @@ public class HarnessController {
                 // 判定源码模式必须认启动入口 bin.js：RC6 模式下工作区目录也存在（只是没有源码），
                 // 只认 -d 会把空工作区误判成源码树 → 启动失败
                 + "if [ -f /root/" + wd + "/apps/cli/lib/bin.js ]; then cd /root/" + wd + "; " + depsSelfHeal()
-                + "exec node apps/cli/lib/bin.js web" + opts + " > ~/dsh-web.log 2>&1; "
+                + "exec node --expose-internals apps/cli/lib/bin.js web" + opts + " > ~/dsh-web.log 2>&1; "
                 + "else "
                 + "if command -v dsh >/dev/null 2>&1 && test -f \"$(command -v dsh)\"; then "
                 // RC6 模式没有源码树，但工作区目录必须存在并作为运行目录：
                 // 1) 否则用户在 MT/工作区页看不到 deepseek-harness 文件夹（"下载完没有工作区"）
                 // 2) agent 产物/上传文件有固定落点，备份功能才能带上
                 + "mkdir -p /root/" + wd + " && cd /root/" + wd + " && "
-                + "exec dsh web" + opts + " > ~/dsh-web.log 2>&1; "
+                // 必须带 --expose-internals：dsh 的 profile-boot 会无条件创建
+                // @deepseek-ai/cordis-plugin-hmr（它要靠 HMR 去监听用户 patch 文件），
+                // 而那个插件第一行就检查 loader.internal，没有这个标志直接抛
+                // 「--expose-internals is required for HMR service」把整个启动带崩。
+                // NODE_OPTIONS 传不了这个标志（node 明确拒绝），只能作为命令行参数；
+                // 而 dsh 是个 wrapper，所以先 readlink 出真正的 bin.js 再交给 node。
+                + "DSH_REAL=$(readlink -f \"$(command -v dsh)\" 2>/dev/null || command -v dsh); "
+                + "exec node --expose-internals \"$DSH_REAL\" web" + opts + " > ~/dsh-web.log 2>&1; "
                 + "else echo '[DSHA] 全局 dsh 不可用（悬空链接或未安装），请到分步安装页重装 ⑤ deepseek-harness'; exit 1; fi; fi";
     }
 
