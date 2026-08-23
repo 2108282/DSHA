@@ -30,7 +30,7 @@ public final class AdbBridge {
     }
 
     /** 当前 assets 脚本版本：每次改脚本 +1，旧版 APK 的残留脚本会因版本不符被强制重注入 */
-    private static final String SCRIPT_VERSION = "9";
+    private static final String SCRIPT_VERSION = "10";
 
     /** 供自检/诊断读取期望版本（包内可见，避免把常量再抄一份） */
     static String scriptVersion() {

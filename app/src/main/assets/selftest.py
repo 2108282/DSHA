@@ -69,6 +69,28 @@ def check_env():
         add("FAIL", "运行环境", "rootfs 里没有 node —— 到分步安装页跑③安装 Node")
 
 
+# ===================== 1.5 基础命令齐备 =====================
+def check_tools():
+    """缺命令是最难猜的一类故障：脚本挂在半路，报错却指向别处
+    （比如 rootfs 没装 unzip，ADB 配对就卡在「pip 仍不可用」）。"""
+    need = ["python3", "tar", "curl", "git", "xz"]
+    opt = ["unzip", "zstd", "wget"]
+    out = sh("for c in %s; do command -v $c >/dev/null && echo \"$c Y\" || echo \"$c N\"; done"
+             % " ".join(need + opt))
+    have = {}
+    for line in out.split("\n"):
+        parts = line.split()
+        if len(parts) == 2:
+            have[parts[0]] = parts[1] == "Y"
+    missing = [c for c in need if not have.get(c, False)]
+    miss_opt = [c for c in opt if not have.get(c, False)]
+    if missing:
+        add("FAIL", "基础命令", "缺 %s —— 到「安装」页重跑②基础工具" % "、".join(missing))
+    else:
+        note = ("；可选缺失 %s（脚本内有兜底，不影响使用）" % "、".join(miss_opt)) if miss_opt else ""
+        add("PASS", "基础命令", "%d 项必需命令齐备%s" % (len(need), note))
+
+
 # ===================== 2. 3090 桥 =====================
 def check_bridge():
     token = read(DSH_HOME + "/.bridge_token").strip()
@@ -343,6 +365,7 @@ def main():
     print("=== DSHA 自检 · %s ===" % time.strftime("%Y-%m-%d %H:%M:%S"))
     for fn, args in (
         (check_env, ()),
+        (check_tools, ()),
         (check_bridge, ()),
         (check_adb, (arg("script-ver"),)),
         (check_guide, (arg("guide-ver"),)),
