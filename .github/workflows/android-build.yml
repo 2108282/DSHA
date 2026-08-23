@@ -103,6 +103,27 @@ jobs:
         with:
           gradle-version: '8.5'
 
+      - name: Prepare shared signing key (optional)
+        env:
+          KS_B64: ${{ secrets.DSHA_KEYSTORE_B64 }}
+          KS_PWD: ${{ secrets.DSHA_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.DSHA_KEY_ALIAS }}
+          KEY_PWD: ${{ secrets.DSHA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # 没配 secret 时保持原样（AGP 默认 debug keystore），只是包与旧版签名不同、
+          # 用户升级要卸载重装；配了就所有构建共用一把，覆盖安装无缝。
+          if [ -n "${KS_B64:-}" ]; then
+            printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/dsha.keystore"
+            echo "DSHA_KEYSTORE=$RUNNER_TEMP/dsha.keystore" >> "$GITHUB_ENV"
+            echo "DSHA_KEYSTORE_PASSWORD=${KS_PWD:-android}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_ALIAS=${KS_ALIAS:-androiddebugkey}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_PASSWORD=${KEY_PWD:-android}" >> "$GITHUB_ENV"
+            echo "已启用统一签名（与历史发布包一致，可直接覆盖安装）"
+          else
+            echo "未配置 DSHA_KEYSTORE_B64：使用默认 debug 签名（升级可能需要卸载重装）"
+          fi
+
       - name: Build debug APK
         run: |
           set -euo pipefail
@@ -110,6 +131,14 @@ jobs:
           sed -i '/aapt2FromMavenOverride/d' gradle.properties
           gradle :app:assembleDebug --no-daemon
           ls -lh app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Report signing fingerprint
+        run: |
+          set -euo pipefail
+          # 把证书指纹打进日志：发布前肉眼比一眼，就能确认没换签名
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk \
+            | grep -i "SHA-256 digest" || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

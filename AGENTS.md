@@ -139,6 +139,29 @@ Rule: **restore as much as possible, never fail the whole archive over one unkno
 
 Rules when adding endpoints: keep them **token-gated**, refuse paths outside `/sdcard` for file access, never expose credential files, and return plain text — `handle()` wraps whatever you return in `{"result":"…"}`, so nested JSON gets double-escaped. Blocking endpoints must have a timeout and a single-flight guard (see `askBusy`).
 
+## Upgrade compatibility (old installs must upgrade in place)
+
+Users install by tapping an APK, so **签名一致是能否覆盖安装的唯一硬条件**. Rules:
+
+- All builds should share one keystore. `app/build.gradle` reads `DSHA_KEYSTORE` /
+  `DSHA_KEYSTORE_PASSWORD` / `DSHA_KEY_ALIAS` / `DSHA_KEY_PASSWORD` (env or gradle property);
+  without them it falls back to AGP's default debug keystore, which **differs per machine/CI
+  runner** — that fallback is what forces users to uninstall first. CI does the same via the
+  `DSHA_KEYSTORE_B64` secret and prints the certificate fingerprint after every build.
+- Current fingerprint of the historical local builds (v1.1.0 … today):
+  `e7e3a31a75946f2669194c972b3dd0c9aea3fc7c50a8b885d2dee710b22a53f5`. Compare before publishing.
+- `versionCode` must only ever increase; Android refuses to install a lower one over a higher one.
+- Never rename or drop a SharedPreferences key: `use_rc6`, `workdir`, `api_key`… are read by
+  every past version. Add new keys instead (`Constants`).
+- Anything shipped into the rootfs must be version-marked (see the table above) so an upgraded
+  APK re-injects it; `installGuard` is idempotent and safe to re-run on old rootfs trees.
+- Data written by an older release must keep working: `restore-merge.py` accepts manifest-less
+  archives, `heal-sessions.py` migrates the legacy `session.jsonl.*.corrupt-*` copies that older
+  builds left inside `sessions/`, and new backups stay readable by old builds (they just see two
+  extra entries).
+- New permissions must be install-time (`normal`) ones — `QUERY_ALL_PACKAGES` / `VIBRATE` are,
+  so覆盖安装不会弹权限询问也不会失败.
+
 ## Build & CI
 
 - Two-stage Actions workflow (`.github/workflows/android-build.yml`):

@@ -319,12 +319,44 @@ def isolate_file(path, reason):
         return False
 
 
+def migrate_legacy_backups():
+    """把老版本留在 sessions 目录里的备份挪走（升级兼容）。
+
+    旧版 heal 会把修复前的副本写成 session.jsonl.zstd.corrupt-<ts> 就地存放，
+    新版按精确文件名扫描已经不认它们 —— 但留在原地白占空间，用户看目录也容易
+    误会「会话变多了」。一次性搬到 corrupt-backup/legacy/，幂等。
+    """
+    if not os.path.isdir(SESSIONS_ROOT):
+        return 0
+    moved = 0
+    for root, dirs, files in os.walk(SESSIONS_ROOT):
+        if root == CORRUPT_ROOT or root.startswith(CORRUPT_ROOT + os.sep):
+            dirs[:] = []
+            continue
+        for fn in files:
+            if fn in SESSION_FILENAMES or not fn.startswith("session.jsonl"):
+                continue
+            src = os.path.join(root, fn)
+            try:
+                rel = os.path.relpath(src, SESSIONS_ROOT)
+                dst = os.path.join(CORRUPT_ROOT, "legacy", rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.move(src, dst)
+                moved += 1
+            except Exception as e:
+                log("老备份搬运失败: %s (%s)" % (src, e))
+    if moved:
+        log("升级兼容：把 %d 个老版本遗留的会话备份挪到 corrupt-backup/legacy" % moved)
+    return moved
+
+
 def main():
     try:
         os.makedirs(LOG_PATH.rpartition("/")[0], exist_ok=True)
     except Exception:
         pass
     log("== 会话自愈开始 zstd=%s paths=%s ==" % (HAVE_ZSTD, SESSIONS_ROOT))
+    migrated = migrate_legacy_backups()
     scanned = fixed = isolated = 0
     if os.path.isdir(SESSIONS_ROOT):
         for root, dirs, files in os.walk(SESSIONS_ROOT):
@@ -355,7 +387,8 @@ def main():
                         log("跳过(缺 zstandard): %s" % p)
                     else:
                         log("异常(%s): %s %s" % (action, detail, p))
-    log("== 会话自愈结束 scanned=%d fixed=%d isolated=%d ==" % (scanned, fixed, isolated))
+    log("== 会话自愈结束 scanned=%d fixed=%d isolated=%d migrated=%d =="
+        % (scanned, fixed, isolated, migrated))
     if fixed > 0 or isolated > 0:
         print("SESSION_HEALED (scanned=%d fixed=%d isolated=%d)" % (scanned, fixed, isolated))
     elif scanned == 0:

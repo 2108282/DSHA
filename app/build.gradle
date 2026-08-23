@@ -36,7 +36,7 @@ android {
         applicationId "com.dsh.client"
         minSdk 26
         targetSdk 34
-        versionCode 33
+        versionCode 34
         versionName "1.1.5"
         ndk {
             abiFilters 'arm64-v8a'
@@ -45,6 +45,23 @@ android {
 
     signingConfigs {
         debug {
+            // 统一签名（可选）：给了 keystore 就所有构建都用它 —— CI 产物与本地产物
+            // 签名一致，用户才能直接覆盖安装。没给就退回 AGP 默认的 debug keystore，
+            // 行为与以前完全一样（不破坏现有构建流程）。
+            // 用法：DSHA_KEYSTORE=/path/to/dsha.keystore（或 gradle 属性 dsha.keystore）
+            def ksPath = System.getenv("DSHA_KEYSTORE") ?: project.findProperty("dsha.keystore")
+            if (ksPath != null && !ksPath.toString().isEmpty() && file(ksPath).exists()) {
+                storeFile file(ksPath)
+                storePassword System.getenv("DSHA_KEYSTORE_PASSWORD")
+                        ?: project.findProperty("dsha.keystore.password") ?: "android"
+                keyAlias System.getenv("DSHA_KEY_ALIAS")
+                        ?: project.findProperty("dsha.key.alias") ?: "androiddebugkey"
+                keyPassword System.getenv("DSHA_KEY_PASSWORD")
+                        ?: project.findProperty("dsha.key.password") ?: "android"
+                println "签名：使用统一 keystore ${ksPath}"
+            } else {
+                println "签名：使用默认 debug keystore（覆盖安装需与旧包同签名，发布请配 DSHA_KEYSTORE）"
+            }
             enableV1Signing true
             enableV2Signing true
             enableV3Signing true
