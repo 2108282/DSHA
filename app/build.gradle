@@ -124,6 +124,10 @@ android {
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
+    // 代码里并不直接用 ConstraintLayout，但这行必须留着：material 1.11.0 传递依赖
+    // constraintlayout 2.0.1，而本地 maven 缓存只有 2.1.4。删掉这行 → 离线构建直接
+    // 报「No cached version of androidx.constraintlayout:constraintlayout:2.0.1」。
+    // 也就是说它的作用是把传递依赖提升到已缓存的版本。（试删过，构建挂了才发现）
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.fragment:fragment:1.6.2'
     implementation 'androidx.viewpager2:viewpager2:1.0.0'
