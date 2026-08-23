@@ -417,6 +417,86 @@ public class ProotBootstrap {
         return out;
     }
 
+    /** 带「静默超时」的执行：不设总时长上限，只判「多久一个字都不吐」。
+     *
+     *  为什么不用普通超时：慢设备上 pnpm install 跑二十分钟是正常的，按总时长掐
+     *  会把还在正常干活的安装杀掉、然后报「安装失败」—— 这比卡死更糟，因为它把
+     *  「慢」误诊成「坏」，用户还会白白重装一遍。真正卡死的特征是长时间没有任何
+     *  输出（网络挂起、等一个永远不会来的响应）。
+     *
+     *  只适用于**会持续打印进度**的命令（pnpm / apt / npm）。tar、xz 这类正常
+     *  也会长时间静默，用这个包就是误杀 —— 它们继续走 execChecked。
+     *
+     *  @param stallMs 允许的最长静默时间；期间只要有输出就重新计时。
+     */
+    public String execCheckedStall(String bashCommand, long stallMs) throws IOException {
+        final Process p = execRootfs(bashCommand);
+        final long[] lastTs = {System.currentTimeMillis()};
+        final boolean[] killed = {false};
+        Thread watchdog = new Thread(() -> {
+            while (p.isAlive()) {
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (System.currentTimeMillis() - lastTs[0] > stallMs) {
+                    killed[0] = true;
+                    p.destroyForcibly();
+                    return;
+                }
+            }
+        }, "dsha-stall-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
+
+        String out;
+        try {
+            out = readStreamTracking(p.getInputStream(), lastTs);
+        } finally {
+            watchdog.interrupt();
+        }
+        int code;
+        try {
+            code = p.waitFor();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("命令被中断", e);
+        }
+        String tail = out.length() > 600 ? out.substring(out.length() - 600) : out;
+        if (killed[0]) {
+            throw new IOException("已超过 " + (stallMs / 1000)
+                    + " 秒没有任何输出，判定卡死并终止（多为网络挂起）。最后的输出：\n" + tail);
+        }
+        if (code != 0) {
+            throw new IOException("退出码 " + code + "：\n" + tail);
+        }
+        return out;
+    }
+
+    /** 同 readStream，但每收到一批数据就更新时间戳，供静默看门狗判断死活 */
+    private String readStreamTracking(InputStream in, long[] lastTs) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        int kept = 0;
+        final int MAX = 256 * 1024;
+        try {
+            while ((n = in.read(buf)) != -1) {
+                lastTs[0] = System.currentTimeMillis();
+                if (kept < MAX) {
+                    int w = Math.min(n, MAX - kept);
+                    bos.write(buf, 0, w);
+                    kept += w;
+                }
+            }
+        } catch (IOException e) {
+            // 看门狗强杀进程会让读操作抛异常：此时已收到的输出仍有用（含失败现场）
+            return bos.toString("UTF-8");
+        }
+        return bos.toString("UTF-8");
+    }
+
     /** 读取进程输出，最多保留 256KB 防止内存暴涨 */
     private String readStream(InputStream in) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();

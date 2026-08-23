@@ -1771,10 +1771,18 @@ public class HarnessController {
         try {
             // 注意：npm 11 的 `npm config set disturl` 会报 "not a valid npm option"，
             // 所以直接写 .npmrc 文件 + 环境变量（不经过 npm 配置校验）
+            // pnpm 会持续打印进度，五分钟一声不吭基本就是网络挂了
             runStep("安装依赖 pnpm install", 95,
                     "cd /root/" + wd + " && " +
-                    "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc && " +
-                    "pnpm install");
+                    // 三项一次写全。以前只写 registry 且用 > 覆盖，会把
+                    // pnpm-env-fix.sh 刚配好的 package-import-method 冲掉 ——
+                    // 于是 pnpm 又回去用硬链接，proot 下就是 .l2s 悬空链那套老问题
+                    "printf 'registry=https://registry.npmmirror.com\\n"
+                    + "package-import-method=copy\\nside-effects-cache=false\\n'"
+                    + " > /root/.npmrc && " +
+                    "pnpm install",
+                    // pnpm 会持续打印包名，五分钟一声不吭基本就是网络挂了
+                    300_000L);
         } catch (Exception e) {
             throw new Exception(e.getMessage() + "\n\n[原生模块编译失败提示]\n"
                     + "1. Node headers 已预下载到 node-gyp 缓存（npmmirror 源），不依赖 nodejs.org\n"
@@ -1977,10 +1985,27 @@ public class HarnessController {
      * 失败时输出日志尾部以便定位。
      */
     private void runStep(String stage, int percent, String cmd) throws Exception {
+        runStep(stage, percent, cmd, 0L);
+    }
+
+    /** @param stallMs 大于 0 时启用静默看门狗：这么久一个字都不吐就判卡死。
+     *                 只给会持续打印进度的命令用（pnpm/apt/npm）；tar、xz 正常
+     *                 也会长时间静默，传 0 走无超时的老路，免得误杀。 */
+    private void runStep(String stage, int percent, String cmd, long stallMs) throws Exception {
         setProgress(stage, percent);
-        String fullCmd = "(" + cmd + ") >/root/dsh-step.log 2>&1"
+        // 输出重定向到日志、失败时回吐尾部 —— 但这样一来标准输出就没内容了，
+        // 静默看门狗看不到进度。所以启用看门狗时改成 tee：日志照留，同时有输出可判活。
+        String fullCmd = stallMs > 0
+                ? "(" + cmd + ") 2>&1 | tee /root/dsh-step.log; "
+                + "test ${PIPESTATUS[0]} -eq 0 || { echo '--- 日志尾部 ---'; "
+                + "tail -100 /root/dsh-step.log; exit 1; }"
+                : "(" + cmd + ") >/root/dsh-step.log 2>&1"
                 + " || { echo '--- 日志尾部 ---'; tail -100 /root/dsh-step.log; exit 1; }";
-        proot.execChecked(fullCmd);
+        if (stallMs > 0) {
+            proot.execCheckedStall(fullCmd, stallMs);
+        } else {
+            proot.execChecked(fullCmd);
+        }
     }
 
     // ================= 脚本与命令 =================
