@@ -30,7 +30,7 @@ SESSION_PKG_CANDIDATES = (
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 rows = []          # (状态, 标题, 说明)
-counts = {"PASS": 0, "FAIL": 0, "SKIP": 0}
+counts = {"PASS": 0, "WARN": 0, "FAIL": 0, "SKIP": 0}
 
 
 def add(state, title, detail=""):
@@ -47,13 +47,33 @@ def arg(name, default=""):
     return default
 
 
+SH_FAILED = "\x00SH_FAILED\x00"
+
+
 def sh(cmd, timeout=20):
-    """跑一条命令拿输出（只用于查询类命令）"""
+    """跑一条查询命令。
+
+    执行本身失败时返回带 SH_FAILED 前缀的串，而不是空字符串 ——
+    分不清「命令回答说没有」和「命令根本没跑起来」，是自动诊断误报的头号来源：
+    容器没起来时，每一项都会因为拿到空输出而报 FAIL，把人吓一跳，
+    而真相只有一条「环境没跑起来」。
+    """
     try:
         p = subprocess.run(["bash", "-lc", cmd], capture_output=True, timeout=timeout)
         return (p.stdout or b"").decode("utf-8", "replace").strip()
+    except subprocess.TimeoutExpired:
+        return SH_FAILED + "执行超过 %d 秒" % timeout
     except Exception as e:
-        return "ERR:%s" % e
+        return SH_FAILED + str(e)
+
+
+def sh_failed(v):
+    """命令是否根本没跑起来（区别于「跑了但回答是空」）"""
+    return isinstance(v, str) and v.startswith(SH_FAILED)
+
+
+def sh_why(v):
+    return v[len(SH_FAILED):] if sh_failed(v) else ""
 
 
 def read(path, limit=4096):
@@ -64,10 +84,58 @@ def read(path, limit=4096):
         return ""
 
 
+def env_stage():
+    """环境走到哪一步了。
+
+    很多检查项的前置条件是「跑过某个流程」：守卫脚本是启动 Web 时装的，
+    write/会话补丁也是启动 Web 时打的，ADB 脚本是开 ADB 通道时注入的。
+    在还没走到那一步的环境里报 FAIL，等于把「你还没用这个功能」说成
+    「你的功能坏了」—— 这是最常见的一类误诊。
+    """
+    ran = os.path.exists("/root/dsh-web.log") or os.path.isdir(DSH_HOME + "/sessions")
+    if ran:
+        return "ran"
+    installed = os.path.isdir(DSH_HOME + "/profiles") or os.path.exists("/usr/local/bin/dsh")
+    return "installed" if installed else "fresh"
+
+
+STAGE = None
+
+
+def stage():
+    global STAGE
+    if STAGE is None:
+        STAGE = env_stage()
+    return STAGE
+
+
+def preflight():
+    """先确认「检查这件事本身能不能做」。
+
+    容器起不来的时候，下面每一项的结论都不可信 —— 与其报一屏 FAIL，
+    不如只说一句真话：环境没跑起来。
+    """
+    probe = sh("echo dsha_probe", timeout=15)
+    if sh_failed(probe):
+        add("FAIL", "容器环境",
+            "连 bash 都执行不了（%s）—— 先到「安装」页确认环境已解压并安装完成。"
+            "其余检查已跳过：在这种状态下它们的结论都不可信。" % sh_why(probe))
+        return False
+    if "dsha_probe" not in probe:
+        add("FAIL", "容器环境",
+            "bash 执行结果异常（输出：%s）—— 环境可能只装了一半，"
+            "建议到「安装」页重跑一遍。其余检查已跳过。" % (probe[:60] or "空"))
+        return False
+    return True
+
+
 # ===================== 1. 运行环境 =====================
 def check_env():
     node = sh("command -v node >/dev/null && node -v || echo NONE")
     dsh_ver = sh("command -v dsh >/dev/null && dsh --version 2>/dev/null | head -1 || echo NONE")
+    if sh_failed(node):
+        add("SKIP", "运行环境", "查不了 node 版本（%s）—— 容器可能正忙或刚启动" % sh_why(node))
+        return
     if node.startswith("v"):
         add("PASS", "运行环境", "node %s，dsh %s" % (node, dsh_ver if dsh_ver != "NONE" else "未装（可能走源码模式）"))
     else:
@@ -87,6 +155,9 @@ def check_tools():
         parts = line.split()
         if len(parts) == 2:
             have[parts[0]] = parts[1] == "Y"
+    if not have:
+        add("SKIP", "基础命令", "探测命令没能执行 —— 容器可能没起来，跳过（避免误报缺失）")
+        return
     missing = [c for c in need if not have.get(c, False)]
     miss_opt = [c for c in opt if not have.get(c, False)]
     if missing:
@@ -100,7 +171,12 @@ def check_tools():
 def check_bridge():
     token = read(DSH_HOME + "/.bridge_token").strip()
     if not token:
-        add("FAIL", "3090 桥 token", "缺 %s/.bridge_token —— 打开 App 后台会自动生成，重开一次 App" % DSH_HOME)
+        if stage() != "ran":
+            add("SKIP", "3090 桥 token", "还没启动过 Web —— token 由 App 在桥启动时生成")
+        else:
+            add("FAIL", "3090 桥 token",
+                "缺 %s/.bridge_token —— 确认弹窗与 App 层接口都会失效；"
+                "重开一次 App 让桥重新生成" % DSH_HOME)
         return
     import urllib.request
     import urllib.error
@@ -164,7 +240,9 @@ def check_adb(want_ver):
         add("SKIP", "ADB 脚本", "未注入（没开 ADB 设备通道就正常）")
         return
     if want_ver and cur != want_ver:
-        add("FAIL", "ADB 脚本版本", "rootfs=%s 期望=%s —— 重开一次「配置」页的 ADB 开关，或重跑步骤⑥" % (cur, want_ver))
+        add("WARN", "ADB 脚本版本",
+            "rootfs=%s 期望=%s —— App 刚升级、脚本还没重注入时会这样，"
+            "打开一次「配置」页的 ADB 开关即可（不影响已有功能）" % (cur, want_ver))
     else:
         add("PASS", "ADB 脚本版本", "v%s" % cur)
     # 只读白名单：必须只放行真正只读的命令
@@ -298,6 +376,9 @@ def check_write_patch():
     if "DSHA_L2S_FIX" in read(target, 400000):
         add("PASS", "write 补丁", "已生效（新建文件走 rename，不会变悬空链接）")
     else:
+        if stage() != "ran":
+            add("SKIP", "write 补丁", "还没启动过 Web —— 补丁是启动时打的，启动一次即会自动补上")
+            return
         add("FAIL", "write 补丁", "未打 —— 重开一次 App（启动自愈会补），或到启动页点一次启动")
     # 会话日志发布补丁：没打的话每轮对话结束就 ENOENT（会话文件发布后即悬空）
     starget = next((p for p in SESSION_PKG_CANDIDATES if os.path.isfile(p)), None)
@@ -306,6 +387,9 @@ def check_write_patch():
     elif "DSHA_L2S_FIX2" in read(starget, 400000):
         add("PASS", "会话发布补丁", "已生效（会话日志走 rename 发布，不会悬空）")
     else:
+        if stage() != "ran":
+            add("SKIP", "会话发布补丁", "还没启动过 Web —— 补丁是启动时打的，启动一次即会自动补上")
+            return
         add("FAIL", "会话发布补丁",
             "未打 —— 会话写完即失效（ENOENT ... session.jsonl.zstd）；"
             "重开一次 App 会自动补，或到启动页点一次启动")
@@ -514,15 +598,30 @@ def check_backup():
 def check_guard(want_guard, want_step6, want_assets):
     v = read("/root/dsh-bin/.version").strip()
     if not os.path.isdir("/root/dsh-bin"):
-        add("FAIL", "危险命令守卫", "/root/dsh-bin 不存在 —— 跑步骤⑥装安全守卫")
+        if stage() != "ran":
+            add("SKIP", "危险命令守卫", "还没启动过 Web —— 守卫脚本在启动时安装")
+        else:
+            add("FAIL", "危险命令守卫",
+                "/root/dsh-bin 不存在 —— 危险命令拦不住了；点一次「重启 Web」会自动重装")
     elif want_guard and v != want_guard:
-        add("FAIL", "守卫版本", "当前 %s 期望 %s —— 重跑步骤⑥" % (v or "无", want_guard))
+        add("WARN", "守卫版本",
+            ("守卫已装但没写版本标记（很早的版本）—— 启动一次 Web 会更新到 %s" % want_guard)
+            if not v else
+            ("当前 %s 期望 %s —— 启动一次 Web 即会自动更新；"
+             "旧版守卫仍在拦截，只是少了新版的改进" % (v, want_guard)))
     else:
         add("PASS", "危险命令守卫", "dsh-bin v%s，确认脚本 %s" % (v, "在" if os.path.isfile("/root/dsh-confirm.sh") else "缺失"))
     s6 = read(DSH_HOME + "/step6.version").strip()
     av = read(DSH_HOME + "/builtin-assets.version").strip()
     if want_step6 and want_assets and (s6 != want_step6 or av != want_assets):
-        add("FAIL", "步骤⑥版本标记", "rootfs=%s|%s 期望=%s|%s —— 重开 App 会自动重跑⑥，或手动点⑥"
+        adb_on = arg("adb-on", "1") == "1"
+        if not adb_on:
+            add("SKIP", "步骤⑥版本标记", "没启用 ADB 设备通道，不需要跑步骤⑥")
+            return
+        if stage() != "ran":
+            add("SKIP", "步骤⑥版本标记", "还没启动过 Web —— 步骤⑥的内容会在启动时补")
+            return
+        add("WARN", "步骤⑥版本标记", "rootfs=%s|%s 期望=%s|%s —— 重开 App 会自动重跑⑥，或手动点⑥"
             % (s6 or "无", av or "无", want_step6, want_assets))
     elif s6:
         add("PASS", "步骤⑥版本标记", "%s|%s" % (s6, av))
@@ -530,6 +629,8 @@ def check_guard(want_guard, want_step6, want_assets):
 
 def main():
     print("=== DSHA 自检 · %s ===" % time.strftime("%Y-%m-%d %H:%M:%S"))
+    # 先确认「检查本身做得了」。做不了就只报这一条，别拿一屏 FAIL 去吓人
+    env_ok = preflight()
     for fn, args in (
         (check_env, ()),
         (check_tools, ()),
@@ -545,22 +646,26 @@ def main():
         (check_backup, ()),
         (check_guard, (arg("guard-ver"), arg("step6"), arg("assets"))),
     ):
+        if not env_ok:
+            continue
         try:
             fn(*args)
         except Exception as e:
-            add("FAIL", fn.__name__, "自检项自身出错：%r" % e)
+            # 检查代码自己抛异常，说明这一项「查不了」，而不是被查的东西有问题
+            add("WARN", "自检项 " + fn.__name__, "这一项没跑完，结论不可用：%r" % e)
 
-    icon = {"PASS": "✅", "FAIL": "❌", "SKIP": "➖"}
+    icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌", "SKIP": "➖"}
     for state, title, detail in rows:
         print("%s %s" % (icon[state], title))
         if detail:
             print("    %s" % detail)
     print("")
-    print("=== 汇总：%d 通过 / %d 失败 / %d 跳过 ===" % (counts["PASS"], counts["FAIL"], counts["SKIP"]))
+    print("=== 汇总：%d 通过 / %d 待处理 / %d 失败 / %d 跳过 ==="
+          % (counts["PASS"], counts["WARN"], counts["FAIL"], counts["SKIP"]))
     if counts["FAIL"] == 0:
         print("全部关键项通过。")
     else:
-        print("上面标 ❌ 的项按提示处理；处理后再跑一次自检。")
+        print("❌ 是需要处理的问题，⚠️ 是可以稍后处理的过渡状态（多为版本待更新），➖ 是当前场景用不到所以没查。")
     return 0
 
 
