@@ -753,6 +753,98 @@ def check_sanitize_log():
         add("SKIP", "profile 校准记录", "最近一次没有需要处理的项")
 
 
+def check_pnpm_shells():
+    """pnpm 装一半留下的空壳插件（议题 #36 Bug 3）。
+
+    pnpm 装 GitHub 来源插件时，tarball 落地成功但 prepare 脚本失败，
+    它会把完整目录 rename 成 .ignored_<name>，原位只留一个含
+    _pnpmPlaceholder 的 package.json 壳。dsh 加载到的是壳 ——
+    插件形同不存在，而用户从任何界面都看不出来，只能人工翻 node_modules。
+    这一项就是把这种静默失败摊开，并顺手修掉。
+    """
+    script = "/root/dsha-heal-pnpm-shells.py"
+    if not os.path.isfile(script):
+        add("SKIP", "插件空壳检查", "修复脚本未随包下发")
+        return
+    try:
+        r = subprocess.run(["python3", script], capture_output=True, text=True, timeout=90)
+        out = (r.stdout or "").strip()
+    except Exception as e:
+        add("SKIP", "插件空壳检查", "没跑起来：%s" % e)
+        return
+    if "没有需要修的" in out:
+        add("PASS", "插件空壳检查", "没有 pnpm 半装残留")
+    elif "已修复" in out:
+        detail = "\n    ".join(out.splitlines()[:12])
+        add("WARN", "插件空壳检查",
+            "发现并修好了 pnpm 半装残留（完整文件被 pnpm 改名成 .ignored_ 藏起来了）\n"
+            "    %s\n"
+            "    下一步：点启动页「重启」让插件真正加载" % detail)
+    else:
+        add("SKIP", "插件空壳检查", out.splitlines()[0] if out else "无输出")
+
+
+def check_runtime_env():
+    """报告运行环境：是否在鸿蒙安卓容器（卓易通）里、内存与进程配额。
+
+    加这一项是因为用户报「总卡在安装第五步」——那一步是源码构建
+    （pnpm install + node-gyp 编译），最吃内存和 fork。而卓易通环境有
+    三个硬约束：鸿蒙沙箱限制 fork 子进程、容器自身占 ~8GB 内存、
+    鸿蒙 6 对卓易通后台杀得极快。这些从「卡住」的现象完全反推不出来，
+    必须让自检把环境摊开给用户看。
+    """
+    marks = []
+    try:
+        with open("/proc/self/cgroup") as f:
+            cg = f.read().lower()
+        for kw in ("isulad", "/lxc/", "zhuoyi"):
+            if kw in cg:
+                marks.append(kw)
+    except OSError:
+        pass
+    try:
+        with open("/proc/version") as f:
+            ver = f.read().strip()
+    except OSError:
+        ver = "?"
+    if "ohos" in ver.lower() or "harmony" in ver.lower():
+        marks.append("harmony-kernel")
+
+    # 可用内存与最大进程数：anco 里这两项才是真正的瓶颈
+    mem_avail = mem_total = 0
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    mem_avail = int(line.split()[1]) // 1024
+                elif line.startswith("MemTotal:"):
+                    mem_total = int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    try:
+        nproc = subprocess.run(["bash", "-lc", "ulimit -u"],
+                               capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        nproc = "?"
+
+    detail = "内存 %dMB 可用 / %dMB 总，进程上限 %s\n    内核 %s" % (
+        mem_avail, mem_total, nproc, ver[:80])
+    if marks:
+        add("WARN", "运行环境",
+            "检测到鸿蒙安卓兼容容器（卓易通 / anco，标识：%s）\n"
+            "    %s\n"
+            "    已知限制与建议：\n"
+            "      · 鸿蒙沙箱限制 fork 子进程 —— 安装已自动降为串行（并发 1）\n"
+            "      · 系统对卓易通后台杀得很快 —— 安装第五步请保持 App 前台、屏幕常亮\n"
+            "      · 容器自身占用约 8GB 内存 —— 建议关掉其它大应用再装"
+            % (", ".join(marks), detail))
+    elif mem_avail and mem_avail < 900:
+        add("WARN", "运行环境",
+            "可用内存偏低，源码构建（第五步）可能被系统杀掉\n    " + detail)
+    else:
+        add("PASS", "运行环境", detail)
+
+
 def check_public_data():
     """会话数据是否已迁到公开目录（决定「卸载重装会不会丢」）。
 
@@ -1021,6 +1113,8 @@ def main():
         (check_web_auth, ()),
         (check_dsh_dupes, ()),
         (check_sessions, ()),
+        (check_pnpm_shells, ()),
+        (check_runtime_env, ()),
         (check_public_data, ()),
         (check_activity, ()),
         (check_runtime, ()),

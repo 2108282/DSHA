@@ -1438,6 +1438,17 @@ public class HarnessController {
             java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-selftest.py");
             if (f.getParentFile() != null) f.getParentFile().mkdirs();
             java.nio.file.Files.write(f.toPath(), py.getBytes(StandardCharsets.UTF_8));
+            // 空壳修复脚本随自检一起下发：自检里的「插件空壳检查」会调用它
+            try {
+                String heal = readAsset("heal-pnpm-shells.py");
+                if (heal != null && !heal.isEmpty()) {
+                    java.nio.file.Files.write(
+                            new java.io.File(proot.getRootfsDir(),
+                                    "root/dsha-heal-pnpm-shells.py").toPath(),
+                            heal.getBytes(StandardCharsets.UTF_8));
+                }
+            } catch (Throwable ignored) {
+            }
             String args = " --runtime " + proot.runtime().id()
                     + " --runtime-pref " + proot.preferredRuntimeId()
                     + " --script-ver " + AdbBridge.scriptVersion()
@@ -1449,7 +1460,8 @@ public class HarnessController {
                     + " --battery-opt " + (batteryOptWhitelisted() ? "1" : "0");
             String out = proot.execAndRead(
                     "python3 /root/dsha-selftest.py" + args
-                            + " 2>&1; rm -f /root/dsha-selftest.py", 180_000);
+                            + " 2>&1; rm -f /root/dsha-selftest.py"
+                            + " /root/dsha-heal-pnpm-shells.py", 180_000);
             if (out == null || out.trim().isEmpty()) {
                 return "自检没有输出：rootfs 内的 python3 可能不可用（可重跑步骤②安装基础工具）。";
             }
@@ -2061,6 +2073,13 @@ public class HarnessController {
     /** ④ deepseek-harness：预构建包 或 直连源码构建（全局进度 90~100） */
     private void installHarness() throws Exception {
         requireRootfs();
+        if (isAncoContainer()) {
+            // 鸿蒙 6 对卓易通后台杀得极快（社区反馈：切换应用/锁屏即杀）。
+            // 这一步要跑十几分钟，用户切出去回来就以为「卡住了」。
+            logActivity("卓易通环境：本步耗时较长，请保持 App 在前台且屏幕常亮");
+            setProgress("⚠ 卓易通环境：请勿切出 App（会被系统杀掉）", 90);
+            try { Thread.sleep(2500); } catch (InterruptedException ignored) { }
+        }
         // 预构建包源已暂停（catbox 匿名站包体被污染/损坏，含 WSL 脚本非官方产物）。
         // 当前唯一可靠路径 = 直连 GitHub 源码构建（多镜像 fallback + 工具链齐全，已验证稳定）。
         installHarnessFromSource();
@@ -2078,6 +2097,64 @@ public class HarnessController {
         }
         // ... 预构建包解压逻辑见历史版本 ...
         */
+    }
+
+    // ================= 受限容器环境（卓易通 / anco）=================
+    /** 检测是否跑在鸿蒙的安卓兼容容器里（卓易通 anco，底层是华为 iSulad）。
+     *
+     *  为什么要单独识别：用户报「总卡在安装第五步」。第五步是从源码构建 dsh
+     *  （git clone + pnpm install + node-gyp 编译 node-pty），是整条链路里
+     *  **最长、最吃内存、fork 最多**的一步。而卓易通环境有三个已知硬约束：
+     *
+     *  1. 鸿蒙 NEXT 的应用沙箱**默认禁止非系统应用 fork 子进程**，
+     *     Termux 在纯血鸿蒙上跑 proot 也是栽在这里；
+     *  2. anco 容器自身要 ~8GB 内存，剩给我们编译的余量很小；
+     *  3. 鸿蒙 6 对卓易通后台**杀得极快**（社区反馈：切换应用、锁屏即杀）——
+     *     一步要跑十几分钟，用户切出去看一眼回来就「卡住」了，
+     *     其实是进程已经没了。
+     *
+     *  判据参考社区做法：读 /proc/self/cgroup 找 isulad / lxc 标识。
+     *  结果缓存，避免每步都读文件。 */
+    private volatile Integer ancoCache = null;
+
+    public boolean isAncoContainer() {
+        Integer c = ancoCache;
+        if (c != null) return c == 1;
+        boolean hit = false;
+        try {
+            java.io.File f = new java.io.File("/proc/self/cgroup");
+            if (f.canRead()) {
+                String txt = new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                        java.nio.charset.StandardCharsets.UTF_8).toLowerCase();
+                hit = txt.contains("isulad") || txt.contains("/lxc/") || txt.contains("zhuoyi");
+            }
+            if (!hit) {
+                // 兜底：部分版本 cgroup 看不出来，看内核版本串里的 ohos/harmony 标识
+                String v = new String(java.nio.file.Files.readAllBytes(
+                        new java.io.File("/proc/version").toPath()),
+                        java.nio.charset.StandardCharsets.UTF_8).toLowerCase();
+                hit = v.contains("ohos") || v.contains("harmony");
+            }
+        } catch (Throwable ignored) {
+        }
+        ancoCache = hit ? 1 : 0;
+        if (hit) logActivity("检测到鸿蒙安卓容器（卓易通）：已切换为低并发安装模式");
+        return hit;
+    }
+
+    /** 受限环境下给 pnpm/npm 用的环境变量前缀。
+     *
+     *  三件事：把子进程并发压到 1（fork 受限）、给 node 设内存上限
+     *  （anco 里 OOM 比超时更常见）、关掉 pnpm 的进度动画
+     *  （被杀后日志里看不出走到哪，纯文本反而好排查）。
+     *  非 anco 环境返回空串，完全不影响原有行为。 */
+    private String lowResourceEnv() {
+        if (!isAncoContainer()) return "";
+        return "export NPM_CONFIG_CHILD_CONCURRENCY=1 "
+                + "PNPM_CHILD_CONCURRENCY=1 "
+                + "NPM_CONFIG_NETWORK_CONCURRENCY=2 "
+                + "NODE_OPTIONS='--max-old-space-size=1024' "
+                + "CI=1 TERM=dumb; ";
     }
 
     /** 是否使用 RC6 版本。已改为“始终最新 RC”（@deepseek-ai/dsh@rc），无开关。 */
@@ -2397,7 +2474,10 @@ public class HarnessController {
                     "printf 'registry=https://registry.npmmirror.com\\n"
                     + "package-import-method=copy\\nside-effects-cache=false\\n'"
                     + " > /root/.npmrc && " +
-                    "pnpm install",
+                    lowResourceEnv() +
+                    // 受限容器里 fork 受限，--child-concurrency=1 让 pnpm 串行跑
+                    // 依赖脚本；非 anco 环境 lowResourceEnv() 为空，参数也不加
+                    (isAncoContainer() ? "pnpm install --child-concurrency=1" : "pnpm install"),
                     // pnpm 会持续打印包名，五分钟一声不吭基本就是网络挂了
                     300_000L);
         } catch (Exception e) {
@@ -3372,9 +3452,9 @@ public class HarnessController {
                             + "        * 设备操作：/root/dsh-bin/adb-shell \"命令\"（唯一可用通道，uid=2000，已配对）\n"
                             + "        * 不要用裸 adb（守卫脚本，会失败）；Shizuku 桥备用 curl -s \"http://127.0.0.1:3090/exec?cmd=...&token=$(cat /root/.dsh/.bridge_token)\"（漏 token 一律 UNAUTHORIZED）\n"
                             + "        * 与用户交流请用中文回复\n";
-                    hpText += patchBlock;
-                    java.nio.file.Files.write(hp.toPath(), hpText.getBytes(StandardCharsets.UTF_8));
-                    android.util.Log.i("DSHA", "home patch 已注入官方极简 bash 描述");
+                    if (safeAppendYamlBlock(hp, hpText, patchBlock)) {
+                        android.util.Log.i("DSHA", "home patch 已注入官方极简 bash 描述");
+                    }
                 }
             } catch (Throwable ignored) {
             }
@@ -3390,6 +3470,114 @@ public class HarnessController {
             }
         } catch (Throwable ignored) {
         }
+    }
+
+    /** 结构安全地往 cordis.patch.yml 追加一段 block（议题 #36 Bug 1 的修复）。
+     *
+     *  原来是 `text += block` 然后直接写回。当现有文件内容是 flow-style 的
+     *  空容器时（`[]` 或 `{}`，dsh 与某些第三方安装脚本都会写成这样），
+     *  拼接结果是：
+     *
+     *      []
+     *      - insert:
+     *          - id: ...
+     *
+     *  `[]` 本身已经是一个**完整的 YAML 文档**，后面再接块序列属于非法语法，
+     *  Cordis 加载时直接抛 YAMLException（end of the stream or a document
+     *  separator is expected），**Web 完全起不来**。
+     *  用户在 #36 里就是这样被我们自己的修复机制打死的。
+     *
+     *  现在分三层防：
+     *   ① 空容器字面量（[] / {} / 纯空白）→ 用新块**替换**而不是追加；
+     *   ② 追加前确保以换行结尾（原来少一个 \n 就会把 block 接到最后一行尾部）；
+     *   ③ 写之前先备份 .bak，写之后用容器里的 python3 做一次 YAML 解析校验，
+     *      解析失败就回滚 —— 宁可这次注入不生效，也不能让 Web 起不来。
+     *
+     *  @param existing 调用方已经读好的现有内容（避免重复读盘）
+     *  @return 是否真的写入成功 */
+    private boolean safeAppendYamlBlock(java.io.File f, String existing, String block) {
+        try {
+            String cur = existing == null ? "" : existing;
+            String trimmed = cur.trim();
+            String merged;
+            if (trimmed.isEmpty() || "[]".equals(trimmed) || "{}".equals(trimmed)
+                    || "null".equals(trimmed) || "~".equals(trimmed)) {
+                // ① 空容器：直接用新块，别在 [] 后面接块序列
+                merged = block.startsWith("\n") ? block.substring(1) : block;
+            } else {
+                // ② 保证换行边界
+                merged = cur.endsWith("\n") ? cur : cur + "\n";
+                merged += block.startsWith("\n") ? block.substring(1) : block;
+            }
+            // ③ 备份 + 写 + 校验 + 失败回滚
+            java.io.File bak = new java.io.File(f.getPath() + ".bak");
+            if (f.isFile()) {
+                try {
+                    java.nio.file.Files.copy(f.toPath(), bak.toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                } catch (Throwable ignored) {
+                }
+            }
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), merged.getBytes(StandardCharsets.UTF_8));
+            if (!yamlParses(f)) {
+                // 回滚：有备份就还原，没有就删掉（宁可没有这个文件，也不留个坏的）
+                if (bak.isFile()) {
+                    try {
+                        java.nio.file.Files.copy(bak.toPath(), f.toPath(),
+                                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    } catch (Throwable ignored) {
+                    }
+                } else {
+                    f.delete();
+                }
+                logActivity("patch.yml 注入后语法校验不通过，已回滚（Web 不受影响）");
+                return false;
+            }
+            return true;
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "safeAppendYamlBlock 失败: " + e);
+            return false;
+        }
+    }
+
+    /** 用容器内的 python3 校验一个 YAML 文件能否解析。
+     *  没有 pyyaml 时退回「只要不是明显的 [] 后接块序列就算过」——
+     *  校验器缺失不该让功能不可用，但也不能假装校验过了。 */
+    private boolean yamlParses(java.io.File f) {
+        try {
+            String rel = f.getAbsolutePath();
+            java.io.File root = proot.getRootfsDir();
+            if (root != null && rel.startsWith(root.getAbsolutePath())) {
+                rel = rel.substring(root.getAbsolutePath().length());
+            }
+            String out = proot.execAndRead(
+                    "python3 - <<'EOF' 2>&1\n"
+                    + "import sys\n"
+                    + "p = " + quoteForPython(rel) + "\n"
+                    + "try:\n"
+                    + "    import yaml\n"
+                    + "except ImportError:\n"
+                    + "    print('NOYAML'); sys.exit(0)\n"
+                    + "try:\n"
+                    + "    list(yaml.safe_load_all(open(p, encoding='utf-8')))\n"
+                    + "    print('OK')\n"
+                    + "except Exception as e:\n"
+                    + "    print('BAD:' + str(e)[:200])\n"
+                    + "EOF\n", 20_000);
+            if (out == null) return true;              // 跑不起来就别拦
+            if (out.contains("BAD:")) {
+                android.util.Log.w("DSHA", "YAML 校验失败: " + out.trim());
+                return false;
+            }
+            return true;
+        } catch (Throwable e) {
+            return true;
+        }
+    }
+
+    private static String quoteForPython(String s) {
+        return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'";
     }
 
     private void writeAssetTo(String assetName, java.io.File dst) {
