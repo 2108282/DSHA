@@ -1280,7 +1280,6 @@ public class HarnessController {
             }
         });
     }
-
     /** 活动日志：凡是「App 自己悄悄做了什么」都往这里写一行，用户随时能看到。
      *
      *  这个项目最反复的一类问题不是功能坏了，而是**用户看不到 App 在做什么**：
@@ -1302,164 +1301,17 @@ public class HarnessController {
             java.nio.file.Files.write(f.toPath(), line.getBytes(StandardCharsets.UTF_8),
                     java.nio.file.StandardOpenOption.CREATE,
                     java.nio.file.StandardOpenOption.APPEND);
-            // 超过 400 行就裁到最后 200 行（顺手做，不另起清理任务）
             if (f.length() > 60_000) {
                 java.util.List<String> all = java.nio.file.Files.readAllLines(f.toPath());
                 if (all.size() > 400) {
                     java.nio.file.Files.write(f.toPath(),
-                            String.join("\n", all.subList(all.size() - 200, all.size())).getBytes(
-                                    StandardCharsets.UTF_8));
+                            String.join("\n", all.subList(all.size() - 200, all.size()))
+                                    .getBytes(StandardCharsets.UTF_8));
                 }
             }
             android.util.Log.i("DSHA", "[活动] " + what);
         } catch (Throwable ignored) {
         }
-    }
-
-    /** 跑分进度回调：每测完一项立刻推一行给 UI。
-     *
-     *  为什么必须是回调而不是「跑完返回一个大字符串」：上一版就是后者，
-     *  用户点下去之后三分钟没有任何反馈，完全不知道是在跑还是死了。
-     *  测速这种天然耗时的操作，**边跑边出结果**是唯一可接受的形态。 */
-    public interface BenchProgress {
-        /** 每完成一项（或阶段性信息）推一行 */
-        void onLine(String line);
-    }
-
-    /** 运行时性能对比：多项负载在 proot 与 proroot 下各跑一遍，边跑边把结果推给 UI。
-     *
-     *  换运行时的唯一理由是更快，而快多少不能靠感觉。测试项按 dsh 的真实负载挑，
-     *  并标注哪几项**对我们最要紧** —— 提速集中在无关项上意义有限。 */
-    public String benchmarkRuntimes(BenchProgress cb) {
-        StringBuilder out = new StringBuilder();
-        try {
-            if (!proot.isInstalled()) return "环境未就绪，先完成安装再对比。";
-            ContainerRuntime a = new ContainerRuntime.Proot(appContext,
-                    proot.findNativeLibPublic("libproot.so"));
-            ContainerRuntime b = new ContainerRuntime.Proroot(appContext,
-                    ContainerRuntime.Proroot.defaultDir(appContext));
-            emit(cb, out, "=== 运行时性能对比 ===");
-            emit(cb, out, "proot = 内置（ptrace）　proroot = 实验（LD_PRELOAD）");
-            if (!b.available()) {
-                emit(cb, out, "");
-                emit(cb, out, "proroot 不可用：" + b.unavailableReason());
-                return out.toString();
-            }
-            try {
-                b.prepare();
-            } catch (Throwable e) {
-                emit(cb, out, "proroot 准备失败：" + e);
-                return out.toString();
-            }
-            // {显示名, 命令, 是否对 dsh 关键}
-            // 每项的工作量要**明显大于**容器启动开销，否则测出来全是启动开销、
-            // 看不出运行时在 syscall 上的差异（上一版就是这个毛病：所有项都 100ms 出头）。
-            String[][] cases = {
-                    {"容器冷启动", "true", "1"},
-                    {"解释器冷启动", "node -e 0", "1"},
-                    {"模块解析", "node -e \"for(let i=0;i<8;i++){delete require.cache[require.resolve('path')];require('path')}\"", "1"},
-                    {"stat 密集", "node -e \"const f=require('fs');for(let i=0;i<3000;i++)f.existsSync('/usr/bin/env')\"", "1"},
-                    {"文件读写", "node -e \"const f=require('fs');for(let i=0;i<600;i++){f.writeFileSync('/tmp/.bt',String(i));f.readFileSync('/tmp/.bt')}\"", "1"},
-                    {"进程创建", "for i in $(seq 1 120); do true; done; for i in $(seq 1 40); do /bin/true; done", "1"},
-                    {"目录遍历", "ls -R /usr/include >/dev/null 2>&1", "0"},
-                    {"文本管道", "seq 1 60000 | grep -c 7 >/dev/null", "0"},
-                    {"Python 冷启动", "python3 -c pass", "0"},
-                    {"tar 打包", "tar -cf /dev/null /usr/include 2>/dev/null", "0"},
-            };
-            emit(cb, out, "共 " + cases.length + " 项，每项各跑 4 次、丢首次、取最快一次。");
-            emit(cb, out, "带 ★ 的是 dsh 实际高频用到的，看这几项更有意义。");
-            emit(cb, out, "");
-            long sumA = 0, sumB = 0, keyA = 0, keyB = 0;
-            for (int k = 0; k < cases.length; k++) {
-                String name = cases[k][0], cmd = cases[k][1];
-                boolean key = "1".equals(cases[k][2]);
-                emit(cb, null, String.format(java.util.Locale.US,
-                        "[%d/%d] %s … 测 proot", k + 1, cases.length, name));
-                long ta = benchOne(a, cmd);
-                emit(cb, null, String.format(java.util.Locale.US,
-                        "[%d/%d] %s … 测 proroot", k + 1, cases.length, name));
-                long tb = benchOne(b, cmd);
-                String mark = key ? "★" : "　";
-                if (ta < 0 || tb < 0) {
-                    emit(cb, out, String.format(java.util.Locale.US, "%s%-12s  %-9s %-9s  —",
-                            mark, name, ta < 0 ? "失败" : ta + "ms", tb < 0 ? "失败" : tb + "ms"));
-                    continue;
-                }
-                sumA += ta;
-                sumB += tb;
-                if (key) {
-                    keyA += ta;
-                    keyB += tb;
-                }
-                double gain = ta == 0 ? 0 : (ta - tb) * 100.0 / ta;
-                emit(cb, out, String.format(java.util.Locale.US,
-                        "%s%-12s  %5dms   %5dms   %+.0f%%", mark, name, ta, tb, gain));
-            }
-            emit(cb, out, "");
-            if (keyA > 0 && keyB > 0) {
-                double kg = (keyA - keyB) * 100.0 / keyA;
-                emit(cb, out, String.format(java.util.Locale.US,
-                        "★ 关键项合计   %5dms   %5dms   %+.0f%%", keyA, keyB, kg));
-            }
-            if (sumA > 0 && sumB > 0) {
-                double tg = (sumA - sumB) * 100.0 / sumA;
-                emit(cb, out, String.format(java.util.Locale.US,
-                        "  全部合计     %5dms   %5dms   %+.0f%%", sumA, sumB, tg));
-                emit(cb, out, "");
-                double judge = keyA > 0 ? (keyA - keyB) * 100.0 / keyA : tg;
-                emit(cb, out, judge >= 20
-                        ? "关键项提速达到 20% 判断线 —— 值得继续推进。"
-                        : "关键项提速未达 20% —— 考虑闭源与维护风险，建议维持默认关闭。");
-            }
-        } catch (Throwable e) {
-            emit(cb, out, "对比中断：" + describe(e));
-        }
-        try {
-            java.io.File f = rootfsFile("root/.dsh/bench-report.txt");
-            if (f.getParentFile() != null) {
-                //noinspection ResultOfMethodCallIgnored
-                f.getParentFile().mkdirs();
-            }
-            java.nio.file.Files.write(f.toPath(),
-                    ("== " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
-                            java.util.Locale.US).format(new java.util.Date()) + " ==\n"
-                            + out + "\n").getBytes(StandardCharsets.UTF_8),
-                    java.nio.file.StandardOpenOption.CREATE,
-                    java.nio.file.StandardOpenOption.APPEND);
-        } catch (Throwable ignored) {
-        }
-        return out.toString();
-    }
-
-    /** 推一行给 UI；out 非空时同时计入最终报告（纯进度行不进报告，免得报告被刷屏）。 */
-    private void emit(BenchProgress cb, StringBuilder out, String line) {
-        if (out != null) {
-            out.append(line).append('\n');
-        }
-        if (cb != null) {
-            try {
-                cb.onLine(line);
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
-    /** 跑 2 次丢掉第一次（预热文件缓存），返回第二次耗时；失败返回 -1。
-     *
-     *  只跑两次是为了总时长可控（10 项 × 2 运行时 × 2 次 = 40 次容器启动）。
-     *  有实时反馈之后，慢一点可以接受，但不能长到让人以为死了。 */
-    private long benchOne(ContainerRuntime rt, String cmd) {
-        // 跑 4 次：第 1 次预热（文件缓存），后 3 次取**最小值**。
-        // 取最小而不是平均/中位：慢的那次几乎总是被别的东西干扰（调度、温控、
-        // 后台任务），最小值最接近这个运行时的真实能力。
-        long best = -1;
-        for (int i = 0; i < 4; i++) {
-            long ms = proot.timeExecWith(rt, cmd, 25_000);
-            if (ms < 0) return -1;
-            if (i == 0) continue;
-            if (best < 0 || ms < best) best = ms;
-        }
-        return best;
     }
 
     /** 一键自检：注入 selftest.py 跑一遍**只读**检查（环境/3090 桥/ADB/引导插件/

@@ -147,17 +147,35 @@ public class ProotBootstrap {
 
     /** proot 运行环境（两个 exec 入口共用，避免两处漂移） */
     private void applyProotEnv(ProcessBuilder pb) {
-        // 运行时特有的环境变量（proroot 需要一个可写的 PROROOT_TMP_DIR）
+        ContainerRuntime rt;
         try {
-            runtime().applyEnv(pb, baseDir, libDir, tmpDir);
+            rt = runtime();
+        } catch (Throwable e) {
+            rt = new ContainerRuntime.Proot(ctx, findNativeLib("libproot.so"));
+        }
+        // ── proot 专用变量：**只在 proot 下设** ──
+        // 之所以要分开：proroot 是 LD_PRELOAD 方案，对 LD_LIBRARY_PATH 尤其敏感 ——
+        // 把它指向 proot 的库目录有可能干扰 proroot 自己的注入链。
+        // PROOT_L2S_DIR 更直接：proroot 有自己的 anchor + symlink group 机制，
+        // 塞一个 proot 语义的 l2s 目录进去只会添乱。
+        // 这几个变量 proroot 压根不读，但「不读」和「不该出现」是两件事 ——
+        // 这个项目已经在「两套机制的配置互相污染」上栽过（npmrc 覆盖冲掉 pnpm 修复）。
+        if ("proot".equals(rt.id())) {
+            pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
+            applyL2sEnv(pb);
+            pb.environment().put("PROOT_LOADER",
+                    findNativeLib("libprootloader.so").getAbsolutePath());
+            pb.environment().put("PROOT_LOADER_32",
+                    findNativeLib("libprootloader32.so").getAbsolutePath());
+            pb.environment().put("LD_LIBRARY_PATH",
+                    libDir.getAbsolutePath() + ":" + findNativeLib("libproot.so").getParent());
+        }
+        // ── 运行时自己的变量（放在专用变量之后，允许覆盖）──
+        try {
+            rt.applyEnv(pb, baseDir, libDir, tmpDir);
         } catch (Throwable ignored) {
         }
-        pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
-        applyL2sEnv(pb);
-        pb.environment().put("PROOT_LOADER", findNativeLib("libprootloader.so").getAbsolutePath());
-        pb.environment().put("PROOT_LOADER_32", findNativeLib("libprootloader32.so").getAbsolutePath());
-        pb.environment().put("LD_LIBRARY_PATH",
-                libDir.getAbsolutePath() + ":" + findNativeLib("libproot.so").getParent());
+        // ── 以下与运行时无关，是 guest 侧的环境 ──
         pb.environment().put("HOME", "/root");
         // guest 的 PATH（否则继承 Android 的 /system/bin，找不到 tail/apt 等）；
         // 前置 /root/dsh-bin = 危险命令确认包装器（DSH_CONFIRM=1 时拦截）
@@ -380,10 +398,20 @@ public class ProotBootstrap {
         tmpDir.mkdirs();
         libDir.mkdirs();
 
-        // libtalloc.so.2（proot 的 NEEDED），jniLibs 里叫 libtalloc.so
-        copyExec(findNativeLib("libtalloc.so"), new File(libDir, "libtalloc.so.2"));
-        // libandroid-shmem.so（旧版 proot 的 NEEDED）
-        copyExec(findNativeLib("libandroidshmem.so"), new File(libDir, "libandroid-shmem.so"));
+        // 这两个是 **proot 的 NEEDED 依赖**，proroot 用不到
+        // （它只链 libdl/libc，共享内存靠挂真实目录当 /dev/shm）。
+        // 切到 proroot 时就不必复制了 —— 少一份没人用的文件，也少一处将来的困惑来源。
+        boolean isProot = true;
+        try {
+            isProot = "proot".equals(runtime().id());
+        } catch (Throwable ignored) {
+        }
+        if (isProot) {
+            // libtalloc.so.2（proot 的 NEEDED），jniLibs 里叫 libtalloc.so
+            copyExec(findNativeLib("libtalloc.so"), new File(libDir, "libtalloc.so.2"));
+            // libandroid-shmem.so（旧版 proot 的 NEEDED）
+            copyExec(findNativeLib("libandroidshmem.so"), new File(libDir, "libandroid-shmem.so"));
+        }
     }
 
     private byte[] readAsset(String name) {
@@ -397,108 +425,6 @@ public class ProotBootstrap {
             return null;
         }
     }
-
-    /** 给外部构造 Proot 运行时用（findNativeLib 是私有的）。 */
-    public File findNativeLibPublic(String name) {
-        return findNativeLib(name);
-    }
-
-    /** 用指定运行时执行命令，只**精确计时**、不读输出。返回毫秒，失败/超时返回 -1。
-     *
-     *  为什么另开一个方法而不复用 execAndReadWith：那边用的是
-     *  {@code Process.waitFor(timeout, unit)} —— OpenJDK 的默认实现是
-     *  {@code Thread.sleep(Math.min(..., 100))} **轮询**，粒度 100 毫秒。
-     *  于是所有测量值都被量化到 100ms 网格上（实测报告里全是 102 / 203 / 204ms，
-     *  真实耗时几毫秒的命令也报 102ms），跑分数据完全失去意义。
-     *
-     *  这里改用无参 {@code waitFor()}（真正的阻塞 waitpid）+ nanoTime 计时，
-     *  超时保护交给一个 daemon 守卫线程 destroyForcibly。
-     *  输出重定向到 /dev/null，避免读取线程干扰计时。 */
-    public long timeExecWith(ContainerRuntime rt, String bashCommand, long timeoutMs) {
-        Process p = null;
-        Thread guard = null;
-        try {
-            java.util.List<String> argv = rt.baseArgv(rootfsDir, hardlinkSupported());
-            argv.add("/bin/bash");
-            argv.add("-c");
-            argv.add(bashCommand);
-            ProcessBuilder pb = new ProcessBuilder(argv);
-            pb.redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null")));
-            pb.redirectOutput(ProcessBuilder.Redirect.to(new File("/dev/null")));
-            pb.redirectError(ProcessBuilder.Redirect.to(new File("/dev/null")));
-            applyProotEnv(pb);
-            rt.applyEnv(pb, baseDir, libDir, tmpDir);
-
-            final long t0 = System.nanoTime();
-            p = pb.start();
-            final Process fp = p;
-            final boolean[] timedOut = {false};
-            guard = new Thread(() -> {
-                try {
-                    Thread.sleep(timeoutMs);
-                    if (fp.isAlive()) {
-                        timedOut[0] = true;
-                        fp.destroyForcibly();
-                    }
-                } catch (InterruptedException ignored) {
-                }
-            }, "dsha-bench-guard");
-            guard.setDaemon(true);
-            guard.start();
-
-            int code = p.waitFor();                 // 阻塞等待，无 100ms 量化
-            long ms = (System.nanoTime() - t0) / 1_000_000L;
-            guard.interrupt();
-            if (timedOut[0]) return -1;
-            return code == 0 ? ms : -1;
-        } catch (Throwable e) {
-            return -1;
-        } finally {
-            if (guard != null) guard.interrupt();
-            if (p != null && p.isAlive()) p.destroyForcibly();
-        }
-    }
-
-    /** 用**指定**运行时执行命令并读回输出。给性能对比用 —— 同一条命令在两个
-     *  运行时下各跑一遍，不能依赖当前选中的那个。
-     *
-     *  写法参考 andClaw 的 buildProrootArgvCommand(argv, runtime)：命令组装显式接收
-     *  runtime，而不是内部读全局状态。这样对比测试不需要来回改配置。 */
-    public String execAndReadWith(ContainerRuntime rt, String bashCommand, long timeoutMs) {
-        Process p = null;
-        try {
-            java.util.List<String> argv = rt.baseArgv(rootfsDir, hardlinkSupported());
-            argv.add("/bin/bash");
-            argv.add("-c");
-            argv.add(bashCommand);
-            ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
-            pb.redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null")));
-            applyProotEnv(pb);
-            rt.applyEnv(pb, baseDir, libDir, tmpDir);
-            p = pb.start();
-            final Process fp = p;
-            final StringBuilder sb = new StringBuilder();
-            Thread reader = new Thread(() -> {
-                try {
-                    sb.append(drainOutput(fp));
-                } catch (Throwable ignored) {
-                }
-            }, "dsha-bench-read");
-            reader.setDaemon(true);
-            reader.start();
-            if (!p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                p.destroyForcibly();
-                return "TIMEOUT";
-            }
-            reader.join(2000);
-            return sb.toString();
-        } catch (Throwable e) {
-            return "ERROR: " + e;
-        } finally {
-            if (p != null && p.isAlive()) p.destroyForcibly();
-        }
-    }
-
     /** 在 rootfs 内执行 bash 命令 */
     public Process execRootfs(String bashCommand) throws IOException {
         java.util.List<String> argv = baseProotArgv();

@@ -63,8 +63,6 @@ public class SettingsFragment extends Fragment {
         view.findViewById(R.id.settings_update).setOnClickListener(v -> checkUpdate());
         View selfTest = view.findViewById(R.id.settings_selftest);
         if (selfTest != null) selfTest.setOnClickListener(v -> runSelfTest());
-        View bench = view.findViewById(R.id.settings_bench);
-        if (bench != null) bench.setOnClickListener(v -> runBenchmark());
     }
 
     /** 一键自检：后台跑只读检查，结果用可滚动弹窗展示（可一键复制发给开发者） */
@@ -79,68 +77,6 @@ public class SettingsFragment extends Fragment {
             });
         }, "dsha-selftest").start();
     }
-
-    /** 运行时性能对比。**先把弹窗开出来再开始跑**，然后一行行往里追加。
-     *
-     *  上一版是「跑完再弹」，用户点下去三分钟毫无反馈，完全不知道是在跑还是死了。
-     *  耗时操作必须边跑边出结果 —— 这是这个项目反复吃亏的地方：
-     *  App 在做事，但用户看不到。 */
-    private void runBenchmark() {
-        final TextView body = new TextView(requireContext());
-        body.setTypeface(android.graphics.Typeface.MONOSPACE);
-        body.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        body.setPadding(24, 24, 24, 24);
-        body.setTextIsSelectable(true);
-        body.setText("正在准备…");
-        final android.widget.ScrollView sv = new android.widget.ScrollView(requireContext());
-        sv.addView(body);
-        final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(requireContext())
-                .setTitle("运行时性能对比")
-                .setView(sv)
-                .setPositiveButton("关闭", null)
-                .setNeutralButton("复制", null)
-                .create();
-        dlg.show();
-
-        final StringBuilder shown = new StringBuilder();
-        final android.content.Context app = requireContext().getApplicationContext();
-        new Thread(() -> {
-            final String report = HarnessController.get(app).benchmarkRuntimes(line -> {
-                // 进度行（[3/10] … 测 proroot）只临时显示在末尾，结果行才累积 ——
-                // 否则十项跑完会多出二十行噪音
-                final boolean isProgress = line.startsWith("[");
-                if (getActivity() == null) return;
-                requireActivity().runOnUiThread(() -> {
-                    if (!isAdded()) return;
-                    if (isProgress) {
-                        body.setText(shown.toString() + "\n" + line);
-                    } else {
-                        shown.append(line).append('\n');
-                        body.setText(shown.toString());
-                    }
-                    sv.post(() -> sv.fullScroll(View.FOCUS_DOWN));
-                });
-            });
-            if (getActivity() == null) return;
-            requireActivity().runOnUiThread(() -> {
-                if (!isAdded()) return;
-                body.setText(report);
-                android.widget.Button copy = dlg.getButton(android.app.AlertDialog.BUTTON_NEUTRAL);
-                if (copy != null) {
-                    copy.setOnClickListener(v -> {
-                        android.content.ClipboardManager cm =
-                                (android.content.ClipboardManager) requireContext()
-                                        .getSystemService(android.content.Context.CLIPBOARD_SERVICE);
-                        if (cm != null) {
-                            cm.setPrimaryClip(android.content.ClipData.newPlainText("bench", report));
-                            Toast.makeText(requireContext(), "已复制", Toast.LENGTH_SHORT).show();
-                        }
-                    });
-                }
-            });
-        }, "dsha-bench").start();
-    }
-
     private void showSelfTestDialog(final String report) {
         TextView body = new TextView(requireContext());
         body.setText(report);

@@ -506,10 +506,17 @@ def check_write_patch():
                 "未打 —— 会话写完即失效（ENOENT ... session.jsonl.zstd）；"
                 "到启动页点一次「重启」即会自动补上（补丁是启动 Web 时打的）")
     mark = read("/root/.dsha-hardlink").strip()
+    _rt = arg("runtime") or "proot"
     if mark.startswith("ok"):
-        add("PASS", "硬链接支持", "文件系统支持真实硬链接，proot 未启用 link2symlink")
+        add("PASS", "硬链接支持", "文件系统支持真实硬链接，未启用 link2symlink")
     elif mark:
-        add("SKIP", "硬链接支持", "不支持（Android 私有目录常态）：%s" % mark[:90])
+        # 这项的结论只对 proot 有直接意义：proroot 的硬链接模拟是另一套机制
+        # （anchor + symlink group），「不支持」并不代表它会产生 proot 那种 .l2s 链
+        tailmsg = "不支持（Android 私有目录常态）：%s" % mark[:90]
+        if _rt == "proroot":
+            tailmsg += "\n    当前运行时是 proroot，它用自己的 anchor+symlink group 机制，" \
+                       "不产生 proot 式的 .l2s 链"
+        add("SKIP", "硬链接支持", tailmsg)
 
 
 # ===================== 5.5 proot l2s 残留 =====================
