@@ -1352,19 +1352,21 @@ public class HarnessController {
                 return out.toString();
             }
             // {显示名, 命令, 是否对 dsh 关键}
+            // 每项的工作量要**明显大于**容器启动开销，否则测出来全是启动开销、
+            // 看不出运行时在 syscall 上的差异（上一版就是这个毛病：所有项都 100ms 出头）。
             String[][] cases = {
-                    {"容器冷启动", "/bin/true", "1"},
-                    {"解释器冷启动", "node -e 1", "1"},
-                    {"模块解析", "node -e \"require('fs');require('path');require('os')\"", "1"},
-                    {"文件存在检查", "node -e \"const f=require('fs');for(let i=0;i<150;i++)f.existsSync('/usr/bin/env')\"", "1"},
-                    {"小文件读写", "node -e \"const f=require('fs');for(let i=0;i<40;i++){f.writeFileSync('/tmp/.bt',String(i));f.readFileSync('/tmp/.bt')}\"", "1"},
-                    {"进程创建", "for i in $(seq 1 15); do /bin/true; done", "1"},
-                    {"目录遍历", "ls -R /usr/include/asm-generic >/dev/null 2>&1", "0"},
-                    {"文本管道", "seq 1 3000 | grep -c 7 >/dev/null", "0"},
+                    {"容器冷启动", "true", "1"},
+                    {"解释器冷启动", "node -e 0", "1"},
+                    {"模块解析", "node -e \"for(let i=0;i<8;i++){delete require.cache[require.resolve('path')];require('path')}\"", "1"},
+                    {"stat 密集", "node -e \"const f=require('fs');for(let i=0;i<3000;i++)f.existsSync('/usr/bin/env')\"", "1"},
+                    {"文件读写", "node -e \"const f=require('fs');for(let i=0;i<600;i++){f.writeFileSync('/tmp/.bt',String(i));f.readFileSync('/tmp/.bt')}\"", "1"},
+                    {"进程创建", "for i in $(seq 1 120); do true; done; for i in $(seq 1 40); do /bin/true; done", "1"},
+                    {"目录遍历", "ls -R /usr/include >/dev/null 2>&1", "0"},
+                    {"文本管道", "seq 1 60000 | grep -c 7 >/dev/null", "0"},
                     {"Python 冷启动", "python3 -c pass", "0"},
-                    {"tar 打包", "tar -cf /dev/null /usr/include/asm-generic 2>/dev/null", "0"},
+                    {"tar 打包", "tar -cf /dev/null /usr/include 2>/dev/null", "0"},
             };
-            emit(cb, out, "共 " + cases.length + " 项，每项两个运行时各跑 2 次取快的那次。");
+            emit(cb, out, "共 " + cases.length + " 项，每项各跑 4 次、丢首次、取最快一次。");
             emit(cb, out, "带 ★ 的是 dsh 实际高频用到的，看这几项更有意义。");
             emit(cb, out, "");
             long sumA = 0, sumB = 0, keyA = 0, keyB = 0;
@@ -1447,14 +1449,17 @@ public class HarnessController {
      *  只跑两次是为了总时长可控（10 项 × 2 运行时 × 2 次 = 40 次容器启动）。
      *  有实时反馈之后，慢一点可以接受，但不能长到让人以为死了。 */
     private long benchOne(ContainerRuntime rt, String cmd) {
-        for (int i = 0; i < 2; i++) {
-            long t0 = System.currentTimeMillis();
-            String r = proot.execAndReadWith(rt, cmd, 25_000);
-            long dt = System.currentTimeMillis() - t0;
-            if (r == null || r.startsWith("ERROR") || "TIMEOUT".equals(r)) return -1;
-            if (i == 1) return dt;
+        // 跑 4 次：第 1 次预热（文件缓存），后 3 次取**最小值**。
+        // 取最小而不是平均/中位：慢的那次几乎总是被别的东西干扰（调度、温控、
+        // 后台任务），最小值最接近这个运行时的真实能力。
+        long best = -1;
+        for (int i = 0; i < 4; i++) {
+            long ms = proot.timeExecWith(rt, cmd, 25_000);
+            if (ms < 0) return -1;
+            if (i == 0) continue;
+            if (best < 0 || ms < best) best = ms;
         }
-        return -1;
+        return best;
     }
 
     /** 一键自检：注入 selftest.py 跑一遍**只读**检查（环境/3090 桥/ADB/引导插件/

@@ -403,6 +403,62 @@ public class ProotBootstrap {
         return findNativeLib(name);
     }
 
+    /** 用指定运行时执行命令，只**精确计时**、不读输出。返回毫秒，失败/超时返回 -1。
+     *
+     *  为什么另开一个方法而不复用 execAndReadWith：那边用的是
+     *  {@code Process.waitFor(timeout, unit)} —— OpenJDK 的默认实现是
+     *  {@code Thread.sleep(Math.min(..., 100))} **轮询**，粒度 100 毫秒。
+     *  于是所有测量值都被量化到 100ms 网格上（实测报告里全是 102 / 203 / 204ms，
+     *  真实耗时几毫秒的命令也报 102ms），跑分数据完全失去意义。
+     *
+     *  这里改用无参 {@code waitFor()}（真正的阻塞 waitpid）+ nanoTime 计时，
+     *  超时保护交给一个 daemon 守卫线程 destroyForcibly。
+     *  输出重定向到 /dev/null，避免读取线程干扰计时。 */
+    public long timeExecWith(ContainerRuntime rt, String bashCommand, long timeoutMs) {
+        Process p = null;
+        Thread guard = null;
+        try {
+            java.util.List<String> argv = rt.baseArgv(rootfsDir, hardlinkSupported());
+            argv.add("/bin/bash");
+            argv.add("-c");
+            argv.add(bashCommand);
+            ProcessBuilder pb = new ProcessBuilder(argv);
+            pb.redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null")));
+            pb.redirectOutput(ProcessBuilder.Redirect.to(new File("/dev/null")));
+            pb.redirectError(ProcessBuilder.Redirect.to(new File("/dev/null")));
+            applyProotEnv(pb);
+            rt.applyEnv(pb, baseDir, libDir, tmpDir);
+
+            final long t0 = System.nanoTime();
+            p = pb.start();
+            final Process fp = p;
+            final boolean[] timedOut = {false};
+            guard = new Thread(() -> {
+                try {
+                    Thread.sleep(timeoutMs);
+                    if (fp.isAlive()) {
+                        timedOut[0] = true;
+                        fp.destroyForcibly();
+                    }
+                } catch (InterruptedException ignored) {
+                }
+            }, "dsha-bench-guard");
+            guard.setDaemon(true);
+            guard.start();
+
+            int code = p.waitFor();                 // 阻塞等待，无 100ms 量化
+            long ms = (System.nanoTime() - t0) / 1_000_000L;
+            guard.interrupt();
+            if (timedOut[0]) return -1;
+            return code == 0 ? ms : -1;
+        } catch (Throwable e) {
+            return -1;
+        } finally {
+            if (guard != null) guard.interrupt();
+            if (p != null && p.isAlive()) p.destroyForcibly();
+        }
+    }
+
     /** 用**指定**运行时执行命令并读回输出。给性能对比用 —— 同一条命令在两个
      *  运行时下各跑一遍，不能依赖当前选中的那个。
      *
