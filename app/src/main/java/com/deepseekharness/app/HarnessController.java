@@ -802,41 +802,135 @@ public class HarnessController {
         return false;
     }
 
-    /** 把内置插件实体**安置**进 node_modules，成功才返回 true。
+    /** 内置插件包名 → assets 目录名。方案 B 直接从 APK 写入，连中间实体都不需要。 */
+    private static String builtinAssetDir(String pkgName) {
+        if ("dsh-device-shell-guide".equals(pkgName)) return "device-shell-guide";
+        if ("dsh-client-ui-mobile-adapt".equals(pkgName)) return "mobile-adapt";
+        if ("dsh-task-notifier".equals(pkgName)) return "task-notifier";
+        return null;
+    }
+
+    /** 把内置插件安置进 node_modules。**四条路依次尝试，任一成功即返回。**
      *
-     *  纯 Java 递归复制 —— 前面几版分别试过：写注册不建链接（dsh 崩）、
-     *  Files.createSymbolicLink（Android 私有目录不支持，插件被误摘）、
-     *  proot 内 ln -sfn 与 cp -a（要拼一串带嵌套引号的 shell，execAndRead
-     *  的包裹方式一旦对不上就整条失败，而失败只写 logcat，用户只看到插件没了）。
+     *  之所以做成多路：前面四个版本每次只赌一种做法，失败了还得等用户回报再换一种，
+     *  一来一回好几轮（写注册不建链接 → dsh 崩；createSymbolicLink → 私有目录不支持；
+     *  proot ln -sfn → 仍失败；proot cp -a 带嵌套引号 → 转义出错整条失败）。
+     *  这些机制的可用性取决于设备文件系统、proot 状态、shell 包裹方式，
+     *  在容器里全都测不准 —— 那就别赌，全都试一遍。
      *
-     *  复制文件是 JVM 最基础的能力，不依赖链接支持、不依赖 proot 是否就绪、
-     *  不需要 shell 转义。三个插件加起来几十 KB，多拷几次也无所谓。
-     *  失败原因直接带回调用方，不再消失在日志里。 */
+     *    A  Java 递归复制      不依赖链接支持、不依赖 proot、无 shell 转义
+     *    B  直接从 assets 写   连 /root 下的中间实体都不需要，最彻底
+     *    C  proot 内 cp -a     命令极简、无嵌套引号
+     *    D  符号链接           省空间，但 Android 私有目录常不支持
+     *
+     *  四条都失败时把每条的原因拼起来记进日志与 repair-builtin.log，
+     *  不再让失败消失在 logcat 里。 */
     private boolean linkPlugin(String name, String real, java.io.File nmDir) {
+        java.io.File dst = new java.io.File(nmDir, name);
+        java.io.File dstPkg = new java.io.File(dst, "package.json");
+        java.io.File src = new java.io.File(proot.getRootfsDir(), "root" + real.substring(5));
+        java.io.File srcPkg = new java.io.File(src, "package.json");
+        StringBuilder tried = new StringBuilder();
+
+        // 已安置且版本一致 → 直接过
         try {
-            java.io.File src = new java.io.File(proot.getRootfsDir(), "root" + real.substring(5));
-            java.io.File srcPkg = new java.io.File(src, "package.json");
-            if (!srcPkg.isFile()) {
-                android.util.Log.w("DSHA", "安置 " + name + "：实体不完整 " + src);
-                return false;
+            if (dstPkg.isFile() && srcPkg.isFile()) {
+                String a = readVersionOf(dstPkg), b = readVersionOf(srcPkg);
+                if (!a.isEmpty() && a.equals(b)) return true;
             }
-            java.io.File dst = new java.io.File(nmDir, name);
-            java.io.File dstPkg = new java.io.File(dst, "package.json");
-            // 已安置且内容一样 → 跳过（避免每次启动白拷）
-            if (dstPkg.isFile() && dstPkg.length() == srcPkg.length()
-                    && readVersionOf(dstPkg).equals(readVersionOf(srcPkg))
-                    && !readVersionOf(srcPkg).isEmpty()) {
-                return true;
-            }
-            purgeForPlace(dst);          // 含悬空符号链接、老的真目录
-            copyForPlace(src, dst);
-            boolean ok = dstPkg.isFile();
-            if (!ok) android.util.Log.w("DSHA", "安置 " + name + " 后 package.json 仍不在");
-            return ok;
-        } catch (Throwable e) {
-            android.util.Log.w("DSHA", "安置内置插件 " + name + " 失败: " + e);
-            return false;
+        } catch (Throwable ignored) {
         }
+
+        // ---- A：Java 递归复制 ----
+        try {
+            if (srcPkg.isFile()) {
+                purgeForPlace(dst);
+                copyForPlace(src, dst);
+                if (dstPkg.isFile()) return true;
+                tried.append("A(复制后 package.json 不在) ");
+            } else {
+                tried.append("A(实体缺 package.json) ");
+            }
+        } catch (Throwable e) {
+            tried.append("A(").append(e.getClass().getSimpleName()).append(") ");
+        }
+
+        // ---- B：直接从 assets 写入 ----
+        try {
+            String adir = builtinAssetDir(name);
+            if (adir != null) {
+                purgeForPlace(dst);
+                int n = writeAssetTree(adir, dst);
+                if (n > 0 && dstPkg.isFile()) return true;
+                tried.append("B(写了").append(n).append("个文件仍不完整) ");
+            } else {
+                tried.append("B(无 assets 映射) ");
+            }
+        } catch (Throwable e) {
+            tried.append("B(").append(e.getClass().getSimpleName()).append(") ");
+        }
+
+        // ---- C：proot 内 cp -a（命令保持极简，避免任何嵌套引号）----
+        try {
+            String t = "/root/.dsh/profiles/web/node_modules/" + name;
+            proot.execAndRead("rm -rf " + shellArg(t), 20_000);
+            proot.execAndRead("cp -a " + shellArg(real) + " " + shellArg(t), 60_000);
+            if (dstPkg.isFile()) return true;
+            tried.append("C(cp 后仍不在) ");
+        } catch (Throwable e) {
+            tried.append("C(").append(e.getClass().getSimpleName()).append(") ");
+        }
+
+        // ---- D：符号链接（最后试，成功了最省空间）----
+        try {
+            String t = "/root/.dsh/profiles/web/node_modules/" + name;
+            proot.execAndRead("rm -rf " + shellArg(t) + "; ln -sfn " + shellArg(real)
+                    + " " + shellArg(t), 20_000);
+            if (dstPkg.isFile()) return true;
+            tried.append("D(链接后读不到 package.json) ");
+        } catch (Throwable e) {
+            tried.append("D(").append(e.getClass().getSimpleName()).append(") ");
+        }
+
+        android.util.Log.w("DSHA", "安置 " + name + " 四种方式全失败: " + tried);
+        try {
+            java.nio.file.Files.write(new java.io.File(proot.getRootfsDir(),
+                            "root/.dsh/repair-builtin.log").toPath(),
+                    ("安置 " + name + " 全部失败: " + tried + "\n")
+                            .getBytes(StandardCharsets.UTF_8),
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND);
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /** 把 assets 下某个目录整棵写进目标目录，返回写出的文件数。 */
+    private int writeAssetTree(String assetDir, java.io.File dstRoot) throws java.io.IOException {
+        int count = 0;
+        String[] kids = appContext.getAssets().list(assetDir);
+        if (kids == null || kids.length == 0) return 0;
+        for (String k : kids) {
+            String child = assetDir + "/" + k;
+            String[] sub = appContext.getAssets().list(child);
+            if (sub != null && sub.length > 0) {
+                count += writeAssetTree(child, new java.io.File(dstRoot, k));
+                continue;
+            }
+            java.io.File out = new java.io.File(dstRoot, k);
+            if (out.getParentFile() != null) {
+                //noinspection ResultOfMethodCallIgnored
+                out.getParentFile().mkdirs();
+            }
+            try (java.io.InputStream in = appContext.getAssets().open(child);
+                 java.io.OutputStream os = new java.io.FileOutputStream(out)) {
+                byte[] buf = new byte[8192];
+                int r;
+                while ((r = in.read(buf)) != -1) os.write(buf, 0, r);
+            }
+            count++;
+        }
+        return count;
     }
 
     private String readVersionOf(java.io.File pkgJson) {
@@ -849,8 +943,8 @@ public class HarnessController {
         }
     }
 
-    /** 递归删除（安置内置插件专用）。符号链接（包括悬空的）只删链接本身，不跟随 ——
-     *  类里那个同名的老方法会跟随链接，用在这里会顺着悬空链报错。 */
+    /** 递归删除（安置专用）。符号链接（含悬空）只删链接本身，不跟随 ——
+     *  类里已有的 deleteRecursively 会跟随链接，用在这儿会顺着悬空链报错。 */
     private void purgeForPlace(java.io.File f) throws java.io.IOException {
         java.nio.file.Path p = f.toPath();
         if (!java.nio.file.Files.exists(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return;
@@ -865,6 +959,7 @@ public class HarnessController {
         java.nio.file.Files.deleteIfExists(p);
     }
 
+    /** 递归复制（安置专用）：目录建出来，文件逐个 Files.copy 覆盖。 */
     private void copyForPlace(java.io.File src, java.io.File dst) throws java.io.IOException {
         if (src.isDirectory()) {
             //noinspection ResultOfMethodCallIgnored
@@ -882,7 +977,6 @@ public class HarnessController {
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
     }
-
     /** 确保配置自愈脚本已写入 rootfs（启动前把超限 timeoutMs 钳回合法值，防 ValidationError 崩溃 WebUI） */
     /** 每次启动前校验内置 bundle（mobile-adapt / device-shell-guide）：
      *  若被 dsh plugin reconcile 清掉/链接丢失，自动补回注册（幂等，秒级）。
