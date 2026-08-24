@@ -394,6 +394,51 @@ public class ProotBootstrap {
         }
     }
 
+    /** 给外部构造 Proot 运行时用（findNativeLib 是私有的）。 */
+    public File findNativeLibPublic(String name) {
+        return findNativeLib(name);
+    }
+
+    /** 用**指定**运行时执行命令并读回输出。给性能对比用 —— 同一条命令在两个
+     *  运行时下各跑一遍，不能依赖当前选中的那个。
+     *
+     *  写法参考 andClaw 的 buildProrootArgvCommand(argv, runtime)：命令组装显式接收
+     *  runtime，而不是内部读全局状态。这样对比测试不需要来回改配置。 */
+    public String execAndReadWith(ContainerRuntime rt, String bashCommand, long timeoutMs) {
+        Process p = null;
+        try {
+            java.util.List<String> argv = rt.baseArgv(rootfsDir, hardlinkSupported());
+            argv.add("/bin/bash");
+            argv.add("-c");
+            argv.add(bashCommand);
+            ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
+            pb.redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null")));
+            applyProotEnv(pb);
+            rt.applyEnv(pb, baseDir, libDir, tmpDir);
+            p = pb.start();
+            final Process fp = p;
+            final StringBuilder sb = new StringBuilder();
+            Thread reader = new Thread(() -> {
+                try {
+                    sb.append(drainOutput(fp));
+                } catch (Throwable ignored) {
+                }
+            }, "dsha-bench-read");
+            reader.setDaemon(true);
+            reader.start();
+            if (!p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                p.destroyForcibly();
+                return "TIMEOUT";
+            }
+            reader.join(2000);
+            return sb.toString();
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        } finally {
+            if (p != null && p.isAlive()) p.destroyForcibly();
+        }
+    }
+
     /** 在 rootfs 内执行 bash 命令 */
     public Process execRootfs(String bashCommand) throws IOException {
         java.util.List<String> argv = baseProotArgv();

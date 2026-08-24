@@ -1274,6 +1274,82 @@ public class HarnessController {
         });
     }
 
+    /** 运行时性能对比：同一组命令在 proot 与 proroot 下各跑若干次，报告耗时。
+     *
+     *  为什么必须有这个：换运行时的唯一理由是「更快」，而快多少不能靠感觉。
+     *  计划里写死了判断线 —— **提速不到 20% 就撤掉这个实验功能**，
+     *  免得因为已经投入了而舍不得。
+     *
+     *  每条命令跑 3 次取**中位数**：手机上单次测量噪音很大（调度、温控、
+     *  后台任务都会干扰），取中位数比取平均更抗离群值。
+     *  第一次结果丢弃（预热文件缓存），否则先跑的那个运行时会吃亏。 */
+    public String benchmarkRuntimes() {
+        StringBuilder out = new StringBuilder();
+        try {
+            if (!proot.isInstalled()) return "环境未就绪，先完成安装再对比。";
+            ContainerRuntime a = new ContainerRuntime.Proot(appContext,
+                    proot.findNativeLibPublic("libproot.so"));
+            ContainerRuntime b = new ContainerRuntime.Proroot(appContext,
+                    ContainerRuntime.Proroot.defaultDir(appContext));
+            out.append("=== 运行时性能对比 ===\n");
+            if (!b.available()) {
+                return out + "proroot 不可用：" + b.unavailableReason() + "\n";
+            }
+            try {
+                b.prepare();
+            } catch (Throwable e) {
+                return out + "proroot 准备失败：" + e + "\n";
+            }
+            String[][] cases = {
+                    {"解释器冷启动", "node -e 1"},
+                    {"文件系统调用", "node -e \"const fs=require('fs');for(let i=0;i<300;i++)fs.existsSync('/usr/lib');\""},
+                    {"进程创建", "for i in $(seq 1 30); do /bin/true; done"},
+                    {"目录遍历", "ls -R /usr/lib >/dev/null 2>&1"},
+            };
+            long sumA = 0, sumB = 0;
+            for (String[] c : cases) {
+                long ta = benchOne(a, c[1]);
+                long tb = benchOne(b, c[1]);
+                if (ta < 0 || tb < 0) {
+                    out.append(String.format(java.util.Locale.US,
+                            "%-14s  proot %-8s  proroot %-8s\n", c[0],
+                            ta < 0 ? "失败" : ta + "ms", tb < 0 ? "失败" : tb + "ms"));
+                    continue;
+                }
+                sumA += ta;
+                sumB += tb;
+                double gain = ta == 0 ? 0 : (ta - tb) * 100.0 / ta;
+                out.append(String.format(java.util.Locale.US,
+                        "%-14s  proot %5dms   proroot %5dms   %+.0f%%\n", c[0], ta, tb, gain));
+            }
+            if (sumA > 0 && sumB > 0) {
+                double total = (sumA - sumB) * 100.0 / sumA;
+                out.append(String.format(java.util.Locale.US,
+                        "\n合计  proot %dms   proroot %dms   提速 %+.0f%%\n", sumA, sumB, total));
+                out.append(total >= 20
+                        ? "达到 20% 判断线 —— 这个实验功能值得留下。\n"
+                        : "未达 20% 判断线 —— 考虑到闭源与维护风险，建议撤掉或维持默认关闭。\n");
+            }
+        } catch (Throwable e) {
+            out.append("对比中断：").append(describe(e)).append('\n');
+        }
+        return out.toString();
+    }
+
+    /** 跑 4 次丢掉第一次（预热），返回后 3 次的中位数毫秒；失败返回 -1。 */
+    private long benchOne(ContainerRuntime rt, String cmd) {
+        long[] t = new long[3];
+        for (int i = 0; i < 4; i++) {
+            long t0 = System.currentTimeMillis();
+            String r = proot.execAndReadWith(rt, cmd, 60_000);
+            long dt = System.currentTimeMillis() - t0;
+            if (r == null || r.startsWith("ERROR") || "TIMEOUT".equals(r)) return -1;
+            if (i > 0) t[i - 1] = dt;
+        }
+        java.util.Arrays.sort(t);
+        return t[1];
+    }
+
     /** 一键自检：注入 selftest.py 跑一遍**只读**检查（环境/3090 桥/ADB/引导插件/
      *  write 补丁/会话/bundles/备份/守卫/版本标记），返回给用户看的报告。
      *  期望版本由这里传进脚本，避免版本号在两边各写一份。 */
