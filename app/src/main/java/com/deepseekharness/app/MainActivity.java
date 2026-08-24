@@ -178,12 +178,19 @@ public class MainActivity extends AppCompatActivity {
                 f.renameTo(prev);
             } catch (Throwable ignored) {
             }
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> new AlertDialog.Builder(this)
+            // 延迟 1.2 秒再弹：等主界面画完，不然对话框会和启动动画抢焦点。
+            // 但延迟期间 Activity 可能已经被退掉（崩溃恢复场景下用户往往会立刻再退一次），
+            // 那时 new AlertDialog.Builder(this).show() 会抛 BadTokenException，
+            // 用户看到的是「刚从崩溃恢复又崩一次」。
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                new AlertDialog.Builder(this)
                     .setTitle("上次异常退出")
                     .setMessage("DSHA 上次运行发生了未处理异常，已自动恢复。\n\n" + info
                             + "\n\n如果问题反复出现，请把内置终端里 `cat /data/data/com.dsh.client/files/crash.log.prev`（或 crash.log）的内容发给开发者。")
                     .setPositiveButton("知道了", null)
-                    .show(), 1200);
+                    .show();
+            }, 1200);
         } catch (Throwable ignored) {
         }
     }

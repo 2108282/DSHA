@@ -100,10 +100,16 @@ public class InstallFragment extends Fragment {
                 c.getProot().uninstall();
                 // 环境已删：步骤缓存强制失效（否则 5s 内 UI 仍显示"已安装"）
                 c.invalidateSteps();
-                requireActivity().runOnUiThread(() -> {
+                // 清除环境要删掉整个 rootfs（几 GB、几十秒），这期间用户很可能已经切走页面。
+                // 那时 requireActivity()/requireContext() 会抛 IllegalStateException，
+                // 碰 view 会 NPE —— 表现为「清完环境 App 闪退」。
+                final android.app.Activity act = getActivity();
+                if (act == null || !isAdded()) return;
+                act.runOnUiThread(() -> {
+                    if (!isAdded()) return;
                     installBtn.setEnabled(true);
                     uninstallBtn.setEnabled(true);
-                    Toast.makeText(requireContext(), "已清除环境", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(act, "已清除环境", Toast.LENGTH_SHORT).show();
                     refreshFromState();
                 });
             }).start();
