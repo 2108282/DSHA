@@ -813,6 +813,13 @@ public class HarnessController {
         return false;
     }
 
+    /** 三个内置插件是否都已注册（bundles 与 dependencies 双在）。 */
+    private boolean allBuiltinRegistered() {
+        return guideRegistered("dsh-device-shell-guide")
+                && guideRegistered("dsh-client-ui-mobile-adapt")
+                && guideRegistered("dsh-task-notifier");
+    }
+
     /** 读 rootfs 内某个文件的尾部若干字符（读不到返回 null）。 */
     private String tailOfFile(String relPath, int maxChars) {
         try {
@@ -839,6 +846,11 @@ public class HarnessController {
                 int fixed = repairBuiltinPlugins(true);
                 if (fixed > 0) {
                     sb.append("· 已安置并注册 ").append(fixed).append(" 个内置插件\n");
+                } else if (allBuiltinRegistered()) {
+                    // fixed==0 有两种含义：修失败、以及**本来就好**。
+                    // 混在一起就会出现「上面写全部关键项通过、下面写仍未修好」这种
+                    // 自相矛盾的报告（用户实际遇到过）。
+                    sb.append("· 内置插件本来就是好的，无需修复\n");
                 } else {
                     // 把原因直接摆在报告里 —— 让用户去 cat 日志文件不叫「修好」，
                     // 这轮就是因为原因只写进 log，来回试了六版才发现是路径差一。

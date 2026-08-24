@@ -26,8 +26,14 @@ import time
 DSH_HOME = os.environ.get("DSHA_DSH_HOME", "/root/.dsh")
 _BP_ROOT = os.path.dirname(DSH_HOME.rstrip("/")) or "/root"
 PROFILES = os.path.join(DSH_HOME, "profiles")
-INLINE_DIR = os.path.join(_BP_ROOT, ".dsha-plugin-src")
-MANIFEST = os.path.join(_BP_ROOT, ".dsha-backup-manifest.json")
+INLINE_DIR = os.path.join(_BP_ROOT, ".dsh", ".dsha-plugin-src")
+# 清单放进 .dsh/ 内部：.dsh 整个目录必然被打包，而放在 /root 下要靠
+# 打包脚本里那串 [ -f x ] && set -- "$@" x 把它显式加进参数 ——
+# 实测清单确实生成了（856 字节）却没出现在包里，说明那串拼接在实际执行
+# 环境下并不可靠。与其继续追查，不如让它待在一定会被打包的位置。
+# 同时保留旧位置一份，老版本 App 的恢复流程仍能找到。
+MANIFEST = os.path.join(_BP_ROOT, ".dsh", ".dsha-backup-manifest.json")
+MANIFEST_LEGACY = os.path.join(_BP_ROOT, ".dsha-backup-manifest.json")
 # 内联单个插件的体积上限（防把巨大目录塞进备份）
 MAX_INLINE_BYTES = 24 * 1024 * 1024
 SKIP_DIRS = {"node_modules", ".git", ".pnpm-store", "dist-cache"}
@@ -144,9 +150,20 @@ def main():
         print("[backup-prepare] 整理异常（不影响备份）: %s" % e, file=sys.stderr)
 
     try:
-        with open(MANIFEST, "w") as f:
+        os.makedirs(os.path.dirname(MANIFEST), exist_ok=True)
+        _tmp = MANIFEST + ".tmp"
+        with open(_tmp, "w") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
-        extra.append(os.path.basename(MANIFEST))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(_tmp, MANIFEST)
+        # 旧位置也留一份：老版本 App 的恢复流程只认 /root/.dsha-backup-manifest.json
+        try:
+            with open(MANIFEST_LEGACY, "w") as f:
+                json.dump(manifest, f, ensure_ascii=False, indent=2)
+            extra.append(os.path.basename(MANIFEST_LEGACY))
+        except OSError:
+            pass
     except Exception as e:
         print("[backup-prepare] manifest 写入失败: %s" % e, file=sys.stderr)
 

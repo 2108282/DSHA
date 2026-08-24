@@ -718,6 +718,22 @@ def check_sanitize_log():
     last = blocks[-1].strip()
     dropped = [ln for ln in last.split("\n") if "已摘除" in ln]
     linked = [ln for ln in last.split("\n") if "补链接" in ln]
+    # 记录是历史的：插件后来被补回来的话，这条「已摘除」就过时了 ——
+    # 用当前 profile 的真实状态覆盖它，否则用户看到的是已经不成立的警告。
+    if dropped:
+        still_missing = []
+        try:
+            _pkg = json.loads(read(os.path.join(DSH_HOME, "profiles", "web", "package.json"), 200000))
+            _b = (((_pkg.get("dsh") or {}).get("profile") or {}).get("bundles")) or []
+            for _n in ("dsh-device-shell-guide", "dsh-client-ui-mobile-adapt", "dsh-task-notifier"):
+                if _n not in _b:
+                    still_missing.append(_n)
+        except Exception:
+            still_missing = ["?"]
+        if not still_missing:
+            add("PASS", "profile 校准记录",
+                "历史上摘过 bundle，但现在三个内置插件都已重新注册，记录已过时")
+            return
     if dropped:
         add("WARN", "profile 校准记录",
             "最近一次启动摘掉了解析不到的 bundle：%s\n"
