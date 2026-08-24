@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-24T05:58:45Z",
+  "generated": "2026-08-24T06:27:43Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -116,8 +116,8 @@
     {
       "path": "app/src/main/assets/heal-profile-boot.py",
       "asset": "heal-profile-boot.py",
-      "size": 5190,
-      "sha256": "fd8e726036ca8666a2fbc3d5982056e6b2196003e9e5a22ba980cc4c7b4733af",
+      "size": 5470,
+      "sha256": "e96dbf3d40246253a165d4dbdec974f835d07f7eabe777e34329c2d99b8a6228",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/heal-profile-boot.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/heal-profile-boot.py",
@@ -138,8 +138,8 @@
     {
       "path": "app/src/main/assets/heal-sessions.py",
       "asset": "heal-sessions.py",
-      "size": 15587,
-      "sha256": "c1d3daecfbaa0a4c7b53840d606169c6e323f8917afb32c43e1eb06c1f57818f",
+      "size": 15902,
+      "sha256": "4d4ee6d760517bb1d40ef39941b87770b10f45d31c7801e0a09012a8e9e33cbd",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/heal-sessions.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/heal-sessions.py",
@@ -193,8 +193,8 @@
     {
       "path": "app/src/main/assets/restore-merge.py",
       "asset": "restore-merge.py",
-      "size": 14119,
-      "sha256": "a95bd3f19df4cba65515a7f1bc730c1816f33f1a7fc892d4ab7de933c7187a8b",
+      "size": 14729,
+      "sha256": "785875b8b68e9326a982684d39eec835964e1f79764a6786f2f8813efaab8c1a",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/restore-merge.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/restore-merge.py",
@@ -215,8 +215,8 @@
     {
       "path": "app/src/main/assets/selftest.py",
       "asset": "selftest.py",
-      "size": 34666,
-      "sha256": "ded0e136b29b69d861dbcb09be76733a64482ed9beef733e64a5e61a38fc3d5d",
+      "size": 34952,
+      "sha256": "86af0ca81bd53f7e64c513122f48ba546fdaeef4cc4a602e04dbb38addbf61df",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/selftest.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/selftest.py",
