@@ -396,6 +396,35 @@ def check_guide(want_ver):
 
 
 # ===================== 5. write 发布补丁 =====================
+def check_repair_log():
+    """App 侧内置插件修复的落盘记录。
+
+    没有这项的话，用户只能看到「插件还是不见」，而「App 压根没跑到那段代码」、
+    「跑了但条件不满足」、「写进去又被 dsh 覆盖」三种情况在界面上长得一模一样，
+    对应的修法却完全不同。
+    """
+    path = os.path.join(DSH_HOME, "repair-builtin.log")
+    if not os.path.isfile(path):
+        add("SKIP", "内置插件修复记录",
+            "还没有记录 —— 打开一次「插件」页会触发修复并留下记录")
+        return
+    txt = read(path, 20000).strip()
+    blocks = [b for b in txt.split("== ") if b.strip()]
+    if not blocks:
+        add("SKIP", "内置插件修复记录", "记录是空的")
+        return
+    last = blocks[-1].strip()
+    head = last.split("\n")[0]
+    if "仍未注册" in last:
+        add("FAIL", "内置插件修复记录",
+            "最近一次修复没成功（%s）—— 写入条件不满足，或写完被覆盖。详情见 %s"
+            % (head, path))
+    elif "修好" in last:
+        add("PASS", "内置插件修复记录", "最近一次修复成功（%s）" % head)
+    else:
+        add("SKIP", "内置插件修复记录", "最近一次：%s（本来就都在）" % head)
+
+
 def check_write_patch():
     target = next((p for p in FS_LOCAL_CANDIDATES if os.path.isfile(p)), None)
     if target is None:
@@ -729,6 +758,7 @@ def main():
         (check_adb, (arg("script-ver"),)),
         (check_adb_keepalive, (arg("adb-on", "1") == "1", arg("battery-opt", ""))),
         (check_guide, (arg("guide-ver"),)),
+        (check_repair_log, ()),
         (check_write_patch, ()),
         (check_l2s, ()),
         (check_web_auth, ()),

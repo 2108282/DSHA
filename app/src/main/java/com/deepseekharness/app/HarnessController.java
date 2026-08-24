@@ -748,7 +748,48 @@ public class HarnessController {
                             + " 的空禁用标记（实体在，属异常残留）");
                 }
                 boolean userDisabled = disabledMark.exists() && !staleMark;
-                if (dirOk && !userDisabled && !inBundles) {
+                // 顺序至关重要：**先把 node_modules 链接建好，再写注册**。
+                // 反过来的话（旧实现），一旦链接没建成，profile 里就留下
+                // 「bundles 有名字 + dependencies 有 link:，但 node_modules 没有实体」
+                // 的组合 —— dsh 启动时 resolveBundleDir 直接抛：
+                //   Error: cannot resolve profile bundle "dsh-client-ui-mobile-adapt"
+                // 整个 Web 起不来。那比「插件不生效」严重得多：插件不生效只是少个功能，
+                // 这个是把能用的环境搞崩。
+                java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
+                        "root/.dsh/profiles/web/node_modules/" + name);
+                boolean linkOk = false;
+                if (dirOk && !userDisabled) {
+                    try {
+                        // exists() 跟随符号链接，对**悬空**链返回 false，而
+                        // createSymbolicLink 遇到已存在的路径（哪怕是悬空链）会抛
+                        // FileAlreadyExistsException —— 旧实现把这个异常吞了，
+                        // 于是链接永远建不成，注册却照样写了进去。
+                        java.nio.file.Path lp = nmLink.toPath();
+                        boolean present = java.nio.file.Files.exists(lp,
+                                java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                        if (present) {
+                            java.nio.file.Path cur = java.nio.file.Files.isSymbolicLink(lp)
+                                    ? java.nio.file.Files.readSymbolicLink(lp) : null;
+                            if (cur != null && real.equals(cur.toString())) {
+                                linkOk = true;
+                            } else {
+                                java.nio.file.Files.delete(lp);   // 指错地方或是普通目录 → 重建
+                            }
+                        }
+                        if (!linkOk) {
+                            java.nio.file.Files.createDirectories(lp.getParent());
+                            java.nio.file.Files.createSymbolicLink(lp,
+                                    java.nio.file.Paths.get(real));
+                            linkOk = true;
+                        }
+                    } catch (Throwable e) {
+                        android.util.Log.w("DSHA", "内置插件 " + name
+                                + " 建 node_modules 链接失败，本次不写注册（"
+                                + "写了会让 dsh 启动崩溃）: " + e);
+                        linkOk = false;
+                    }
+                }
+                if (dirOk && !userDisabled && linkOk && !inBundles) {
                     bundles.put(name);
                     changed = true;
                     android.util.Log.w("DSHA", "内置插件 " + name + " 被清掉，已自动补回");
@@ -757,19 +798,12 @@ public class HarnessController {
                 // 对应声明」的项判为无法解析并摘掉。以前这里只补 bundles 和符号链接，
                 // 于是形成「补回 → 被摘 → 再补回」的死循环，用户看到的就是插件一直没生效
                 // （实测现场：实体在、node_modules 链接在，bundles 与 dependencies 双缺）。
-                if (dirOk && !userDisabled && !deps.has(name)) {
+                if (dirOk && !userDisabled && linkOk && !deps.has(name)) {
                     deps.put(name, "link:" + real);
                     changed = true;
                     android.util.Log.w("DSHA", "内置插件 " + name + " 缺 dependencies 声明，已补 link:");
                 }
-                java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
-                        "root/.dsh/profiles/web/node_modules/" + name);
-                if (dirOk && !userDisabled && !nmLink.exists()) {
-                    try {
-                        java.nio.file.Files.createSymbolicLink(nmLink.toPath(), java.nio.file.Paths.get(real));
-                    } catch (Throwable ignored) {
-                    }
-                }
+
             }
             if (changed) {
                 java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
@@ -2522,12 +2556,36 @@ public class HarnessController {
             ensureDeviceShellGuide();
             ensureTaskNotifier();
             ensureBuiltinBundles();
+            StringBuilder diag = new StringBuilder();
             for (int i = 0; i < names.length; i++) {
-                if (!before[i] && guideRegistered(names[i])) fixed++;
+                boolean after = guideRegistered(names[i]);
+                if (!before[i] && after) fixed++;
+                diag.append(names[i]).append(before[i] ? "=已注册" : (after ? "=修好" : "=仍未注册"))
+                        .append('\n');
             }
-            if (fixed > 0) {
-                android.util.Log.w("DSHA", "修回 " + fixed + " 个内置插件的注册");
+            // 把每个插件的前后状态落盘：用户看不到 logcat，而「修了但没成功」和
+            // 「压根没跑到这里」在界面上是同一个样子（插件还是不见）。
+            // 有这份记录，自检就能告诉用户卡在哪一步，而不是让人反复点插件页。
+            try {
+                java.io.File pkgf = new java.io.File(proot.getRootfsDir(),
+                        "root/.dsh/profiles/web/package.json");
+                String pkgTxt = pkgf.isFile() ? new String(java.nio.file.Files.readAllBytes(
+                        pkgf.toPath()), StandardCharsets.UTF_8) : "(package.json 不存在)";
+                String bundlesLine = "";
+                int bi = pkgTxt.indexOf("\"bundles\"");
+                if (bi >= 0) bundlesLine = pkgTxt.substring(bi, Math.min(pkgTxt.length(), bi + 260));
+                java.io.File logf = new java.io.File(proot.getRootfsDir(),
+                        "root/.dsh/repair-builtin.log");
+                String rec = "== " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
+                        java.util.Locale.US).format(new java.util.Date()) + " 修回 " + fixed
+                        + " 个 ==\n" + diag + "写入后 bundles: " + bundlesLine + "\n\n";
+                java.nio.file.Files.write(logf.toPath(), rec.getBytes(StandardCharsets.UTF_8),
+                        java.nio.file.StandardOpenOption.CREATE,
+                        java.nio.file.StandardOpenOption.APPEND);
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "写 repair-builtin.log 失败: " + e);
             }
+            android.util.Log.w("DSHA", "内置插件修复结果 fixed=" + fixed + "\n" + diag);
         } catch (Throwable e) {
             android.util.Log.w("DSHA", "修内置插件失败: " + e);
         }
