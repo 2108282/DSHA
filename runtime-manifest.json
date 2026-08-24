@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-24T10:12:13Z",
+  "generated": "2026-08-24T10:26:22Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -39,8 +39,8 @@
     {
       "path": "app/src/main/assets/backup-prepare.py",
       "asset": "backup-prepare.py",
-      "size": 6250,
-      "sha256": "f5f33f6d3cad6d0b8bfcafc063f807488c8b2a5e7ba4fd084083a2ee9a20c210",
+      "size": 7254,
+      "sha256": "b8adbf4293f44e8a567102078414be9b67679aa86740a5db8e5eb868388ff7e6",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/backup-prepare.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/backup-prepare.py",
@@ -215,8 +215,8 @@
     {
       "path": "app/src/main/assets/selftest.py",
       "asset": "selftest.py",
-      "size": 47368,
-      "sha256": "73b237eafc4ef51895e47ee046bcf27d42c0abc5ea2b002d333a9e27781d453e",
+      "size": 48262,
+      "sha256": "2f6d1469120ec27b9ff171ff64e6e5b5e7547a782f76a3d1fc0969dff65a33d3",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/selftest.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/selftest.py",
