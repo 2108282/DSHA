@@ -274,6 +274,7 @@ public final class BackupManager {
             // 那时原设备往往已经不在手边。现在至少让日志能一眼看出问题在哪。
             File man = new File(c.getProot().getRootfsDir(), "root/.dsha-backup-manifest.json");
             if (!man.isFile() || man.length() == 0) {
+                c.logActivity("备份清单未生成，这次是老格式（能恢复，但跨设备可能缺插件）");
                 android.util.Log.w("DSHA", "备份清单未生成 —— 这次备份会是老格式"
                         + "（能恢复，但跨设备可能缺插件）。前置整理输出："
                         + (out == null ? "无" : out.trim()));

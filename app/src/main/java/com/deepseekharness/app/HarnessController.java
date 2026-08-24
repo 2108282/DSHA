@@ -1316,16 +1316,21 @@ public class HarnessController {
         }
     }
 
-    /** 运行时性能对比：同一组命令在 proot 与 proroot 下各跑若干次，报告耗时。
+    /** 跑分进度回调：每测完一项立刻推一行给 UI。
      *
-     *  为什么必须有这个：换运行时的唯一理由是「更快」，而快多少不能靠感觉。
-     *  计划里写死了判断线 —— **提速不到 20% 就撤掉这个实验功能**，
-     *  免得因为已经投入了而舍不得。
+     *  为什么必须是回调而不是「跑完返回一个大字符串」：上一版就是后者，
+     *  用户点下去之后三分钟没有任何反馈，完全不知道是在跑还是死了。
+     *  测速这种天然耗时的操作，**边跑边出结果**是唯一可接受的形态。 */
+    public interface BenchProgress {
+        /** 每完成一项（或阶段性信息）推一行 */
+        void onLine(String line);
+    }
+
+    /** 运行时性能对比：多项负载在 proot 与 proroot 下各跑一遍，边跑边把结果推给 UI。
      *
-     *  每条命令跑 3 次取**中位数**：手机上单次测量噪音很大（调度、温控、
-     *  后台任务都会干扰），取中位数比取平均更抗离群值。
-     *  第一次结果丢弃（预热文件缓存），否则先跑的那个运行时会吃亏。 */
-    public String benchmarkRuntimes() {
+     *  换运行时的唯一理由是更快，而快多少不能靠感觉。测试项按 dsh 的真实负载挑，
+     *  并标注哪几项**对我们最要紧** —— 提速集中在无关项上意义有限。 */
+    public String benchmarkRuntimes(BenchProgress cb) {
         StringBuilder out = new StringBuilder();
         try {
             if (!proot.isInstalled()) return "环境未就绪，先完成安装再对比。";
@@ -1333,60 +1338,80 @@ public class HarnessController {
                     proot.findNativeLibPublic("libproot.so"));
             ContainerRuntime b = new ContainerRuntime.Proroot(appContext,
                     ContainerRuntime.Proroot.defaultDir(appContext));
-            out.append("=== 运行时性能对比 ===\n");
+            emit(cb, out, "=== 运行时性能对比 ===");
+            emit(cb, out, "proot = 内置（ptrace）　proroot = 实验（LD_PRELOAD）");
             if (!b.available()) {
-                return out + "proroot 不可用：" + b.unavailableReason() + "\n";
+                emit(cb, out, "");
+                emit(cb, out, "proroot 不可用：" + b.unavailableReason());
+                return out.toString();
             }
             try {
                 b.prepare();
             } catch (Throwable e) {
-                return out + "proroot 准备失败：" + e + "\n";
+                emit(cb, out, "proroot 准备失败：" + e);
+                return out.toString();
             }
-            // 命令必须**轻**：每组要跑 3 次、两个运行时共 6 次，再乘 4 组 = 24 次容器启动。
-            // 第一版用了 ls -R /usr/lib，那目录在 proot 下遍历一次就可能几十秒，
-            // 结果用户等了三分钟毫无反馈 —— 测速工具本身把人卡住是最糟的设计。
+            // {显示名, 命令, 是否对 dsh 关键}
             String[][] cases = {
-                    {"解释器冷启动", "node -e 1"},
-                    {"文件系统调用", "node -e \"const fs=require('fs');for(let i=0;i<120;i++)fs.existsSync('/usr/bin/env');\""},
-                    {"进程创建", "for i in $(seq 1 15); do /bin/true; done"},
-                    {"小目录遍历", "ls -R /usr/include/asm-generic >/dev/null 2>&1"},
+                    {"容器冷启动", "/bin/true", "1"},
+                    {"解释器冷启动", "node -e 1", "1"},
+                    {"模块解析", "node -e \"require('fs');require('path');require('os')\"", "1"},
+                    {"文件存在检查", "node -e \"const f=require('fs');for(let i=0;i<150;i++)f.existsSync('/usr/bin/env')\"", "1"},
+                    {"小文件读写", "node -e \"const f=require('fs');for(let i=0;i<40;i++){f.writeFileSync('/tmp/.bt',String(i));f.readFileSync('/tmp/.bt')}\"", "1"},
+                    {"进程创建", "for i in $(seq 1 15); do /bin/true; done", "1"},
+                    {"目录遍历", "ls -R /usr/include/asm-generic >/dev/null 2>&1", "0"},
+                    {"文本管道", "seq 1 3000 | grep -c 7 >/dev/null", "0"},
+                    {"Python 冷启动", "python3 -c pass", "0"},
+                    {"tar 打包", "tar -cf /dev/null /usr/include/asm-generic 2>/dev/null", "0"},
             };
-            long sumA = 0, sumB = 0;
-            int idx = 0;
-            for (String[] c : cases) {
-                idx++;
-                setProgress("性能对比 " + idx + "/" + cases.length + "：" + c[0] + "（proot）",
-                        idx * 100 / (cases.length + 1));
-                long ta = benchOne(a, c[1]);
-                setProgress("性能对比 " + idx + "/" + cases.length + "：" + c[0] + "（proroot）",
-                        idx * 100 / (cases.length + 1));
-                long tb = benchOne(b, c[1]);
+            emit(cb, out, "共 " + cases.length + " 项，每项两个运行时各跑 2 次取快的那次。");
+            emit(cb, out, "带 ★ 的是 dsh 实际高频用到的，看这几项更有意义。");
+            emit(cb, out, "");
+            long sumA = 0, sumB = 0, keyA = 0, keyB = 0;
+            for (int k = 0; k < cases.length; k++) {
+                String name = cases[k][0], cmd = cases[k][1];
+                boolean key = "1".equals(cases[k][2]);
+                emit(cb, null, String.format(java.util.Locale.US,
+                        "[%d/%d] %s … 测 proot", k + 1, cases.length, name));
+                long ta = benchOne(a, cmd);
+                emit(cb, null, String.format(java.util.Locale.US,
+                        "[%d/%d] %s … 测 proroot", k + 1, cases.length, name));
+                long tb = benchOne(b, cmd);
+                String mark = key ? "★" : "　";
                 if (ta < 0 || tb < 0) {
-                    out.append(String.format(java.util.Locale.US,
-                            "%-14s  proot %-8s  proroot %-8s\n", c[0],
-                            ta < 0 ? "失败" : ta + "ms", tb < 0 ? "失败" : tb + "ms"));
+                    emit(cb, out, String.format(java.util.Locale.US, "%s%-12s  %-9s %-9s  —",
+                            mark, name, ta < 0 ? "失败" : ta + "ms", tb < 0 ? "失败" : tb + "ms"));
                     continue;
                 }
                 sumA += ta;
                 sumB += tb;
+                if (key) {
+                    keyA += ta;
+                    keyB += tb;
+                }
                 double gain = ta == 0 ? 0 : (ta - tb) * 100.0 / ta;
-                out.append(String.format(java.util.Locale.US,
-                        "%-14s  proot %5dms   proroot %5dms   %+.0f%%\n", c[0], ta, tb, gain));
+                emit(cb, out, String.format(java.util.Locale.US,
+                        "%s%-12s  %5dms   %5dms   %+.0f%%", mark, name, ta, tb, gain));
+            }
+            emit(cb, out, "");
+            if (keyA > 0 && keyB > 0) {
+                double kg = (keyA - keyB) * 100.0 / keyA;
+                emit(cb, out, String.format(java.util.Locale.US,
+                        "★ 关键项合计   %5dms   %5dms   %+.0f%%", keyA, keyB, kg));
             }
             if (sumA > 0 && sumB > 0) {
-                double total = (sumA - sumB) * 100.0 / sumA;
-                out.append(String.format(java.util.Locale.US,
-                        "\n合计  proot %dms   proroot %dms   提速 %+.0f%%\n", sumA, sumB, total));
-                out.append(total >= 20
-                        ? "达到 20% 判断线 —— 这个实验功能值得留下。\n"
-                        : "未达 20% 判断线 —— 考虑到闭源与维护风险，建议撤掉或维持默认关闭。\n");
+                double tg = (sumA - sumB) * 100.0 / sumA;
+                emit(cb, out, String.format(java.util.Locale.US,
+                        "  全部合计     %5dms   %5dms   %+.0f%%", sumA, sumB, tg));
+                emit(cb, out, "");
+                double judge = keyA > 0 ? (keyA - keyB) * 100.0 / keyA : tg;
+                emit(cb, out, judge >= 20
+                        ? "关键项提速达到 20% 判断线 —— 值得继续推进。"
+                        : "关键项提速未达 20% —— 考虑闭源与维护风险，建议维持默认关闭。");
             }
         } catch (Throwable e) {
-            out.append("对比中断：").append(describe(e)).append('\n');
+            emit(cb, out, "对比中断：" + describe(e));
         }
-        setProgress("", 0);
-        // 落盘一份：弹窗可能因为页面已销毁而弹不出来（那种静默丢失最气人），
-        // 有文件的话随时能在终端 cat 出来
         try {
             java.io.File f = rootfsFile("root/.dsh/bench-report.txt");
             if (f.getParentFile() != null) {
@@ -1396,32 +1421,40 @@ public class HarnessController {
             java.nio.file.Files.write(f.toPath(),
                     ("== " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
                             java.util.Locale.US).format(new java.util.Date()) + " ==\n"
-                            + out).getBytes(StandardCharsets.UTF_8),
+                            + out + "\n").getBytes(StandardCharsets.UTF_8),
                     java.nio.file.StandardOpenOption.CREATE,
                     java.nio.file.StandardOpenOption.APPEND);
-            out.append("\n（这份报告已存到 .dsh/bench-report.txt）\n");
         } catch (Throwable ignored) {
         }
         return out.toString();
     }
 
-    /** 跑 3 次丢掉第一次（预热文件缓存），返回后两次里**较小**的那个，毫秒；失败返回 -1。
+    /** 推一行给 UI；out 非空时同时计入最终报告（纯进度行不进报告，免得报告被刷屏）。 */
+    private void emit(BenchProgress cb, StringBuilder out, String line) {
+        if (out != null) {
+            out.append(line).append('\n');
+        }
+        if (cb != null) {
+            try {
+                cb.onLine(line);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** 跑 2 次丢掉第一次（预热文件缓存），返回第二次耗时；失败返回 -1。
      *
-     *  取较小值而不是平均：手机上慢的那次几乎总是被别的东西干扰（调度、温控、
-     *  后台任务），而快的那次更接近真实能力。
-     *  单次超时压到 25 秒 —— 测速命令本身就该是秒级的，跑到 25 秒说明这个运行时
-     *  在这条命令上有问题，继续等没意义。 */
+     *  只跑两次是为了总时长可控（10 项 × 2 运行时 × 2 次 = 40 次容器启动）。
+     *  有实时反馈之后，慢一点可以接受，但不能长到让人以为死了。 */
     private long benchOne(ContainerRuntime rt, String cmd) {
-        long best = -1;
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 2; i++) {
             long t0 = System.currentTimeMillis();
             String r = proot.execAndReadWith(rt, cmd, 25_000);
             long dt = System.currentTimeMillis() - t0;
             if (r == null || r.startsWith("ERROR") || "TIMEOUT".equals(r)) return -1;
-            if (i == 0) continue;                 // 预热轮丢弃
-            if (best < 0 || dt < best) best = dt;
+            if (i == 1) return dt;
         }
-        return best;
+        return -1;
     }
 
     /** 一键自检：注入 selftest.py 跑一遍**只读**检查（环境/3090 桥/ADB/引导插件/
@@ -1581,6 +1614,10 @@ public class HarnessController {
     public void ensureFsWritePatch() {
         String r = runAssetScript("fs-write-patch.sh", "dsha-fs-write-patch.sh", 90_000);
         android.util.Log.i("DSHA", "write 发布补丁: " + (r == null ? "无输出" : r.trim()));
+        // 只在真的打上时记账：幂等返回（ALREADY）每次启动都会有，记了就是刷屏
+        if (r != null && r.contains("PATCHED")) {
+            logActivity("给 dsh 打了 write / 会话发布补丁（治新建文件变悬空链接）");
+        }
     }
 
     /** 启动前自愈：老 WebView 兼容补丁（AbortSignal.any/timeout polyfill，幂等） */
@@ -3951,6 +3988,16 @@ public class HarnessController {
      *  1) 修复前先停 Web（否则写入中的会话文件边修边坏）；
      *  2) heal-sessions.py（Python os.walk + 流式 zstd 解码）无门槛全量扫描修复。
      *  幂等：正常文件秒过。 */
+    /** 会话自愈的结果要让用户看见 —— 它会改写历史记录，静默进行最不合适。 */
+    private void logHealResult(String out) {
+        if (out == null) return;
+        if (out.contains("SESSION_HEALED")) {
+            int i = out.indexOf("SESSION_HEALED");
+            logActivity("会话自愈：" + out.substring(i, Math.min(out.length(), i + 60)).trim()
+                    + "（原文件留 .pre-fix 备份）");
+        }
+    }
+
     private void doHealSessionCorruption() {
         healingSession = true;
         try {
