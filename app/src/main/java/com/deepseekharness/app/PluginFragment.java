@@ -562,35 +562,64 @@ public class PluginFragment extends Fragment {
         }).start();
     }
 
-    /** 一键安装：点一下就全自动（解析 npm 名 → 安装 → 提示），无二次确认 */
+    /** 一键安装：先**预检**再装。
+     *
+     *  为什么加预检：社区标准（dsh-community-standard v0.15）把这条列为生态三大裂缝
+     *  之一 ——「装上才知道炸：装之前没人能回答这个插件能不能跑，
+     *  唯一的报错方式是崩溃」。安装一个插件可能要等几分钟，
+     *  让用户等完再看一大段 pnpm 堆栈是最差的体验。
+     *
+     *  预检只发一两个 HTTP 请求（读仓库 package.json + 查 registry），很快。
+     *  结论明确「装不上」时给出原因并让用户自己决定要不要硬试，而不是替他放弃 ——
+     *  规范 §3 也要求「展示但禁用，不要隐藏」。 */
     private void startAutoInstall(String[] it, String owner, String repo) {
         final String display = it[0];
-        say("正在解析并安装 " + display + " …");
+        say("正在预检 " + display + " …");
         new Thread(() -> {
-            String npmName = c.fetchNpmName(owner, repo);
-            if (npmName == null) {
-                runOnUiThreadSafely(() -> {
-                    say("无法安装 " + display + "（未发布 npm）");
-                    new android.app.AlertDialog.Builder(requireContext())
-                            .setTitle("无法安装：" + display)
-                            .setMessage("未在该仓库找到 package.json / npm 包名，可能未发布 npm，只能源码安装。\n\n仓库：\n" + it[6])
-                            .setPositiveButton("复制仓库链接", (d, w) -> {
-                                android.content.ClipboardManager cm = (android.content.ClipboardManager)
-                                        requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
-                                cm.setPrimaryClip(android.content.ClipData.newPlainText("url", it[6]));
-                                Toast.makeText(requireContext(), "链接已复制", Toast.LENGTH_SHORT).show();
-                            })
-                            .setNegativeButton("关闭", null)
-                            .show();
-                });
+            final String spec = "github:" + owner + "/" + repo;
+            String hint = c.fetchNpmName(owner, repo);
+            final String[] pre = c.precheckForMarket(spec, hint);
+            final String verdict = pre[0], why = pre[1];
+            final String pkg = pre[2] != null ? pre[2] : (hint != null ? hint : spec);
+
+            // 一路顺畅：不打扰用户，直接装
+            if ("ok".equals(verdict)) {
+                runOnUiThreadSafely(() -> say("✅ " + display + " 可安装，正在装…"));
+                String out = c.installPlugin(pkg, spec);
+                runOnUiThreadSafely(() -> showInstallResult(pkg, display, out));
                 return;
             }
-            say("正在安装 " + npmName + " …");
-            // npm 名找不到时自动回退 github:owner/repo（市场条目多为仅 GitHub 发布的仓库插件）
-            String out = c.installPlugin(npmName, "github:" + owner + "/" + repo);
-            final String fOut = out;
-            runOnUiThreadSafely(() -> showInstallResult(npmName, display, fOut));
-        }).start();
+            // 其余三态：把结论摆出来，让用户决定
+            runOnUiThreadSafely(() -> {
+                String badge = "blocked".equals(verdict) ? "🔴 大概装不上"
+                        : "build".equals(verdict) ? "🟡 需要现场构建" : "⚪ 情况不明";
+                say(badge + "：" + display);
+                android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(requireContext())
+                        .setTitle(badge + "：" + display)
+                        .setMessage(why + "\n\n仓库：\n" + it[6])
+                        // 即使预检说装不上也保留「仍然试试」—— 预检是启发式的，
+                        // 不该替用户做最终决定（万一作者刚发布、或仓库结构特殊）
+                        .setPositiveButton("仍然安装", (d, w) -> {
+                            say("正在安装 " + pkg + " …");
+                            new Thread(() -> {
+                                String out = c.installPlugin(pkg, spec);
+                                runOnUiThreadSafely(() -> showInstallResult(pkg, display, out));
+                            }, "dsha-install").start();
+                        })
+                        .setNeutralButton("复制仓库链接", (d, w) -> {
+                            android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                                    requireContext().getSystemService(
+                                            android.content.Context.CLIPBOARD_SERVICE);
+                            if (cm != null) {
+                                cm.setPrimaryClip(
+                                        android.content.ClipData.newPlainText("url", it[6]));
+                                Toast.makeText(requireContext(), "链接已复制", Toast.LENGTH_SHORT).show();
+                            }
+                        })
+                        .setNegativeButton("算了", null);
+                b.show();
+            });
+        }, "dsha-precheck").start();
     }
 
     /** 安装结果（成功/失败）弹窗 + 重启 WebUI 按钮 */

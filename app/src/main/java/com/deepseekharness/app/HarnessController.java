@@ -5238,6 +5238,23 @@ public class HarnessController {
 
     /** 从 GitHub 仓库拉取 npm 包名（package.json 的 name 字段），用于安装 */
     public String fetchNpmName(String owner, String repo) {
+        String body = fetchGitHubPackageJson(owner, repo);
+        if (body == null) return null;
+        try {
+            String name = new org.json.JSONObject(body).optString("name", "");
+            if (!name.isEmpty() && !name.contains("${")) return name;
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** 取 GitHub 仓库根目录的 package.json 原文（多源回退：代理 → 直连 → ghfast）。
+     *
+     *  单独抽出来是因为**不止一个地方要读它**：查 npm 包名要读、安装前预检要读。
+     *  各写一份的话就成了两套取包逻辑 —— 这个项目已经在「两套实现并存、
+     *  改动落在没被调用的那一套」上栽过一次（内置插件安置连续六个版本无效），
+     *  不能再来一遍。 */
+    public String fetchGitHubPackageJson(String owner, String repo) {
         if (owner == null || owner.isEmpty() || repo == null || repo.isEmpty()) return null;
         String[] urls = {
                 gitHubProxy("https://raw.githubusercontent.com/" + owner + "/" + repo + "/main/package.json"),
@@ -5264,9 +5281,7 @@ public class HarnessController {
                     if (all.length() > 50000) break;
                 }
                 conn.disconnect();
-                org.json.JSONObject j = new org.json.JSONObject(all);
-                String name = j.optString("name", "");
-                if (!name.isEmpty() && !name.contains("${")) return name;
+                if (all.contains("\"name\"")) return all;
             } catch (Exception ignored) {
             }
         }
@@ -5427,6 +5442,223 @@ public class HarnessController {
         return storePath && (out.contains("ENOENT") || out.contains("EEXIST"));
     }
 
+    /** 通用 GET 取文本（插件解析用）。失败返回 null，不抛。 */
+    private String httpGetText(String url, int connectMs, int readMs) {
+        java.net.HttpURLConnection conn = null;
+        try {
+            conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            conn.setConnectTimeout(connectMs);
+            conn.setReadTimeout(readMs);
+            conn.setRequestProperty("User-Agent", "DSHA/" + getVersionNameForUa());
+            conn.setRequestProperty("Accept", "application/json,text/plain,*/*");
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) return null;
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            try (java.io.InputStream in = conn.getInputStream()) {
+                byte[] buf = new byte[8192];
+                int n;
+                int total = 0;
+                final int MAX = 512 * 1024;      // 上限：package.json / registry 元数据够用了
+                while ((n = in.read(buf)) != -1 && total < MAX) {
+                    bos.write(buf, 0, n);
+                    total += n;
+                }
+            }
+            return bos.toString("UTF-8");
+        } catch (Throwable e) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    /** 安装前预检的**对外**版本：给市场页在用户等待之前就把结论摆出来。
+     *
+     *  社区标准（dsh-community-standard v0.15 §3）要求市场用五态展示兼容性，
+     *  并且「不得互相升级」——「声明兼容」不等于「已实测」，更不等于「安全」。
+     *  我们没有协商器，所以不照抄它的标签（那样等于吹牛），
+     *  只报**自己真能判断**的四种结论。
+     *
+     *  返回 {verdict, 给用户看的说明, 建议使用的包名或 null}：
+     *    ok       registry 上有，直接装
+     *    build    只能从 git 装且需要现场构建 —— 慢，且 pnpm ≥11 可能直接拒绝
+     *    blocked  基本装不上（monorepo 内部依赖且 npm 上没有）
+     *    unknown  信息不足（拿不到 package.json），照原样试 */
+    public String[] precheckForMarket(String spec, String npmNameHint) {
+        try {
+            String[] ref = parseGitHubRef(spec);
+            String body = ref == null ? null : fetchGitHubPackageJson(ref[0], ref[1]);
+            if (body == null) {
+                // 拿不到仓库信息：如果调用方已经有 npm 名，就按它查 registry
+                if (npmNameHint != null && npmRegistryHas(npmNameHint, null)) {
+                    return new String[]{"ok",
+                            "npm registry 上有 " + npmNameHint + "，可以直接安装。", npmNameHint};
+                }
+                return new String[]{"unknown",
+                        "拿不到这个仓库的 package.json（网络不通或仓库结构特殊），"
+                                + "安装能不能成只有试过才知道。", null};
+            }
+            org.json.JSONObject o = new org.json.JSONObject(body);
+            String name = o.optString("name", "");
+            boolean onNpm = !name.isEmpty() && npmRegistryHas(name, null);
+            if (onNpm) {
+                return new String[]{"ok",
+                        "npm registry 上有 " + name + "（发布版含构建产物），"
+                                + "会按 npm 包安装 —— 这是最稳的一条路。", name};
+            }
+            boolean hasWorkspace = body.replace(" ", "").contains("\"workspace:");
+            org.json.JSONObject scripts = o.optJSONObject("scripts");
+            boolean needBuild = scripts != null && scripts.has("build");
+            String files = o.optJSONArray("files") == null ? "" : o.optJSONArray("files").toString();
+
+            if (hasWorkspace) {
+                return new String[]{"blocked",
+                        (name.isEmpty() ? "这个插件" : name) + " 的依赖里有 workspace:*"
+                                + "（monorepo 内部引用），从 git 源装必然失败，"
+                                + "而 npm registry 上又没有发布版。\n\n"
+                                + "这类插件只能等作者发布到 npm。可以先去仓库看看 README "
+                                + "里有没有写「registry 包名」。", null};
+            }
+            if (needBuild && files.contains("dist")) {
+                return new String[]{"build",
+                        (name.isEmpty() ? "这个插件" : name) + " 的产物在 dist/ 且需要现场构建，"
+                                + "而 git 仓库通常不含 dist。\n\n"
+                                + "会尝试 clone 下来自己装依赖并构建，可能要好几分钟，"
+                                + "也可能因为缺构建工具而失败。\n"
+                                + "另外 pnpm 11 起默认拒绝执行 git 依赖的 prepare 脚本，"
+                                + "这条路本身就不太稳。", null};
+            }
+            return new String[]{"unknown",
+                    (name.isEmpty() ? "这个插件" : name)
+                            + " 没发布到 npm，会按 GitHub 仓库方式安装。\n"
+                            + "没发现明显的阻碍，但仓库源安装的成功率本来就低一些。", null};
+        } catch (Throwable e) {
+            return new String[]{"unknown", "预检没跑成：" + describe(e), null};
+        }
+    }
+
+    /** 安装前预检：读仓库的 package.json，判断「这个插件从 git 装能不能成」。
+     *
+     *  社区标准（oh-my-dsh/dsh-community-standard v0.15）提的第二条裂缝正是这个：
+     *  「装上才知道炸 —— 装之前没人能回答这个插件能不能跑，唯一的报错方式是崩溃」。
+     *  它给了 dsh-plugin.json 的 JSON Schema，但那是一周前的 Draft，
+     *  生态里 3800+ 个插件目前都还在用 package.json 的 dsh 字段，
+     *  拿新 schema 去校验现有插件会全部不合格 —— 所以这里不用它的 schema，
+     *  而是照**现有插件的真实结构**做判断。判据都来自这轮踩到的实际故障。
+     *
+     *  返回 null 表示没发现问题；否则返回给用户看的提示。 */
+    private String precheckGitPlugin(String spec) {
+        try {
+            String[] ref = parseGitHubRef(spec);
+            if (ref == null) return null;
+            String body = fetchGitHubPackageJson(ref[0], ref[1]);
+            if (body == null) return null;               // 拿不到就别拦，让安装自己去试
+            org.json.JSONObject o = new org.json.JSONObject(body);
+            String name = o.optString("name", "");
+            StringBuilder warn = new StringBuilder();
+
+            // ① workspace: 依赖 —— 这种包的 git 源装不了（dsh-TUI 自己 README 就说明了）
+            String all = body.replace(" ", "");
+            if (all.contains("\"workspace:")) {
+                warn.append("· 它的依赖里有 workspace:*（monorepo 内部引用），"
+                        + "从 git 源装必然失败\n");
+            }
+            // ② 声明了 dist 但仓库里没有 → 需要现场构建，pnpm 11 起还会拒绝跑 prepare
+            String files = o.optJSONArray("files") == null ? "" : o.optJSONArray("files").toString();
+            org.json.JSONObject scripts = o.optJSONObject("scripts");
+            boolean needBuild = scripts != null && scripts.has("build");
+            if (files.contains("dist") && needBuild) {
+                warn.append("· 产物在 dist/ 且需要现场构建（build 脚本存在），"
+                        + "git 源通常不含 dist\n");
+            }
+            // ③ 压根不是 dsh 插件
+            if (!o.has("dsh") && !name.contains("dsh")) {
+                warn.append("· package.json 里没有 dsh 字段，可能不是 dsh 插件\n");
+            }
+            if (warn.length() == 0) return null;
+
+            // 有问题的话，顺手看看 registry 上有没有 —— 有就直接给出正确装法
+            String fix = "";
+            if (!name.isEmpty() && npmRegistryHas(name, o.optString("version", ""))) {
+                fix = "\n好消息：npm 上有 " + name + "，装这个就行（已自动改用它）。\n";
+            } else if (!name.isEmpty()) {
+                fix = "\nnpm registry 上暂时没有 " + name + "，"
+                        + "会尝试 clone + 构建，可能比较慢。\n";
+            }
+            return "[安装前预检] " + (name.isEmpty() ? spec : name) + " 从 git 源安装可能有问题：\n"
+                    + warn + fix;
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /** 从各种 GitHub 写法里取出 {owner, repo}；不是 GitHub 地址返回 null。 */
+    private String[] parseGitHubRef(String spec) {
+        if (spec == null) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(?:github:|https?://github\\.com/)([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)")
+                .matcher(spec);
+        if (!m.find()) return null;
+        return new String[]{m.group(1), m.group(2).replaceAll("\\.git$", "")};
+    }
+
+    /** registry 上是否有这个包（顺带比对版本，版本一致才值得替换 GitHub 源）。 */
+    private boolean npmRegistryHas(String name, String wantVersion) {
+        try {
+            String url = "https://registry.npmmirror.com/"
+                    + name.replace("/", "%2F");
+            String body = httpGetText(url, 6000, 15000);
+            if (body == null || body.length() < 20) return false;
+            org.json.JSONObject o = new org.json.JSONObject(body);
+            org.json.JSONObject tags = o.optJSONObject("dist-tags");
+            String latest = tags == null ? "" : tags.optString("latest", "");
+            if (latest.isEmpty()) return false;
+            if (wantVersion == null || wantVersion.isEmpty()) return true;
+            // 版本不一致也允许（registry 可能更新），只是记一笔
+            if (!latest.equals(wantVersion)) {
+                android.util.Log.i("DSHA", "registry 版本 " + latest
+                        + " 与仓库 " + wantVersion + " 不同，仍优先用 registry");
+            }
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /** 最后一招：自己 clone 下来、装依赖、必要时构建，再以本地目录 link 进 profile。
+     *
+     *  这条路**完全不经过 pnpm 的 store/tmp 与 git-hosted prepare 流程**，
+     *  所以能绕开 npm/cli#2144 那类上游 bug。代价是慢（要装 devDeps 并构建）。 */
+    private String installFromGitClone(String spec) {
+        try {
+            String[] ref = parseGitHubRef(spec);
+            if (ref == null) return "CLONE_SKIP: 不是 GitHub 地址";
+            String owner = ref[0], repo = ref[1];
+            String dir = "/root/dsha-plug-" + repo.toLowerCase(java.util.Locale.ROOT)
+                    .replaceAll("[^a-z0-9._-]", "-");
+            String cmd = "set -e; rm -rf " + shellArg(dir) + "; "
+                    + "echo '[1/4] clone…'; "
+                    + "(git clone --depth 1 -q " + shellArg("https://github.com/" + owner + "/" + repo)
+                    + " " + shellArg(dir)
+                    + " || git clone --depth 1 -q " + shellArg(gitHubProxy("https://github.com/" + owner + "/" + repo))
+                    + " " + shellArg(dir) + "); "
+                    + "cd " + shellArg(dir) + "; "
+                    + "echo '[2/4] 装依赖…'; "
+                    + "npm install --registry=https://registry.npmmirror.com 2>&1 | tail -3; "
+                    + "echo '[3/4] 构建（若有 build 脚本）…'; "
+                    + "if node -e \"process.exit((require('./package.json').scripts||{}).build?0:1)\" 2>/dev/null; then "
+                    + "npm run build 2>&1 | tail -5; fi; "
+                    + "echo '[4/4] 以本地目录注册…'; "
+                    + "cd /root/.dsh/profiles/web && "
+                    + "pnpm add " + shellArg("link:" + dir) + " 2>&1 | tail -5; "
+                    + "echo CLONE_INSTALL_EXIT=$?";
+            String out = proot.execAndRead(cmd, 600_000);
+            return out == null ? "CLONE_FAIL: 无输出" : out;
+        } catch (Throwable e) {
+            return "CLONE_FAIL: " + describe(e);
+        }
+    }
+
     /**
      * 安装插件（带 GitHub 兜底）：先按 pkg 装（npm 名），若 404/找不到包 且给了 fallbackSpec，
      * 自动用 github:owner/repo 重试一次（市场条目多为仅 GitHub 发布的仓库插件）。
@@ -5444,21 +5676,87 @@ public class HarnessController {
                     + "同名插件会和内置版本抢同一个包名。\n"
                     + "如果市场里显示它未安装，去「配置」页点「重启 Web」让内置版本生效即可。";
         }
-        String r = runPluginInstall(pkg);
-        // ENOENT 这类是环境问题而不是包的问题：修掉硬链接配置与残留后重试一次，
-        // 多数情况这一次就过了（dsh 那句「去改 allowBuilds」是误导，跟本错无关）
+        // ── 第 0 级：GitHub 地址先问 npm registry 有没有同名包 ──
+        // registry 上的 tarball 是发布时**构建好的**，而 git 主干往往不含 dist；
+        // 更要紧的是 git-hosted 那条路会撞 pnpm/npm 的上游 bug
+        // （npm/cli#2144：clone 到 store/tmp 时丢 .gitignore → prepare 阶段 ENOENT，
+        //  用户报的正是这个）。所以能走 registry 就别走 git。
+        StringBuilder tried = new StringBuilder();
+        String spec = pkg;
+        String pre = precheckGitPlugin(fallbackSpec != null ? fallbackSpec : pkg);
+        if (pre != null) {
+            tried.append(pre);
+            logActivity("安装前预检提示：" + pre.replace("\n", " ").trim());
+        }
+        String[] ghRef = parseGitHubRef(fallbackSpec);
+        if (ghRef != null) {
+            String real = fetchNpmName(ghRef[0], ghRef[1]);
+            if (real != null && !real.equals(spec) && npmRegistryHas(real, null)) {
+                logActivity("插件 " + real + " 在 npm 上有同名包，改走 registry（避开 git-hosted 的已知问题）");
+                tried.append("· registry 上有 ").append(real)
+                        .append("，优先按 npm 包安装\n");
+                spec = real;
+            }
+        }
+
+        String r = runPluginInstall(spec);
+        // ENOENT 这类是环境问题而不是包的问题：修掉硬链接配置与残留后重试一次
         if (isPnpmEnvFailure(r)) {
             String fix = runAssetScript("pnpm-env-fix.sh", "dsha-pnpm-env-fix.sh", 60_000);
-            r = r + "\n\n[检测到 pnpm 环境问题（proot 下硬链接只能模拟），已修复并重试]\n"
-                    + (fix == null ? "" : fix.trim() + "\n") + runPluginInstall(pkg);
+            tried.append("· 第 1 次失败（pnpm 环境问题），已修配置并重试\n");
+            r = r + "\n\n[检测到 pnpm 环境问题，已修复并重试]\n"
+                    + (fix == null ? "" : fix.trim() + "\n") + runPluginInstall(spec);
         }
-        if (r != null && fallbackSpec != null && !fallbackSpec.equals(pkg)
+        // ── 第 1.5 级：网络故障 → 换镜像源重试同一个包 ──
+        // 关键是**不换机制**：网络不好跟「包在哪」无关，换去 git 源只会把
+        // 一次可重试的失败变成一次必然失败。
+        if (isNetworkFailure(r) && !r.contains("INSTALL_EXIT=0")) {
+            tried.append("· 网络故障（不是包不存在），换镜像源重试\n");
+            logActivity("插件安装遇到网络故障，换镜像源重试：" + spec);
+            String alt = proot.execAndRead(
+                    "cd /root/.dsh/profiles/web 2>/dev/null || cd /root/.dsh; "
+                            + "pnpm add --registry=https://registry.npmjs.org "
+                            + shellArg(spec) + " 2>&1 | tail -20; echo INSTALL_EXIT=$?",
+                    300_000);
+            r = r + "\n\n[换用 npm 官方源重试…]\n" + (alt == null ? "无输出" : alt);
+        }
+        // ── 第 2 级：包名找不到 → 用 GitHub 源再试 ──
+        if (r != null && fallbackSpec != null && !fallbackSpec.equals(spec)
                 && isPkgNotFound(r)) {
             if (!isValidPluginSpec(fallbackSpec)) {
                 r += "\n[自动回退被忽略：非法来源 " + fallbackSpec + "]";
             } else {
+                tried.append("· registry 里没有，改用 GitHub 源\n");
                 r = "\n[自动回退 GitHub 仓库方式安装…]\n" + runPluginInstall(fallbackSpec);
             }
+        }
+        // ── 第 3 级：仍然是 git-hosted 的 prepare/ENOENT → 自己 clone、构建、link ──
+        // 这条路完全不经过 pnpm 的 store/tmp 与 prepare，所以能绕开那个上游 bug。
+        // 慢（要装 devDeps 并构建），所以放最后。
+        if (r != null && !r.contains("INSTALL_EXIT=0") && isPnpmEnvFailure(r)
+                && fallbackSpec != null && fallbackSpec.contains("github")) {
+            tried.append("· git-hosted 装不上（上游已知问题），改为自己 clone + 构建 + 本地注册\n");
+            logActivity("插件 " + fallbackSpec + " 走 clone+构建 兜底安装");
+            String cl = installFromGitClone(fallbackSpec);
+            r = r + "\n\n[改用 clone + 构建 + 本地 link 安装…]\n" + cl;
+        }
+        if (r != null && r.contains("INSTALL_EXIT=0") && pre != null) {
+            r = pre + "\n" + r;
+        }
+        if (tried.length() > 0 && r != null && !r.contains("INSTALL_EXIT=0")) {
+            r = r + "\n\n=== 试过的几条路 ===\n" + tried;
+            // pnpm ≥11 默认拒绝 git 依赖的 prepare 脚本 —— 上游生态已经形成共识：
+            // 从 git URL 装插件这条路基本走不通了。dsh-TUI（生态里最火的插件）
+            // 在自己 README 里就写着「Git URL 安装不受支持，请安装 registry 包」。
+            // 用户看到一堆 pnpm 堆栈时最需要知道的就是这句话，而不是去猜自己环境坏了。
+            if (isPnpmEnvFailure(r) || r.contains("prepare")) {
+                r = r + "\n很可能这个插件**只支持从 npm registry 安装**：\n"
+                        + "pnpm 11 起默认拒绝执行 git 依赖的 prepare 脚本，"
+                        + "而多数插件的 git 仓库里不含构建产物（dist），装了也用不了。\n"
+                        + "解决办法：在市场里搜它的 npm 包名（通常是 @作者/插件名），"
+                        + "或到插件仓库 README 找「registry 包名」那一行。\n";
+            }
+            r = r + "\n如果都失败，把上面的输出贴到 DSHA 的 GitHub issue，我们跟进。";
         }
         if (r != null && r.contains("INSTALL_EXIT=0")) {
             // 装完当场查双副本：pnpm 可能刚把 @deepseek-ai/* 物理复制进 profile，
@@ -5543,8 +5841,31 @@ public class HarnessController {
 
     /** 判定安装输出是否为"包在 registry 找不到"（npm 404 类） */
     private boolean isPkgNotFound(String out) {
-        return out.contains("ERR_PNPM_FETCH") || out.contains("not in the npm registry")
-                || out.contains("404") || out.contains("ENOTFOUND");
+        if (out == null) return false;
+        // 这里的判据必须**只认「registry 说没有这个包」**。
+        //
+        // 原来的版本把 ENOTFOUND（DNS 解析失败）、ERR_PNPM_FETCH（可能只是超时）
+        // 和裸 "404"（输出里任何位置出现都算）都算成「包不存在」，
+        // 于是一次网络抖动就会被判成「npm 上没有」，然后自动回退到 git 源 ——
+        // 而 git 源在 pnpm ≥11 下基本必死（默认拒绝执行 git 依赖的 prepare 脚本）。
+        //
+        // 用户报的 modlens 就是这个形状：@liustack/modlens 明明在 npm 上，
+        // 报错里却出现了「自动回退 GitHub 仓库方式安装」。
+        // 一次网络抖动，被这条判据变成了一次必然失败。
+        return out.contains("not in the npm registry")
+                || out.contains("ERR_PNPM_FETCH_404")
+                || out.contains("is not in this registry")
+                || (out.contains("404") && (out.contains("registry.np") || out.contains("Not Found -")));
+    }
+
+    /** 网络故障：值得**原地重试或换镜像**，绝不该换成 git 源。 */
+    private boolean isNetworkFailure(String out) {
+        if (out == null) return false;
+        return out.contains("ENOTFOUND") || out.contains("ETIMEDOUT")
+                || out.contains("ECONNRESET") || out.contains("ECONNREFUSED")
+                || out.contains("socket hang up") || out.contains("ERR_PNPM_FETCH")
+                || out.contains("ERR_SOCKET_TIMEOUT") || out.contains("request to ")
+                && out.contains("failed");
     }
 
     /** 单次插件安装执行（源码目录优先，无则全局 dsh）；pkg 已由入口校验，这里再兜一道。 */
