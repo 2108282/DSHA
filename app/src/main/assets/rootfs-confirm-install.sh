@@ -94,10 +94,19 @@ cat > "$DSH_BIN/adb" <<'EOF2'
 SELF=$(basename "$0")
 REAL=""
 for p in /root/.dsh-real /usr/local/bin /usr/bin /bin /system/bin /data/data/com.termux/files/usr/bin; do
-  if [ -x "$p/$SELF" ] && [ "$p/$SELF" != "$0" ] && [ "$p/$SELF" != "/root/.dsh-real/adb" ]; then REAL="$p/$SELF"; break; fi
+  # 只需排除「自己」，不能顺手排除 /root/.dsh-real/adb —— 那恰好是真实 adb 的标准存放位置，
+  # 排掉之后只能靠后面的 ls 兜底，兜不到就直接报「找不到真实 adb」
+  if [ -x "$p/$SELF" ] && [ "$p/$SELF" != "$0" ]; then REAL="$p/$SELF"; break; fi
 done
 [ -z "$REAL" ] && REAL=$(ls /root/.dsh-real/adb /usr/local/bin/adb /usr/bin/adb /system/bin/adb 2>/dev/null | head -1)
-if [ -z "$REAL" ]; then echo "找不到真实 adb" >&2; exit 127; fi
+if [ -z "$REAL" ]; then
+  REAL=$(PATH=/usr/local/bin:/usr/bin:/bin:/system/bin command -v "$SELF" 2>/dev/null | grep -v "^$DSH_BIN" | head -1)
+fi
+if [ -z "$REAL" ]; then
+  echo "找不到真实 $SELF：rootfs 里没装它（App 的 ADB 功能走 Android 侧，不依赖这个）。" >&2
+  echo "想看系统日志可以直接用 /system/bin/logcat" >&2
+  exit 127
+fi
 is_danger_cmd() {
   echo "$1" | grep -qE '(^|[^a-z])(rm|rmdir|unlink|truncate|wipe)([^a-z]|$)|(dd|mkfs|fdisk|format|reboot|shutdown|poweroff|halt)([^a-z]|$)|-delete|base64|\| ?(sh|bash)|eval|sh -c|toybox|pm clear|uninstall'
 }

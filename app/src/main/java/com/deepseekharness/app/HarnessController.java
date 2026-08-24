@@ -870,29 +870,7 @@ public class HarnessController {
             tried.append("B(").append(e.getClass().getSimpleName()).append(") ");
         }
 
-        // ---- C：proot 内 cp -a（命令保持极简，避免任何嵌套引号）----
-        try {
-            String t = "/root/.dsh/profiles/web/node_modules/" + name;
-            proot.execAndRead("rm -rf " + shellArg(t), 20_000);
-            proot.execAndRead("cp -a " + shellArg(real) + " " + shellArg(t), 60_000);
-            if (dstPkg.isFile()) return true;
-            tried.append("C(cp 后仍不在) ");
-        } catch (Throwable e) {
-            tried.append("C(").append(e.getClass().getSimpleName()).append(") ");
-        }
-
-        // ---- D：符号链接（最后试，成功了最省空间）----
-        try {
-            String t = "/root/.dsh/profiles/web/node_modules/" + name;
-            proot.execAndRead("rm -rf " + shellArg(t) + "; ln -sfn " + shellArg(real)
-                    + " " + shellArg(t), 20_000);
-            if (dstPkg.isFile()) return true;
-            tried.append("D(链接后读不到 package.json) ");
-        } catch (Throwable e) {
-            tried.append("D(").append(e.getClass().getSimpleName()).append(") ");
-        }
-
-        android.util.Log.w("DSHA", "安置 " + name + " 四种方式全失败: " + tried);
+        android.util.Log.w("DSHA", "安置 " + name + " 两种方式都失败: " + tried);
         try {
             java.nio.file.Files.write(new java.io.File(proot.getRootfsDir(),
                             "root/.dsh/repair-builtin.log").toPath(),
@@ -1244,9 +1222,13 @@ public class HarnessController {
             boolean after = guideRegistered("dsh-device-shell-guide");
             if (!before && after && !builtinPatchedOnce) {
                 builtinPatchedOnce = true;
-                android.util.Log.w("DSHA", "首次启动后补齐内置插件，自动重启 Web 让它生效");
-                setState("", 95, "已补齐内置插件，正在重启 Web…", "", true);
-                restartWeb();
+                // 这里**不再自动 restartWeb()**。原来那句是在 waitWebPortUp 成功的回调线程里
+                // 调重启：停掉刚起来的 Web 进程、再走一遍完整启动流程，时序上撞在一起，
+                // 是用户报的「点重启就闪退」最合理的嫌疑之一。
+                // 而且现在已经用不着它了 —— sanitizeProfileBundles() 在 dsh 启动**之前**
+                // 就把 bundles 校准好了，插件在第一次启动时就已就位，不需要「起来后再补一次
+                // 然后重启」这种绕法。
+                android.util.Log.w("DSHA", "启动后补齐了内置插件的注册（下次启动即生效，不自动重启）");
             }
         } catch (Throwable e) {
             android.util.Log.w("DSHA", "启动后补内置插件失败: " + e);
@@ -2440,9 +2422,7 @@ public class HarnessController {
         // 启动前自愈：write 工具新建文件变悬空链接（proot l2s 与 dsh link 发布冲突，幂等）
         try {
             ensureFsWritePatch();
-            // 每次启动都把 bundles 校准一遍：解析不到的先试着补链接，补不上就摘掉。
-            // 这一步必须在 dsh 起来之前做完 —— 它一旦读到解析不到的 bundle 就直接退出。
-            sanitizeProfileBundles();
+
         } catch (Throwable ignored) {
         }
         // 启动前自愈：内置插件（mobile-adapt/device-shell-guide）注册校验，
@@ -3362,6 +3342,10 @@ public class HarnessController {
                 proot.ensureRuntimeFiles();
                 ensureDangerGuard(); // 安全包装器缺失则自动补装
                 ensureBashGuardPatch(); // bash 工具 lib 强制加载守卫（不依赖重装）
+                // 校准 bundles 必须在 dsh 起来之前做完（它读到解析不到的 bundle 就直接退出），
+                // 但**不能**放在 startWebCommand() 里面 —— 那个方法只该组装命令字符串，
+                // 在里面做文件 IO、甚至再起一个 proot 进程，正撞上马上要启动的 Web 进程。
+                sanitizeProfileBundles();
                 Process p = proot.execRootfs(startWebCommand());
                 webProcesses.add(p);
                 synchronized (webStartLock) {
