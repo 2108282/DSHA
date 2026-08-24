@@ -5472,6 +5472,76 @@ public class HarnessController {
         }
     }
 
+    /** 「这个插件**只能**从 npm registry 装」的硬信号。
+     *
+     *  三条判据都来自实测，命中任一条就说明 git 源那条路走不通：
+     *
+     *  ① `workspace:*` 依赖 —— monorepo 内部引用。git clone 下来只有一个子目录，
+     *     那些 workspace 包压根不存在，pnpm 直接报解析失败。
+     *  ② `scripts.prepare` —— **pnpm ≥11 默认拒绝执行 git 依赖的 prepare 脚本**。
+     *     而 prepare 往往正是编译产物的地方（tsc / vite build），
+     *     拒绝执行就等于装了个空壳。
+     *  ③ `bundledDependencies` —— 这些包只在 `npm publish` 打 tarball 时才塞进去，
+     *     git 源永远拿不到。
+     *
+     *  dsh-TUI（生态里 2343 星那个）同时命中①②③，它自己 README 就写着
+     *  「Git URL 安装不受支持，请安装 registry 包」。
+     *
+     *  命中之后的正确行为是**强制走 registry 且不回退 git** ——
+     *  回退只会浪费用户几分钟然后给一段看不懂的 pnpm 堆栈。 */
+    private String mustUseRegistryReason(String pkgJson) {
+        if (pkgJson == null) return null;
+        String compact = pkgJson.replace(" ", "").replace("\n", "");
+        if (compact.contains("\"workspace:")) {
+            return "依赖里有 workspace:*（monorepo 内部引用），git 源拿不到这些包";
+        }
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(pkgJson);
+            org.json.JSONObject sc = o.optJSONObject("scripts");
+            if (sc != null && sc.has("prepare")) {
+                return "它靠 prepare 脚本生成产物，而 pnpm 11 起默认拒绝执行 git 依赖的 prepare";
+            }
+            if (o.optJSONArray("bundledDependencies") != null) {
+                return "它有 bundledDependencies（只在 npm 发布时打包），git 源拿不到";
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** 兜底：从 README 里捞 registry 包名。
+     *
+     *  用在 package.json 的 name 拿不到、或者那个 name 不是发布名的时候
+     *  （monorepo 根包很常见）。插件作者几乎都会在 README 写一行安装命令，
+     *  那行就是最权威的「该装哪个包」。 */
+    private String fetchNpmNameFromReadme(String owner, String repo) {
+        String[] urls = {
+                gitHubProxy("https://raw.githubusercontent.com/" + owner + "/" + repo + "/main/README.md"),
+                "https://raw.githubusercontent.com/" + owner + "/" + repo + "/main/README.md",
+                "https://raw.githubusercontent.com/" + owner + "/" + repo + "/master/README.md",
+        };
+        // 只认明确的安装命令，别在正文里瞎猜包名
+        java.util.regex.Pattern pat = java.util.regex.Pattern.compile(
+                "(?:dsh\\s+plugin(?:\\s+--profile\\s+\\S+)?\\s+add|npm\\s+i(?:nstall)?(?:\\s+-g)?"
+                        + "|pnpm\\s+add|yarn\\s+add)\\s+((?:@[a-z0-9._-]+/)?[a-z0-9._-]+)",
+                java.util.regex.Pattern.CASE_INSENSITIVE);
+        for (String u : urls) {
+            String body = httpGetText(u, 6000, 12000);
+            if (body == null) continue;
+            java.util.regex.Matcher m = pat.matcher(body);
+            while (m.find()) {
+                String cand = m.group(1);
+                // 跳过官方 dsh 本体这类明显不是「本插件」的候选
+                if (cand.startsWith("@deepseek-ai/") || cand.equals("dsh")
+                        || cand.equals("pnpm") || cand.equals("corepack")) {
+                    continue;
+                }
+                if (npmRegistryHas(cand, null)) return cand;
+            }
+        }
+        return null;
+    }
+
     /** 安装前预检的**对外**版本：给市场页在用户等待之前就把结论摆出来。
      *
      *  社区标准（dsh-community-standard v0.15 §3）要求市场用五态展示兼容性，
@@ -5501,10 +5571,29 @@ public class HarnessController {
             org.json.JSONObject o = new org.json.JSONObject(body);
             String name = o.optString("name", "");
             boolean onNpm = !name.isEmpty() && npmRegistryHas(name, null);
+            String onlyWhy = mustUseRegistryReason(body);
             if (onNpm) {
                 return new String[]{"ok",
                         "npm registry 上有 " + name + "（发布版含构建产物），"
-                                + "会按 npm 包安装 —— 这是最稳的一条路。", name};
+                                + "会按 npm 包安装 —— 这是最稳的一条路。"
+                                + (onlyWhy == null ? ""
+                                        : "\n\n（顺带说：这个插件只能这么装，"
+                                                + onlyWhy + "。已自动处理。）"), name};
+            }
+            // package.json 的 name 查不到 → 从 README 的安装命令兜底
+            String fromReadme = ref == null ? null : fetchNpmNameFromReadme(ref[0], ref[1]);
+            if (fromReadme != null) {
+                return new String[]{"ok",
+                        "仓库 package.json 的名字在 npm 上查不到，但 README 里写的是 "
+                                + fromReadme + "，registry 上有这个包，会用它安装。", fromReadme};
+            }
+            if (onlyWhy != null) {
+                return new String[]{"blocked",
+                        (name.isEmpty() ? "这个插件" : name)
+                                + " 只能从 npm registry 安装（" + onlyWhy + "），"
+                                + "但 npm 上找不到发布版。\n\n"
+                                + "从 git 源装必然失败，所以不建议白等。\n"
+                                + "去仓库 README 找「registry 包名」那一行，或等作者发布。", null};
             }
             boolean hasWorkspace = body.replace(" ", "").contains("\"workspace:");
             org.json.JSONObject scripts = o.optJSONObject("scripts");
@@ -5689,13 +5778,46 @@ public class HarnessController {
             logActivity("安装前预检提示：" + pre.replace("\n", " ").trim());
         }
         String[] ghRef = parseGitHubRef(fallbackSpec);
+        boolean registryOnly = false;          // 命中硬信号：git 源必死，禁止回退
+        String registryOnlyWhy = null;
         if (ghRef != null) {
-            String real = fetchNpmName(ghRef[0], ghRef[1]);
-            if (real != null && !real.equals(spec) && npmRegistryHas(real, null)) {
-                logActivity("插件 " + real + " 在 npm 上有同名包，改走 registry（避开 git-hosted 的已知问题）");
-                tried.append("· registry 上有 ").append(real)
-                        .append("，优先按 npm 包安装\n");
+            String pkgJson = fetchGitHubPackageJson(ghRef[0], ghRef[1]);
+            registryOnlyWhy = mustUseRegistryReason(pkgJson);
+
+            // 找 registry 包名：先用 package.json 的 name，不行再从 README 的安装命令捞
+            String real = null;
+            if (pkgJson != null) {
+                try {
+                    String n = new org.json.JSONObject(pkgJson).optString("name", "");
+                    if (!n.isEmpty() && !n.contains("${") && npmRegistryHas(n, null)) real = n;
+                } catch (Throwable ignored) {
+                }
+            }
+            if (real == null) {
+                real = fetchNpmNameFromReadme(ghRef[0], ghRef[1]);
+                if (real != null) {
+                    tried.append("· package.json 的 name 在 npm 上查不到，"
+                            + "从 README 的安装命令认出 ").append(real).append("\n");
+                }
+            }
+
+            if (real != null) {
+                if (!real.equals(spec)) {
+                    logActivity("插件改走 npm registry：" + real
+                            + (registryOnlyWhy == null ? "" : "（" + registryOnlyWhy + "）"));
+                    tried.append("· 按 npm 包安装 ").append(real).append("\n");
+                }
                 spec = real;
+                registryOnly = registryOnlyWhy != null;
+            } else if (registryOnlyWhy != null) {
+                // 只能用 npm，却在 registry 上找不到 —— 直接说清楚，别浪费用户几分钟
+                logActivity("插件只能从 npm 装但 registry 上没有：" + fallbackSpec);
+                return "无法安装：" + fallbackSpec + "\n\n"
+                        + "这个插件**只能从 npm registry 安装**（" + registryOnlyWhy + "），"
+                        + "但 npm 上找不到它的发布版。\n\n"
+                        + "从 git 源装必然失败，所以就不白等了。\n"
+                        + "建议去仓库 README 找「registry 包名」那一行，"
+                        + "或者等作者发布到 npm。";
             }
         }
 
@@ -5721,7 +5843,11 @@ public class HarnessController {
             r = r + "\n\n[换用 npm 官方源重试…]\n" + (alt == null ? "无输出" : alt);
         }
         // ── 第 2 级：包名找不到 → 用 GitHub 源再试 ──
-        if (r != null && fallbackSpec != null && !fallbackSpec.equals(spec)
+        if (r != null && registryOnly && !r.contains("INSTALL_EXIT=0")) {
+            // 已知 git 源必死，不做无意义的回退 —— 那只会再耗几分钟再失败一次
+            tried.append("· 不回退 git 源：").append(registryOnlyWhy).append("\n");
+            r = r + "\n\n[跳过 GitHub 回退：这个插件只能从 npm 装（" + registryOnlyWhy + "）]";
+        } else if (r != null && fallbackSpec != null && !fallbackSpec.equals(spec)
                 && isPkgNotFound(r)) {
             if (!isValidPluginSpec(fallbackSpec)) {
                 r += "\n[自动回退被忽略：非法来源 " + fallbackSpec + "]";
@@ -5734,7 +5860,7 @@ public class HarnessController {
         // 这条路完全不经过 pnpm 的 store/tmp 与 prepare，所以能绕开那个上游 bug。
         // 慢（要装 devDeps 并构建），所以放最后。
         if (r != null && !r.contains("INSTALL_EXIT=0") && isPnpmEnvFailure(r)
-                && fallbackSpec != null && fallbackSpec.contains("github")) {
+                && !registryOnly && fallbackSpec != null && fallbackSpec.contains("github")) {
             tried.append("· git-hosted 装不上（上游已知问题），改为自己 clone + 构建 + 本地注册\n");
             logActivity("插件 " + fallbackSpec + " 走 clone+构建 兜底安装");
             String cl = installFromGitClone(fallbackSpec);
