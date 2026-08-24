@@ -1131,7 +1131,9 @@ public class HarnessController {
                 // R 用 A/B/C_OK/D，U 用 E_OK/F
                 "C_OK=$(command -v dsh >/dev/null 2>&1 && echo 1 || echo 0); " +
                 "E_OK=$(command -v dsh >/dev/null 2>&1 && echo 1 || echo 0); " +
-                "echo V=\"$C\" \"$E\"; " +
+                // 用 | 分隔而不是空格：万一将来 dsh --version 输出成 "dsh 0.1.1-rc.2"，
+                // 按空格取第一段会得到 "dsh"，版本评分归零，步骤⑤永远显示未安装
+                "echo \"V=$C|$E\"; " +
                 "echo R=$A$B$C_OK$D U=$E_OK$F");
         // 解析 R=ABCD：不用 matches() 正则（全匹配会被 echo 末尾换行坑到，之前
         // 因此②④⑤⑥全显示未安装）——直接用 indexOf + substring 取 4 位
@@ -1155,8 +1157,8 @@ public class HarnessController {
         int vi = merged == null ? -1 : merged.indexOf("V=");
         if (vi >= 0) {
             String vv = merged.substring(vi + 2);
-            int amp = vv.indexOf(' ');
-            if (amp >= 0) vv = vv.substring(0, amp); // 取 $C（空格分隔）
+            int amp = vv.indexOf('|');
+            if (amp >= 0) vv = vv.substring(0, amp); // 取 $C（| 分隔，见上面 echo）
             int nl2 = vv.indexOf('\n');
             if (nl2 >= 0) vv = vv.substring(0, nl2);
             dshVer = vv.trim();
@@ -1594,6 +1596,11 @@ public class HarnessController {
                 + "fi");
         // 预下载 Node headers（node-gyp 编译 node-pty 必需；否则 node-gyp 默认访问
         // nodejs.org 下载，国内手机网络不通 → undici 报错 → 退出码 1）
+        // 新版 node-pty 自带 prebuilds/linux-arm64/pty.node，有它就不必下 headers、
+        // 也不必 node-gyp 编译 —— 那是几十 MB 加慢设备上好几分钟，全是白花的。
+        if (hasPtyNode()) {
+            setProgress("node-pty 已就绪（自带预编译产物），跳过 headers 与编译", 98);
+        } else {
         runStep("准备 Node headers（node-gyp 编译依赖）", 96,
                 "NGV=$(node -v | sed 's/^v//'); " +
                 "if [ ! -f /root/.cache/node-gyp/$NGV/include/node/node.h ]; then " +
@@ -1618,10 +1625,11 @@ public class HarnessController {
                 "echo '--- @deepseek-ai 目录 ---'; ls /usr/local/lib/node_modules/@deepseek-ai/ 2>&1; " +
                 "echo '--- dsh 命令 ---'; command -v dsh || echo 'dsh 不存在'; " +
                 "exit 1; fi; " +
-                "if [ ! -f \"$npty_dir/build/Release/pty.node\" ]; then " +
+                "if [ ! -f \"$npty_dir/build/Release/pty.node\" ] && [ ! -f \"$npty_dir/prebuilds/linux-arm64/pty.node\" ]; then " +
                 "(cd \"$npty_dir\" && node-gyp rebuild > /tmp/rc6-gyp.log 2>&1) || " +
                 "{ echo 'node-pty 编译失败：'; tail -10 /tmp/rc6-gyp.log 2>&1; exit 1; }; fi; " +
-                "ls \"$npty_dir/build/Release/pty.node\" >/dev/null 2>&1 && echo 'pty.node 已就绪' && command -v dsh && echo 'RC 安装完成'");
+                "{ [ -f \"$npty_dir/build/Release/pty.node\" ] || [ -f \"$npty_dir/prebuilds/linux-arm64/pty.node\" ]; } >/dev/null 2>&1 && echo 'pty.node 已就绪' && command -v dsh && echo 'RC 安装完成'");
+        }
         // 依赖完整性自愈：npmmirror 元数据不一致可能导致 @deepseek-ai/* 子包
         // 声明了但没装上（Cannot find module）——安装时强制校验补装一次
         runStep("校验 dsh 子包依赖完整性", 99,
