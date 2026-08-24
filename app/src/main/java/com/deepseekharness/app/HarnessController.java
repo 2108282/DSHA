@@ -802,50 +802,41 @@ public class HarnessController {
         return false;
     }
 
-    /** 建 node_modules 链接。悬空或指错地方的先删掉重建；成功才返回 true。
+    /** 把内置插件实体**安置**进 node_modules，成功才返回 true。
      *
-     *  **优先在 proot 内用 shell 建**：Android 私有目录对链接有限制（同一个文件系统
-     *  连硬链接都不支持，见自检的「硬链接支持」项），从 Android 侧直接调
-     *  Files.createSymbolicLink 常常失败。而 proot 内部是 root、还有
-     *  --link2symlink 兜底，成功率高得多。
+     *  不用符号链接，直接复制 —— 这是这一版最关键的取舍。
+     *  Android 私有目录连硬链接都不支持（自检的「硬链接支持」项常年是「不支持」），
+     *  符号链接也时好时坏：从 Android 侧调 Files.createSymbolicLink 基本失败，
+     *  proot 内 ln -sfn 也未必稳。而链接一旦没建成，上层降级逻辑就把插件从
+     *  bundles 摘掉，用户看到的是「插件莫名消失」——实测就这么丢过一次。
      *
-     *  这一点很要紧：建链接失败会触发 sanitizeProfileBundles 的降级分支
-     *  把插件从 bundles 摘掉 —— 用户看到的就是「进了插件页，内置插件全没了」。
-     *  实测踩过，所以 Java NIO 只作为退路。 */
+     *  三个内置插件加起来才几十 KB，复制一次的代价远小于「时不时就没了」。
+     *  复制是最基础的文件操作，没有任何环境依赖，成功率就是 100%。
+     *
+     *  版本管理：比对目标与实体的 package.json version，一致就跳过，
+     *  不一致才重新复制 —— 插件升级照样生效，也不会每次启动都白拷一遍。
+     */
     private boolean linkPlugin(String name, String real, java.io.File nmDir) {
         String target = "/root/.dsh/profiles/web/node_modules/" + name;
         try {
-            String r = proot.execAndRead(
-                    "mkdir -p /root/.dsh/profiles/web/node_modules && "
-                            + "rm -rf " + shellArg(target) + "; "
-                            + "ln -sfn " + shellArg(real) + " " + shellArg(target) + " && "
-                            + "test -f " + shellArg(target + "/package.json")
-                            + " && echo DSHA_LINK_OK", 25_000);
-            if (r != null && r.contains("DSHA_LINK_OK")) return true;
-            android.util.Log.w("DSHA", "proot 内建 " + name + " 链接未成功: "
-                    + (r == null ? "无输出" : r.trim()));
-        } catch (Throwable e) {
-            android.util.Log.w("DSHA", "proot 内建 " + name + " 链接异常: " + e);
-        }
-        try {
-            java.nio.file.Path lp = new java.io.File(nmDir, name).toPath();
-            if (java.nio.file.Files.exists(lp, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                java.nio.file.Path cur = java.nio.file.Files.isSymbolicLink(lp)
-                        ? java.nio.file.Files.readSymbolicLink(lp) : null;
-                if (cur != null && real.equals(cur.toString())
-                        && new java.io.File(new java.io.File(nmDir, name), "package.json").isFile()) {
-                    return true;
-                }
-                if (java.nio.file.Files.isDirectory(lp, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                    return false;   // 真目录，不敢删（可能是用户装的实体）
-                }
-                java.nio.file.Files.delete(lp);
+            // 已经安置好且版本一致 → 什么都不做
+            String cmd = "T=" + shellArg(target) + "; R=" + shellArg(real) + "; "
+                    + "mkdir -p /root/.dsh/profiles/web/node_modules; "
+                    + "getver() { node -p \"require('$1/package.json').version\" 2>/dev/null || echo x; }; "
+                    + "if [ -f \"$T/package.json\" ] && [ \"$(getver \"$T\")\" = \"$(getver \"$R\")\" ]; then "
+                    + "echo DSHA_PLACE_OK_CACHED; exit 0; fi; "
+                    // 老用户那里 $T 可能是个符号链接（甚至悬空的），rm -rf 一并清掉
+                    + "rm -rf \"$T\"; cp -a \"$R\" \"$T\" && [ -f \"$T/package.json\" ] "
+                    + "&& echo DSHA_PLACE_OK";
+            String r = proot.execAndRead(cmd, 90_000);
+            if (r != null && (r.contains("DSHA_PLACE_OK") || r.contains("DSHA_PLACE_OK_CACHED"))) {
+                return true;
             }
-            java.nio.file.Files.createDirectories(lp.getParent());
-            java.nio.file.Files.createSymbolicLink(lp, java.nio.file.Paths.get(real));
-            return new java.io.File(new java.io.File(nmDir, name), "package.json").isFile();
+            android.util.Log.w("DSHA", "安置内置插件 " + name + " 失败: "
+                    + (r == null ? "无输出" : r.trim()));
+            return false;
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "建 " + name + " 链接失败: " + e);
+            android.util.Log.w("DSHA", "安置内置插件 " + name + " 异常: " + e);
             return false;
         }
     }
