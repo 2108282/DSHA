@@ -1377,6 +1377,20 @@ public class HarnessController {
             }
         });
     }
+    /** 立刻跑一次公开数据迁移（用户刚授予「所有文件访问」后调用）。
+     *
+     *  平时这个脚本只在启动 Web 时跑，但用户授权的时机往往在那之后 ——
+     *  不补这一下，就得等下次启动才生效，而用户此刻正期待「数据已经安全了」。 */
+    public void migratePublicDataNow() {
+        String out = runAssetScript("migrate-public-data.sh", "dsha-migrate-public.sh", 60_000);
+        if (out == null) return;
+        if (out.contains("已迁移") || out.contains("接回公开副本")) {
+            logActivity("已获授权，会话数据迁到公开目录（卸载重装不再丢）");
+        } else if (out.contains("不可写")) {
+            logActivity("公开目录仍不可写，数据留在私有目录（卸载会丢）");
+        }
+    }
+
     /** 活动日志：凡是「App 自己悄悄做了什么」都往这里写一行，用户随时能看到。
      *
      *  这个项目最反复的一类问题不是功能坏了，而是**用户看不到 App 在做什么**：

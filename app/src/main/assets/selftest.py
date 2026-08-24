@@ -753,6 +753,44 @@ def check_sanitize_log():
         add("SKIP", "profile 校准记录", "最近一次没有需要处理的项")
 
 
+def check_public_data():
+    """会话数据是否已迁到公开目录（决定「卸载重装会不会丢」）。
+
+    这一项必须存在：迁移在缺少「所有文件访问」权限时会**静默跳过** ——
+    用户以为数据安全了，其实还在 App 私有目录里，一卸载全没。
+    静默失败是这个项目最该避免的形态。
+    """
+    items = ("sessions", "storages", "attachments", "settings.yaml")
+    linked, plain, missing = [], [], []
+    for name in items:
+        path = os.path.join(DSH_HOME, name)
+        # proot 下 os.path.islink 不可信，用 readlink 判断
+        try:
+            tgt = os.readlink(path)
+            linked.append("%s → %s" % (name, tgt))
+        except OSError:
+            if os.path.exists(path):
+                plain.append(name)
+            else:
+                missing.append(name)
+    if linked and not plain:
+        add("PASS", "对话数据存放位置",
+            "已迁到公开目录，卸载重装不会丢：\n    " + "\n    ".join(linked))
+    elif linked and plain:
+        add("WARN", "对话数据存放位置",
+            "部分迁移：已迁 %d 项，仍在私有目录 %s\n"
+            "    下一步：到「设置」页点「运行自检」或重启 Web，会自动补迁"
+            % (len(linked), ", ".join(plain)))
+    elif plain:
+        add("FAIL", "对话数据存放位置",
+            "仍在 App 私有目录（%s）——**卸载或换机重装会全部丢失**\n"
+            "    原因：缺少「所有文件访问」权限，写不进 内部存储/Documents/dshdata\n"
+            "    下一步：系统设置 → 应用 → DSHA → 权限 → 所有文件访问，打开后回到 App"
+            % ", ".join(plain))
+    else:
+        add("SKIP", "对话数据存放位置", "还没有会话数据")
+
+
 def check_activity():
     """最近的自动动作 —— 这一项存在的唯一理由是「让用户看见 App 做了什么」。
 
@@ -983,6 +1021,7 @@ def main():
         (check_web_auth, ()),
         (check_dsh_dupes, ()),
         (check_sessions, ()),
+        (check_public_data, ()),
         (check_activity, ()),
         (check_runtime, ()),
         (check_sanitize_log, ()),

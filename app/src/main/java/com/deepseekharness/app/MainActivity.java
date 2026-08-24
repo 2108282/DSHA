@@ -239,6 +239,72 @@ public class MainActivity extends AppCompatActivity {
         }
         current = this;
         TaskNotifier.appInForeground = true;
+        // 从「所有文件访问」设置页返回时能立刻发现已授予 → 补跑一次数据迁移
+        maybeRequestAllFilesAccess();
+    }
+
+    /** 申请「所有文件访问」（All Files Access）。
+     *
+     *  为什么需要：会话/设置/附件要迁到 /sdcard/Documents/dshdata 才能做到
+     *  **卸载重装不丢**。而 Android 11+ 下没有这个权限就写不进公开目录，
+     *  迁移脚本只会静默跳过 —— 用户以为数据安全了，其实还在私有目录里，
+     *  一卸载全没。
+     *
+     *  这是特殊权限，不能用运行时弹窗授予，必须跳系统设置页由用户手动开。
+     *  所以：说清理由 → 跳设置页 → 回来后自动补跑迁移。
+     *  用户拒绝也不纠缠（只问一次），但自检里会持续提示风险。 */
+    private void maybeRequestAllFilesAccess() {
+        try {
+            if (Build.VERSION.SDK_INT < 30) return;      // 老系统本来就能直写公共目录
+            SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
+            if (android.os.Environment.isExternalStorageManager()) {
+                // 已授予：如果之前因为没权限跳过过迁移，这里补跑一次（幂等、失败无感）
+                if (!prefs.getBoolean("public_data_migrated", false)) {
+                    prefs.edit().putBoolean("public_data_migrated", true).apply();
+                    final HarnessController hc = HarnessController.get(this);
+                    new Thread(() -> {
+                        try {
+                            hc.migratePublicDataNow();
+                        } catch (Throwable ignored) {
+                        }
+                    }, "dsha-migrate-after-grant").start();
+                }
+                return;
+            }
+            // 未授予且已经问过 → 不再打扰（自检里仍会报「卸载会丢数据」）
+            if (prefs.getBoolean("asked_all_files", false)) return;
+            // 正在结束的 Activity 上 show() 会抛 BadTokenException（本项目踩过一次）
+            if (isFinishing() || isDestroyed()) return;
+            prefs.edit().putBoolean("asked_all_files", true).apply();
+            new androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("让对话数据卸载重装不丢")
+                    .setMessage("需要「所有文件访问」权限，把会话、设置、附件存到\n"
+                            + "内部存储/Documents/dshdata\n\n"
+                            + "· 卸载 App 或换机重装后数据仍在\n"
+                            + "· 文件管理器里可以直接看到和备份\n"
+                            + "· API Key 不会存进去（仍留在 App 私有区并加密）\n\n"
+                            + "不开也能正常使用，但数据只存在 App 私有目录里，卸载即丢失。")
+                    .setPositiveButton("去开启", (d, w) -> {
+                        try {
+                            Intent i = new Intent(
+                                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                            i.setData(Uri.parse("package:" + getPackageName()));
+                            startActivity(i);
+                        } catch (Throwable e) {
+                            // 个别 ROM 没有这个页面：退到应用详情页，用户仍能找到开关
+                            try {
+                                Intent i2 = new Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                                i2.setData(Uri.parse("package:" + getPackageName()));
+                                startActivity(i2);
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    })
+                    .setNegativeButton("以后再说", null)
+                    .show();
+        } catch (Throwable ignored) {
+        }
     }
 
     @Override
