@@ -813,6 +813,19 @@ public class HarnessController {
         return false;
     }
 
+    /** 读 rootfs 内某个文件的尾部若干字符（读不到返回 null）。 */
+    private String tailOfFile(String relPath, int maxChars) {
+        try {
+            java.io.File f = new java.io.File(proot.getRootfsDir(), relPath);
+            if (!f.isFile()) return null;
+            byte[] all = java.nio.file.Files.readAllBytes(f.toPath());
+            String t = new String(all, StandardCharsets.UTF_8).trim();
+            return t.length() <= maxChars ? t : t.substring(t.length() - maxChars);
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
     /** 按自检结论触发可以自动完成的修复。只写文件、不碰进程。
      *  返回追加到自检报告末尾的说明（没修任何东西时返回空串）。 */
     private String autoFixFromSelfTest(String out) {
@@ -827,7 +840,16 @@ public class HarnessController {
                 if (fixed > 0) {
                     sb.append("· 已安置并注册 ").append(fixed).append(" 个内置插件\n");
                 } else {
-                    sb.append("· 内置插件仍未修好，原因见 .dsh/repair-builtin.log\n");
+                    // 把原因直接摆在报告里 —— 让用户去 cat 日志文件不叫「修好」，
+                    // 这轮就是因为原因只写进 log，来回试了六版才发现是路径差一。
+                    String why = tailOfFile("root/.dsh/repair-builtin.log", 600);
+                    sb.append("· 内置插件仍未修好");
+                    if (why != null && !why.isEmpty()) {
+                        sb.append("，最近一次的原因：\n    ").append(why.replace("\n", "\n    "));
+                    } else {
+                        sb.append("（日志也是空的，说明压根没走到安置逻辑）");
+                    }
+                    sb.append('\n');
                 }
             }
             if (out.contains("❌ write 补丁") || out.contains("❌ 会话发布补丁")) {
@@ -1036,12 +1058,19 @@ public class HarnessController {
                 for (int i = 0; i < bundles.length(); i++) {
                     if (name.equals(bundles.optString(i, "").trim())) { inBundles = true; break; }
                 }
-                boolean dirOk = new java.io.File(proot.getRootfsDir(), "root" + real.substring(4)).isDirectory();
+                // "/root" 长度是 5。写 4 会拼出 roott/dsha-… 这个不存在的路径，
+                // dirOk 恒为 false，整个插件直接跳过 —— 后面建链接、写 bundles、
+                // 写 dependencies 一步都不会执行。这道门一直关着，所以此前六种
+                // 安置做法（符号链接 / proot ln / proot cp / Java 复制 / assets 直写 /
+                // 四路 fallback）全都压根没被走到，每次都报「修回 0 个」。
+                boolean dirOk = new java.io.File(proot.getRootfsDir(),
+                        "root" + real.substring(5)).isDirectory();
                 // 实体目录不见了（被清理/从没装成）→ 先把 assets 里的补出来再谈注册，
                 // 否则这里只会一路 return，用户看到的就是「插件没自动安装」
                 if (!dirOk && "dsh-device-shell-guide".equals(name)) {
                     ensureDeviceShellGuide();
-                    dirOk = new java.io.File(proot.getRootfsDir(), "root" + real.substring(4)).isDirectory();
+                    dirOk = new java.io.File(proot.getRootfsDir(),
+                            "root" + real.substring(5)).isDirectory();
                 }
                 // 用户主动禁用（.disabled 存在）→ 跳过补回（尊重用户）。
                 // 但要区分两种 .disabled：
