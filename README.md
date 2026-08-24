@@ -6,30 +6,38 @@
 
 内置容器运行时（proroot / proot 可切换）+ Ubuntu rootfs，一键（或分步）安装 deepseek-harness，内嵌 WebView 直接使用 Web UI。
 
-> ### 🚀 v1.1.6：默认启用 proroot 运行时 —— 实测启动快 5~6 倍
+> ### 🔐 v1.1.7：对话数据不再随卸载消失
+>
+> 会话、设置、附件迁到 **内部存储/Documents/dshdata**，原位留私有符号链接。
+> 文件管理器里直接可见、可自行备份，**卸载 App 或换机重装后数据仍在**。
+>
+> 进入 App 会自动申请「所有文件访问」权限并说明用途；授权后立刻迁移，
+> 不必等下次启动。自检新增「对话数据存放位置」一项，明确告诉你现在到底会不会丢 ——
+> 之前这个迁移在缺权限时会**静默跳过**，用户以为安全了其实没有。
+>
+> 刻意留在私有目录的东西：`DSH_HOME` 本体（dsh 维护的 `node_modules` 符号链接，
+> 公开 FUSE 禁止软链）、`.credentials.yaml`（公开区强制 660，且密钥会暴露给其他 App）。
+> **API Key 改用 Android Keystore 加密**（AES/CBC，密钥不出 Keystore），
+> 备份里的那份也加密后再写 —— 此前是明文进 `Download/DSHA` 公共目录。
+>
+> 同版还修了两个影响日常使用的问题：
+>
+> | 问题 | 根因 |
+> |---|---|
+> | 每条 agent 命令都弹危险确认 | 守卫把我们自己注入的 `source …dsh-guard.sh 2>/dev/null;` 前缀当成用户命令，其中的 `>` 让「覆盖关键路径」判据恒真 |
+> | 深色模式按钮浅蓝底浅字看不清 | Material3 把 `<Button>` 膨胀成 MaterialButton 并用 `colorPrimary` 填充，**忽略 `android:background`**，对比度只有约 1.3:1 |
+>
+> ### 🚀 v1.1.6 起：默认 proroot 运行时，启动快 5~6 倍
 >
 > 传统 proot 基于 ptrace，**每个系统调用要两次上下文切换**；
 > [proroot](https://github.com/coderredlab/proroot) 改用 LD_PRELOAD + 二进制补丁做
-> 进程内路径翻译，零 ptrace 开销。
+> 进程内路径翻译，零 ptrace 开销。装完即生效，想用回 proot 可在「配置」页关掉。
+> 真机实测（vivo V2352A / Android 14）关键项合计 **+58%**，
+> 其中 tar 打包 +94%（备份走这条）、stat 密集 +82%（node 模块解析）。
 >
-> **本版起默认启用，装完即生效**，不需要任何设置。
-> 想用回传统 proot：「配置」页取消勾选「proroot 运行时」→ 保存 → 重启 Web。
-> 真机实测（vivo V2352A / Android 14）：
->
-> | 场景 | proot | proroot | 提速 |
-> |---|---|---|---|
-> | tar 打包（**备份走这条**） | 608ms | 38ms | **+94%** |
-> | stat 密集（node 模块解析） | 635ms | 113ms | **+82%** |
-> | 文件读写 | 448ms | 118ms | +74% |
-> | 目录遍历 | 89ms | 30ms | +66% |
-> | 容器冷启动 | 45ms | 19ms | +58% |
-> | 进程创建 | 202ms | 217ms | -7% |
-> | **关键项合计** | 1594ms | 677ms | **+58%** |
->
-> **兜底机制**：运行时文件缺失会自动降回 proot；连续 3 次启动失败强制切回并告知；
-> 装机路径（解压、安装六步）始终用 proot。所以最坏情况只是回到原来的速度，
-> 不会让环境不可用 —— 这也是敢把它设为默认的前提。
-> proroot 是闭源二进制，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+> **兜底机制**：运行时文件缺失自动降回 proot；连续 3 次启动失败强制切回并告知；
+> 装机路径始终用 proot。最坏情况只是回到原来的速度，不会让环境不可用 ——
+> 这也是敢把闭源组件设为默认的前提。见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -40,10 +48,11 @@
 | **装完即用** | 内置 Ubuntu 24.04 + Node 24 + dsh（默认 rc.8），首启解压即可用 |
 | **ADB 无线通道** | 免 Shizuku 直连设备：配对一次永久授权，看门狗自动重连、开机自启、永不掉线 |
 | **设备 Shell 引导** | 内置插件让 agent 主动用 `/root/dsh-bin/adb-shell` 操作手机（查应用/启动应用/抓日志…） |
-| **自动备份体系** | 每 N 次启动/升级自动备份到 Download/DSHA，重解压数据保护，卸载重装不丢 |
+| **数据不丢** | 会话/设置/附件存在 Documents/dshdata（文件管理器可见），卸载重装仍在；另有每 N 次启动/升级自动备份到 Download/DSHA |
+| **密钥加密** | API Key 走 Android Keystore（AES/CBC，密钥不出 Keystore），备份里的那份也是密文 |
 | **自愈能力** | busy 超时释放 / Web 自动重试 / 崩溃恢复提示 / 内置插件防消失 / 检测 dsh 新版自动适配 |
 | **多源加速** | npm/rootfs/Node 全部走国内镜像（npmmirror/清华/华为云…），多级回退 |
-| **插件市场** | 过滤非插件/仅兼容筛选/排序优化，内置插件可管理 |
+| **插件市场** | 按分类/兼容性/已安装筛选，排序，内置插件可管理；安装前预检并自动改用 npm 包（识别 `workspace:*`、`prepare` 脚本等「只能从 registry 装」的情形） |
 | **免 ROOT 文件共享** | 集成 MT 管理器官方文件提供器，直接浏览/编辑 App 私有数据 |
 | **WebUI 移动端适配** | 单栏/抽屉/汉堡/全屏设置，移动端开箱即用 |
 | **双容器运行时** | proroot（**默认**，零 ptrace，实测启动快 5~6 倍）/ proot（传统，稳定），配置页一键切换，失败自动回退 |
