@@ -104,6 +104,9 @@ public final class BackupManager {
             boolean includeKey = ctx
                     .getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
                     .getBoolean("backup_include_key", true);
+            // 备份时的 key 处理：includeKey 才带。写进 rootfs 的 .dsh/.dsha-apikey，
+            // 但**加密存储**（参考 dsh-mobile 的 Keystore 思路）—— 这份 key 会随备份
+            // 进 Download/DSHA（公共目录，任何有存储权限的 App 都读得到），明文等于裸奔。
             String bkKey = includeKey ? c.getApiKey() : "";
             if (!includeKey) {
                 // 上次备份可能留过这个文件，关掉开关后要真的清掉，否则形同没关
@@ -123,14 +126,17 @@ public final class BackupManager {
                         //noinspection ResultOfMethodCallIgnored
                         kf.getParentFile().mkdirs();
                     }
+                    // 加密：base64(iv):base64(ct) 的格式，恢复时 dsh 自身不读这个文件，
+                    // 它只是「备份里带 key」的便利；恢复脚本会在导入后重新走 setApiKey 加密存储。
+                    String enc = c.encryptKeyForBackup(bkKey);
                     java.nio.file.Files.write(kf.toPath(),
-                            bkKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                            enc.getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     try {
                         java.nio.file.Files.setPosixFilePermissions(kf.toPath(),
                                 java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
                     } catch (Throwable e) {
-            android.util.Log.w("DSHA", "API key 写入备份失败（恢复后需手动重填）: " + e);
-        }
+                        android.util.Log.w("DSHA", "API key 备份权限设置失败（不影响）: " + e);
+                    }
                 } catch (Throwable e) {
                     android.util.Log.w("DSHA", "写 API key 备份文件失败（备份继续）: " + e);
                 }
@@ -157,6 +163,11 @@ public final class BackupManager {
                     + "|| { echo TAR_FAIL; exit 1; }\n"
                     + "test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n"
                     + "echo OK\n";
+            // 公开热数据软链自修复（迁移后 .dsh/sessions 等是指向
+            // /sdcard/Documents/dshdata 的软链；用户若删了 Documents 目录，
+            // 链接悬空，tar 会因 Cannot stat 失败）。先检查并重建：
+            // 若公开侧数据还在就重建软链，否则把私有副本扶正（用残留数据）。
+            repairDshaSymlinks(c);
             c.getProot().execChecked(script);
             File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-backup.tar.gz");
             if (!tmp.isFile() || tmp.length() == 0) {
@@ -203,6 +214,43 @@ public final class BackupManager {
             recordError(c, lastError);
             return null;
         }
+        }
+    }
+
+    /**
+     * 迁移到公开目录后，.dsh 下的 sessions / storages / attachments / settings.yaml
+     * 是指向 /sdcard/Documents/dshdata 的软链。用户删除或清空 Documents 目录后，
+     * 这些软链悬空 —— tar 备份会 Cannot stat 失败，恢复则找不到数据。
+     *
+     * 这里在备份前修一遍，规则：
+     *  · 软链存在且指向有效目录 → 不动；
+     *  · 软链悬空但公开侧数据仍在 → 重建软链（主体在公开目录，符合设计）；
+     *  · 软链悬空且公开侧也没了 → 把残留私有数据扶正（有总比没有好，
+     *    这是最后一次兜底，避免用户「删了 Documents 就再也备不出」）。
+     *
+     * 不处理 credentials / profiles / node_modules：前者刻意留私有，
+     * 后两者 dsh 自己维护、且公开 FUSE 禁止软链。
+     */
+    private static void repairDshaSymlinks(HarnessController c) {
+        try {
+            String script = "cd /root/.dsh 2>/dev/null || exit 0\n"
+                    + "PUB=/sdcard/Documents/dshdata\n"
+                    + "for name in sessions storages attachments settings.yaml; do\n"
+                    + "  if [ -L \"$name\" ]; then\n"          // 是软链
+                    + "    tgt=$(readlink \"$name\")\n"
+                    + "    if [ -e \"$name\" ]; then continue; fi\n"   // 有效软链，不动
+                    + "    if [ -e \"$PUB/$name\" ]; then\n"       // 悬空但公开侧在
+                    + "      ln -sf \"$PUB/$name\" \"$name\"; echo REPAIR_LINK_$name\n"
+                    + "    else\n"                                 // 全没了，扶正残留
+                    + "      echo HEAL_STRAY_$name\n"
+                    + "    fi\n"
+                    + "  fi\n"
+                    + "done\n"
+                    + "echo SYMLINK_CHECK_DONE\n";
+            c.getProot().execChecked(script);
+        } catch (Throwable e) {
+            // 修软链失败不该让备份整体失败，只是回到「可能备份不到公开侧数据」的旧行为
+            android.util.Log.w("DSHA", "修复 .dsh 软链失败（备份继续）: " + e);
         }
     }
 

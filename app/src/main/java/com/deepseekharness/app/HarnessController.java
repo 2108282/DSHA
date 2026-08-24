@@ -560,8 +560,105 @@ public class HarnessController {
     }
 
     // ================= 配置读写 =================
-    public String getApiKey() { return prefs.getString("api_key", ""); }
-    public void setApiKey(String v) { prefs.edit().putString("api_key", v).apply(); }
+    /** API Key 的本地存储封装。
+     *
+     *  之前是明文存 SharedPreferences（"api_key"），然后明文写进 rootfs 的
+     *  .dsh/.dsha-apikey、再随备份进 Download/DSHA（公共目录，任何有存储权限的
+     *  App 都读得到）—— 这是个真实的泄露面。
+     *
+     *  参考 dsh-mobile（Apache-2.0）的做法：密钥经 Android Keystore 加密。
+     *  这里用 Keystore 里的 AES 密钥 + 随机 IV 做 AES/CBC/PKCS5，密钥不出 Keystore。
+     *
+     *  兼容迁移：旧版明文 "api_key" 仍在时，第一次读取会自动加密并清掉明文。
+     *  解密失败（如用户清除 App 数据导致 Keystore 密钥丢失）回退空串，
+     *  不崩、不卡死启动。 */
+    private static final String KS_ALIAS = "dsha_apikey";
+    private static final Object ksLock = new Object();
+
+    private javax.crypto.SecretKey getOrCreateKey() throws Exception {
+        synchronized (ksLock) {
+            java.security.KeyStore ks = java.security.KeyStore.getInstance("AndroidKeyStore");
+            ks.load(null);
+            if (ks.containsAlias(KS_ALIAS)) {
+                return (javax.crypto.SecretKey) ks.getKey(KS_ALIAS, null);
+            }
+            android.security.keystore.KeyGenParameterSpec spec =
+                    new android.security.keystore.KeyGenParameterSpec.Builder(
+                            KS_ALIAS,
+                            android.security.keystore.KeyProperties.PURPOSE_ENCRYPT
+                                    | android.security.keystore.KeyProperties.PURPOSE_DECRYPT)
+                            .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_CBC)
+                            .setEncryptionPaddings(
+                                    android.security.keystore.KeyProperties.ENCRYPTION_PADDING_PKCS7)
+                            .setUserAuthenticationRequired(false)
+                            .build();
+            javax.crypto.KeyGenerator kg = javax.crypto.KeyGenerator.getInstance(
+                    android.security.keystore.KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+            kg.init(spec);
+            return kg.generateKey();
+        }
+    }
+
+    private String encryptKey(String plain) {
+        try {
+            javax.crypto.SecretKey key = getOrCreateKey();
+            javax.crypto.Cipher c = javax.crypto.Cipher.getInstance("AES/CBC/PKCS7Padding");
+            c.init(javax.crypto.Cipher.ENCRYPT_MODE, key);
+            byte[] iv = c.getIV();
+            byte[] enc = c.doFinal(plain.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            // 存成 base64(iv) : base64(ct)
+            return android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP)
+                    + ":" + android.util.Base64.encodeToString(enc, android.util.Base64.NO_WRAP);
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "加密 API key 失败，回落明文: " + e);
+            return "PLAIN:" + plain;       // 加密失败不阻断主流程，但标记明文
+        }
+    }
+
+    private String decryptKey(String stored) {
+        if (stored == null || stored.isEmpty()) return "";
+        if (stored.startsWith("PLAIN:")) return stored.substring(6);
+        try {
+            int sep = stored.indexOf(':');
+            byte[] iv = android.util.Base64.decode(stored.substring(0, sep), android.util.Base64.NO_WRAP);
+            byte[] enc = android.util.Base64.decode(stored.substring(sep + 1), android.util.Base64.NO_WRAP);
+            javax.crypto.SecretKey key = getOrCreateKey();
+            javax.crypto.Cipher c = javax.crypto.Cipher.getInstance("AES/CBC/PKCS7Padding");
+            c.init(javax.crypto.Cipher.DECRYPT_MODE, key, new javax.crypto.spec.IvParameterSpec(iv));
+            byte[] pt = c.doFinal(enc);
+            return new String(pt, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "解密 API key 失败（Keystore 密钥可能已丢）: " + e);
+            return "";
+        }
+    }
+
+    public String getApiKey() {
+        String stored = prefs.getString("api_key_enc", null);
+        if (stored == null) {
+            // 兼容旧版明文迁移
+            String legacy = prefs.getString("api_key", "");
+            if (!legacy.isEmpty()) {
+                prefs.edit().putString("api_key_enc", encryptKey(legacy)).apply();
+                prefs.edit().remove("api_key").apply();
+            }
+            return legacy;
+        }
+        String dec = decryptKey(stored);
+        return dec == null ? "" : dec;
+    }
+
+    public void setApiKey(String v) {
+        if (v == null) v = "";
+        prefs.edit().putString("api_key_enc", v.isEmpty() ? "" : encryptKey(v)).apply();
+        prefs.edit().remove("api_key").apply();   // 清掉任何遗留明文
+    }
+
+    /** 给备份用的加密（与本地存储同一把 Keystore 密钥，格式 base64(iv):base64(ct)）。 */
+    public String encryptKeyForBackup(String plain) {
+        return plain == null || plain.isEmpty() ? "" : encryptKey(plain);
+    }
+
 
     public String getPort() {
         // 兜底校验：空/非数字/越界全部回退默认 3080（否则 --port 后是空串导致启动失败）
@@ -2619,6 +2716,12 @@ public class HarnessController {
             ensureBuiltinBundles();
         } catch (Throwable ignored) {
         }
+        // 启动前把热数据迁移到公开目录（会话/设置/附件跨重装不丢），
+        // 幂等且安全：只迁纯文件目录、不碰 credentials、失败保留私有副本。
+        try {
+            runAssetScript("migrate-public-data.sh", "dsha-migrate-public.sh", 60_000);
+        } catch (Throwable ignored) {
+        }
         // 启动前自愈：清理无法解析的 stale bundle（防 cannot resolve profile bundle 启动崩溃）
         runAssetScript("fix-stale-bundles.sh", "dsha-fix-stale-bundles.sh", 60_000);
         // 局域网访问：deepseek-harness 官方 CLI 默认拒绝 --host 0.0.0.0，
@@ -2725,6 +2828,12 @@ public class HarnessController {
                 .getBoolean("lan_mode", false);
         // 与 startWebCommand 一致：只有补丁真的打上（lanReady=true）才用 0.0.0.0，
         // 否则看门狗重启命令带 --host 0.0.0.0 会被官方拒绝 → 重启失败
+        // 启动前把热数据迁移到公开目录（与 startWebCommand 同款钩子，
+        // 否则 HarnessService 的独立启动路径会跳过这一步）
+        try {
+            runAssetScript("migrate-public-data.sh", "dsha-migrate-public.sh", 60_000);
+        } catch (Throwable ignored) {
+        }
         boolean lanReady = lan && tryEnableLanBind();
         writeWatchdogFiles(runCoreCommand(lanReady), parsePort());
     }
@@ -4225,6 +4334,18 @@ public class HarnessController {
                 body += "\n· " + missing.size() + " 个插件正在后台补装，装好后重启 WebUI 即回到启用状态";
             }
             deleteRecursively(stage);
+            // 恢复会把整个 .dsh 换成实体目录（restore-merge.py 里 move_aside + move），
+            // 指向公开目录的软链因此丢失 —— 数据分裂成「.dsh 里的新数据」和
+            // 「Documents/dshdata 里的旧数据」，且没人指向后者。
+            // 跑一次迁移把它归位：脚本的冲突分支会保留旧公开副本为 .conflict-<时间>，
+            // 用刚恢复的数据覆盖，不会静默删任何一边。
+            try {
+                String mig = runAssetScript("migrate-public-data.sh", "dsha-migrate-public.sh", 60_000);
+                if (mig != null && mig.contains("conflict-")) {
+                    logActivity("恢复后公开数据归位：发现冲突，旧公开副本已存为 .conflict-*");
+                }
+            } catch (Throwable ignored) {
+            }
             invalidateSteps();
             return (ok ? "恢复完成" : "恢复完成（部分内容已跳过，详见下方）")
                     + (body.isEmpty() ? "" : "\n" + body)
