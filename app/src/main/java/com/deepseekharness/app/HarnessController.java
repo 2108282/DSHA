@@ -693,6 +693,140 @@ public class HarnessController {
      * 环境就绪 && web 未运行 && 用户近期未手动停止 → 后台静默 startWeb()，
      * 让用户点「启动」时基本秒开。幂等：web 已在跑/启动中自动跳过。
      */
+    /** 启动 Web 前把 profile 的 bundles 校准到「一定能启动」的状态。
+     *
+     *  为什么必须自动：发行版里绝大多数用户不会去看自检，更不会到终端敲命令。
+     *  dsh 的 resolveBundleDir 只认 profile 的 node_modules 或 dsh 安装树 ——
+     *  bundles 里只要有一个名字解析不到，启动直接抛
+     *  「cannot resolve profile bundle」退出，整个 Web 起不来，
+     *  而用户看到的只是一个白屏，没有任何线索。
+     *
+     *  三种处置：
+     *    能解析              → 留着
+     *    解析不到但实体在     → 建 node_modules 链接（修好，插件照常可用）
+     *    解析不到实体也没有   → 从 bundles 与 dependencies 摘掉（降级保命）
+     *
+     *  宁可少一个插件，也不能让用户对着起不来的 Web 干瞪眼 ——
+     *  少插件是功能缺失，起不来是完全不可用。摘掉的项会记进
+     *  .dsh/profile-sanitize.log，插件页与自检都能看到。
+     */
+    private void sanitizeProfileBundles() {
+        try {
+            java.io.File pf = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/package.json");
+            if (!pf.isFile()) return;
+            String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()),
+                    StandardCharsets.UTF_8);
+            org.json.JSONObject root;
+            try {
+                root = new org.json.JSONObject(txt);
+            } catch (Throwable bad) {
+                // package.json 本身坏了：这里不擅自重建（会丢用户的插件配置），
+                // 交给备份恢复或 dsh 自己重建，但要留下痕迹
+                android.util.Log.w("DSHA", "profile package.json 无法解析，跳过校准: " + bad);
+                return;
+            }
+            org.json.JSONObject dshObj = root.optJSONObject("dsh");
+            org.json.JSONObject profObj = dshObj == null ? null : dshObj.optJSONObject("profile");
+            org.json.JSONArray bundles = profObj == null ? null : profObj.optJSONArray("bundles");
+            if (bundles == null) return;
+            org.json.JSONObject deps = root.optJSONObject("dependencies");
+
+            // 内置插件的实体位置：解析不到时优先尝试建链接救回来
+            java.util.Map<String, String> builtinReal = new java.util.LinkedHashMap<>();
+            builtinReal.put("dsh-client-ui-mobile-adapt", "/root/dsha-mobile-adapt");
+            builtinReal.put("dsh-device-shell-guide", "/root/dsha-device-shell-guide");
+            builtinReal.put("dsh-task-notifier", "/root/dsha-task-notifier");
+
+            String[] globalRoots = {
+                    "usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules",
+                    "usr/local/lib/node_modules",
+            };
+            java.io.File nmDir = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/node_modules");
+
+            org.json.JSONArray keep = new org.json.JSONArray();
+            java.util.List<String> linked = new java.util.ArrayList<>();
+            java.util.List<String> dropped = new java.util.ArrayList<>();
+            for (int i = 0; i < bundles.length(); i++) {
+                String name = bundles.optString(i, "");
+                if (name.isEmpty()) continue;
+                if (bundleResolvable(name, nmDir, globalRoots)) {
+                    keep.put(name);
+                    continue;
+                }
+                String real = builtinReal.get(name);
+                if (real != null && new java.io.File(proot.getRootfsDir(),
+                        "root" + real.substring(5)).isDirectory()) {
+                    if (linkPlugin(name, real, nmDir)) {
+                        keep.put(name);
+                        linked.add(name);
+                        continue;
+                    }
+                }
+                // 救不回来：摘掉，让 Web 至少能起来
+                dropped.add(name);
+                if (deps != null) deps.remove(name);
+            }
+            if (dropped.isEmpty() && linked.isEmpty()) return;
+            profObj.put("bundles", keep);
+            java.nio.file.Files.write(pf.toPath(),
+                    root.toString(2).getBytes(StandardCharsets.UTF_8));
+            String rec = "== " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
+                    java.util.Locale.US).format(new java.util.Date()) + " ==\n"
+                    + (linked.isEmpty() ? "" : "补链接后保留: " + linked + "\n")
+                    + (dropped.isEmpty() ? "" : "解析不到已摘除: " + dropped
+                    + "（否则 dsh 启动会崩）\n");
+            try {
+                java.nio.file.Files.write(new java.io.File(proot.getRootfsDir(),
+                                "root/.dsh/profile-sanitize.log").toPath(),
+                        rec.getBytes(StandardCharsets.UTF_8),
+                        java.nio.file.StandardOpenOption.CREATE,
+                        java.nio.file.StandardOpenOption.APPEND);
+            } catch (Throwable ignored) {
+            }
+            android.util.Log.w("DSHA", "profile bundles 校准: " + rec.replace("\n", " "));
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "profile bundles 校准失败: " + e);
+        }
+    }
+
+    /** 判据必须与 dsh 的 resolveBundleDir 一致：只看 node_modules 与 dsh 安装树，
+     *  不看 dependencies 里的 link: 声明（那是给 pnpm 建链接用的，不是运行时依据）。 */
+    private boolean bundleResolvable(String name, java.io.File nmDir, String[] globalRoots) {
+        if (new java.io.File(new java.io.File(nmDir, name), "package.json").isFile()) return true;
+        for (String g : globalRoots) {
+            if (new java.io.File(new java.io.File(proot.getRootfsDir(), g + "/" + name),
+                    "package.json").isFile()) return true;
+        }
+        return false;
+    }
+
+    /** 建 node_modules 链接。悬空或指错地方的先删掉重建；成功才返回 true。 */
+    private boolean linkPlugin(String name, String real, java.io.File nmDir) {
+        try {
+            java.nio.file.Path lp = new java.io.File(nmDir, name).toPath();
+            if (java.nio.file.Files.exists(lp, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                java.nio.file.Path cur = java.nio.file.Files.isSymbolicLink(lp)
+                        ? java.nio.file.Files.readSymbolicLink(lp) : null;
+                if (cur != null && real.equals(cur.toString())
+                        && new java.io.File(new java.io.File(nmDir, name), "package.json").isFile()) {
+                    return true;
+                }
+                if (java.nio.file.Files.isDirectory(lp, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    return false;   // 真目录，不敢删（可能是用户装的实体）
+                }
+                java.nio.file.Files.delete(lp);
+            }
+            java.nio.file.Files.createDirectories(lp.getParent());
+            java.nio.file.Files.createSymbolicLink(lp, java.nio.file.Paths.get(real));
+            return new java.io.File(new java.io.File(nmDir, name), "package.json").isFile();
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "建 " + name + " 链接失败: " + e);
+            return false;
+        }
+    }
+
     /** 确保配置自愈脚本已写入 rootfs（启动前把超限 timeoutMs 钳回合法值，防 ValidationError 崩溃 WebUI） */
     /** 每次启动前校验内置 bundle（mobile-adapt / device-shell-guide）：
      *  若被 dsh plugin reconcile 清掉/链接丢失，自动补回注册（幂等，秒级）。
@@ -2156,6 +2290,9 @@ public class HarnessController {
         // 启动前自愈：write 工具新建文件变悬空链接（proot l2s 与 dsh link 发布冲突，幂等）
         try {
             ensureFsWritePatch();
+            // 每次启动都把 bundles 校准一遍：解析不到的先试着补链接，补不上就摘掉。
+            // 这一步必须在 dsh 起来之前做完 —— 它一旦读到解析不到的 bundle 就直接退出。
+            sanitizeProfileBundles();
         } catch (Throwable ignored) {
         }
         // 启动前自愈：内置插件（mobile-adapt/device-shell-guide）注册校验，

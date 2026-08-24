@@ -17,6 +17,7 @@ import time
 
 # 允许用环境变量指向别的 dsh 目录：这样才能拿损坏的 profile 喂给自检验证它的判断，
 # 否则任何测试都会读到真实环境的健康数据，「自检会不会误判」根本没法验。
+SELFTEST_VERSION = "13"   # 报问题时对账用：能分清「提示没更新」和「走了别的分支」
 DSH_HOME = os.environ.get("DSHA_DSH_HOME", "/root/.dsh")
 SESSIONS = DSH_HOME + "/sessions"
 GUIDE_DIR = "/root/dsha-device-shell-guide"
@@ -31,11 +32,54 @@ SESSION_PKG_CANDIDATES = (
 )
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
+# 每条 FAIL 都必须告诉用户下一步做什么。分散写在各处必然有漏 ——
+# 这轮扫描发现 11 条 FAIL 只报告问题、不给出路。
+#
+# 措辞原则：修复本身是**自动**的（绝大多数在启动 Web 时完成），
+# 所以说「点启动页的重启」而不是「重开 App 会自动修」——
+# 后者用户既不知道要等多久，也无法确认到底做了没有。
+NEXT_STEP = {
+    "运行环境": "到「安装」页重跑步骤③（Node）和步骤⑤（dsh）",
+    "3090 桥 token": "到「配置」页把「设备桥」关掉再打开",
+    "ADB 只读白名单": "到「安装」页重跑步骤⑥（更新 ADB 脚本）",
+    "设备引导插件版本": "点启动页的「重启」——启动时会重新注入新版实体",
+    "l2s 悬空链": "到「配置」页点一次备份即会自动清理（清理是备份流程的一部分）",
+    "Web 服务鉴权": "点启动页的「重启」——鉴权补丁是启动时打的",
+    "会话完整性": "点启动页的「重启」——会话自愈会补 id，原文件留 .pre-fix 备份",
+    "会话可读性": "点启动页的「重启」——自愈会修好或隔离损坏会话",
+    "profile bundles": "点启动页的「重启」——启动前会自动补链接、摘掉解析不到的项",
+    "备份内容": "到「配置」页重新备份一次",
+    "设备引导插件未注册": "点启动页的「重启」——启动前会自动补链接并注册",
+    "内置插件修复记录": "点启动页的「重启」触发一次完整校准",
+    "profile 文件损坏": "到「配置」页恢复最近一次备份（这个自动修不了）",
+    "Web 启动失败": "点启动页的「重启」——启动前会自动校准 profile",
+    "上次备份失败": "到「配置」页重新点一次备份",
+    "3090 桥启动": "到「配置」页把「设备桥」关掉再打开",
+    "3090 桥响应": "到「配置」页重开「设备桥」；仍异常请贴到 GitHub issue",
+    "3090 桥鉴权": "点启动页的「重启」",
+    "容器环境": "到「安装」页重跑步骤①（解压环境）",
+    "基础命令": "到「安装」页重跑步骤②（基础工具）",
+    "App 层接口": "到「配置」页把「设备桥」关掉再打开",
+    "ADB 保活": "打开手机「开发者选项 → 无线调试」，保活会自动重连",
+    "电池优化白名单": "到「配置」页点「申请电池优化白名单」",
+    "write 补丁": "点启动页的「重启」——补丁是启动时打的",
+    "会话发布补丁": "点启动页的「重启」——补丁是启动时打的",
+    "插件副本检查": "点启动页的「重启」——启动时会自动改成符号链接",
+    "危险命令守卫": "点启动页的「重启」——守卫缺失时会自动补装",
+    "设备引导插件": "点启动页的「重启」",
+}
+
 rows = []          # (状态, 标题, 说明)
 counts = {"PASS": 0, "WARN": 0, "FAIL": 0, "SKIP": 0}
 
 
 def add(state, title, detail=""):
+    # 统一补「下一步」：FAIL 只报问题不给出路，用户只能干瞪眼或者乱试。
+    # 放在这里而不是各处调用点 —— 分散写必然有漏（这轮扫出 11 条没写）。
+    if state == "FAIL":
+        step = NEXT_STEP.get(title)
+        if step and step not in (detail or ""):
+            detail = (detail or "") + "\n    → " + step
     rows.append((state, title, detail))
     counts[state] = counts.get(state, 0) + 1
 
@@ -199,7 +243,8 @@ def check_bridge():
         status = read(DSH_HOME + "/.bridge_status").strip()
         if status.startswith("fail"):
             # App 侧记下了绑定失败的真实原因（端口被占等），直接摊开说
-            add("FAIL", "3090 桥启动", status[5:].strip() or "绑定失败（原因未记录）")
+            add("FAIL", "3090 桥启动", (status[5:].strip() or "绑定失败（原因未记录）")
+            + "\n    到「配置」页把「设备桥」关掉再打开（该服务随 App 启动）")
         elif status == "stopped":
             add("SKIP" if not adb_on else "FAIL", "3090 桥",
                 "桥已停止（设备桥服务没在跑）—— 重开 App，或在「配置」页勾选 ADB 设备通道并保存")
@@ -210,7 +255,7 @@ def check_bridge():
         return
     body = bodies[0]
     if '"result"' not in body:
-        add("FAIL", "3090 桥响应", "响应不含 result 字段：%s" % body[:80])
+        add("FAIL", "3090 桥响应", "响应不含 result 字段：%s\n    到「配置」页重开「设备桥」；若仍异常请把这段贴到 GitHub issue" % body[:80])
         return
     if "[UNAUTHORIZED]" in body:
         add("FAIL", "3090 桥鉴权", "token 不匹配 —— 删掉 .bridge_token 后重开 App 让它重签")
@@ -390,7 +435,7 @@ def check_guide(want_ver):
                         "重开 App 与重跑步骤⑥都不会补回用户主动禁用的插件" % mark)
         else:
             hint = "重开 App 会自动补齐（补不上就重跑步骤⑥）"
-        add("FAIL", "设备引导插件未注册", "v%s 实体在，但 %s —— %s" % (ver, why, hint))
+        add("FAIL", "设备引导插件未注册", "v%s 实体在，但 %s —— %s\n    修复是自动的：启动 Web 时会补链接并注册。现在就想修好 → 点启动页的「重启」" % (ver, why, hint))
     else:
         add("PASS", "设备引导插件", "v%s，已注册进 profile，注入消息带 id" % ver)
 
@@ -644,7 +689,7 @@ def check_sessions():
                 if isinstance(m, dict) and not m.get("id"):
                     missing_id += 1
     if bad:
-        add("FAIL", "会话可读性", "解码失败：%s —— 启动时的会话自愈会尝试修复/隔离" % "、".join(bad[:3]))
+        add("FAIL", "会话可读性", "解码失败：%s\n    修复是自动的：启动 Web 时会修好或隔离损坏的会话，原文件留 .pre-fix 备份。现在就想修 → 点启动页的「重启」" % "、".join(bad[:3]))
     elif missing_id:
         add("FAIL", "会话完整性", "抽查发现 %d 条消息缺 id（历史遗留）—— 重开 App 让自愈修复" % missing_id)
     else:
@@ -653,6 +698,106 @@ def check_sessions():
 
 
 # ===================== 7. 内置插件可解析 =====================
+def check_sanitize_log():
+    """启动前 profile 校准的结果。
+
+    校准会做两件用户看不见的事：给解析不到的内置插件补 node_modules 链接，
+    以及把仍然解析不到的项从 bundles 摘掉（否则 dsh 启动直接崩）。
+    摘掉意味着某个插件不再生效 —— 这必须让用户知道，否则他只会觉得
+    「装了插件却没反应」，永远查不到是启动时被摘了。
+    """
+    path = os.path.join(DSH_HOME, "profile-sanitize.log")
+    if not os.path.isfile(path):
+        add("SKIP", "profile 校准记录", "还没有记录（bundles 一直是健康的）")
+        return
+    txt = read(path, 20000).strip()
+    blocks = [b for b in txt.split("== ") if b.strip()]
+    if not blocks:
+        add("SKIP", "profile 校准记录", "记录是空的")
+        return
+    last = blocks[-1].strip()
+    dropped = [ln for ln in last.split("\n") if "已摘除" in ln]
+    linked = [ln for ln in last.split("\n") if "补链接" in ln]
+    if dropped:
+        add("WARN", "profile 校准记录",
+            "最近一次启动摘掉了解析不到的 bundle：%s\n"
+            "    被摘的插件不会生效。到「市场」重装即可恢复；"
+            "内置插件会在下次启动自动补链接" % dropped[0].split(":", 1)[-1].strip())
+    elif linked:
+        add("PASS", "profile 校准记录",
+            "最近一次启动补好了链接：%s" % linked[0].split(":", 1)[-1].strip())
+    else:
+        add("SKIP", "profile 校准记录", "最近一次没有需要处理的项")
+
+
+def check_web_boot():
+    """dsh 最近一次启动有没有致命错误 —— 这是整份自检里最该先看的一项。
+
+    前面十几项可以全绿，而 dsh 根本起不来。用户看到「16 通过 / 0 失败」
+    然后发现 Web 白屏，第一反应是自检没用 —— 而且他会拿着这份报告去查
+    完全错误的方向（实际发生过：bundles 报「全部可解析」，dsh 那边正抛
+    cannot resolve profile bundle）。
+
+    判据分两层：日志里的致命错误（说明启动过但崩了）+ 端口是否在听（硬证据）。
+    """
+    log = "/root/dsh-web.log"
+    if not os.path.isfile(log):
+        add("SKIP", "Web 启动状态", "还没有启动日志（没启动过 Web）")
+        return
+    _p = arg("web-port")
+    port = int(_p) if (_p and _p.isdigit()) else 3080
+    tail = read(log, 400000)[-12000:]
+    fatal = (
+        ("cannot resolve profile bundle",
+         "profile 里注册了解析不到的 bundle —— 见上面「profile bundles」那项，"
+         "打开一次「插件」页会自动补链接"),
+        ("--expose-internals",
+         "某个插件需要 node --expose-internals —— 启动时的 profile 自愈会定向禁用它"),
+        ("EADDRINUSE",
+         "端口被占用 —— 点「重启」会先深杀残留进程"),
+        ("Cannot find module",
+         "依赖缺失 —— 到「安装」页重跑步骤⑤，或在「插件」页重装出问题的插件"),
+        ("ERR_MODULE_NOT_FOUND",
+         "模块解析失败 —— 同上，多为插件装了一半"),
+        ("Invalid or unexpected token",
+         "某个 js 文件损坏（下载中断多见）—— 重跑步骤⑤覆盖安装"),
+    )
+    hit = None
+    for pat, why in fatal:
+        if pat in tail:
+            hit = (pat, why)
+            break
+    port_up = False
+    try:
+        import socket
+        for host in ("127.0.0.1", "::1"):
+            try:
+                fam = socket.AF_INET6 if ":" in host else socket.AF_INET
+                sk = socket.socket(fam, socket.SOCK_STREAM)
+                sk.settimeout(1.5)
+                if sk.connect_ex((host, port)) == 0:
+                    port_up = True
+                sk.close()
+            except Exception:
+                pass
+            if port_up:
+                break
+    except Exception:
+        pass
+    if port_up and hit:
+        add("WARN", "Web 启动状态",
+            "端口 %d 在听（现在能用），但日志里有过 %s —— %s" % (port, hit[0], hit[1]))
+    elif port_up:
+        add("PASS", "Web 启动状态", "端口 %d 在听，日志里没有致命错误" % port)
+    elif hit:
+        add("FAIL", "Web 启动失败",
+            "%s\n    %s\n    大多数情况点启动页的「重启」即可 —— "
+            "启动前会自动校准 profile、补链接、摘掉解析不到的项" % (hit[0], hit[1]))
+    else:
+        add("SKIP", "Web 启动状态",
+            "端口 %d 没在听，日志里也没有致命错误 —— 可能只是还没启动" % port)
+
+
 def check_bundles():
     prof = os.path.join(DSH_HOME, "profiles", "web", "package.json")
     if not os.path.isfile(prof):
@@ -670,17 +815,30 @@ def check_bundles():
                 "/usr/local/lib/node_modules")
     missing = []
     for b in bundles:
-        spec = deps.get(b, "")
-        p = spec[5:] if isinstance(spec, str) and spec.startswith(("link:", "file:")) else None
-        if p and os.path.isfile(os.path.join(p, "package.json")):
-            continue
+        # 判据必须和 dsh 的 resolveBundleDir 一致：它只从 profile 的 node_modules
+        # 或 dsh 安装树里找，**完全不看 dependencies 里的 link: 声明** ——
+        # 那个声明是给 pnpm 建链接用的，不是运行时解析依据。
+        #
+        # 旧实现把「link: 指向的目录里有 package.json」当成可解析，于是
+        # 「bundles + dependencies 都齐、但 node_modules 没链接」被判成 PASS，
+        # 而 dsh 启动时直接抛 cannot resolve profile bundle —— 自检说一切正常，
+        # Web 却起不来。用户拿着一份全绿的自检报告完全没法排查。
         if os.path.isfile(os.path.join(nm, b, "package.json")):
             continue
         if any(os.path.isfile(os.path.join(g, b, "package.json")) for g in globals_):
             continue
-        missing.append(b)
+        spec = deps.get(b, "")
+        real = spec[5:] if isinstance(spec, str) and spec.startswith(("link:", "file:")) else None
+        if real and os.path.isfile(os.path.join(real, "package.json")):
+            missing.append("%s（实体在 %s，但 node_modules 缺链接 —— dsh 只认 node_modules）"
+                           % (b, real))
+        else:
+            missing.append(b)
     if missing:
-        add("FAIL", "profile bundles", "%d/%d 个解析不到：%s —— 到「市场」重装，或重跑步骤⑥补内置插件"
+        add("FAIL", "profile bundles",
+            "%d/%d 个解析不到：%s\n"
+            "    这会让 dsh 启动直接崩溃（cannot resolve profile bundle）。\n"
+            "    打开一次「插件」页会自动补链接；或到「市场」重装该插件"
             % (len(missing), len(bundles), "、".join(missing)))
     else:
         add("PASS", "profile bundles", "%d 个全部可解析" % len(bundles))
@@ -699,7 +857,8 @@ def check_backup():
         return
     err = read(DSH_HOME + "/backup-last-error").strip()
     if err:
-        add("FAIL", "上次备份失败", err[:160])
+        add("FAIL", "上次备份失败", err[:160]
+            + "\n    到「配置」页重新点一次备份；若仍失败请把这段贴到 GitHub issue")
     latest = max(packs, key=os.path.getmtime)
     listing = sh("tar -tzf %s 2>/dev/null | head -80" % latest.replace(" ", "\\ "), timeout=60)
     has_dsh = ".dsh/" in listing
@@ -748,7 +907,7 @@ def check_guard(want_guard, want_step6, want_assets):
 
 
 def main():
-    print("=== DSHA 自检 · %s ===" % time.strftime("%Y-%m-%d %H:%M:%S"))
+    print("=== DSHA 自检 v%s" % SELFTEST_VERSION + " · %s ===" % time.strftime("%Y-%m-%d %H:%M:%S"))
     # 先确认「检查本身做得了」。做不了就只报这一条，别拿一屏 FAIL 去吓人
     env_ok = preflight()
     for fn, args in (
@@ -764,6 +923,8 @@ def main():
         (check_web_auth, ()),
         (check_dsh_dupes, ()),
         (check_sessions, ()),
+        (check_sanitize_log, ()),
+        (check_web_boot, ()),
         (check_bundles, ()),
         (check_backup, ()),
         (check_guard, (arg("guard-ver"), arg("step6"), arg("assets"))),
