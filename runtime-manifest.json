@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-24T11:46:20Z",
+  "generated": "2026-08-24T12:01:53Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -215,8 +215,8 @@
     {
       "path": "app/src/main/assets/selftest.py",
       "asset": "selftest.py",
-      "size": 49150,
-      "sha256": "c85d46e38834c43fc8d69e5163d55b180c67e82f50227b0c496969956d2b1211",
+      "size": 50074,
+      "sha256": "c0bfcfa9fe8b9a2c0852aa143bf1b18e35510a6e4f18550dbbf39023ea9012e9",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/selftest.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/selftest.py",
