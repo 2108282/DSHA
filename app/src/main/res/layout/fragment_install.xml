@@ -85,6 +85,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/gap_section"
+            android:textColor="@color/accent_on"
             android:text="一键安装" />
 
         <TextView

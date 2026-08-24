@@ -62,7 +62,7 @@
             android:paddingEnd="@dimen/gap_control"
             android:gravity="center"
             android:text="筛选"
-            android:textColor="#E6EDF3"
+            android:textColor="@color/text"
             android:textSize="@dimen/text_label"
             android:background="@drawable/bg_btn" />
 

@@ -58,6 +58,9 @@ public class PluginFragment extends Fragment {
     /** 仅显示兼容插件（过滤 ❌不兼容） */
     private boolean filterIncompat = false;
     private boolean hideInstalled = false;
+    /** 当前分类筛选（空 = 全部）。市场源本来就带分类（it[4]），
+     *  之前只在详情弹窗里显示，白白浪费了一个天然的筛选维度。 */
+    private String categoryFilter = "";
     /** 已装插件名（供市场页「隐藏已安装」比对；加载已装列表时填充） */
     private final java.util.List<String> installedNames = new java.util.ArrayList<>();
     /** 当前搜索词（供过滤/排序后刷新视图复用） */
@@ -274,23 +277,57 @@ public class PluginFragment extends Fragment {
         android.widget.PopupMenu pm = new android.widget.PopupMenu(requireContext(), anchor);
         pm.getMenu().add(0, 1, 0, "仅显示兼容").setCheckable(true).setChecked(filterIncompat);
         pm.getMenu().add(0, 2, 0, "隐藏已安装").setCheckable(true).setChecked(hideInstalled);
+        // 分类来自市场源本身（it[4]），按实际出现的值动态列出 ——
+        // 硬编码分类名会在上游改标题时静默失效
+        java.util.List<String> cats = collectCategories();
+        if (!cats.isEmpty()) {
+            android.view.SubMenu sub = pm.getMenu().addSubMenu(0, 3, 0,
+                    categoryFilter.isEmpty() ? "分类：全部" : "分类：" + categoryFilter);
+            sub.add(0, 100, 0, "全部").setCheckable(true).setChecked(categoryFilter.isEmpty());
+            for (int i = 0; i < cats.size(); i++) {
+                String cat = cats.get(i);
+                sub.add(0, 101 + i, 0, cat)
+                        .setCheckable(true).setChecked(cat.equals(categoryFilter));
+            }
+        }
         pm.setOnMenuItemClickListener(item -> {
-            if (item.getItemId() == 1) {
+            int id = item.getItemId();
+            if (id == 100) {
+                categoryFilter = "";
+            } else if (id >= 101) {
+                categoryFilter = String.valueOf(item.getTitle());
+            } else if (id == 3) {
+                return false;                 // 子菜单标题本身：交给系统展开
+            } else if (id == 1) {
                 filterIncompat = !filterIncompat;
-            } else if (item.getItemId() == 2) {
+            } else if (id == 2) {
                 hideInstalled = !hideInstalled;
             }
-            item.setChecked(item.getItemId() == 1 ? filterIncompat : hideInstalled);
+            if (id == 1 || id == 2) item.setChecked(id == 1 ? filterIncompat : hideInstalled);
             // 有筛选生效时按钮加个点，让用户知道列表被过滤过 ——
             // 「明明搜到了却看不到」是最容易被当成 bug 的体验
             if (anchor instanceof TextView) {
                 ((TextView) anchor).setText(
-                        (filterIncompat || hideInstalled) ? "筛选 •" : "筛选");
+                        (filterIncompat || hideInstalled || !categoryFilter.isEmpty())
+                                ? "筛选 •" : "筛选");
             }
             if (mode == Mode.MARKET) refreshMarketView();
             return true;
         });
         pm.show();
+    }
+
+    /** 收集市场里实际出现的分类（去重、保持源顺序）。
+     *  源顺序就是上游文档的编排顺序，比字母序更符合用户在网页上看到的样子。 */
+    private java.util.List<String> collectCategories() {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (String[] it : items) {
+            if (it.length > 4 && it[4] != null && !it[4].trim().isEmpty()
+                    && !out.contains(it[4].trim())) {
+                out.add(it[4].trim());
+            }
+        }
+        return out;
     }
 
     /** 市场条目是否已经装过。市场里的名字是 owner/repo，已装列表里是 npm 包名，
@@ -390,6 +427,12 @@ public class PluginFragment extends Fragment {
                 hidden++;
                 continue;
             }
+            // 分类筛选
+            if (!categoryFilter.isEmpty()
+                    && (it.length <= 4 || !categoryFilter.equals(
+                            it[4] == null ? "" : it[4].trim()))) {
+                continue;
+            }
             filtered.add(it);
         }
         adapter.setData(filtered, true);
@@ -397,6 +440,7 @@ public class PluginFragment extends Fragment {
         if (!q.isEmpty()) hint += "（搜索：\"" + q + "\"）";
         if (filterIncompat) hint += " · 仅显示兼容（已滤 " + skipped + " 条不兼容）";
         if (hideInstalled) hint += " · 已隐藏 " + hidden + " 个装过的";
+        if (!categoryFilter.isEmpty()) hint += " · 分类：" + categoryFilter;
         hint += " · 点击查看详情/安装" + cacheHint();
         say(hint);
     }
