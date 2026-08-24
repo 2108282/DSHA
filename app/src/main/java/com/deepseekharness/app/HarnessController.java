@@ -169,6 +169,19 @@ public class HarnessController {
     }
 
     /** 同步停止（等端口关透）：供强重启/插件变更使用；常规杀不净则宽杀 node */
+    /** 安全杀 web 进程：proot **不隔离 PID**，容器内 /proc 看到的是宿主的全部进程，
+     *  pkill 一旦命中 proot 自身就会把承载整个环境的进程杀掉，App 的前台服务随之死亡
+     *  （现象：点重启十秒后闪退、通知栏一起消失）。
+     *
+     *  所以这里不直接 pkill，而是 pgrep 出候选，逐个查 /proc/<pid>/cmdline，
+     *  凡带 proot / libproot 的一律跳过。多写几行，换掉一整类自杀风险。 */
+    private String safeKillWebCmd(String sig) {
+        return "for _p in $(pgrep -f 'bin.js web' 2>/dev/null; pgrep -f 'dsh web' 2>/dev/null; "
+                + "pgrep -f dsh-watchdog.sh 2>/dev/null); do "
+                + "tr '\\0' ' ' < /proc/$_p/cmdline 2>/dev/null | grep -q proot && continue; "
+                + "kill -" + sig + " $_p 2>/dev/null; done; ";
+    }
+
     public void stopWebAndWait() {
         try {
             destroyAllWebProcesses();
@@ -176,10 +189,8 @@ public class HarnessController {
             if (!waitPortClosed(5000)) {
                 // 只杀 dsh web 相关进程（bin.js web / dsh web），不裸杀 node
                 // （裸 pkill -f node 会误杀 agent/用户跑的其他 node 进程！）
-                proot.execAndRead("pkill -TERM -f 'bin.js web' 2>/dev/null; pkill -TERM -f 'dsh web' 2>/dev/null; "
-                        + "sleep 3; "
-                        + "pkill -9 -f 'bin.js web' 2>/dev/null; pkill -9 -f 'dsh web' 2>/dev/null; "
-                        + "sleep 1; echo done");
+                proot.execAndRead(safeKillWebCmd("TERM") + "sleep 3; "
+                        + safeKillWebCmd("9") + "sleep 1; echo done");
                 waitPortClosed(5000);
             }
             // Web 停了桥也没用：停桥（幂等，HarnessService.onDestroy 也会停）
@@ -3331,8 +3342,17 @@ public class HarnessController {
                     destroyAllWebProcesses();
                     proot.execAndRead(stopWebCommand());
                     if (!waitPortClosed(4000)) {
-                        proot.execAndRead("pkill -TERM -f node 2>/dev/null; pkill -TERM -f 'bin.js' 2>/dev/null; "
-                                + "sleep 3; pkill -9 -f node 2>/dev/null; pkill -9 -f 'bin.js' 2>/dev/null; sleep 1; echo done");
+                        // 这里原来是裸的 pkill -f node / -f 'bin.js' —— 同一个文件第 178 行
+                        // 的注释就写着「裸 pkill -f node 会误杀」，可这儿漏了。
+                        // 后果比误杀 agent 严重得多：proot 的命令行里带着 rootfs 路径和
+                        // 待执行命令，'node' 与 'bin.js' 都可能命中 proot 自身，
+                        // 于是把承载整个环境的 proot 一起杀掉，App 的前台服务随之死亡 ——
+                        // 用户看到的就是「点重启约 10 秒后闪退，通知栏也没了」
+                        // （那个 10 秒正是这段里的 sleep 3 加上前面 waitPortClosed 的累计）。
+                        // 而且只有「端口仍被占、正常停止没成功」才会走到这儿，也就是重启场景，
+                        // 首次启动端口是空的、压根不执行 —— 所以表现为「以前一直是好的」。
+                        proot.execAndRead(safeKillWebCmd("TERM") + "sleep 3; "
+                                + safeKillWebCmd("9") + "sleep 1; echo done");
                         waitPortClosed(4000);
                     }
                 }
