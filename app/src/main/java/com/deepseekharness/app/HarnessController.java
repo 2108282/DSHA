@@ -3479,9 +3479,15 @@ public class HarnessController {
             if (n % interval != 0) return; // 每 N 次才备份
             IO.execute(() -> {
                 try {
-                    if (proot.isInstalled() && rootfsFile("root/.dsh").isDirectory()) {
+                    // 判据用 hasUserDataInDsh() 而不是「.dsh 目录存在」：全新环境里解压收尾
+                    // 就会把 .dsh 建出来，老判据会把**空环境**打成一个"有效"备份。它是当次
+                    // 安装写的（唯一可读），于是自动恢复反而会挑中它、覆盖掉本可手动恢复的
+                    // 真数据 —— 比不备份更糟。
+                    if (proot.isInstalled() && hasUserDataInDsh()) {
                         String p = BackupManager.backupToExternalAuto(appContext, HarnessController.this);
                         if (p != null) android.util.Log.i("DSHA", "第 " + n + " 次启动，自动备份完成: " + p);
+                    } else {
+                        android.util.Log.i("DSHA", "第 " + n + " 次启动：.dsh 里还没有用户数据，跳过自动备份");
                     }
                 } catch (Throwable ignored) {
                 }
@@ -3490,28 +3496,236 @@ public class HarnessController {
         }
     }
 
-    /** 外部下载目录 Download/DSHA 里最新的 DSHA 备份；没有返回 null */
-    public File findLatestExternalBackup() {
-        try {
-            File dir = new File(android.os.Environment.getExternalStoragePublicDirectory(
-                    android.os.Environment.DIRECTORY_DOWNLOADS), "DSHA");
-            // 宽容：手动/自动备份（DSHA-backup-*）与升级迁移包（DSHA-migration-*）都认，
-            // .tgz 后缀也接受（用户手工改名/其他工具打的包）
-            File[] fs = dir.listFiles((d, n) -> {
-                if (n == null) return false;
-                String low = n.toLowerCase();
-                boolean nameOk = low.startsWith("dsha-backup-") || low.startsWith("dsha-migration-");
-                return nameOk && (low.endsWith(".tar.gz") || low.endsWith(".tgz"));
-            });
-            if (fs == null || fs.length == 0) return null;
-            File best = null;
-            for (File f : fs) {
-                if (f.length() <= 0) continue; // 跳过空/半截文件
-                if (best == null || f.lastModified() > best.lastModified()) best = f;
+    // ================= 外部备份发现（分区存储下必须按「能否真的打开」判定） =================
+
+    /** 一个候选备份包。uri 来自 MediaStore，file 是同名的直接路径 —— 两者都留着，
+     *  读的时候 uri 优先、file 兜底（哪条通走哪条）。 */
+    public static final class BackupCandidate {
+        public final String name;
+        public final android.net.Uri uri;   // MediaStore 条目，可空
+        public final File file;             // 直接文件路径，可空
+        public final long time;             // 修改时间（毫秒）
+        public final long size;             // 字节数，0=未知
+
+        BackupCandidate(String name, android.net.Uri uri, File file, long time, long size) {
+            this.name = name;
+            this.uri = uri;
+            this.file = file;
+            this.time = time;
+            this.size = size;
+        }
+
+        /** 弹窗里给用户看的一行描述：时间 + 大小。
+         *  自动备份用固定名 DSHA-backup-auto.tar.gz，MediaStore 同名去重又派生出
+         *  "…auto.tar (3).gz" 这种孤儿包 —— 名字里没有时间戳，只给文件名用户没法判断
+         *  这到底是哪一次的数据，所以时间和大小必须一起显示。 */
+        public String describe() {
+            StringBuilder sb = new StringBuilder(name);
+            if (time > 0) {
+                sb.append("\n备份时间：").append(new java.text.SimpleDateFormat(
+                        "yyyy-MM-dd HH:mm", java.util.Locale.US).format(new java.util.Date(time)));
             }
-            return best;
+            if (size > 0) {
+                sb.append(size > 0 && time > 0 ? "　　" : "\n");
+                sb.append("大小：");
+                if (size >= 1024L * 1024L) {
+                    sb.append(String.format(java.util.Locale.US, "%.1f MB", size / 1048576.0));
+                } else {
+                    sb.append(Math.max(1L, size / 1024L)).append(" KB");
+                }
+            }
+            return sb.toString();
+        }
+    }
+
+    /** 一次备份扫描的结果：最新且**确认可读**的候选，加上「发现了但读不了」的数量。
+     *
+     *  为什么非得区分「发现」和「可读」，以及为什么 total()==0 不等于「没有备份」：
+     *  Android 11+ 分区存储下 App 查 MediaStore.Downloads 只能看到自己**这次安装**写的行，
+     *  listFiles() 同样被整批过滤。卸载重装后 Download/DSHA 里旧包的 owner_package_name
+     *  变成 NULL，于是对新安装**完全不可见** —— 真机实测（Android 16 / SDK 36）：未授予
+     *  「所有文件访问」时扫描结果是 0 个；授予后同一台机同一批文件立刻变成「14 个，可读 14」。
+     *  文件一直都在，是枚举这一步就看不见。
+     *
+     *  所以 0 个有两种截然不同的含义，调用方必须靠 canSeeAllFiles() 区分：
+     *    真的没有备份            → 静默
+     *    有备份但本次安装看不见  → 必须给出口（SAF 手动选择 / 让用户自己去开权限）
+     *  否则空环境下就是「明明有备份却什么都不说」（issue #22 用户复现的正是这个）。 */
+    public static final class BackupScan {
+        public final BackupCandidate best;   // 最新且可读；一个都读不到时为 null
+        public final int readable;
+        public final int unreadable;
+
+        BackupScan(BackupCandidate best, int readable, int unreadable) {
+            this.best = best;
+            this.readable = readable;
+            this.unreadable = unreadable;
+        }
+
+        public int total() {
+            return readable + unreadable;
+        }
+    }
+
+    /** 本次安装能否枚举到「别的安装写进公共目录的文件」。
+     *  Android 10 以下没有分区存储限制，一律 true；11+ 只有拿到「所有文件访问」才为 true。
+     *  唯一用途：把「扫描到 0 个」解释成「真的没有」还是「看不见」。 */
+    private boolean canSeeAllFiles() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT < 30) return true;
+            return android.os.Environment.isExternalStorageManager();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 备份文件名判据（宽容）。
+     *
+     *  必须容忍 MediaStore 的同名去重后缀：insert 同名条目不会覆盖，而是把 DISPLAY_NAME
+     *  改成 "DSHA-backup-auto.tar (1).gz" —— 序号插在 .tar 和 .gz **中间**，于是
+     *  endsWith(".tar.gz") 永远不成立，自动备份攒下的包会被整批筛掉。这正是
+     *  「Download/DSHA 里明明有备份却从不弹恢复窗」的直接原因（issue #22）。 */
+    static boolean looksLikeBackupName(String name) {
+        if (name == null) return false;
+        String low = name.toLowerCase(java.util.Locale.US);
+        if (!low.startsWith("dsha-backup-") && !low.startsWith("dsha-migration-")) return false;
+        // 去掉 " (1)" / "(2)" 这类去重后缀后再判扩展名
+        String norm = low.replaceAll("\\s*\\(\\d+\\)", "");
+        return norm.endsWith(".tar.gz") || norm.endsWith(".tgz") || norm.endsWith(".tar");
+    }
+
+    /** 候选是否真的能打开（只读 1 字节，开销可忽略）。isFile()/length() 都不算数，
+     *  归属失效的文件这两项照样是真的，只有 open 会如实报 EACCES。 */
+    private boolean canOpen(BackupCandidate c) {
+        if (c.uri != null) {
+            try (java.io.InputStream in = appContext.getContentResolver().openInputStream(c.uri)) {
+                if (in != null && in.read() != -1) return true;
+            } catch (Throwable ignored) {
+            }
+        }
+        if (c.file != null) {
+            try (java.io.InputStream in = new java.io.FileInputStream(c.file)) {
+                if (in.read() != -1) return true;
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
+    }
+
+    /** 扫描 Download/DSHA：MediaStore 与直接列目录两路合并去重，逐个试开确认可读，
+     *  返回最新可读的那个 + 不可读计数。 */
+    public BackupScan scanExternalBackups() {
+        final File dshaDir = new File(android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS), "DSHA");
+        java.util.LinkedHashMap<String, BackupCandidate> found = new java.util.LinkedHashMap<>();
+        // 1) MediaStore（Android 10+，不需要任何存储权限）
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            try {
+                android.net.Uri col = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+                String base = android.os.Environment.DIRECTORY_DOWNLOADS; // "Download"
+                // RELATIVE_PATH 存的是否带尾斜杠因设备/版本而异（写入用的是 "Download/DSHA"），
+                // 两种都查，兜住。
+                String sel = android.provider.MediaStore.MediaColumns.RELATIVE_PATH + "=? OR "
+                        + android.provider.MediaStore.MediaColumns.RELATIVE_PATH + "=?";
+                String[] selArgs = new String[]{base + "/DSHA/", base + "/DSHA"};
+                try (android.database.Cursor cur = appContext.getContentResolver().query(
+                        col,
+                        new String[]{android.provider.MediaStore.MediaColumns._ID,
+                                android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
+                                android.provider.MediaStore.MediaColumns.DATE_MODIFIED,
+                                android.provider.MediaStore.MediaColumns.SIZE},
+                        sel, selArgs, null)) {
+                    if (cur != null) {
+                        while (cur.moveToNext()) {
+                            String dn = cur.getString(1);
+                            if (!looksLikeBackupName(dn)) continue;
+                            android.net.Uri u = android.content.ContentUris.withAppendedId(
+                                    col, cur.getLong(0));
+                            found.put(dn, new BackupCandidate(dn, u, new File(dshaDir, dn),
+                                    cur.getLong(2) * 1000L, // DATE_MODIFIED 是秒
+                                    cur.isNull(3) ? 0L : cur.getLong(3)));
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        // 2) 直接列目录（Android 9-，或已授予「所有文件访问」的设备）
+        try {
+            File[] fs = dshaDir.listFiles();
+            if (fs != null) {
+                for (File f : fs) {
+                    String n = f.getName();
+                    if (!looksLikeBackupName(n) || found.containsKey(n)) continue;
+                    found.put(n, new BackupCandidate(n, null, f, f.lastModified(), f.length()));
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        // 3) 逐个试开：可读的参与「挑最新」，读不到的只计数
+        BackupCandidate best = null;
+        int readable = 0, unreadable = 0;
+        for (BackupCandidate c : found.values()) {
+            if (canOpen(c)) {
+                readable++;
+                if (best == null || c.time > best.time) best = c;
+            } else {
+                unreadable++;
+            }
+        }
+        return new BackupScan(best, readable, unreadable);
+    }
+
+    /** 兼容旧调用：最新且可读备份的文件路径（只有 MediaStore 条目时可能为 null）。
+     *  新代码请用 scanExternalBackups() —— 它还能告诉你有多少个读不到。 */
+    public File findLatestExternalBackup() {
+        BackupScan s = scanExternalBackups();
+        return s.best == null ? null : s.best.file;
+    }
+
+    /** 恢复一个候选：content:// 优先（分区存储下唯一可靠的读法），File 路径兜底。 */
+    public String restoreCandidate(BackupCandidate c) {
+        if (c == null) return "没有可恢复的备份";
+        if (c.uri != null) {
+            String r = restoreFromUri(c.uri);
+            if (r != null) return r;
+        }
+        if (c.file != null && c.file.isFile()) return restoreFromBackup(c.file);
+        return "该备份无法读取（系统分区存储限制），请用「手动选择」重新指定文件";
+    }
+
+    /** 从 content:// 读备份并恢复。返回 null 表示这个 Uri 根本读不出来（权限/条目失效），
+     *  调用方可以退回别的读法；非 null 一律是给用户看的结果文案。 */
+    public String restoreFromUri(android.net.Uri uri) {
+        File tmp = rootfsFile("root/.dsha-restore-src.tar.gz");
+        try {
+            if (tmp.getParentFile() != null) {
+                //noinspection ResultOfMethodCallIgnored
+                tmp.getParentFile().mkdirs();
+            }
+            // 打开阶段的失败要与恢复阶段区分开：openInputStream 抛 EACCES 时必须返回 null，
+            // 让 restoreCandidate 还能去试 File 路径，别把「换条路就能成」说成恢复失败。
+            java.io.InputStream in;
+            try {
+                in = appContext.getContentResolver().openInputStream(uri);
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "备份 Uri 打不开: " + describe(e));
+                return null;
+            }
+            if (in == null) return null;
+            try (java.io.InputStream ins = in;
+                 java.io.OutputStream out = new java.io.FileOutputStream(tmp)) {
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = ins.read(buf)) != -1) out.write(buf, 0, n);
+            }
+            if (!tmp.isFile() || tmp.length() == 0) return "备份内容为空，无法恢复";
+            return restoreFromBackup(tmp);
         } catch (Throwable e) {
-            return null;
+            return "恢复失败: " + describe(e);
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
         }
     }
 
@@ -3563,6 +3777,7 @@ public class HarnessController {
                 proot.execAndRead("cp -a /root/.dsha-restore-stage/. /root/ 2>/dev/null; "
                         + "rm -rf /root/.dsha-restore-stage; echo DONE");
                 deleteRecursively(stage);
+                syncApiKeyFromRootfs();
                 return "恢复完成（基础模式：整包还原）\n"
                         + "若启动报插件缺失，可到「市场」重新安装该插件。重启 WebUI 生效";
             }
@@ -3582,11 +3797,30 @@ public class HarnessController {
             }
             deleteRecursively(stage);
             invalidateSteps();
+            // issue #22：恢复数据落位后回读备份里的 .dsha-apikey 并回填配置页——
+            // 否则离线包用户（无 .env）走自动/迁移恢复后配置页 key 为空、启动注入空 key。
+            syncApiKeyFromRootfs();
             return (ok ? "恢复完成" : "恢复完成（部分内容已跳过，详见下方）")
                     + (body.isEmpty() ? "" : "\n" + body)
                     + "\n重启 WebUI 生效";
         } catch (Exception e) {
             return "恢复失败: " + e.getMessage();
+        }
+    }
+
+    /** issue #22：把 rootfs 里恢复出的 .dsha-apikey 回填到 App 配置页（与 WorkspaceFragment.doRestore 的手动恢复一致）。
+     *  .env 只在「在线安装」最后一步写，离线包用户恢复后没有它，key 在备份的 .dsh/.dsha-apikey 里。 */
+    private void syncApiKeyFromRootfs() {
+        try {
+            String k = proot.execAndRead("cat /root/.dsh/.dsha-apikey 2>/dev/null");
+            if (k == null) return;
+            k = k.trim();
+            // 只接受形如密钥的值（避免把脚本输出/错误信息当 key 写进配置）
+            if (!k.isEmpty() && !k.contains(" ") && k.length() >= 8) {
+                setApiKey(k);
+                android.util.Log.i("DSHA", "恢复后已从 .dsha-apikey 回填 API key（issue #22）");
+            }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -3665,31 +3899,220 @@ public class HarnessController {
     }
 
     /**
-     * 全新环境检测：若 rootfs 尚无数据（卸载重装后的空环境）且 Download/DSHA 存在旧备份，
-     * 弹窗询问是否恢复。仅在 rootfs 已就绪后由调用方触发（避免解压前误弹）。
+     * .dsh 里是否已经有「用户数据」。
+     *
+     * 不能拿「root/.dsh 目录存在」当判据 —— 解压收尾时 ProotBootstrap.writeOfflineVersion()
+     * 自己就会写出 root/.dsh/offline-rootfs.version 把这个目录建起来（离线包预置的
+     * profiles/web、步骤⑥ 的 step6.version / builtin-assets.version 同理），而这些都发生在
+     * MainActivity 判定之前。于是全新环境里 root/.dsh 永远「已存在」，自动恢复弹窗被自己的
+     * 前置步骤挡死 —— 这就是 issue #22「卸载重装后从不弹『检测到旧版备份』」的根因。
+     *
+     * 判据改成只认用户数据本体：会话、存储、配置、凭据。纯版本标记文件不算数据；
+     * profiles/ 也故意不算 —— 它可能由同一次启动里的 ⑥ 自愈 / 内置插件校验并发创建。
+     */
+    private boolean hasUserDataInDsh() {
+        try {
+            File dsh = rootfsFile("root/.dsh");
+            if (!dsh.isDirectory()) return false;
+            // 凭据文件实际叫 .credentials.yaml（老版本可能是 .credentials）—— 两个都探，
+            // 只写前者会漏判。
+            String[] probes = {"sessions", "storages", "settings.yaml", "settings.json",
+                    ".credentials.yaml", ".credentials", ".dsha-apikey"};
+            for (String p : probes) {
+                File f = new File(dsh, p);
+                if (f.isDirectory()) {
+                    String[] kids = f.list();
+                    if (kids != null && kids.length > 0) return true;
+                } else if (f.isFile() && f.length() > 0) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Throwable t) {
+            // 判不出来时按「已有数据」处理：宁可少弹一次窗，也不冒险覆盖用户数据
+            return true;
+        }
+    }
+
+    /**
+     * 全新环境检测：rootfs 已就绪但 .dsh 里还没有用户数据（卸载重装后的空环境），
+     * 且 Download/DSHA 有旧备份 → 弹窗询问是否恢复。
+     * 仅在 rootfs 已就绪后由调用方触发（避免解压前误弹）。
+     *
+     * 四种分支（分区存储决定了必须这么分）：
+     *   有可读候选              → 正常问「是否恢复 xxx」（带时间+大小）；若同时有读不到的，说明并给「手动选择」
+     *   只有读不到的候选        → 不给必然失败的「恢复」，只给「手动选择」
+     *   0 个候选 + 无全文件权限 → **不能静默**：文件可能就在那儿只是看不见，给「手动选择」+「开启文件访问」
+     *   0 个候选 + 有全文件权限 → 真的没有备份，静默（日志留痕）
+     *
+     * 关于权限：不主动申请 MANAGE_EXTERNAL_STORAGE。它要跳系统设置手动拉开关，而绝大多数
+     * 用户（全新安装、没有任何备份）根本不需要它，部分 ROM 还会拦。只在确实可能有备份、
+     * 且自动发现已经失败时，把入口交给用户自己点。
      */
     public void maybePromptRestore(final android.app.Activity act) {
-        IO.execute(() -> {
+        // 独立线程而不是 IO 单线程队列：首启自愈任务多时会排在它们后面，等轮到自己
+        // 时步骤⑥ 已经把 .dsh 铺出来了，弹窗窗口早已错过（issue #22）。
+        Thread probe = new Thread(() -> {
             try {
                 if (!proot.isInstalled()) return; // rootfs 未就绪（未解压/未安装）不弹
-                if (rootfsFile("root/.dsh").isDirectory()) return; // 已有数据，不打扰
-                final File b = findLatestExternalBackup();
-                if (b == null) return;
+                if (hasUserDataInDsh()) return;   // 已有数据，不打扰也不可能误覆盖
+                final BackupScan scan = scanExternalBackups();
+                final boolean allFiles = canSeeAllFiles();
+                if (scan.total() == 0 && allFiles) {
+                    // 能看全盘还是 0 个 —— 这才是真的没有备份
+                    android.util.Log.i("DSHA", "自动恢复：空环境，Download/DSHA 确无备份包");
+                    return;
+                }
+                android.util.Log.i("DSHA", "自动恢复：空环境，备份 " + scan.total()
+                        + " 个（可读 " + scan.readable + " / 读不到 " + scan.unreadable
+                        + "），全文件访问=" + allFiles);
+                final SharedPreferences prefs = appContext.getSharedPreferences(
+                        "deepseekharness", android.content.Context.MODE_PRIVATE);
+                final BackupCandidate best = scan.best;
+                // 对同一个备份说过「忽略」就不再追问；出现更新的备份会重新问一次。
+                // 没有可读候选时按情形固定记忆，避免每次开 App 都弹同一句提示。
+                final String declineKey = best != null ? best.name
+                        : (scan.total() == 0 ? "__invisible__" : "__unreadable__" + scan.unreadable);
+                if (declineKey.equals(prefs.getString("restore_prompt_declined", ""))) return;
                 new Handler(Looper.getMainLooper()).post(() -> {
-                    new android.app.AlertDialog.Builder(act)
-                            .setTitle("检测到旧版备份")
-                            .setMessage("发现备份：\n" + b.getName()
-                                    + "\n\n是否恢复到当前环境？\n（恢复配置、API Key 与对话记录）")
-                            .setPositiveButton("恢复", (d, w) -> {
-                                String r = restoreFromBackup(b);
-                                android.widget.Toast.makeText(act, r, android.widget.Toast.LENGTH_LONG).show();
-                            })
-                            .setNegativeButton("忽略", null)
-                            .show();
+                    // 正在结束的 Activity 上 show() 抛 BadTokenException（主线程，外层 catch 不到）
+                    if (act.isFinishing() || act.isDestroyed()) return;
+                    try {
+                        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(act);
+                        final android.content.DialogInterface.OnClickListener decline =
+                                (d, w) -> prefs.edit()
+                                        .putString("restore_prompt_declined", declineKey).apply();
+                        if (best != null) {
+                            // 时间+大小必须显示：自动备份是固定名，同名去重又派生出
+                            // "…auto.tar (3).gz"，只看名字用户无法判断这是哪一次的数据。
+                            String msg = "发现备份：\n" + best.describe()
+                                    + "\n\n是否恢复到当前环境？\n（恢复配置、API Key 与对话记录）";
+                            if (scan.unreadable > 0) {
+                                msg += "\n\n另有 " + scan.unreadable
+                                        + " 个备份无法自动读取（卸载重装会让旧文件归属失效）。"
+                                        + "想用其中某一个，请点「手动选择」。";
+                            }
+                            b.setTitle("检测到旧版备份").setMessage(msg)
+                                    .setPositiveButton("恢复", (d, w) -> startRestore(act, best))
+                                    .setNegativeButton("忽略", decline);
+                            if (scan.unreadable > 0) {
+                                b.setNeutralButton("手动选择", (d, w) -> pickBackupManually(act));
+                            }
+                        } else if (scan.total() > 0) {
+                            // 枚举到了但一个都打不开：不能给「恢复」按钮——点了必然失败。
+                            b.setTitle("发现 " + scan.unreadable + " 个备份，但无法自动读取")
+                                    .setMessage("Download/DSHA 里有 " + scan.unreadable
+                                            + " 个备份包，系统的分区存储限制让本次安装读不到它们"
+                                            + "（卸载重装后旧文件的归属失效）。\n\n"
+                                            + "点「手动选择」在文件选择器里指定备份即可正常恢复。")
+                                    .setPositiveButton("手动选择", (d, w) -> pickBackupManually(act))
+                                    .setNegativeButton("忽略", decline);
+                        } else {
+                            // 0 个候选且没有全文件访问：备份可能就在 Download/DSHA 里，只是
+                            // 本次安装枚举不到（真机实测：授权前扫描 0 个，授权后同一批文件 14 个
+                            // 全部可读）。假装没有备份就是 issue #22 用户看到的那个静默。
+                            b.setTitle("是否需要恢复以前的备份？")
+                                    .setMessage("当前是全新环境。系统的分区存储限制让本次安装"
+                                            + "无法自动扫描 Download/DSHA —— 如果你以前备份过，"
+                                            + "文件还在，只是这里看不到。\n\n"
+                                            + "「手动选择」：在文件选择器里挑备份包，不需要任何权限，"
+                                            + "推荐。\n"
+                                            + "「开启文件访问」：授予「所有文件访问」后，以后每次"
+                                            + "重装都能自动发现备份。")
+                                    .setPositiveButton("手动选择", (d, w) -> pickBackupManually(act))
+                                    .setNeutralButton("开启文件访问", (d, w) -> openAllFilesAccessSettings(act))
+                                    .setNegativeButton("不用了", decline);
+                        }
+                        b.show();
+                    } catch (Throwable t) {
+                        android.util.Log.w("DSHA", "自动恢复弹窗未能显示: " + describe(t));
+                    }
                 });
-            } catch (Throwable ignored) {
+            } catch (Throwable t) {
+                android.util.Log.w("DSHA", "自动恢复检测异常: " + describe(t));
             }
-        });
+        }, "dsha-restore-probe");
+        probe.setDaemon(true);
+        probe.start();
+    }
+
+    /** 后台执行恢复 + Toast 回报（恢复要解压 + 跑 proot 脚本，放 UI 线程足够 ANR）。 */
+    private void startRestore(final android.app.Activity act, final BackupCandidate c) {
+        android.widget.Toast.makeText(act, "正在恢复，请稍候…",
+                android.widget.Toast.LENGTH_SHORT).show();
+        Thread work = new Thread(() -> {
+            final String r = restoreCandidate(c);
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    android.widget.Toast.makeText(appContext, r,
+                            android.widget.Toast.LENGTH_LONG).show();
+                } catch (Throwable ignored) {
+                }
+            });
+        }, "dsha-auto-restore");
+        work.setDaemon(true);
+        work.start();
+    }
+
+    /** 跳系统的「所有文件访问」设置页。只在用户主动点击时调用 —— 不自动申请。
+     *  部分 ROM 没有按包名直达的页面，退回全局列表页；两条都不行就如实说一句。 */
+    private void openAllFilesAccessSettings(android.app.Activity act) {
+        if (android.os.Build.VERSION.SDK_INT < 30) return;
+        try {
+            Intent i = new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    android.net.Uri.parse("package:" + appContext.getPackageName()));
+            act.startActivity(i);
+            android.widget.Toast.makeText(act,
+                    "打开「允许管理所有文件」后返回，重开 App 即可自动发现备份",
+                    android.widget.Toast.LENGTH_LONG).show();
+            return;
+        } catch (Throwable ignored) {
+        }
+        try {
+            act.startActivity(new Intent(
+                    android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+            android.widget.Toast.makeText(act, "请在列表里找到 DSHA 并打开开关",
+                    android.widget.Toast.LENGTH_LONG).show();
+        } catch (Throwable e) {
+            android.widget.Toast.makeText(act,
+                    "本机没有该设置页，请用「手动选择」恢复备份",
+                    android.widget.Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 打开系统文件选择器让用户手点备份（SAF 不需要任何存储权限，是分区存储下
+     *  读取「别的安装写的文件」唯一稳妥的办法）。 */
+    private void pickBackupManually(android.app.Activity act) {
+        try {
+            if (act instanceof MainActivity) {
+                ((MainActivity) act).pickBackupForRestore();
+                return;
+            }
+        } catch (Throwable ignored) {
+        }
+        android.widget.Toast.makeText(act,
+                "请到「设置 → 工作区 → 恢复备份」手动选择备份文件",
+                android.widget.Toast.LENGTH_LONG).show();
+    }
+
+    /** 手动选中备份后的恢复入口（MainActivity 的选择器回调用）：后台执行 + Toast 回报。 */
+    public void restorePickedUri(final android.app.Activity act, final android.net.Uri uri) {
+        if (uri == null) return;
+        android.widget.Toast.makeText(act, "正在恢复，请稍候…",
+                android.widget.Toast.LENGTH_SHORT).show();
+        Thread work = new Thread(() -> {
+            String r = restoreFromUri(uri);
+            final String msg = r == null ? "无法读取所选文件（权限不足或文件已损坏）" : r;
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    android.widget.Toast.makeText(appContext, msg,
+                            android.widget.Toast.LENGTH_LONG).show();
+                } catch (Throwable ignored) {
+                }
+            });
+        }, "dsha-manual-restore");
+        work.setDaemon(true);
+        work.start();
     }
 
     /** 离线包升级感知：APK 内置离线包版本 > rootfs 已解压版本 → 弹窗提示升级

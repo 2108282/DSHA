@@ -28,6 +28,30 @@ public class MainActivity extends AppCompatActivity {
     /** 当前前台 Activity（HttpShellService 用它弹确认框）；null = 不在前台 */
     public static volatile MainActivity current = null;
 
+    /** 自动恢复弹窗的「手动选择」出口。分区存储下 SAF 是读取「别的安装写进
+     *  Download/DSHA 的备份」唯一不需要权限、也一定能成的办法（issue #22）。
+     *  注册必须发生在 Activity 进入 STARTED 之前，所以放在字段初始化里。 */
+    private final androidx.activity.result.ActivityResultLauncher<String[]> backupPicker =
+            registerForActivityResult(
+                    new androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+                    uri -> {
+                        if (uri != null) {
+                            HarnessController.get(this).restorePickedUri(this, uri);
+                        }
+                    });
+
+    /** 供 HarnessController 的恢复弹窗调用：打开系统文件选择器挑备份包。 */
+    public void pickBackupForRestore() {
+        try {
+            // MediaStore 给 tar.gz 记的 MIME 各家 ROM 不一，多给几个并兜 */*，
+            // 否则用户会看到「没有可选文件」。
+            backupPicker.launch(new String[]{"application/gzip", "application/x-gzip",
+                    "application/x-tar", "application/octet-stream", "*/*"});
+        } catch (Throwable e) {
+            Toast.makeText(this, "无法打开文件选择器：" + e, Toast.LENGTH_LONG).show();
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -75,11 +99,11 @@ public class MainActivity extends AppCompatActivity {
         HarnessController.get(this).ensureBuiltinPluginsReady();
         // 崩溃自愈提示：上次异常退出时读 crash.log 告知原因（不阻塞使用）
         showCrashRecoveryNotice();
-        // 解压完成后进入主界面（skip_extract=true）才检测"全新环境可恢复"，
-        // 避免首启解压前 rootfs 未就绪误弹恢复框（恢复内容会被解压流程覆盖）
-        if (getIntent().getBooleanExtra("skip_extract", false)) {
-            HarnessController.get(this).maybePromptRestore(this);
-        }
+        // 全新环境可恢复检测。走到这里 rootfs 一定已解压（skip_extract=true 来自
+        // ExtractActivity，否则上面 isOfflineExtracted() 不通过就已跳走），所以不再限定
+        // skip_extract —— 首启那次弹窗被用户划掉/进程被杀后，下次开 App 还有机会补上
+        // （issue #22）。方法内部只在 .dsh 尚无用户数据时才弹，不会覆盖已有数据。
+        HarnessController.get(this).maybePromptRestore(this);
         // 离线包升级感知：APK 内置新离线包 → 提示重解压（数据自动保留）。
         // 放外面：正常启动（rootfs 已解压）也要检测，方法内部自带
         // isOfflineExtracted() 保护（首启未解压时静默）。
