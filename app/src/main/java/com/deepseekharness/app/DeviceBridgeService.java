@@ -244,6 +244,40 @@ public class DeviceBridgeService extends Service {
      *  4. 仍不行 → 无线调试可能被关：WRITE_SECURE_SETTINGS 直接开，其次 Shizuku
      *  5. 都失败 → 分类记录状态，低频通知用户
      */
+    /** 距上次「完整握手验证」的时间。TCP 探活省掉了 toast，但不能永远只看 TCP ——
+     *  配对可能被系统撤销而端口仍在监听，那样就是假健康。 */
+    private static volatile long lastFullVerifyAt = 0L;
+    private static final long FULL_VERIFY_INTERVAL_MS = 30 * 60 * 1000L;   // 30 分钟
+
+    /** 读容器里记录的 ADB 连接端口（adb-shell.py 的同一个来源）。
+     *  直接读 rootfs 文件而不进容器：探活要尽量轻，且不能有任何 ADB 侧动作。 */
+    private int readConnectPort(HarnessController c) {
+        try {
+            java.io.File f = new java.io.File(c.getProot().getRootfsDir(),
+                    "root/.dsh/adbkeys/connect_port");
+            if (f.isFile()) {
+                String t = new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                        java.nio.charset.StandardCharsets.UTF_8).trim();
+                int v = Integer.parseInt(t);
+                if (v > 0 && v < 65536) return v;
+            }
+        } catch (Throwable ignored) {
+        }
+        return 5555;   // 与 adb-shell.py 的兜底一致
+    }
+
+    /** 纯 TCP 可达性检查：连上就断，不发任何 ADB 协议数据。
+     *  这是整个改动的关键 —— 不完成 TLS 握手，框架层就不会记一次新设备连接。 */
+    private boolean tcpReachable(int port, int timeoutMs) {
+        if (port <= 0) return false;
+        try (java.net.Socket sock = new java.net.Socket()) {
+            sock.connect(new java.net.InetSocketAddress("127.0.0.1", port), timeoutMs);
+            return sock.isConnected();
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
     private void runProbe(String reason) {
         // 3090 桥自愈：HarnessService 也会 new 一个 HttpShellService，谁抢到端口谁持有；
         // 它在停止 Web 时把桥关掉后，ADB 开关还开着，agent 的确认请求就会全部
@@ -259,7 +293,26 @@ public class DeviceBridgeService extends Service {
             setAdbState("no_env", "环境未安装");
             return;
         }
+        // ===== 无副作用探活（议题 #35）=====
+        // adb-shell.py 是无状态客户端：每次调用都完整走一遍 AdbDeviceTls 握手。
+        // 于是「每轮保活探测 = 一次全新的无线调试设备连接 = 一次系统级
+        // 『已连接到无线调试』toast」。保活本身工作正常（failures=0），
+        // 但用户几分钟就被弹一次，还以为无线调试关不掉。
+        //
+        // 改成两级：先在 App 进程里对记录的端口做一次 TCP 可达性检查
+        // （框架层不产生「新设备连接」事件，因此没有 toast），通了就算健康；
+        // 只有 TCP 不通才走完整握手去触发原有的自愈链路。
+        //
+        // 但 TCP 通 ≠ ADB 授权还在（配对可能被系统撤销），所以每
+        // FULL_VERIFY_INTERVAL_MS 仍强制做一次完整验证，避免「假健康」
+        // 一直掩盖真实掉线。
+        boolean needFull = System.currentTimeMillis() - lastFullVerifyAt > FULL_VERIFY_INTERVAL_MS;
+        if (!needFull && tcpReachable(readConnectPort(c), 1200)) {
+            onProbeOk(reason);
+            return;
+        }
         String r = c.getProot().execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py id 2>&1 | head -3");
+        if (r != null && r.contains("uid=")) lastFullVerifyAt = System.currentTimeMillis();
         if (r != null && r.contains("uid=")) {
             onProbeOk(reason);
             return;
