@@ -1097,37 +1097,15 @@ public class HarnessController {
                 // 这个是把能用的环境搞崩。
                 java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
                         "root/.dsh/profiles/web/node_modules/" + name);
+                // 安置统一走 linkPlugin（Java 递归复制 → assets 直写两路 fallback）。
+                // 这里原来内联了一套 Files.createSymbolicLink：于是仓库里有两套安置
+                // 逻辑并存，我这几版改的是 linkPlugin，实际跑的却是这段旧的 ——
+                // 这是「改了六版都没效果」的直接原因。
                 boolean linkOk = false;
                 if (dirOk && !userDisabled) {
-                    try {
-                        // exists() 跟随符号链接，对**悬空**链返回 false，而
-                        // createSymbolicLink 遇到已存在的路径（哪怕是悬空链）会抛
-                        // FileAlreadyExistsException —— 旧实现把这个异常吞了，
-                        // 于是链接永远建不成，注册却照样写了进去。
-                        java.nio.file.Path lp = nmLink.toPath();
-                        boolean present = java.nio.file.Files.exists(lp,
-                                java.nio.file.LinkOption.NOFOLLOW_LINKS);
-                        if (present) {
-                            java.nio.file.Path cur = java.nio.file.Files.isSymbolicLink(lp)
-                                    ? java.nio.file.Files.readSymbolicLink(lp) : null;
-                            if (cur != null && real.equals(cur.toString())) {
-                                linkOk = true;
-                            } else {
-                                java.nio.file.Files.delete(lp);   // 指错地方或是普通目录 → 重建
-                            }
-                        }
-                        if (!linkOk) {
-                            java.nio.file.Files.createDirectories(lp.getParent());
-                            java.nio.file.Files.createSymbolicLink(lp,
-                                    java.nio.file.Paths.get(real));
-                            linkOk = true;
-                        }
-                    } catch (Throwable e) {
-                        android.util.Log.w("DSHA", "内置插件 " + name
-                                + " 建 node_modules 链接失败，本次不写注册（"
-                                + "写了会让 dsh 启动崩溃）: " + e);
-                        linkOk = false;
-                    }
+                    java.io.File nmDir = new java.io.File(proot.getRootfsDir(),
+                            "root/.dsh/profiles/web/node_modules");
+                    linkOk = linkPlugin(name, real, nmDir);
                 }
                 if (dirOk && !userDisabled && linkOk && !inBundles) {
                     bundles.put(name);
@@ -1138,7 +1116,8 @@ public class HarnessController {
                 // 对应声明」的项判为无法解析并摘掉。以前这里只补 bundles 和符号链接，
                 // 于是形成「补回 → 被摘 → 再补回」的死循环，用户看到的就是插件一直没生效
                 // （实测现场：实体在、node_modules 链接在，bundles 与 dependencies 双缺）。
-                if (dirOk && !userDisabled && linkOk && !deps.has(name)) {
+                boolean depOk = deps.optString(name, "").startsWith("link:");
+                if (dirOk && !userDisabled && linkOk && !depOk) {
                     deps.put(name, "link:" + real);
                     changed = true;
                     android.util.Log.w("DSHA", "内置插件 " + name + " 缺 dependencies 声明，已补 link:");
@@ -2929,7 +2908,16 @@ public class HarnessController {
                         pkgf.toPath()), StandardCharsets.UTF_8) : "(package.json 不存在)";
                 String bundlesLine = "";
                 int bi = pkgTxt.indexOf("\"bundles\"");
-                if (bi >= 0) bundlesLine = pkgTxt.substring(bi, Math.min(pkgTxt.length(), bi + 260));
+                if (bi >= 0) {
+                    String seg = pkgTxt.substring(bi, Math.min(pkgTxt.length(), bi + 200));
+                    bundlesLine = seg.replaceAll("\\s+", " ");
+                }
+                String depsLine = "";
+                int di = pkgTxt.indexOf("\"dependencies\"");
+                if (di >= 0) {
+                    String seg = pkgTxt.substring(di, Math.min(pkgTxt.length(), di + 240));
+                    depsLine = seg.replaceAll("\\s+", " ");
+                }
                 java.io.File logf = new java.io.File(proot.getRootfsDir(),
                         "root/.dsh/repair-builtin.log");
                 String rec = "== " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
