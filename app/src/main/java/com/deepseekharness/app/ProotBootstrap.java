@@ -195,7 +195,7 @@ public class ProotBootstrap {
         try {
             android.content.SharedPreferences sp = ctx.getSharedPreferences(
                     "deepseekharness", Context.MODE_PRIVATE);
-            if (!"proroot".equals(sp.getString("container_runtime", "proot"))) return false;
+            if (!"proroot".equals(sp.getString("container_runtime", "proroot"))) return false;
             int n = sp.getInt("proroot_fail_streak", 0) + 1;
             if (n >= PROROOT_FAIL_LIMIT) {
                 sp.edit().putString("container_runtime", "proot")
@@ -226,13 +226,14 @@ public class ProotBootstrap {
         }
     }
 
-    /** 当前容器运行时。默认 proot；用户在配置页切到 proroot 后，
-     *  若它不可用（.so 缺失）会自动降回 proot —— 实验功能不该让环境不可用。 */
+    /** 当前容器运行时。**默认 proroot**（真机实测启动快 5~6 倍）；
+     *  它不可用（.so 缺失）时自动降回 proot，连续 3 次启动失败也会强制切回。
+     *  也就是说默认值只影响「先试哪个」，不影响「能不能用」。 */
     public ContainerRuntime runtime() {
         try {
             android.content.SharedPreferences sp = ctx.getSharedPreferences(
                     "deepseekharness", Context.MODE_PRIVATE);
-            if ("proroot".equals(sp.getString("container_runtime", "proot"))) {
+            if ("proroot".equals(sp.getString("container_runtime", "proroot"))) {
                 ContainerRuntime pr = new ContainerRuntime.Proroot(
                         ctx, ContainerRuntime.Proroot.defaultDir(ctx));
                 if (pr.available()) {
@@ -254,9 +255,9 @@ public class ProotBootstrap {
     public String preferredRuntimeId() {
         try {
             return ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
-                    .getString("container_runtime", "proot");
+                    .getString("container_runtime", "proroot");
         } catch (Throwable e) {
-            return "proot";
+            return "proroot";
         }
     }
 

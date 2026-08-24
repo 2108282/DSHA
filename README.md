@@ -4,15 +4,16 @@
 
 **DeepSeek Harness 安卓启动器** —— 在手机上跑 deepseek-harness 的一体化方案，无需 Termux、无需 ROOT。
 
-内置容器运行时 + Ubuntu rootfs，一键（或分步）安装 deepseek-harness，内嵌 WebView 直接使用 Web UI。
+内置容器运行时（proroot / proot 可切换）+ Ubuntu rootfs，一键（或分步）安装 deepseek-harness，内嵌 WebView 直接使用 Web UI。
 
-> ### 🚀 v1.1.6 新增：proroot 运行时（实验）—— 实测启动快 5~6 倍
+> ### 🚀 v1.1.6：默认启用 proroot 运行时 —— 实测启动快 5~6 倍
 >
 > 传统 proot 基于 ptrace，**每个系统调用要两次上下文切换**；
 > [proroot](https://github.com/coderredlab/proroot) 改用 LD_PRELOAD + 二进制补丁做
 > 进程内路径翻译，零 ptrace 开销。
 >
-> **到「配置」页勾选「proroot 运行时（实验）」→ 保存 → 重启 Web** 即可启用。
+> **本版起默认启用，装完即生效**，不需要任何设置。
+> 想用回传统 proot：「配置」页取消勾选「proroot 运行时」→ 保存 → 重启 Web。
 > 真机实测（vivo V2352A / Android 14）：
 >
 > | 场景 | proot | proroot | 提速 |
@@ -25,8 +26,9 @@
 > | 进程创建 | 202ms | 217ms | -7% |
 > | **关键项合计** | 1594ms | 677ms | **+58%** |
 >
-> 出问题会**自动切回 proot**（连续 3 次启动失败即强制回退），装机路径始终用 proot，
-> 所以最坏情况只是回到原来的速度，不会让环境不可用。
+> **兜底机制**：运行时文件缺失会自动降回 proot；连续 3 次启动失败强制切回并告知；
+> 装机路径（解压、安装六步）始终用 proot。所以最坏情况只是回到原来的速度，
+> 不会让环境不可用 —— 这也是敢把它设为默认的前提。
 > proroot 是闭源二进制，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -44,7 +46,7 @@
 | **插件市场** | 过滤非插件/仅兼容筛选/排序优化，内置插件可管理 |
 | **免 ROOT 文件共享** | 集成 MT 管理器官方文件提供器，直接浏览/编辑 App 私有数据 |
 | **WebUI 移动端适配** | 单栏/抽屉/汉堡/全屏设置，移动端开箱即用 |
-| **双容器运行时** | proot（默认，稳定）/ proroot（实验，零 ptrace，实测启动快 5~6 倍），配置页一键切换，失败自动回退 |
+| **双容器运行时** | proroot（**默认**，零 ptrace，实测启动快 5~6 倍）/ proot（传统，稳定），配置页一键切换，失败自动回退 |
 | **看得见的自动修复** | 插件补齐、运行时降级、备份清单、会话自愈等自动动作全部记入活动日志，自检里直接可见 |
 
 ## 🚀 快速上手
@@ -52,8 +54,7 @@
 1. 安装 APK（仅 arm64 / Android 8.0+；GitHub Actions 产物已内置完整 Linux 环境）
 2. 首次启动解压内置环境（数分钟，只需一次）
 3. 「配置」页填入 DeepSeek API key（可选勾选「启用 ADB 设备通道」）
-4. 「启动」页启动 Web UI，自动打开预览
-5. **想要更快**：「配置」页勾选「proroot 运行时（实验）」→ 保存 → 回「启动」页点「重启」
+4. 「启动」页启动 Web UI，自动打开预览（proroot 运行时默认已启用，无需设置）
 
 ## 🔧 构建
 

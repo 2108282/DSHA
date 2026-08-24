@@ -613,7 +613,7 @@ public class ConfigFragment extends Fragment {
         if (prorootCb != null) {
             prorootCb.setChecked("proroot".equals(requireContext()
                     .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
-                    .getString("container_runtime", "proot")));
+                    .getString("container_runtime", "proroot")));
         }
         if (geckoCb != null) {
             geckoCb.setChecked(requireContext()

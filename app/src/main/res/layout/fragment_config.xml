@@ -220,7 +220,7 @@
                 android:layout_height="wrap_content"
                 android:minHeight="@dimen/touch_min"
                 android:paddingStart="@dimen/gap_tight"
-                android:text="proroot 运行时（实验：零 ptrace 开销，理论更快；出问题会自动退回 proot）" />
+                android:text="proroot 运行时（默认开启，启动快 5~6 倍；关掉则用传统 proot）" />
 
             <CheckBox
                 android:id="@+id/config_lan_mode"
