@@ -746,6 +746,26 @@ def check_sanitize_log():
         add("SKIP", "profile 校准记录", "最近一次没有需要处理的项")
 
 
+def check_activity():
+    """最近的自动动作 —— 这一项存在的唯一理由是「让用户看见 App 做了什么」。
+
+    这个项目反复出问题的地方不是功能坏了，而是 App 悄悄做了事（摘插件、
+    降级运行时、跳过备份清单、修复失败）却只写进用户拿不到的 logcat，
+    界面上只剩一个说不清的结果。
+    """
+    path = os.path.join(DSH_HOME, "dsha-activity.log")
+    if not os.path.isfile(path):
+        add("SKIP", "最近的自动动作", "还没有记录")
+        return
+    lines = [ln for ln in read(path, 40000).strip().split("\n") if ln.strip()]
+    if not lines:
+        add("SKIP", "最近的自动动作", "记录是空的")
+        return
+    tail = lines[-4:]
+    add("PASS", "最近的自动动作",
+        "最近 %d 条（完整见 %s）：\n    %s" % (len(tail), path, "\n    ".join(tail)))
+
+
 def check_runtime():
     """当前容器运行时。**选的**和**实际生效的**可能不同 ——
     proroot 缺文件或连续失败会被自动降回 proot，用户界面上看不出来，
@@ -956,6 +976,7 @@ def main():
         (check_web_auth, ()),
         (check_dsh_dupes, ()),
         (check_sessions, ()),
+        (check_activity, ()),
         (check_runtime, ()),
         (check_sanitize_log, ()),
         (check_web_boot, ()),

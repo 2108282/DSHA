@@ -864,6 +864,13 @@ public class HarnessController {
             } catch (Throwable ignored) {
             }
             android.util.Log.w("DSHA", "profile bundles 校准: " + rec.replace("\n", " "));
+            if (!dropped.isEmpty()) {
+                logActivity("启动前校准：摘掉了解析不到的插件 " + dropped
+                        + "（否则 dsh 起不来）；到「插件」页或重启一次会自动补回");
+            }
+            if (!linked.isEmpty()) {
+                logActivity("启动前校准：补好了内置插件 " + linked);
+            }
         } catch (Throwable e) {
             android.util.Log.w("DSHA", "profile bundles 校准失败: " + e);
         }
@@ -1274,6 +1281,41 @@ public class HarnessController {
         });
     }
 
+    /** 活动日志：凡是「App 自己悄悄做了什么」都往这里写一行，用户随时能看到。
+     *
+     *  这个项目最反复的一类问题不是功能坏了，而是**用户看不到 App 在做什么**：
+     *  插件被自动摘掉、运行时被降级、备份清单没生成、修复失败 ——
+     *  每一次都只写进 logcat（用户根本拿不到），界面上只留下一个说不清的结果，
+     *  于是只能靠反复装包试错。有这份日志，自检就能直接告诉用户
+     *  「刚才发生了什么」，而不是让人猜。
+     *
+     *  只留最后 200 行，避免无限增长。 */
+    public void logActivity(String what) {
+        try {
+            java.io.File f = rootfsFile("root/.dsh/dsha-activity.log");
+            if (f.getParentFile() != null) {
+                //noinspection ResultOfMethodCallIgnored
+                f.getParentFile().mkdirs();
+            }
+            String line = new java.text.SimpleDateFormat("MM-dd HH:mm:ss",
+                    java.util.Locale.US).format(new java.util.Date()) + "  " + what + "\n";
+            java.nio.file.Files.write(f.toPath(), line.getBytes(StandardCharsets.UTF_8),
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND);
+            // 超过 400 行就裁到最后 200 行（顺手做，不另起清理任务）
+            if (f.length() > 60_000) {
+                java.util.List<String> all = java.nio.file.Files.readAllLines(f.toPath());
+                if (all.size() > 400) {
+                    java.nio.file.Files.write(f.toPath(),
+                            String.join("\n", all.subList(all.size() - 200, all.size())).getBytes(
+                                    StandardCharsets.UTF_8));
+                }
+            }
+            android.util.Log.i("DSHA", "[活动] " + what);
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** 运行时性能对比：同一组命令在 proot 与 proroot 下各跑若干次，报告耗时。
      *
      *  为什么必须有这个：换运行时的唯一理由是「更快」，而快多少不能靠感觉。
@@ -1300,15 +1342,24 @@ public class HarnessController {
             } catch (Throwable e) {
                 return out + "proroot 准备失败：" + e + "\n";
             }
+            // 命令必须**轻**：每组要跑 3 次、两个运行时共 6 次，再乘 4 组 = 24 次容器启动。
+            // 第一版用了 ls -R /usr/lib，那目录在 proot 下遍历一次就可能几十秒，
+            // 结果用户等了三分钟毫无反馈 —— 测速工具本身把人卡住是最糟的设计。
             String[][] cases = {
                     {"解释器冷启动", "node -e 1"},
-                    {"文件系统调用", "node -e \"const fs=require('fs');for(let i=0;i<300;i++)fs.existsSync('/usr/lib');\""},
-                    {"进程创建", "for i in $(seq 1 30); do /bin/true; done"},
-                    {"目录遍历", "ls -R /usr/lib >/dev/null 2>&1"},
+                    {"文件系统调用", "node -e \"const fs=require('fs');for(let i=0;i<120;i++)fs.existsSync('/usr/bin/env');\""},
+                    {"进程创建", "for i in $(seq 1 15); do /bin/true; done"},
+                    {"小目录遍历", "ls -R /usr/include/asm-generic >/dev/null 2>&1"},
             };
             long sumA = 0, sumB = 0;
+            int idx = 0;
             for (String[] c : cases) {
+                idx++;
+                setProgress("性能对比 " + idx + "/" + cases.length + "：" + c[0] + "（proot）",
+                        idx * 100 / (cases.length + 1));
                 long ta = benchOne(a, c[1]);
+                setProgress("性能对比 " + idx + "/" + cases.length + "：" + c[0] + "（proroot）",
+                        idx * 100 / (cases.length + 1));
                 long tb = benchOne(b, c[1]);
                 if (ta < 0 || tb < 0) {
                     out.append(String.format(java.util.Locale.US,
@@ -1333,21 +1384,44 @@ public class HarnessController {
         } catch (Throwable e) {
             out.append("对比中断：").append(describe(e)).append('\n');
         }
+        setProgress("", 0);
+        // 落盘一份：弹窗可能因为页面已销毁而弹不出来（那种静默丢失最气人），
+        // 有文件的话随时能在终端 cat 出来
+        try {
+            java.io.File f = rootfsFile("root/.dsh/bench-report.txt");
+            if (f.getParentFile() != null) {
+                //noinspection ResultOfMethodCallIgnored
+                f.getParentFile().mkdirs();
+            }
+            java.nio.file.Files.write(f.toPath(),
+                    ("== " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
+                            java.util.Locale.US).format(new java.util.Date()) + " ==\n"
+                            + out).getBytes(StandardCharsets.UTF_8),
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND);
+            out.append("\n（这份报告已存到 .dsh/bench-report.txt）\n");
+        } catch (Throwable ignored) {
+        }
         return out.toString();
     }
 
-    /** 跑 4 次丢掉第一次（预热），返回后 3 次的中位数毫秒；失败返回 -1。 */
+    /** 跑 3 次丢掉第一次（预热文件缓存），返回后两次里**较小**的那个，毫秒；失败返回 -1。
+     *
+     *  取较小值而不是平均：手机上慢的那次几乎总是被别的东西干扰（调度、温控、
+     *  后台任务），而快的那次更接近真实能力。
+     *  单次超时压到 25 秒 —— 测速命令本身就该是秒级的，跑到 25 秒说明这个运行时
+     *  在这条命令上有问题，继续等没意义。 */
     private long benchOne(ContainerRuntime rt, String cmd) {
-        long[] t = new long[3];
-        for (int i = 0; i < 4; i++) {
+        long best = -1;
+        for (int i = 0; i < 3; i++) {
             long t0 = System.currentTimeMillis();
-            String r = proot.execAndReadWith(rt, cmd, 60_000);
+            String r = proot.execAndReadWith(rt, cmd, 25_000);
             long dt = System.currentTimeMillis() - t0;
             if (r == null || r.startsWith("ERROR") || "TIMEOUT".equals(r)) return -1;
-            if (i > 0) t[i - 1] = dt;
+            if (i == 0) continue;                 // 预热轮丢弃
+            if (best < 0 || dt < best) best = dt;
         }
-        java.util.Arrays.sort(t);
-        return t[1];
+        return best;
     }
 
     /** 一键自检：注入 selftest.py 跑一遍**只读**检查（环境/3090 桥/ADB/引导插件/
@@ -3087,6 +3161,9 @@ public class HarnessController {
                 android.util.Log.w("DSHA", "写 repair-builtin.log 失败: " + e);
             }
             android.util.Log.w("DSHA", "内置插件修复结果 fixed=" + fixed + "\n" + diag);
+            logActivity(fixed > 0
+                    ? ("修好了 " + fixed + " 个内置插件的注册（重启 Web 生效）")
+                    : ("内置插件检查完毕，本次没有需要修的（或修不上，详见 repair-builtin.log）"));
         } catch (Throwable e) {
             android.util.Log.w("DSHA", "修内置插件失败: " + e);
         }

@@ -185,6 +185,8 @@ public class ProotBootstrap {
                         .putString("proroot_last_error", why == null ? "" : why)
                         .apply();
                 android.util.Log.w("DSHA", "proroot 连续失败 " + n + " 次，已强制切回 proot：" + why);
+                HarnessController.get(ctx).logActivity(
+                        "运行时强制回退：proroot 连续失败 " + n + " 次已切回 proot —— " + why);
                 return true;
             }
             sp.edit().putInt("proroot_fail_streak", n)
@@ -221,6 +223,8 @@ public class ProotBootstrap {
                 }
                 android.util.Log.w("DSHA", "proroot 不可用，本次降回 proot: "
                         + pr.unavailableReason());
+                HarnessController.get(ctx).logActivity(
+                        "运行时降级：proroot 不可用，本次用 proot —— " + pr.unavailableReason());
             }
         } catch (Throwable e) {
             android.util.Log.w("DSHA", "选择运行时失败，降回 proot: " + e);
