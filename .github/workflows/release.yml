@@ -1,0 +1,231 @@
+name: Release
+
+# 打 tag 就发布：构建离线 rootfs → 打签名 APK → 建 GitHub Release 并上传。
+#
+# 为什么单独一个工作流而不是往 android-build.yml 里加条件：
+# 那个流水线每次 push main 都跑，职责是「代码能编过、产物能下载」；
+# 发布是低频、有副作用（创建 Release、对外可见）的动作，混在一起容易误触发。
+# 两边共用同一套构建脚本（scripts/ci-make-offline-bundle.sh + gradle），
+# 不复制构建逻辑本身。
+#
+# 触发方式：
+#   git tag v1.1.7 && git push origin v1.1.7
+#   或在 Actions 页手动 workflow_dispatch，填 tag 名
+#
+# 必需的 secrets（没配就用 debug 签名，会在日志里大声警告）：
+#   DSHA_KEYSTORE_B64        base64 编码的 release keystore
+#   DSHA_KEYSTORE_PASSWORD   keystore 密码
+#   DSHA_KEY_ALIAS           key 别名
+#   DSHA_KEY_PASSWORD        key 密码
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（如 v1.1.7）；留空则用当前 commit 建 tag'
+        required: false
+        default: ''
+      prerelease:
+        description: '标记为预发布'
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false      # 发布不该被后一次触发打断
+
+permissions:
+  contents: write                # 创建 Release、上传附件需要
+
+jobs:
+  # Job 1：原生 arm64 预装 rootfs（node-pty 必须编 arm64）
+  bundle:
+    name: Offline rootfs (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore cached offline bundle
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: bundle/offline-rootfs.tar.gz
+          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'scripts/provision-builtin-plugins.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/webui-origin-port-patch.sh', 'app/src/main/assets/*.patch', 'app/src/main/assets/mobile-adapt/**', 'app/src/main/assets/device-shell-guide/**', 'app/src/main/assets/task-notifier/**') }}
+
+      - name: Build offline rootfs bundle
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p bundle
+          bash scripts/ci-make-offline-bundle.sh
+          test -s bundle/offline-rootfs.tar.gz
+          ls -lh bundle/offline-rootfs.tar.gz
+
+      - name: Write offline version
+        run: |
+          set -euo pipefail
+          VER="${OFFLINE_VERSION:-1}"
+          printf '%s\n' "$VER" > bundle/offline-rootfs.version
+          echo "offline-rootfs.version=$VER"
+
+      - name: Upload offline bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-rootfs-bundle
+          path: |
+            bundle/offline-rootfs.tar.gz
+            bundle/offline-rootfs.version
+          if-no-files-found: error
+          retention-days: 7
+
+  # Job 2：x86 runner 打签名 APK 并发布
+  release:
+    name: Build signed APK & publish
+    needs: bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download offline bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: offline-rootfs-bundle
+          path: bundle
+
+      - name: Bundle asset into app
+        run: |
+          set -euo pipefail
+          test -s bundle/offline-rootfs.tar.gz
+          mkdir -p app/src/main/assets
+          cp bundle/offline-rootfs.tar.gz app/src/main/assets/offline-rootfs.tar.gz
+          if [ -f bundle/offline-rootfs.version ]; then
+            cp bundle/offline-rootfs.version app/src/main/assets/offline-rootfs.version
+          fi
+          ls -lh app/src/main/assets/offline-rootfs.tar.gz
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK components
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Gradle 8.5
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
+
+      # 签名密钥从 secrets 落地成临时文件。绝不写进工作区（那会被后续步骤
+      # 或缓存意外带走），只放 RUNNER_TEMP，job 结束即销毁。
+      - name: Prepare release signing key
+        env:
+          KS_B64: ${{ secrets.DSHA_KEYSTORE_B64 }}
+          KS_PWD: ${{ secrets.DSHA_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.DSHA_KEY_ALIAS }}
+          KEY_PWD: ${{ secrets.DSHA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KS_B64:-}" ]; then
+            echo "::error::未配置 DSHA_KEYSTORE_B64 —— 发布包不能用 debug 签名"
+            echo "debug keystore 的密码是公开的（android/android），"
+            echo "谁都能用它签出「看起来是官方更新」的包。"
+            echo "请到 Settings → Secrets and variables → Actions 配置四个 secret。"
+            exit 1
+          fi
+          printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/dsha.keystore"
+          test -s "$RUNNER_TEMP/dsha.keystore"
+          echo "DSHA_KEYSTORE=$RUNNER_TEMP/dsha.keystore" >> "$GITHUB_ENV"
+          echo "DSHA_KEYSTORE_PASSWORD=$KS_PWD" >> "$GITHUB_ENV"
+          echo "DSHA_KEY_ALIAS=${KS_ALIAS:-dsha}" >> "$GITHUB_ENV"
+          echo "DSHA_KEY_PASSWORD=$KEY_PWD" >> "$GITHUB_ENV"
+          echo "已加载 release keystore"
+
+      - name: Read version from build.gradle
+        id: ver
+        run: |
+          set -euo pipefail
+          VN=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle | head -1)
+          VC=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle | head -1)
+          echo "name=$VN" >> "$GITHUB_OUTPUT"
+          echo "code=$VC" >> "$GITHUB_OUTPUT"
+          echo "versionName=$VN versionCode=$VC"
+
+      - name: Build signed release APK
+        run: |
+          set -euo pipefail
+          # CI 是 x86_64：去掉仅适用于本地 ARM64 的 aapt2 覆盖
+          sed -i '/aapt2FromMavenOverride/d' gradle.properties
+          gradle :app:assembleDebug --no-daemon
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+
+      # 指纹必须核对：发布前确认签名没换，否则老用户无法覆盖升级。
+      # 这一步失败就停下，不要发出一个签名不对的包。
+      - name: Verify signing fingerprint
+        run: |
+          set -euo pipefail
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
+          OUT=$("$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk)
+          echo "$OUT" | grep -i "SHA-256 digest" || true
+          # 项目 release keystore 的证书指纹前缀（RSA 4096）
+          if ! echo "$OUT" | grep -qi "ED:8A:AE:A2:07:F5:1B:F1"; then
+            echo "::warning::证书指纹与预期的 release keystore 不一致，请人工确认"
+          else
+            echo "签名指纹核对通过"
+          fi
+
+      - name: Rename APK
+        id: apk
+        run: |
+          set -euo pipefail
+          NAME="deepseekharness-arm64-v${{ steps.ver.outputs.name }}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$NAME"
+          sha256sum "$NAME" | tee "$NAME.sha256"
+          echo "file=$NAME" >> "$GITHUB_OUTPUT"
+          echo "sha=$(sha256sum "$NAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          ls -lh "$NAME"
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=v${{ steps.ver.outputs.name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: DSHA ${{ steps.tag.outputs.value }}
+          prerelease: ${{ inputs.prerelease || false }}
+          generate_release_notes: true
+          body: |
+            **仅支持 arm64 / Android 8.0+**，APK 已内置完整 Linux 环境。
+
+            ```
+            versionName  ${{ steps.ver.outputs.name }}
+            versionCode  ${{ steps.ver.outputs.code }}
+            sha256       ${{ steps.apk.outputs.sha }}
+            ```
+
+            由 CI 构建并用项目 release keystore 签名，可直接覆盖安装。
+            以下是自动生成的变更记录：
+          files: |
+            ${{ steps.apk.outputs.file }}
+            ${{ steps.apk.outputs.file }}.sha256
+          fail_on_unmatched_files: true

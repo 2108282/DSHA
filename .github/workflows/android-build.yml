@@ -117,7 +117,10 @@ jobs:
             printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/dsha.keystore"
             echo "DSHA_KEYSTORE=$RUNNER_TEMP/dsha.keystore" >> "$GITHUB_ENV"
             echo "DSHA_KEYSTORE_PASSWORD=${KS_PWD:-android}" >> "$GITHUB_ENV"
-            echo "DSHA_KEY_ALIAS=${KS_ALIAS:-androiddebugkey}" >> "$GITHUB_ENV"
+            # 默认值必须是 dsha —— 项目 release keystore 的 alias 就是它
+            # （build.gradle 里同名默认）。写成 androiddebugkey 的话，
+            # 少配这一个 secret 就会「keystore 有、alias 找不到」而签名失败。
+            echo "DSHA_KEY_ALIAS=${KS_ALIAS:-dsha}" >> "$GITHUB_ENV"
             echo "DSHA_KEY_PASSWORD=${KEY_PWD:-android}" >> "$GITHUB_ENV"
             echo "已启用统一签名（与历史发布包一致，可直接覆盖安装）"
           else
