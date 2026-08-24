@@ -813,6 +813,44 @@ public class HarnessController {
         return false;
     }
 
+    /** 按自检结论触发可以自动完成的修复。只写文件、不碰进程。
+     *  返回追加到自检报告末尾的说明（没修任何东西时返回空串）。 */
+    private String autoFixFromSelfTest(String out) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            boolean pluginTrouble = out.contains("设备引导插件未注册")
+                    || out.contains("解析不到")
+                    || out.contains("已摘除")
+                    || out.contains("修复没成功");
+            if (pluginTrouble) {
+                int fixed = repairBuiltinPlugins(true);
+                if (fixed > 0) {
+                    sb.append("· 已安置并注册 ").append(fixed).append(" 个内置插件\n");
+                } else {
+                    sb.append("· 内置插件仍未修好，原因见 .dsh/repair-builtin.log\n");
+                }
+            }
+            if (out.contains("❌ write 补丁") || out.contains("❌ 会话发布补丁")) {
+                ensureFsWritePatch();
+                sb.append("· 已重打 write / 会话发布补丁\n");
+            }
+            if (out.contains("❌ 危险命令守卫")) {
+                ensureDangerGuard();
+                sb.append("· 已补装危险命令守卫\n");
+            }
+            if (out.contains("l2s 悬空链")) {
+                runAssetScript("flatten-l2s.py", "dsha-flatten-l2s.py", 120_000);
+                sb.append("· 已清理 l2s 悬空链（备份不会再因它失败）\n");
+            }
+        } catch (Throwable e) {
+            sb.append("· 自动修复中断：").append(describe(e)).append('\n');
+        }
+        if (sb.length() == 0) return "";
+        return "\n\n=== 自检顺手做的修复 ===\n" + sb
+                + "这些改动在下次启动 Web 后生效 —— 点启动页的「重启」，"
+                + "然后可以再跑一次自检确认。";
+    }
+
     /** 内置插件包名 → assets 目录名。方案 B 直接从 APK 写入，连中间实体都不需要。 */
     private static String builtinAssetDir(String pkgName) {
         if ("dsh-device-shell-guide".equals(pkgName)) return "device-shell-guide";
@@ -1175,7 +1213,13 @@ public class HarnessController {
             if (out == null || out.trim().isEmpty()) {
                 return "自检没有输出：rootfs 内的 python3 可能不可用（可重跑步骤②安装基础工具）。";
             }
-            return out.trim();
+            // 用户点「运行自检」的这一刻，正是他明确想解决问题的时候 —— 顺手把能自动
+            // 修的修掉。比挂在启动路径上安全得多（启动那条路已经栽过好几次：自动重启
+            // 打断自己、pkill 误杀宿主进程），而且修完可以立刻再跑一次自检验证。
+            //
+            // 原则：**只动文件，不动进程**。要不要重启交给用户决定，
+            // 绝不在用户没预期的时候去停/起 Web。
+            return (out.trim() + autoFixFromSelfTest(out)).trim();
         } catch (Throwable e) {
             return "自检失败：" + describe(e);
         }
@@ -2813,6 +2857,11 @@ public class HarnessController {
     private volatile long lastBuiltinRepairAt = 0;
 
     public int repairBuiltinPlugins() {
+        return repairBuiltinPlugins(false);
+    }
+
+    /** force=true 时忽略节流 —— 用户主动跑自检就是「现在就给我修」，不该被时间窗挡住。 */
+    public int repairBuiltinPlugins(boolean force) {
         int fixed = 0;
         try {
             if (!proot.isInstalled()) return 0;
@@ -2820,7 +2869,7 @@ public class HarnessController {
             // 而这里要读写 rootfs 里的 package.json —— 频繁跑纯属浪费 IO。
             // 注册丢失不是高频事件，20 秒的窗口足够。
             long now = System.currentTimeMillis();
-            if (now - lastBuiltinRepairAt < 20_000) return 0;
+            if (!force && now - lastBuiltinRepairAt < 20_000) return 0;
             lastBuiltinRepairAt = now;
             java.io.File pkg = new java.io.File(proot.getRootfsDir(),
                     "root/.dsh/profiles/web/package.json");
