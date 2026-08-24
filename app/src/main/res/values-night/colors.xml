@@ -2,7 +2,6 @@
 <resources>
     <color name="primary">#7DA7F4</color>
     <color name="primary_dark">#6F9BEF</color>
-    <color name="accent">#7DA7F4</color>
     <color name="accent_on">#0B1524</color>
     <color name="surface">#10141B</color>
     <color name="card">#161B24</color>
@@ -20,8 +19,5 @@
     <!-- 深色底下涟漪要更亮一点才看得见 -->
     <color name="ripple">#337DA7F4</color>
     <color name="disabled">#1B2130</color>
-    <color name="text_disabled">#5A6478</color>
-    <color name="ok_bg">#1F7ED6A2</color>
-    <color name="warn_bg">#1FE5C07B</color>
     <color name="err_bg">#1AE08A8A</color>
 </resources>
