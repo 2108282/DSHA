@@ -214,6 +214,15 @@
                 android:text="内置浏览器内核（系统 WebView 过旧时再开，更吃内存）" />
 
             <CheckBox
+                android:id="@+id/config_proroot"
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/touch_min"
+                android:paddingStart="@dimen/gap_tight"
+                android:text="proroot 运行时（实验：零 ptrace 开销，理论更快；出问题会自动退回 proot）" />
+
+            <CheckBox
                 android:id="@+id/config_lan_mode"
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"

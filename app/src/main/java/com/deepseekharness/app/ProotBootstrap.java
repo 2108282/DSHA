@@ -147,6 +147,11 @@ public class ProotBootstrap {
 
     /** proot 运行环境（两个 exec 入口共用，避免两处漂移） */
     private void applyProotEnv(ProcessBuilder pb) {
+        // 运行时特有的环境变量（proroot 需要一个可写的 PROROOT_TMP_DIR）
+        try {
+            runtime().applyEnv(pb, baseDir, libDir, tmpDir);
+        } catch (Throwable ignored) {
+        }
         pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
         applyL2sEnv(pb);
         pb.environment().put("PROOT_LOADER", findNativeLib("libprootloader.so").getAbsolutePath());
@@ -163,33 +168,79 @@ public class ProotBootstrap {
     }
 
     /** 组装 proot 公共参数（两个 exec 入口共用，避免两处漂移） */
-    private java.util.List<String> baseProotArgv() {
-        java.util.List<String> argv = new java.util.ArrayList<>();
-        argv.add(prootPath());
-        // 只有文件系统不支持硬链接时才需要 link2symlink 模拟（会破坏 dsh write 工具）
-        if (!hardlinkSupported()) argv.add("--link2symlink");
-        argv.add("-L");
-        argv.add("--kill-on-exit");
-        argv.add("-0");
-        argv.add("--rootfs=" + rootfsDir.getAbsolutePath());
-        argv.add("--cwd=/root");
-        argv.add("-b");
-        argv.add("/dev");
-        argv.add("-b");
-        argv.add("/dev/urandom:/dev/random");
-        argv.add("-b");
-        argv.add("/proc");
-        argv.add("-b");
-        argv.add("/sys");
-        argv.add("-b");
-        argv.add("/proc/self/fd:/dev/fd");
-        argv.add("-b");
-        argv.add("/storage/emulated/0:/sdcard");
-        argv.add("-b");
-        argv.add("/storage/emulated/0:/storage/emulated/0");
-        return argv;
+    /** 连续失败到这个次数就强制切回 proot 并清掉用户的选择。
+     *  实验功能允许失败，但不能让人卡在一个起不来的环境里反复试。 */
+    private static final int PROROOT_FAIL_LIMIT = 3;
+
+    /** 记一次 proroot 启动失败；达到上限就自动切回 proot。返回是否触发了强制回退。 */
+    public boolean noteProrootFailure(String why) {
+        try {
+            android.content.SharedPreferences sp = ctx.getSharedPreferences(
+                    "deepseekharness", Context.MODE_PRIVATE);
+            if (!"proroot".equals(sp.getString("container_runtime", "proot"))) return false;
+            int n = sp.getInt("proroot_fail_streak", 0) + 1;
+            if (n >= PROROOT_FAIL_LIMIT) {
+                sp.edit().putString("container_runtime", "proot")
+                        .putInt("proroot_fail_streak", 0)
+                        .putString("proroot_last_error", why == null ? "" : why)
+                        .apply();
+                android.util.Log.w("DSHA", "proroot 连续失败 " + n + " 次，已强制切回 proot：" + why);
+                return true;
+            }
+            sp.edit().putInt("proroot_fail_streak", n)
+                    .putString("proroot_last_error", why == null ? "" : why).apply();
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
+    /** 启动成功后清零计数 —— 否则偶发失败累积起来也会触发回退。 */
+    public void noteProrootSuccess() {
+        try {
+            android.content.SharedPreferences sp = ctx.getSharedPreferences(
+                    "deepseekharness", Context.MODE_PRIVATE);
+            if (sp.getInt("proroot_fail_streak", 0) != 0) {
+                sp.edit().putInt("proroot_fail_streak", 0).apply();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 当前容器运行时。默认 proot；用户在配置页切到 proroot 后，
+     *  若它不可用（.so 缺失）会自动降回 proot —— 实验功能不该让环境不可用。 */
+    public ContainerRuntime runtime() {
+        try {
+            android.content.SharedPreferences sp = ctx.getSharedPreferences(
+                    "deepseekharness", Context.MODE_PRIVATE);
+            if ("proroot".equals(sp.getString("container_runtime", "proot"))) {
+                ContainerRuntime pr = new ContainerRuntime.Proroot(
+                        ctx, ContainerRuntime.Proroot.defaultDir(ctx));
+                if (pr.available()) {
+                    pr.prepare();
+                    return pr;
+                }
+                android.util.Log.w("DSHA", "proroot 不可用，本次降回 proot: "
+                        + pr.unavailableReason());
+            }
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "选择运行时失败，降回 proot: " + e);
+        }
+        return new ContainerRuntime.Proot(ctx, findNativeLib("libproot.so"));
+    }
+
+    /** 只读地看一眼配置里选的是哪个（不做可用性判断，供 UI 显示）。 */
+    public String preferredRuntimeId() {
+        try {
+            return ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
+                    .getString("container_runtime", "proot");
+        } catch (Throwable e) {
+            return "proot";
+        }
+    }
+
+    private java.util.List<String> baseProotArgv() {
+        return runtime().baseArgv(rootfsDir, hardlinkSupported());
+    }
     public boolean isInstalled() {
         return hasBash();
     }

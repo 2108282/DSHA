@@ -169,6 +169,67 @@ public class HarnessController {
     }
 
     /** 同步停止（等端口关透）：供强重启/插件变更使用；常规杀不净则宽杀 node */
+    /** 在 **Android 侧**扫 /proc 找 web 进程并精确杀掉，返回杀了几个。
+     *
+     *  为什么不在容器内 pkill：proot 不隔离 PID，容器里 /proc 看到的是宿主全部进程，
+     *  pkill -f 的信号会落到 proot 乃至 App 自己身上 —— 实测就这么被杀过，
+     *  现象是「点重启约十秒后闪退，通知栏一起消失」。
+     *
+     *  做法参考 andClaw（proroot 作者自己的 App，同样是 Android→容器→Node→AI agent
+     *  这套结构）：记 pid、读 /proc/<pid>/cmdline 核对身份、用
+     *  android.os.Process.killProcess 精确杀。好处是不依赖容器内命令，
+     *  也就**不受容器运行时切换影响** —— 换 proroot 后不用改这里。
+     *
+     *  非 root 应用只能杀同 uid 的进程，而容器内进程都是本 App fork 出来的，
+     *  正好够用；顺带天然不会误伤系统或其它应用。 */
+    private int killWebProcessesFromAndroid() {
+        int killed = 0;
+        try {
+            String[] pids = new java.io.File("/proc").list();
+            if (pids == null) return 0;
+            int self = android.os.Process.myPid();
+            for (String name : pids) {
+                if (name.isEmpty() || name.charAt(0) < '0' || name.charAt(0) > '9') continue;
+                int pid;
+                try {
+                    pid = Integer.parseInt(name);
+                } catch (NumberFormatException e) {
+                    continue;
+                }
+                if (pid == self) continue;
+                String cmd = readProcCmdline(pid);
+                if (cmd == null || cmd.isEmpty()) continue;
+                // 绝不碰容器启动器：杀了它等于把整个环境连 App 一起带走
+                if (cmd.contains("libproot.so") || cmd.contains("libproroot")) continue;
+                boolean isWeb = (cmd.contains("bin.js") && cmd.contains("web"))
+                        || cmd.contains("dsh web")
+                        || cmd.contains("dsh-watchdog.sh");
+                if (!isWeb) continue;
+                try {
+                    android.os.Process.killProcess(pid);
+                    killed++;
+                    android.util.Log.w("DSHA", "已杀 web 进程 pid=" + pid + " cmd=" + tail(cmd, 80));
+                } catch (Throwable e) {
+                    android.util.Log.w("DSHA", "杀 pid=" + pid + " 失败: " + e);
+                }
+            }
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "Android 侧扫进程失败: " + e);
+        }
+        return killed;
+    }
+
+    private String readProcCmdline(int pid) {
+        try {
+            byte[] b = java.nio.file.Files.readAllBytes(
+                    new java.io.File("/proc/" + pid + "/cmdline").toPath());
+            // cmdline 用 \0 分隔参数
+            return new String(b, StandardCharsets.UTF_8).replace('\0', ' ').trim();
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
     /** 安全杀 web 进程：proot **不隔离 PID**，容器内 /proc 看到的是宿主的全部进程，
      *  pkill 一旦命中 proot 自身就会把承载整个环境的进程杀掉，App 的前台服务随之死亡
      *  （现象：点重启十秒后闪退、通知栏一起消失）。
@@ -178,7 +239,10 @@ public class HarnessController {
     private String safeKillWebCmd(String sig) {
         return "for _p in $(pgrep -f 'bin.js web' 2>/dev/null; pgrep -f 'dsh web' 2>/dev/null; "
                 + "pgrep -f dsh-watchdog.sh 2>/dev/null); do "
-                + "tr '\\0' ' ' < /proc/$_p/cmdline 2>/dev/null | grep -q proot && continue; "
+                // 同时排除两种容器启动器：只写 proot 的话，切到 proroot 后
+                // 这道保护就失效了（关键字不匹配），而失效的后果是把整个环境连 App 杀掉
+                + "tr '\\0' ' ' < /proc/$_p/cmdline 2>/dev/null "
+                + "| grep -qE 'libproot\\.so|libproroot' && continue; "
                 + "kill -" + sig + " $_p 2>/dev/null; done; ";
     }
 
@@ -189,6 +253,9 @@ public class HarnessController {
             if (!waitPortClosed(5000)) {
                 // 只杀 dsh web 相关进程（bin.js web / dsh web），不裸杀 node
                 // （裸 pkill -f node 会误杀 agent/用户跑的其他 node 进程！）
+                // 先在 Android 侧按 pid 精确杀（不受容器运行时影响），
+                // 仍没关透再用容器内那条兜底
+                killWebProcessesFromAndroid();
                 proot.execAndRead(safeKillWebCmd("TERM") + "sleep 3; "
                         + safeKillWebCmd("9") + "sleep 1; echo done");
                 waitPortClosed(5000);
@@ -1220,7 +1287,9 @@ public class HarnessController {
             java.io.File f = new java.io.File(proot.getRootfsDir(), "root/dsha-selftest.py");
             if (f.getParentFile() != null) f.getParentFile().mkdirs();
             java.nio.file.Files.write(f.toPath(), py.getBytes(StandardCharsets.UTF_8));
-            String args = " --script-ver " + AdbBridge.scriptVersion()
+            String args = " --runtime " + proot.runtime().id()
+                    + " --runtime-pref " + proot.preferredRuntimeId()
+                    + " --script-ver " + AdbBridge.scriptVersion()
                     + " --guard-ver " + GUARD_VERSION
                     + " --step6 " + STEP6_VERSION
                     + " --assets " + BUILTIN_ASSET_VERSION
@@ -3429,6 +3498,7 @@ public class HarnessController {
                         // （那个 10 秒正是这段里的 sleep 3 加上前面 waitPortClosed 的累计）。
                         // 而且只有「端口仍被占、正常停止没成功」才会走到这儿，也就是重启场景，
                         // 首次启动端口是空的、压根不执行 —— 所以表现为「以前一直是好的」。
+                        killWebProcessesFromAndroid();
                         proot.execAndRead(safeKillWebCmd("TERM") + "sleep 3; "
                                 + safeKillWebCmd("9") + "sleep 1; echo done");
                         waitPortClosed(4000);
@@ -3486,6 +3556,7 @@ public class HarnessController {
                     try {
                         if (waitWebPortUp(60_000)) {
                             setState("", 100, "Web UI 已启动", "", false);
+                            proot.noteProrootSuccess();   // 这次运行时可用，清零失败计数
                             // 全新安装的关键一步：profile 是 dsh 首次启动时才创建的，
                             // 而 MainActivity 里那次 ensureBuiltinPluginsReady 跑在它之前 ——
                             // 那时三个内置插件一个也注册不上。以前只在日志里写「启动一次
@@ -3494,8 +3565,11 @@ public class HarnessController {
                             ensureBuiltinPluginsAfterProfileReady();
                         } else {
                             // 超时：释放 busy（否则一直卡灰，靠 10 分钟自愈太慢）
+                            boolean forced = proot.noteProrootFailure("Web 启动超时（60s 端口未就绪）");
                             setState("", 0, "", "Web UI 启动超时（60s 端口未就绪）\n"
-                                    + "可稍后点「重启」，或查看启动页日志尾部", false);
+                                    + (forced
+                                    ? "proroot 连续失败已达上限，已自动切回 proot —— 再点一次「重启」"
+                                    : "可稍后点「重启」，或查看启动页日志尾部"), false);
                         }
                     } catch (Throwable ignored) {
                     }

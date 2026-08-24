@@ -1,0 +1,60 @@
+# 第三方组件声明
+
+DSHA 的 APK 内包含以下第三方二进制组件。
+
+## proot（Termux 分支）
+
+- 来源：https://github.com/termux/proot
+- 许可：GPL-2.0
+- 在包内的位置：`lib/arm64-v8a/libproot.so`、`libprootloader.so`、
+  `libprootloader32.so`、`libtalloc.so`、`libandroidshmem.so`
+- 用途：默认的容器运行时，用 ptrace 实现免 root 的 chroot 环境
+- 说明：文件名带 `lib` 前缀、`.so` 后缀是 Android 打包要求
+  （只有这样系统才会把它提取到可执行的 `nativeLibraryDir`），
+  内容未作修改
+
+## proroot
+
+- 来源：https://github.com/coderredlab/proroot（v1.2.8）
+- 许可：Proprietary。README 原文：*"Free to use in your projects.
+  Redistribution of modified binaries is not permitted."*
+  —— 允许在项目中使用，禁止分发**修改过**的二进制
+- 在包内的位置：`lib/arm64-v8a/libproroot.so`、`libproroot-runtime.so`、
+  `libproroot-linker.so`、`libproroot-stub-loader.so`、`libproroot-bridge.so`
+- 用途：**可选**的实验性容器运行时。用 LD_PRELOAD + 二进制补丁做进程内路径翻译，
+  没有 ptrace 的上下文切换开销
+- 分发的是官方 release 的**原始二进制**，未作任何修改，sha256 与
+  上游 release notes 一致：
+
+```
+a4e74d75b66cdc02b080adfe863dbf9951c3b30610d77beddc95488d5fe5de01  libproroot.so
+8c47a0a7db32d84c179ebb5bf3640f655a3181860ece5886ae44d92858730c34  libproroot-runtime.so
+1c5bc9537a270e8bf8b1c70222813f57b60b828bfb5503ddf8fe37685092de2f  libproroot-bridge.so
+51a0ec5bfed00e572a0de09e22d9057e2befc386b78e426613d3e0ab03f4ecee  libproroot-linker.so
+06c6624db3bdc45b9ced151cd781df439a37b47731d244b93e9d6a58cd48cde0  libproroot-stub-loader.so
+```
+
+### 为什么随包分发而不是按需下载
+
+Android 10+ 的 W^X 策略不允许从应用可写目录（`filesDir`）执行代码。
+下载到 `filesDir` 的 `.so` 无法执行，只有放进 APK 的 `jniLibs`、
+由系统提取到 `nativeLibraryDir` 才能跑。现有的 `libproot.so` 同理。
+
+### 用户可控性
+
+- **默认不启用**，需在「配置」页显式勾选
+- 不参与装机路径（解压、安装六步一律用 proot），只影响「执行命令」这一层
+- 连续 3 次启动失败会自动切回 proot 并告知用户
+- 因此最坏情况是这一层退回 proot，不会导致环境不可用
+
+### 已知限制
+
+- 上游未公开源码，无法审计，出问题只能等作者修
+- 作者已将开发重心转向另一个项目（proroom），更新频率会下降
+- 因闭源，Termux 官方仓库拒绝收录（见 proroot issue #21）
+
+## 其他
+
+- Ubuntu arm64 rootfs（`assets/offline-rootfs.bin`）：各软件包遵循各自许可
+- GeckoView（`libxul.so` 等）：MPL-2.0
+- `@deepseek-ai/dsh`：见其 npm 包内的许可声明

@@ -30,7 +30,7 @@ public class ConfigFragment extends Fragment {
     private HarnessController c;
     private EditText apiKeyEdit, portEdit, modelEdit;
     private Spinner modeSpinner;
-    private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb, rootShellCb;
+    private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb, rootShellCb, prorootCb;
     private CheckBox backupKeyCb;
     private EditText autoBackupEdit;
     private Button saveBtn;
@@ -58,6 +58,7 @@ public class ConfigFragment extends Fragment {
         rc6Cb = view.findViewById(R.id.config_rc6);
         autoBackupEdit = view.findViewById(R.id.config_auto_backup);
         geckoCb = view.findViewById(R.id.config_gecko_core);
+        prorootCb = view.findViewById(R.id.config_proroot);
         adbCb = view.findViewById(R.id.config_adb_enable);
         rootShellCb = view.findViewById(R.id.config_root_shell);
         saveBtn = view.findViewById(R.id.config_save);
@@ -544,6 +545,11 @@ public class ConfigFragment extends Fragment {
                     .putBoolean("lan_mode", lanModeCb.isChecked())
                     .putBoolean("use_rc6", rc6Cb.isChecked())
                     .putBoolean("gecko_core", geckoCb != null && geckoCb.isChecked())
+                    // 运行时以字符串存，将来加第三种后端不必改存储格式
+                    .putString("container_runtime",
+                            prorootCb != null && prorootCb.isChecked() ? "proroot" : "proot")
+                    // 换运行时后连续失败计数要归零，否则会带着旧账立刻触发强制回退
+                    .putInt("proroot_fail_streak", 0)
                     .putBoolean(DeviceBridgeService.PREF_ADB, adbCb != null && adbCb.isChecked())
                     .putInt("auto_backup_launches", parseAutoBackup())
                     .apply();
@@ -604,6 +610,11 @@ public class ConfigFragment extends Fragment {
         lanModeCb.setChecked(requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false));
+        if (prorootCb != null) {
+            prorootCb.setChecked("proroot".equals(requireContext()
+                    .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .getString("container_runtime", "proot")));
+        }
         if (geckoCb != null) {
             geckoCb.setChecked(requireContext()
                     .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)

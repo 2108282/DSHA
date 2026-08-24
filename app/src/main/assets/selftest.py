@@ -746,6 +746,23 @@ def check_sanitize_log():
         add("SKIP", "profile 校准记录", "最近一次没有需要处理的项")
 
 
+def check_runtime():
+    """当前容器运行时。**选的**和**实际生效的**可能不同 ——
+    proroot 缺文件或连续失败会被自动降回 proot，用户界面上看不出来，
+    而「为什么没变快」这个问题只有这里能回答。
+    """
+    actual = arg("runtime") or "proot"
+    pref = arg("runtime-pref") or "proot"
+    names = {"proot": "proot（内置，稳定）", "proroot": "proroot（实验，零 ptrace）"}
+    if actual == pref:
+        add("PASS", "容器运行时", "%s" % names.get(actual, actual))
+    else:
+        add("WARN", "容器运行时",
+            "选的是 %s，实际用的是 %s —— 说明它不可用或连续失败已被自动切回。\n"
+            "    原因见 logcat；想再试就到「配置」页重新勾选"
+            % (names.get(pref, pref), names.get(actual, actual)))
+
+
 def check_web_boot():
     """dsh 最近一次启动有没有致命错误 —— 这是整份自检里最该先看的一项。
 
@@ -939,6 +956,7 @@ def main():
         (check_web_auth, ()),
         (check_dsh_dupes, ()),
         (check_sessions, ()),
+        (check_runtime, ()),
         (check_sanitize_log, ()),
         (check_web_boot, ()),
         (check_bundles, ()),
