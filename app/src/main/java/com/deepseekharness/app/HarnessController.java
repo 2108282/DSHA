@@ -804,40 +804,82 @@ public class HarnessController {
 
     /** 把内置插件实体**安置**进 node_modules，成功才返回 true。
      *
-     *  不用符号链接，直接复制 —— 这是这一版最关键的取舍。
-     *  Android 私有目录连硬链接都不支持（自检的「硬链接支持」项常年是「不支持」），
-     *  符号链接也时好时坏：从 Android 侧调 Files.createSymbolicLink 基本失败，
-     *  proot 内 ln -sfn 也未必稳。而链接一旦没建成，上层降级逻辑就把插件从
-     *  bundles 摘掉，用户看到的是「插件莫名消失」——实测就这么丢过一次。
+     *  纯 Java 递归复制 —— 前面几版分别试过：写注册不建链接（dsh 崩）、
+     *  Files.createSymbolicLink（Android 私有目录不支持，插件被误摘）、
+     *  proot 内 ln -sfn 与 cp -a（要拼一串带嵌套引号的 shell，execAndRead
+     *  的包裹方式一旦对不上就整条失败，而失败只写 logcat，用户只看到插件没了）。
      *
-     *  三个内置插件加起来才几十 KB，复制一次的代价远小于「时不时就没了」。
-     *  复制是最基础的文件操作，没有任何环境依赖，成功率就是 100%。
-     *
-     *  版本管理：比对目标与实体的 package.json version，一致就跳过，
-     *  不一致才重新复制 —— 插件升级照样生效，也不会每次启动都白拷一遍。
-     */
+     *  复制文件是 JVM 最基础的能力，不依赖链接支持、不依赖 proot 是否就绪、
+     *  不需要 shell 转义。三个插件加起来几十 KB，多拷几次也无所谓。
+     *  失败原因直接带回调用方，不再消失在日志里。 */
     private boolean linkPlugin(String name, String real, java.io.File nmDir) {
-        String target = "/root/.dsh/profiles/web/node_modules/" + name;
         try {
-            // 已经安置好且版本一致 → 什么都不做
-            String cmd = "T=" + shellArg(target) + "; R=" + shellArg(real) + "; "
-                    + "mkdir -p /root/.dsh/profiles/web/node_modules; "
-                    + "getver() { node -p \"require('$1/package.json').version\" 2>/dev/null || echo x; }; "
-                    + "if [ -f \"$T/package.json\" ] && [ \"$(getver \"$T\")\" = \"$(getver \"$R\")\" ]; then "
-                    + "echo DSHA_PLACE_OK_CACHED; exit 0; fi; "
-                    // 老用户那里 $T 可能是个符号链接（甚至悬空的），rm -rf 一并清掉
-                    + "rm -rf \"$T\"; cp -a \"$R\" \"$T\" && [ -f \"$T/package.json\" ] "
-                    + "&& echo DSHA_PLACE_OK";
-            String r = proot.execAndRead(cmd, 90_000);
-            if (r != null && (r.contains("DSHA_PLACE_OK") || r.contains("DSHA_PLACE_OK_CACHED"))) {
+            java.io.File src = new java.io.File(proot.getRootfsDir(), "root" + real.substring(5));
+            java.io.File srcPkg = new java.io.File(src, "package.json");
+            if (!srcPkg.isFile()) {
+                android.util.Log.w("DSHA", "安置 " + name + "：实体不完整 " + src);
+                return false;
+            }
+            java.io.File dst = new java.io.File(nmDir, name);
+            java.io.File dstPkg = new java.io.File(dst, "package.json");
+            // 已安置且内容一样 → 跳过（避免每次启动白拷）
+            if (dstPkg.isFile() && dstPkg.length() == srcPkg.length()
+                    && readVersionOf(dstPkg).equals(readVersionOf(srcPkg))
+                    && !readVersionOf(srcPkg).isEmpty()) {
                 return true;
             }
-            android.util.Log.w("DSHA", "安置内置插件 " + name + " 失败: "
-                    + (r == null ? "无输出" : r.trim()));
-            return false;
+            purgeForPlace(dst);          // 含悬空符号链接、老的真目录
+            copyForPlace(src, dst);
+            boolean ok = dstPkg.isFile();
+            if (!ok) android.util.Log.w("DSHA", "安置 " + name + " 后 package.json 仍不在");
+            return ok;
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "安置内置插件 " + name + " 异常: " + e);
+            android.util.Log.w("DSHA", "安置内置插件 " + name + " 失败: " + e);
             return false;
+        }
+    }
+
+    private String readVersionOf(java.io.File pkgJson) {
+        try {
+            String t = new String(java.nio.file.Files.readAllBytes(pkgJson.toPath()),
+                    StandardCharsets.UTF_8);
+            return new org.json.JSONObject(t).optString("version", "");
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
+    /** 递归删除（安置内置插件专用）。符号链接（包括悬空的）只删链接本身，不跟随 ——
+     *  类里那个同名的老方法会跟随链接，用在这里会顺着悬空链报错。 */
+    private void purgeForPlace(java.io.File f) throws java.io.IOException {
+        java.nio.file.Path p = f.toPath();
+        if (!java.nio.file.Files.exists(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return;
+        if (java.nio.file.Files.isSymbolicLink(p) || !f.isDirectory()) {
+            java.nio.file.Files.deleteIfExists(p);
+            return;
+        }
+        java.io.File[] kids = f.listFiles();
+        if (kids != null) {
+            for (java.io.File k : kids) purgeForPlace(k);
+        }
+        java.nio.file.Files.deleteIfExists(p);
+    }
+
+    private void copyForPlace(java.io.File src, java.io.File dst) throws java.io.IOException {
+        if (src.isDirectory()) {
+            //noinspection ResultOfMethodCallIgnored
+            dst.mkdirs();
+            java.io.File[] kids = src.listFiles();
+            if (kids != null) {
+                for (java.io.File k : kids) copyForPlace(k, new java.io.File(dst, k.getName()));
+            }
+        } else {
+            if (dst.getParentFile() != null) {
+                //noinspection ResultOfMethodCallIgnored
+                dst.getParentFile().mkdirs();
+            }
+            java.nio.file.Files.copy(src.toPath(), dst.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
