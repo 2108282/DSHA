@@ -50,7 +50,7 @@
                 style="@style/DshaText.Title"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="接入" />
+                android:text="API Key" />
 
             <TextView
                 style="@style/DshaText.Label"
@@ -79,61 +79,47 @@
                 android:paddingStart="@dimen/gap_control"
                 android:paddingEnd="@dimen/gap_control" />
 
+            <!-- 高级项默认收起：端口几乎没人改、模型在 WebUI 里也能配、
+                 沙箱模式是高级概念。全铺在首屏只会让必填的 API Key 被淹没。 -->
             <TextView
+                android:id="@+id/config_adv_header"
                 style="@style/DshaText.Label"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/gap_control"
-                android:text="端口" />
+                android:background="?attr/selectableItemBackground"
+                android:paddingTop="@dimen/gap_tight"
+                android:paddingBottom="@dimen/gap_tight"
+                android:text="▸ 高级：端口" />
 
-            <EditText
-                android:id="@+id/config_port"
-                style="@style/DshaText.Body"
+            <LinearLayout
+                android:id="@+id/config_adv_body"
                 android:layout_width="match_parent"
-                android:layout_height="@dimen/input_height"
-                android:layout_marginTop="@dimen/gap_tight"
-                android:background="@drawable/bg_input"
-                android:hint="3080"
-                android:importantForAutofill="no"
-                android:inputType="number"
-                android:paddingStart="@dimen/gap_control"
-                android:paddingEnd="@dimen/gap_control" />
-
-            <TextView
-                style="@style/DshaText.Label"
-                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_control"
-                android:text="模型" />
+                android:orientation="vertical"
+                android:visibility="gone">
 
-            <EditText
-                android:id="@+id/config_model"
-                style="@style/DshaText.Body"
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/input_height"
-                android:layout_marginTop="@dimen/gap_tight"
-                android:background="@drawable/bg_input"
-                android:hint="deepseek-v4-flash"
-                android:importantForAutofill="no"
-                android:inputType="text"
-                android:paddingStart="@dimen/gap_control"
-                android:paddingEnd="@dimen/gap_control" />
+                <TextView
+                    style="@style/DshaText.Label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/gap_tight"
+                    android:text="端口" />
 
-            <TextView
-                style="@style/DshaText.Label"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_control"
-                android:text="沙箱权限模式" />
+                <EditText
+                    android:id="@+id/config_port"
+                    style="@style/DshaText.Body"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/input_height"
+                    android:layout_marginTop="@dimen/gap_tight"
+                    android:background="@drawable/bg_input"
+                    android:hint="3080"
+                    android:importantForAutofill="no"
+                    android:inputType="number"
+                    android:paddingStart="@dimen/gap_control"
+                    android:paddingEnd="@dimen/gap_control" />
 
-            <Spinner
-                android:id="@+id/config_mode"
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/input_height"
-                android:layout_marginTop="@dimen/gap_tight"
-                android:background="@drawable/bg_spinner"
-                android:paddingStart="@dimen/gap_control"
-                android:paddingEnd="40dp" />
+            </LinearLayout>
         </LinearLayout>
 
         <!-- ========== 行为 ========== -->

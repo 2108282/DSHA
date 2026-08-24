@@ -5,44 +5,6 @@
     android:background="@color/surface"
     android:orientation="vertical">
 
-    <!-- 链接解析栏：位于标签行上方，右对齐（视觉上在"市场"右侧） -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:paddingStart="@dimen/page_pad"
-        android:paddingEnd="@dimen/page_pad"
-        android:paddingTop="6dp"
-        android:paddingBottom="4dp"
-        android:gravity="center_vertical">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="🔗 GitHub"
-            android:textColor="@color/text_secondary"
-            android:textSize="@dimen/text_caption" />
-
-        <EditText
-            android:id="@+id/githubInstallInput"
-            android:layout_width="0dp"
-            android:layout_height="40dp"
-            android:layout_marginStart="@dimen/gap_tight"
-            android:layout_weight="1"
-            android:background="@drawable/bg_input"
-            android:hint="GitHub 仓库链接，粘贴自动解析"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:imeOptions="actionGo"
-            android:inputType="textUri"
-            android:paddingStart="@dimen/gap_control"
-            android:paddingEnd="@dimen/gap_control"
-            android:singleLine="true"
-            android:textColor="@color/text"
-            android:textColorHint="@color/text_muted"
-            android:textSize="@dimen/text_caption" />
-    </LinearLayout>
-
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -50,8 +12,8 @@
         android:orientation="horizontal"
         android:paddingStart="@dimen/page_pad"
         android:paddingEnd="@dimen/page_pad"
-        android:paddingTop="4dp"
-        android:paddingBottom="@dimen/gap_control">
+        android:paddingTop="2dp"
+        android:paddingBottom="@dimen/gap_tight">
 
         <TextView
             android:id="@+id/btnMarket"
@@ -73,7 +35,7 @@
             android:layout_weight="1"
             android:background="@drawable/bg_tab"
             android:gravity="center"
-            android:text="已装插件"
+            android:text="插件管理"
             android:textColor="@color/text_muted"
             android:textSize="@dimen/text_label"
             android:textStyle="bold" />
@@ -94,7 +56,7 @@
         <TextView
             android:id="@+id/btnFilter"
             android:layout_width="wrap_content"
-            android:layout_height="40dp"
+            android:layout_height="38dp"
             android:layout_marginStart="@dimen/gap_tight"
             android:paddingStart="@dimen/gap_control"
             android:paddingEnd="@dimen/gap_control"

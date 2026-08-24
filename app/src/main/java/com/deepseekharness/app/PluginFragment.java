@@ -57,6 +57,9 @@ public class PluginFragment extends Fragment {
     private int sortMode = 0;
     /** 仅显示兼容插件（过滤 ❌不兼容） */
     private boolean filterIncompat = false;
+    private boolean hideInstalled = false;
+    /** 已装插件名（供市场页「隐藏已安装」比对；加载已装列表时填充） */
+    private final java.util.List<String> installedNames = new java.util.ArrayList<>();
     /** 当前搜索词（供过滤/排序后刷新视图复用） */
     private String searchQuery = "";
 
@@ -83,7 +86,14 @@ public class PluginFragment extends Fragment {
         TextView btnSort = view.findViewById(R.id.btnSort);
         android.widget.EditText searchBox = view.findViewById(R.id.pluginSearch);
         // ===== GitHub 仓库链接解析（市场顶部）：输入链接 → 列表切换为解析结果 =====
-        final android.widget.EditText githubInput = view.findViewById(R.id.githubInstallInput);
+        // 输入框已移到 Activity 的 app_bar（嵌在标题与「关于」按钮之间），
+        // 所以从 activity 取而不是 fragment 的 view。
+        // 取不到就跳过整段解析逻辑 —— 将来布局再变也不至于 NPE。
+        final android.widget.EditText githubInput =
+                requireActivity().findViewById(R.id.appbar_github_input);
+        // 不在这里 return —— 下面的 if (githubInput != null) 已经做了保护，
+        // 而 btnMarket/btnSort/btnFilter/btnRefresh 的绑定都在本方法后半段：
+        // 中途 return 会让整个插件页的按钮全部失去监听。
         // 没有「解析」按钮：输入停顿 600ms 自动解析，回车也能立刻解析，按钮纯属多余
         if (githubInput != null) {
             // 当前解析结果缓存（null=非解析模式）
@@ -203,6 +213,10 @@ public class PluginFragment extends Fragment {
             showInstalled();
         });
         btnSort.setOnClickListener(v -> showSortMenu(btnSort));
+        // 「筛选」按钮布局里一直存在，但从未绑定过监听 —— 用户点了毫无反应。
+        // 筛选功能原先塞在排序菜单里，两个按钮职责混淆。现在拆开。
+        TextView btnFilter = view.findViewById(R.id.btnFilter);
+        if (btnFilter != null) btnFilter.setOnClickListener(v -> showFilterMenu(btnFilter));
 
         // 强制刷新市场缓存（清缓存 → 重新拉网络）
         TextView btnRefresh = view.findViewById(R.id.btnRefresh);
@@ -243,22 +257,58 @@ public class PluginFragment extends Fragment {
         for (int i = 0; i < options.length; i++) {
             pm.getMenu().add(0, i, 0, options[i]);
         }
-        // 分隔线 + 过滤开关（勾选态与 filterIncompat 同步）
-        pm.getMenu().add(0, 100, 0, "仅显示兼容");
-        pm.getMenu().getItem(2).setCheckable(true).setChecked(filterIncompat);
         pm.setOnMenuItemClickListener(item -> {
-            if (item.getItemId() == 100) {
-                filterIncompat = !filterIncompat;
-                item.setChecked(filterIncompat);
-                if (mode == Mode.MARKET) refreshMarketView();
-                return true;
-            }
             sortMode = item.getItemId();
             ((android.widget.TextView) anchor).setText(options[sortMode].replace("排序：", ""));
             if (mode == Mode.MARKET) refreshMarketView();
             return true;
         });
         pm.show();
+    }
+
+    /** 筛选菜单：只管「显示哪些」，与排序分开。
+     *
+     *  之前这些选项塞在排序菜单里，而布局上另有一个「筛选」按钮没绑监听 ——
+     *  用户看到按钮却点不动，功能藏在另一个按钮后面。 */
+    private void showFilterMenu(android.view.View anchor) {
+        android.widget.PopupMenu pm = new android.widget.PopupMenu(requireContext(), anchor);
+        pm.getMenu().add(0, 1, 0, "仅显示兼容").setCheckable(true).setChecked(filterIncompat);
+        pm.getMenu().add(0, 2, 0, "隐藏已安装").setCheckable(true).setChecked(hideInstalled);
+        pm.setOnMenuItemClickListener(item -> {
+            if (item.getItemId() == 1) {
+                filterIncompat = !filterIncompat;
+            } else if (item.getItemId() == 2) {
+                hideInstalled = !hideInstalled;
+            }
+            item.setChecked(item.getItemId() == 1 ? filterIncompat : hideInstalled);
+            // 有筛选生效时按钮加个点，让用户知道列表被过滤过 ——
+            // 「明明搜到了却看不到」是最容易被当成 bug 的体验
+            if (anchor instanceof TextView) {
+                ((TextView) anchor).setText(
+                        (filterIncompat || hideInstalled) ? "筛选 •" : "筛选");
+            }
+            if (mode == Mode.MARKET) refreshMarketView();
+            return true;
+        });
+        pm.show();
+    }
+
+    /** 市场条目是否已经装过。市场里的名字是 owner/repo，已装列表里是 npm 包名，
+     *  两者对不上号，所以做宽松比对（去掉 scope 和 owner 前缀后比尾段）。 */
+    private boolean isAlreadyInstalled(String marketName) {
+        if (marketName == null || installedNames.isEmpty()) return false;
+        String tail = marketName.contains("/")
+                ? marketName.substring(marketName.lastIndexOf('/') + 1) : marketName;
+        tail = tail.toLowerCase(java.util.Locale.ROOT);
+        for (String ins : installedNames) {
+            String it = ins.toLowerCase(java.util.Locale.ROOT);
+            String insTail = it.contains("/") ? it.substring(it.lastIndexOf('/') + 1) : it;
+            if (insTail.equals(tail) || it.equals(tail) || insTail.contains(tail)
+                    || tail.contains(insTail)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 安全解析 star 数（外部数据源格式变化不崩溃） */
@@ -327,11 +377,17 @@ public class PluginFragment extends Fragment {
         java.util.List<String[]> filtered = new java.util.ArrayList<>();
         String q = searchQuery.trim().toLowerCase();
         int skipped = 0;
+        int hidden = 0;
         for (String[] it : items) {
             if (!q.isEmpty() && !it[0].toLowerCase().contains(q)) continue;
             // 仅兼容开关：滤掉不兼容条目（⏳待定/未测 保留，未知兼容性不误杀）
             if (filterIncompat && isIncompat(it[3])) {
                 skipped++;
+                continue;
+            }
+            // 隐藏已安装：市场里翻找新插件时，装过的会挤占视野
+            if (hideInstalled && isAlreadyInstalled(it[0])) {
+                hidden++;
                 continue;
             }
             filtered.add(it);
@@ -340,6 +396,7 @@ public class PluginFragment extends Fragment {
         String hint = "共 " + filtered.size() + " 个插件";
         if (!q.isEmpty()) hint += "（搜索：\"" + q + "\"）";
         if (filterIncompat) hint += " · 仅显示兼容（已滤 " + skipped + " 条不兼容）";
+        if (hideInstalled) hint += " · 已隐藏 " + hidden + " 个装过的";
         hint += " · 点击查看详情/安装" + cacheHint();
         say(hint);
     }
@@ -379,6 +436,15 @@ public class PluginFragment extends Fragment {
                 .getBoolean("hide_builtin", false);
         new Thread(() -> {
             String[][] pl = c.listPlugins(hide);
+            // 记下已装插件名，供市场页「隐藏已安装」比对。
+            // 放在这里是因为这是唯一真实拿到已装列表的地方 ——
+            // 单独再查一次会和这里的结果漂移。
+            installedNames.clear();
+            for (String[] row : pl) {
+                if (row.length > 0 && row[0] != null && !row[0].isEmpty()) {
+                    installedNames.add(row[0]);
+                }
+            }
             runOnUiThreadSafely(() -> {
                 installed.clear();
                 if (pl == null || pl.length == 0) {

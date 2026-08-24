@@ -32,11 +32,43 @@
         <TextView
             android:id="@+id/app_title"
             style="@style/DshaText.Title"
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="@dimen/gap_control"
-            android:layout_weight="1"
             android:text="启动" />
+
+        <!-- 插件页的 GitHub 链接输入框：嵌在标题与「关于」之间。
+             默认 gone，切到插件页时由 MainActivity 显示 ——
+             它在 app_bar 里而不是 fragment 里，是为了不让插件页
+             再为一个输入框单独占一行。 -->
+        <EditText
+            android:id="@+id/appbar_github_input"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_marginStart="@dimen/gap_control"
+            android:layout_marginEnd="@dimen/gap_tight"
+            android:layout_weight="1"
+            android:background="@drawable/bg_input"
+            android:ellipsize="end"
+            android:hint="🔗 粘贴 GitHub 链接"
+            android:imeOptions="actionGo"
+            android:importantForAutofill="no"
+            android:inputType="textUri"
+            android:maxLines="1"
+            android:paddingStart="@dimen/gap_control"
+            android:paddingEnd="@dimen/gap_control"
+            android:singleLine="true"
+            android:textColor="@color/text"
+            android:textColorHint="@color/text_muted"
+            android:textSize="@dimen/text_caption"
+            android:visibility="gone" />
+
+        <!-- 标题右侧的弹性占位：没有输入框时把「关于」挤到最右 -->
+        <View
+            android:id="@+id/appbar_spacer"
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
 
         <FrameLayout
             android:id="@+id/btn_about"

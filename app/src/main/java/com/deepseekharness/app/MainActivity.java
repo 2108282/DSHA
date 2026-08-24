@@ -100,6 +100,16 @@ public class MainActivity extends AppCompatActivity {
 
         nav.setOnItemSelectedListener(item -> {
             int id = item.getItemId();
+            // GitHub 链接输入框只在插件页有意义：切走就藏起来并清空，
+            // 否则它会顶着别的页面的标题栏，还留着上次的内容。
+            android.widget.EditText ghIn = findViewById(R.id.appbar_github_input);
+            View spacer = findViewById(R.id.appbar_spacer);
+            if (ghIn != null) {
+                boolean onPlugins = id == R.id.nav_plugins;
+                ghIn.setVisibility(onPlugins ? View.VISIBLE : View.GONE);
+                if (spacer != null) spacer.setVisibility(onPlugins ? View.GONE : View.VISIBLE);
+                if (!onPlugins) ghIn.setText("");
+            }
             getSupportFragmentManager().popBackStack(null,
                     androidx.fragment.app.FragmentManager.POP_BACK_STACK_INCLUSIVE);
             Fragment f;

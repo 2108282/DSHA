@@ -10,11 +10,9 @@ import android.app.PendingIntent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
-import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -28,8 +26,7 @@ import androidx.fragment.app.Fragment;
 public class ConfigFragment extends Fragment {
 
     private HarnessController c;
-    private EditText apiKeyEdit, portEdit, modelEdit;
-    private Spinner modeSpinner;
+    private EditText apiKeyEdit, portEdit;
     private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb, rootShellCb, prorootCb;
     private CheckBox backupKeyCb;
     private EditText autoBackupEdit;
@@ -48,8 +45,6 @@ public class ConfigFragment extends Fragment {
         c = HarnessController.get(requireContext());
         apiKeyEdit = view.findViewById(R.id.config_api_key);
         portEdit = view.findViewById(R.id.config_port);
-        modelEdit = view.findViewById(R.id.config_model);
-        modeSpinner = view.findViewById(R.id.config_mode);
         confirmShellCb = view.findViewById(R.id.config_confirm_shell);
         checkUpdateCb = view.findViewById(R.id.config_check_update);
         desktopModeCb = view.findViewById(R.id.config_desktop_mode);
@@ -59,6 +54,20 @@ public class ConfigFragment extends Fragment {
         autoBackupEdit = view.findViewById(R.id.config_auto_backup);
         geckoCb = view.findViewById(R.id.config_gecko_core);
         prorootCb = view.findViewById(R.id.config_proroot);
+        // 高级项折叠：默认收起，点标题展开。已经改过端口/模型的用户
+        // （非默认值）自动展开，否则他们会以为设置丢了。
+        final View advBody = view.findViewById(R.id.config_adv_body);
+        final TextView advHeader = view.findViewById(R.id.config_adv_header);
+        if (advBody != null && advHeader != null) {
+            boolean customized = !"3080".equals(c.getPort().trim());
+            advBody.setVisibility(customized ? View.VISIBLE : View.GONE);
+            advHeader.setText((customized ? "▾" : "▸") + " 高级：端口");
+            advHeader.setOnClickListener(v -> {
+                boolean show = advBody.getVisibility() != View.VISIBLE;
+                advBody.setVisibility(show ? View.VISIBLE : View.GONE);
+                advHeader.setText((show ? "▾" : "▸") + " 高级：端口");
+            });
+        }
         adbCb = view.findViewById(R.id.config_adb_enable);
         rootShellCb = view.findViewById(R.id.config_root_shell);
         saveBtn = view.findViewById(R.id.config_save);
@@ -514,14 +523,6 @@ public class ConfigFragment extends Fragment {
     }
 
     private void setupCommonControls() {
-        String[] modes = {"danger-full-access", "workspace-write", "read-only"};
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(requireContext(),
-                android.R.layout.simple_spinner_item, modes);
-        // 关闭态用 simple_spinner_item、展开态才用 dropdown_item：
-        // 两处都传 dropdown_item 会让关闭态也带上勾选标记的留白，和右侧箭头挤在一起
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        modeSpinner.setAdapter(adapter);
-
         loadConfig();
         if (rootShellCb != null) rootShellCb.setChecked(c.isRootShellAllowed());
         if (backupKeyCb != null) {
@@ -534,8 +535,6 @@ public class ConfigFragment extends Fragment {
         saveBtn.setOnClickListener(v -> {
             c.setApiKey(apiKeyEdit.getText().toString().trim());
             c.setPort(portEdit.getText().toString().trim());
-            c.setModel(modelEdit.getText().toString().trim());
-            c.setPermissionMode((String) modeSpinner.getSelectedItem());
             requireContext().getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                     .edit().putBoolean("confirm_shell", confirmShellCb.isChecked())
                     .putBoolean("check_update", checkUpdateCb.isChecked())
@@ -589,12 +588,6 @@ public class ConfigFragment extends Fragment {
     private void loadConfig() {
         apiKeyEdit.setText(c.getApiKey());
         portEdit.setText(c.getPort());
-        modelEdit.setText(c.getModel());
-        String mode = c.getPermissionMode();
-        int idx = 0;
-        if ("workspace-write".equals(mode)) idx = 1;
-        else if ("read-only".equals(mode)) idx = 2;
-        modeSpinner.setSelection(idx);
         confirmShellCb.setChecked(requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("confirm_shell", true));
