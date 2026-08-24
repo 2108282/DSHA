@@ -269,6 +269,15 @@ public final class BackupManager {
                             + "' --workdir '" + wdEsc + "' 2>&1; rm -f /root/.dsha-backup-prepare.py",
                     120_000);
             android.util.Log.i("DSHA", "备份前置整理: " + (out == null ? "无输出" : out.trim()));
+            // 验证清单是否真的落地。这一步以前只写 logcat，清单没生成也照样打包，
+            // 用户拿到的是「老格式」备份 —— 要等到换设备恢复时才发现插件全缺，
+            // 那时原设备往往已经不在手边。现在至少让日志能一眼看出问题在哪。
+            File man = new File(c.getProot().getRootfsDir(), "root/.dsha-backup-manifest.json");
+            if (!man.isFile() || man.length() == 0) {
+                android.util.Log.w("DSHA", "备份清单未生成 —— 这次备份会是老格式"
+                        + "（能恢复，但跨设备可能缺插件）。前置整理输出："
+                        + (out == null ? "无" : out.trim()));
+            }
         } catch (Throwable e) {
             android.util.Log.w("DSHA", "备份前置整理失败（不影响备份）: " + e);
         }

@@ -412,15 +412,25 @@ def check_write_patch():
     starget = next((p for p in SESSION_PKG_CANDIDATES if os.path.isfile(p)), None)
     if starget is None:
         add("SKIP", "会话发布补丁", "找不到 dsh-session-persistence-jsonl")
-    elif "DSHA_L2S_FIX2" in read(starget, 400000):
-        add("PASS", "会话发布补丁", "已生效（会话日志走 rename 发布，不会悬空）")
     else:
-        if stage() != "ran":
+        _ssrc = read(starget, 400000)
+        # 标记版本必须与 fs-write-patch.sh 保持同步！补丁那边升到 FIX4 时，
+        # 这里还在查 FIX2 —— 于是形成双向死锁：脚本看到 FIX4 报
+        # SESSION_PATCH_ALREADY 直接跳过，自检看不到 FIX2 报「未打」，
+        # 提示用户「重开 App 会自动补」，重开一百次也没用（本来就是好的）。
+        # 用户以为功能坏了，实际只是自检说错话。
+        if "DSHA_L2S_FIX4" in _ssrc:
+            add("PASS", "会话发布补丁", "已生效（会话日志走 rename 发布，不会悬空）")
+        elif "DSHA_L2S_FIX2" in _ssrc or "DSHA_L2S_FIX3" in _ssrc:
+            add("WARN", "会话发布补丁",
+                "打的是老版本补丁 —— 下次启动 Web 时会自动升级到最新版")
+        elif stage() != "ran":
             add("SKIP", "会话发布补丁", "还没启动过 Web —— 补丁是启动时打的，启动一次即会自动补上")
             return
-        add("FAIL", "会话发布补丁",
-            "未打 —— 会话写完即失效（ENOENT ... session.jsonl.zstd）；"
-            "重开一次 App 会自动补，或到启动页点一次启动")
+        else:
+            add("FAIL", "会话发布补丁",
+                "未打 —— 会话写完即失效（ENOENT ... session.jsonl.zstd）；"
+                "到启动页点一次「重启」即会自动补上（补丁是启动 Web 时打的）")
     mark = read("/root/.dsha-hardlink").strip()
     if mark.startswith("ok"):
         add("PASS", "硬链接支持", "文件系统支持真实硬链接，proot 未启用 link2symlink")
@@ -670,7 +680,7 @@ def check_backup():
     if not has_dsh:
         add("FAIL", "备份内容", detail + " 里没有 .dsh —— 重新备份一次")
     elif not has_manifest:
-        add("SKIP", "备份格式", detail + " 是老格式（无清单）：能恢复，但跨设备可能缺插件；重新备份即升级到 v2")
+        add("WARN", "备份格式", detail + " 是老格式（无清单）：能恢复，但跨设备可能缺插件；重新备份即升级到 v2")
     else:
         add("PASS", "备份", detail + " 含 .dsh 与清单，可跨设备恢复")
 
