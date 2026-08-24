@@ -153,6 +153,9 @@ def main():
     links.sort(key=lambda p: (L2S_MARK in os.path.basename(p), len(p)))
 
     stats = {"flattened": 0, "dangling": 0, "skip": 0}
+    removed = []
+    # 默认摘除悬空链（那是备份失败的直接原因）；要留证据可传 --keep-dangling
+    keep_dangling = "--keep-dangling" in sys.argv
     danglers = []
     for p in links:
         # 上一轮可能已经把它实体化（中间节点被顺带处理）
@@ -166,6 +169,18 @@ def main():
         elif action == "dangling":
             danglers.append(rel)
             log("  ✗ 悬空 %s  %s" % (rel, detail))
+            # 必须摘掉这条链，光记一笔不够：数据已经丢了，链本身毫无价值，
+            # 而 tar 碰到它会报 "Cannot stat: Operation not permitted" 并以
+            # 失败状态退出 —— 这正是「备份 100% 失败」的直接原因。
+            # 以前写的是「交给会话自愈隔离」，可会话自愈只认 session.jsonl，
+            # 普通文件根本没人管，于是备份一直失败。
+            if not dry_run and not keep_dangling:
+                try:
+                    os.unlink(p)
+                    removed.append(rel)
+                    log("    → 已摘除（数据已丢，留着只会让备份失败）")
+                except OSError as e:
+                    log("    ! 摘除失败：%s" % e)
         else:
             log("  ⚠ 跳过 %s  %s" % (rel, detail))
 
@@ -201,10 +216,15 @@ def main():
     log("== l2s 实体化结束 flattened=%d dangling=%d skipped=%d orphans=%d =="
         % (stats["flattened"], stats["dangling"], stats["skip"], len(orphans)))
     if danglers:
-        log("悬空条目（数据已丢，交给会话自愈隔离）：%s" % "、".join(danglers[:10]))
+        log("悬空条目（数据已丢）：%s" % "、".join(danglers[:10]))
+        if removed:
+            log("已摘除 %d 条悬空链，备份不会再因它们失败" % len(removed))
+        elif keep_dangling:
+            log("按 --keep-dangling 保留了悬空链 —— 注意 tar 仍会因它们失败")
     # 机器可读行，供 App 侧解析
-    print("FLATTEN_RESULT: flattened=%d dangling=%d orphans=%d skipped=%d"
-          % (stats["flattened"], stats["dangling"], len(orphans), stats["skip"]))
+    print("FLATTEN_RESULT: flattened=%d dangling=%d removed=%d orphans=%d skipped=%d"
+          % (stats["flattened"], stats["dangling"], len(removed),
+             len(orphans), stats["skip"]))
     return 0
 
 

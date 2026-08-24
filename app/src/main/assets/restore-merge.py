@@ -55,18 +55,47 @@ def local_path_dep(spec):
     return None
 
 
+# 老版本 dsh 的配置文件名和现在不一样（config.yaml / dsh.yaml），而「刚配好
+# API key 还没对话过」的备份里连 sessions 都没有。原先只认
+# sessions/profiles/settings.* 四个探针，上面这两类老备份会被判成
+# 「备份里没找到 .dsh」→ 配置和 API key 全丢，用户看到的就是「和老版本不兼容」。
+DSH_PROBES = ("sessions", "profiles", "settings.yaml", "settings.json",
+              "config.yaml", "config.json", "dsh.yaml", "dsh.json",
+              ".env", "agents", "skills", "credentials.json", "auth.json",
+              "mcp.json", "history")
+
+
 def looks_like_dsh(path):
-    """目录像不像 .dsh 本体（有 sessions / profiles / settings.yaml 之一）"""
-    for probe in ("sessions", "profiles", "settings.yaml", "settings.json"):
+    """目录内容像不像 .dsh 本体。判据故意放宽 —— 漏认的代价是用户配置全丢。"""
+    for probe in DSH_PROBES:
         if os.path.exists(os.path.join(path, probe)):
             return True
     return False
+
+
+def count_sessions(dsh_dir):
+    """数一下 .dsh 里有多少个会话文件（用于恢复前后对比）"""
+    n = 0
+    root = os.path.join(dsh_dir, "sessions")
+    if not os.path.isdir(root):
+        return 0
+    for _r, _d, files in os.walk(root):
+        n += sum(1 for f in files if f.startswith("session.jsonl"))
+    return n
+
+
+def dir_nonempty(path):
+    try:
+        return bool(os.listdir(path))
+    except OSError:
+        return False
 
 
 def find_dsh_dir(stage):
     """在 stage 里定位 .dsh：优先名为 .dsh 且内容像的最浅路径；
     其次 stage 自身就是 .dsh 内容（老包/手工包）。"""
     best = None
+    fallback = None
     best_depth = 10 ** 6
     for root, dirs, _files in os.walk(stage):
         dirs[:] = [d for d in dirs if d != "node_modules"]
@@ -77,8 +106,14 @@ def find_dsh_dir(stage):
             depth = p.count(os.sep)
             if looks_like_dsh(p) and depth < best_depth:
                 best, best_depth = p, depth
+            elif fallback is None and dir_nonempty(p):
+                # 内容不匹配任何已知探针，但目录名就叫 .dsh 且非空 ——
+                # 名字本身已是强信号，宁可多恢复一个目录，也不能漏掉用户的配置。
+                fallback = p
     if best:
         return best
+    if fallback:
+        return fallback
     if looks_like_dsh(stage):
         return stage
     return None
@@ -140,6 +175,17 @@ def restore_dsh(stage, root):
             partial = True
             return False
     say("· 已恢复 .dsh（配置 + 对话记录）%s" % ("，原数据留存在 " + os.path.basename(bak) if bak else ""))
+    # 健全性对比：恢复后的会话数远少于恢复前，说明这个备份很可能不完整
+    # （选错文件、备份中断都会这样）。数据其实还在 .pre-restore-* 里，
+    # 但用户看到 RESTORE_OK 就以为万事大吉，过几天才发现「历史没了」，
+    # 那时已经分不清该回退哪个目录了。所以这里必须说出来。
+    if bak:
+        old_n, new_n = count_sessions(bak), count_sessions(dst)
+        if old_n > 0 and new_n * 2 < old_n:
+            partial = True
+            say("· ⚠ 恢复前有 %d 个对话，恢复后只剩 %d —— 这个备份可能不完整。"
+                "原数据完整保留在 %s，要回退就把它改名回 .dsh"
+                % (old_n, new_n, os.path.basename(bak)))
     return True
 
 

@@ -21,10 +21,13 @@ import shutil
 import sys
 import time
 
-DSH_HOME = "/root/.dsh"
+# 路径可配：不然测「磁盘满 / 权限被拒时会不会留下半个备份」只能拿真实环境试，
+# 而这个脚本会在 /root 下写清单和内联插件源码，试一次就污染一次
+DSH_HOME = os.environ.get("DSHA_DSH_HOME", "/root/.dsh")
+_BP_ROOT = os.path.dirname(DSH_HOME.rstrip("/")) or "/root"
 PROFILES = os.path.join(DSH_HOME, "profiles")
-INLINE_DIR = "/root/.dsha-plugin-src"
-MANIFEST = "/root/.dsha-backup-manifest.json"
+INLINE_DIR = os.path.join(_BP_ROOT, ".dsha-plugin-src")
+MANIFEST = os.path.join(_BP_ROOT, ".dsha-backup-manifest.json")
 # 内联单个插件的体积上限（防把巨大目录塞进备份）
 MAX_INLINE_BYTES = 24 * 1024 * 1024
 SKIP_DIRS = {"node_modules", ".git", ".pnpm-store", "dist-cache"}

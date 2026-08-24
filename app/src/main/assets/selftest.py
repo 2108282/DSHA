@@ -15,7 +15,9 @@ import subprocess
 import sys
 import time
 
-DSH_HOME = "/root/.dsh"
+# 允许用环境变量指向别的 dsh 目录：这样才能拿损坏的 profile 喂给自检验证它的判断，
+# 否则任何测试都会读到真实环境的健康数据，「自检会不会误判」根本没法验。
+DSH_HOME = os.environ.get("DSHA_DSH_HOME", "/root/.dsh")
 SESSIONS = DSH_HOME + "/sessions"
 GUIDE_DIR = "/root/dsha-device-shell-guide"
 FS_LOCAL_CANDIDATES = (
@@ -339,6 +341,7 @@ def check_guide(want_ver):
     prof = os.path.join(DSH_HOME, "profiles", "web", "package.json")
     profile_exists = os.path.isfile(prof)
     dep_ok = False
+    parse_err = None
     if profile_exists:
         try:
             pkg = json.loads(read(prof, 200000))
@@ -348,9 +351,17 @@ def check_guide(want_ver):
             # 所以两者都要在才算真注册
             dep_ok = str((pkg.get("dependencies") or {}).get(
                 "dsh-device-shell-guide", "")).startswith("link:")
-        except Exception:
+        except Exception as e:
             registered = False
-    if disabled:
+            parse_err = str(e)
+    if parse_err:
+        add("FAIL", "profile 文件损坏",
+            "profiles/web/package.json 无法解析（%s）。\n"
+            "    这不是插件的问题，重开 App 或重跑步骤⑥都修不了 —— 解析不了就没法改。\n"
+            "    可选：① 用「配置」页恢复最近一次备份；"
+            "② 删掉该文件让 dsh 重新生成（会丢插件注册，之后打开「插件」页会自动补回）"
+            % parse_err)
+    elif disabled:
         add("SKIP", "设备引导插件", "已被用户手动禁用（市场页可重新启用）")
     elif not has_id:
         add("FAIL", "设备引导插件", "注入的消息没补 message.id（会把会话写坏）—— 重跑步骤⑥")

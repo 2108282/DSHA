@@ -19,9 +19,12 @@ import shutil
 import sys
 import time
 
-SESSIONS_ROOT = "/root/.dsh/sessions"
-CORRUPT_ROOT = "/root/.dsh/corrupt-backup"
-LOG_PATH = "/root/.dsh/heal.log"
+# 路径允许用环境变量覆盖：不然没法拿造出来的损坏会话验证「它到底修对了没有」，
+# 只能在真实数据上试 —— 而这个脚本会改写用户的历史记录，拿真数据试是不可接受的
+_DSH = os.environ.get("DSHA_DSH_HOME", "/root/.dsh")
+SESSIONS_ROOT = os.path.join(_DSH, "sessions")
+CORRUPT_ROOT = os.path.join(_DSH, "corrupt-backup")
+LOG_PATH = os.path.join(_DSH, "heal.log")
 # 会话文件名（精确匹配，不含任何备份/隔离产物）
 SESSION_FILENAMES = ("session.jsonl", "session.jsonl.zstd")
 
@@ -218,13 +221,24 @@ def fix_file(path):
     kept, fixed, need_isolate = [], 0, False
     diag_missing_id = 0
     diag_msg_events = 0
-    for line in text.split("\n"):
+    diag_bad_lines = 0
+    all_lines = text.split("\n")
+    for _idx, line in enumerate(all_lines):
         s = line.strip()
         if not s:
             continue
         try:
             ev = json.loads(s)
         except Exception:
+            # 旧实现这里直接 continue —— 非法行既不计数也不触发重写，于是最常见的
+            # 损坏（写入中途被杀留下的半行）会被报成「无需修复」，而那行还在文件里。
+            # dsh 解析到它就断了，后面的历史用户全看不见。
+            #
+            # 但要区分位置：**末尾**那一行的半截是正常现象（dsh 正在写、或上次
+            # 被杀），dsh 按「已提交前缀」语义自己会容忍，重写它反而多事。
+            # 中间出现非法行才是真损坏，必须丢掉并重写。
+            if any(l.strip() for l in all_lines[_idx + 1:]):
+                diag_bad_lines += 1
             continue
         t = ev.get("type", "")
         if t in ("user/message", "assistant/message", "tool/result"):
@@ -258,8 +272,10 @@ def fix_file(path):
             need_format_fix = True
             fmt_reason = "首帧不是恰好一行 header"
         # 末尾撕裂帧（torn）不重写：dsh 自己会按「已提交前缀」语义容忍并续写
-    if fixed == 0 and not need_format_fix:
+    if fixed == 0 and not need_format_fix and diag_bad_lines == 0:
         return "no_fix", "无需修复 (检=%d行 消息事件=%d 缺id=%d)" % (len(kept), diag_msg_events, diag_missing_id)
+    if diag_bad_lines and not fmt_reason:
+        fmt_reason = "%d 行无法解析（丢弃后重写，保住后面的历史）" % diag_bad_lines
     # 备份放到 sessions 目录之外（corrupt-backup 下）：留在原地会被下一轮
     # 扫描当成会话再修再备份 → 文件数指数膨胀。
     ts = time.strftime("%Y%m%d-%H%M%S")
