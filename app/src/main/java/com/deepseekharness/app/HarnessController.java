@@ -802,8 +802,31 @@ public class HarnessController {
         return false;
     }
 
-    /** 建 node_modules 链接。悬空或指错地方的先删掉重建；成功才返回 true。 */
+    /** 建 node_modules 链接。悬空或指错地方的先删掉重建；成功才返回 true。
+     *
+     *  **优先在 proot 内用 shell 建**：Android 私有目录对链接有限制（同一个文件系统
+     *  连硬链接都不支持，见自检的「硬链接支持」项），从 Android 侧直接调
+     *  Files.createSymbolicLink 常常失败。而 proot 内部是 root、还有
+     *  --link2symlink 兜底，成功率高得多。
+     *
+     *  这一点很要紧：建链接失败会触发 sanitizeProfileBundles 的降级分支
+     *  把插件从 bundles 摘掉 —— 用户看到的就是「进了插件页，内置插件全没了」。
+     *  实测踩过，所以 Java NIO 只作为退路。 */
     private boolean linkPlugin(String name, String real, java.io.File nmDir) {
+        String target = "/root/.dsh/profiles/web/node_modules/" + name;
+        try {
+            String r = proot.execAndRead(
+                    "mkdir -p /root/.dsh/profiles/web/node_modules && "
+                            + "rm -rf " + shellArg(target) + "; "
+                            + "ln -sfn " + shellArg(real) + " " + shellArg(target) + " && "
+                            + "test -f " + shellArg(target + "/package.json")
+                            + " && echo DSHA_LINK_OK", 25_000);
+            if (r != null && r.contains("DSHA_LINK_OK")) return true;
+            android.util.Log.w("DSHA", "proot 内建 " + name + " 链接未成功: "
+                    + (r == null ? "无输出" : r.trim()));
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "proot 内建 " + name + " 链接异常: " + e);
+        }
         try {
             java.nio.file.Path lp = new java.io.File(nmDir, name).toPath();
             if (java.nio.file.Files.exists(lp, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
