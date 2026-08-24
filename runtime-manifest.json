@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-24T06:27:43Z",
+  "generated": "2026-08-24T07:09:04Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -39,8 +39,8 @@
     {
       "path": "app/src/main/assets/backup-prepare.py",
       "asset": "backup-prepare.py",
-      "size": 5916,
-      "sha256": "e330bb834ed03c4864c26617d7f5d0258323c44f92be46f7c19091294f23241f",
+      "size": 6250,
+      "sha256": "f5f33f6d3cad6d0b8bfcafc063f807488c8b2a5e7ba4fd084083a2ee9a20c210",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/backup-prepare.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/backup-prepare.py",
@@ -94,8 +94,8 @@
     {
       "path": "app/src/main/assets/flatten-l2s.py",
       "asset": "flatten-l2s.py",
-      "size": 7847,
-      "sha256": "8d099f1cb349ca2bd4d08661df704862ea22e4b7989d61cee28c99e56d083bde",
+      "size": 9051,
+      "sha256": "57dcde8eb8feb0db240baa47e896a05f8d1ad1320127391e79cccc8388da9d01",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/flatten-l2s.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/flatten-l2s.py",
@@ -138,8 +138,8 @@
     {
       "path": "app/src/main/assets/heal-sessions.py",
       "asset": "heal-sessions.py",
-      "size": 15902,
-      "sha256": "4d4ee6d760517bb1d40ef39941b87770b10f45d31c7801e0a09012a8e9e33cbd",
+      "size": 17165,
+      "sha256": "d7e97239f92026e00bc52f1ceeffb8b59aee06ca15f4a333cefaedbdf6502544",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/heal-sessions.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/heal-sessions.py",
@@ -193,8 +193,8 @@
     {
       "path": "app/src/main/assets/restore-merge.py",
       "asset": "restore-merge.py",
-      "size": 14729,
-      "sha256": "785875b8b68e9326a982684d39eec835964e1f79764a6786f2f8813efaab8c1a",
+      "size": 16911,
+      "sha256": "dca3fe52b39ca1a32ffbb91c8b5ff73e70539770e8b161e0536246a8d15fa959",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/restore-merge.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/restore-merge.py",
@@ -215,8 +215,8 @@
     {
       "path": "app/src/main/assets/selftest.py",
       "asset": "selftest.py",
-      "size": 34952,
-      "sha256": "86af0ca81bd53f7e64c513122f48ba546fdaeef4cc4a602e04dbb38addbf61df",
+      "size": 35745,
+      "sha256": "7b6b685a3429e76a8b8d4226f7a2de39f4fb7aeb73c23bdae8be56ed51de7e94",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/selftest.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/selftest.py",
