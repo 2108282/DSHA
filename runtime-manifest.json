@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-24T08:08:41Z",
+  "generated": "2026-08-24T08:20:53Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
