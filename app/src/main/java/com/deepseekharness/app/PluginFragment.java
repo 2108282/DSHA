@@ -297,6 +297,30 @@ public class PluginFragment extends Fragment {
 
     /** 刷新市场视图：按 搜索词 + 仅兼容开关 过滤，再排序，更新列表与状态栏。
      * 基于全量 items 每次重新计算，保证各条件可叠加。 */
+    @Override
+    public void onResume() {
+        super.onResume();
+        // 内置插件的注册可能被 dsh 的 initProfile 覆盖掉（首次启动时最常见）。
+        // 打开插件页正是用户「发现插件不见了」的那一刻，在这里静默修掉最直接 ——
+        // 否则用户只能看着自检报错，然后去终端手改 package.json，那不叫修好。
+        final HarnessController hc = c;
+        if (hc == null) return;
+        new Thread(() -> {
+            int fixed = hc.repairBuiltinPlugins();
+            if (fixed <= 0) return;
+            try {
+                if (!isAdded()) return;
+                requireActivity().runOnUiThread(() -> {
+                    if (!isAdded()) return;
+                    Toast.makeText(requireContext(),
+                            "已修回 " + fixed + " 个内置插件的注册，点「重启 Web」生效",
+                            Toast.LENGTH_LONG).show();
+                });
+            } catch (Throwable ignored) {
+            }
+        }, "dsha-repair-builtin").start();
+    }
+
     private void refreshMarketView() {
         if (mode != Mode.MARKET) return;
         applySort();

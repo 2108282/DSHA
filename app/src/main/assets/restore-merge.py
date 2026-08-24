@@ -216,7 +216,13 @@ def ensure_nm_link(prof_dir, name, target):
     link = os.path.join(nm, name)
     try:
         os.makedirs(nm, exist_ok=True)
-        if os.path.islink(link):
+        # 用 readlink 而不是 os.path.islink —— proot 下 lstat 被劫持，islink 对
+        # 这些链恒返回 False，已经建好的正确链接会被下面的 isdir 分支当成普通目录处理
+        try:
+            cur = os.readlink(link)
+        except OSError:
+            cur = None
+        if cur is not None:
             if os.path.realpath(link) == os.path.realpath(target):
                 return True
             os.unlink(link)
@@ -308,9 +314,15 @@ def fix_profiles(root, landed):
                 prof_node["bundles"] = keep
         if changed:
             try:
-                with open(pkg_path, "w") as f:
+                # 原子写 + fsync：这是 profile 的核心文件，
+                # 半个 JSON 会让 dsh 完全无法加载该 profile
+                tmp_pkg = pkg_path + ".dsha-tmp"
+                with open(tmp_pkg, "w") as f:
                     json.dump(pkg, f, ensure_ascii=False, indent=2)
                     f.write("\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_pkg, pkg_path)
             except Exception as e:
                 say("· profile「%s」写回失败：%s" % (prof, e))
                 partial = True

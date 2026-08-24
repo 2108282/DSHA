@@ -136,10 +136,12 @@ public final class HttpShellService {
                         java.nio.file.attribute.PosixFilePermissions.fromString("rw-------");
                         java.nio.file.Files.setPosixFilePermissions(tf.toPath(),
                                 java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
-                    } catch (Throwable ignored) {
-                    }
-                } catch (Throwable ignored) {
-                }
+                    } catch (Throwable e) {
+            android.util.Log.w("DSHA", "token 文件写入失败，3090 桥将无法鉴权: " + e);
+        }
+                } catch (Throwable e) {
+            android.util.Log.w("DSHA", "token 文件读取/清理失败: " + e);
+        }
             }
             return authToken;
         }

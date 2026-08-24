@@ -906,6 +906,35 @@ public class HarnessController {
         }
     }
 
+    /** 首次启动 Web 之后补内置插件；真补上了就自动重启一次 Web 让 dsh 加载它们。
+     *
+     *  只可能在「全新安装的第一次启动」触发：那时 profile 刚被 dsh 建出来，
+     *  App 启动时的那次注册尝试早已扑空。补完必须重启 —— 插件是 profile 加载时
+     *  读进去的，光写进 package.json 当前这个实例看不见。
+     *  用 builtinPatchedOnce 保证只重启一次，避免「补→重启→再补」打转。 */
+    private volatile boolean builtinPatchedOnce = false;
+
+    private void ensureBuiltinPluginsAfterProfileReady() {
+        try {
+            java.io.File pkg = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/package.json");
+            if (!pkg.isFile()) return;   // profile 还没生成，等下一次启动
+            boolean before = guideRegistered("dsh-device-shell-guide");
+            ensureDeviceShellGuide();
+            ensureTaskNotifier();
+            ensureBuiltinBundles();
+            boolean after = guideRegistered("dsh-device-shell-guide");
+            if (!before && after && !builtinPatchedOnce) {
+                builtinPatchedOnce = true;
+                android.util.Log.w("DSHA", "首次启动后补齐内置插件，自动重启 Web 让它生效");
+                setState("", 95, "已补齐内置插件，正在重启 Web…", "", true);
+                restartWeb();
+            }
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "启动后补内置插件失败: " + e);
+        }
+    }
+
     /** 启动自愈：确保内置插件（设备引导 / 任务通知 / 移动端适配）实体在位且注册有效。
      *  不再只依赖步骤⑥ —— ⑥ 可能跑在 profile 生成之前，也可能被版本标记判定跳过。 */
     public void ensureBuiltinPluginsReady() {
@@ -919,8 +948,9 @@ public class HarnessController {
                     boolean disabled = new java.io.File(proot.getRootfsDir(),
                             "root/.dsh/profiles/web/node_modules/dsh-device-shell-guide.disabled").exists();
                     if (!disabled) {
-                        android.util.Log.w("DSHA", "设备引导插件仍未注册（profile 可能还没生成，"
-                                + "启动一次 WebUI 后会自动补上）");
+                        android.util.Log.w("DSHA", "设备引导插件暂未注册：profile 还没生成。"
+                                + "Web 首次启动成功后会自动补齐并重启一次（见 "
+                                + "ensureBuiltinPluginsAfterProfileReady）");
                     }
                 }
             } catch (Throwable e) {
@@ -1542,15 +1572,26 @@ public class HarnessController {
                 "npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user 2>/dev/null; " +
                 "echo '--- /root/.npmrc ---'; cat /root/.npmrc");
         runStep("安装 @deepseek-ai/dsh 最新 RC", 95,
+                // 离线包（快照）里已经预装好了 dsh。这一步过去无条件跑 npm install，
+                // 于是第一次进安装页就开始重新下载几十 MB 的 dsh 及其依赖 ——
+                // 白等、白耗流量，网差的用户还会直接失败，而本地那份明明是好的。
+                // 现在先探本地：有可用的就跳过。想升级到更新的 RC 是另一件事，
+                // 应该由用户显式发起，而不是装机流程偷偷替换掉自带版本。
+                "if [ -f /usr/local/lib/node_modules/@deepseek-ai/dsh/package.json ] && "
+                + "command -v dsh >/dev/null 2>&1; then "
+                + "echo \"已有可用的 dsh（离线包自带 $(node -p \\\"require('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').version\\\" 2>/dev/null || echo 未知)），跳过 npm 安装\"; "
+                + "echo '如需升级到最新 RC，可在「设置」页手动更新'; "
+                + "else "
                 // 优先 @next（官方最新 rc）；npmmirror 镜像同步滞后时回退 pin rc.8，再回退官方源
-                "(npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmmirror.com 2>&1 || " +
+                + "(npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmmirror.com 2>&1 || " +
                 "npm install -g @deepseek-ai/dsh@0.1.1-rc.2 --force --registry=https://registry.npmmirror.com 2>&1 || " +
                 "npm install -g @deepseek-ai/dsh@rc --force --registry=https://registry.npmmirror.com 2>&1 || " +
                 "npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmjs.org 2>&1) | tail -25; " +
                 "echo \">> npm 退出码: ${PIPESTATUS[0]}\"; " +
                 // 强制 RC8/npm 路线：失败直接退出（不 fallback clone——手机 clone GitHub
                 // 几乎必失败且会留下空源码目录，用户看到"源码是空的"）
-                "if [ \"${PIPESTATUS[0]}\" != 0 ]; then echo 'RC 安装失败：npm 三个源都不通，请检查网络后重试'; exit 1; fi");
+                "if [ \"${PIPESTATUS[0]}\" != 0 ]; then echo 'RC 安装失败：npm 三个源都不通，请检查网络后重试'; exit 1; fi; "
+                + "fi");
         // 预下载 Node headers（node-gyp 编译 node-pty 必需；否则 node-gyp 默认访问
         // nodejs.org 下载，国内手机网络不通 → undici 报错 → 退出码 1）
         runStep("准备 Node headers（node-gyp 编译依赖）", 96,
@@ -1697,7 +1738,8 @@ public class HarnessController {
                 }
                 runStep("WebUI 浏览器兼容补丁", 93, "bash /root/dsha-webui-polyfill.sh; rm -f /root/dsha-webui-polyfill.sh");
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            android.util.Log.w("DSHA", "WebUI polyfill 注入失败（老 WebView 可能白屏）: " + e);
         }
 
         // 安装危险命令确认包装器（rootfs 内 rm/dd 等先弹确认，防止 agent/终端误删）
@@ -1781,7 +1823,8 @@ public class HarnessController {
             runStep("安装 dsh 命令", 99,
                     "ln -sf /root/" + wd + "/apps/cli/lib/bin.js /usr/local/bin/dsh && " +
                     "chmod +x /usr/local/bin/dsh 2>/dev/null; echo 'dsh 命令已安装'");
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            android.util.Log.w("DSHA", "安装 dsh 命令这一步失败（后续 dsh 可能不可用）: " + e);
         }
 
         runStep("验证 pty.node 产物", 97,
@@ -2273,8 +2316,7 @@ public class HarnessController {
             // 用户主动禁用（.disabled 存在）→ 只更新实体文件（assets 新版本写到
             // 实体目录，重新启用时拿到的是新版），不 touch marker / 不注册 bundle /
             // 不建链接（否则资产版本变化删 marker 后会把禁用的插件强制重新启用）。
-            boolean userDisabled = new java.io.File(proot.getRootfsDir(),
-                    "root/.dsh/profiles/web/node_modules/" + NAME + ".disabled").exists();
+            boolean userDisabled = userDisabledPlugin(NAME);
             java.io.File aDir = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-adapt");
             aDir.mkdirs();
             // 实体始终更新（幂等，秒级）
@@ -2387,8 +2429,7 @@ public class HarnessController {
                     "root/.dsh/profiles/web/node_modules/" + NAME);
             java.io.File marker = new java.io.File(proot.getRootfsDir(), "root/dsha-task-notifier-installed");
             // 用户禁用 → 仅更新实体不注册
-            if (new java.io.File(proot.getRootfsDir(),
-                    "root/.dsh/profiles/web/node_modules/" + NAME + ".disabled").exists()) {
+            if (userDisabledPlugin(NAME)) {
                 writeAssetTo("task-notifier/package.json", new java.io.File(realDir, "package.json"));
                 writeAssetTo("task-notifier/cordis.patch.yml", new java.io.File(realDir, "cordis.patch.yml"));
                 writeAssetTo("task-notifier/lib/index.js", new java.io.File(realDir, "lib/index.js"));
@@ -2442,6 +2483,70 @@ public class HarnessController {
         }
     }
 
+    /** 把内置插件修回可用状态，返回这次真的补了几个（0 = 本来就好）。
+     *
+     *  为什么需要一个能被 UI 随时调用的入口：注册丢失最常见的成因是 dsh 首次启动时
+     *  initProfile() 用官方 bundles 重建了 package.json，把我们写进去的 link: 声明
+     *  整段覆盖。此前的补回只挂在「Web 启动成功后」——Web 起不来、或用户没重启 Web，
+     *  就永远轮不到，自检报了错也只能让人去终端手改。这不叫修好。
+     *  现在插件页每次打开都会静默跑一次。 */
+    private volatile long lastBuiltinRepairAt = 0;
+
+    public int repairBuiltinPlugins() {
+        int fixed = 0;
+        try {
+            if (!proot.isInstalled()) return 0;
+            // 节流：插件页每次可见都会调一次（切标签、从后台回来都算），
+            // 而这里要读写 rootfs 里的 package.json —— 频繁跑纯属浪费 IO。
+            // 注册丢失不是高频事件，20 秒的窗口足够。
+            long now = System.currentTimeMillis();
+            if (now - lastBuiltinRepairAt < 20_000) return 0;
+            lastBuiltinRepairAt = now;
+            java.io.File pkg = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/package.json");
+            if (!pkg.isFile()) return 0;   // profile 还没生成，启动一次 Web 再说
+            String[] names = {"dsh-device-shell-guide", "dsh-client-ui-mobile-adapt",
+                    "dsh-task-notifier"};
+            boolean[] before = new boolean[names.length];
+            for (int i = 0; i < names.length; i++) {
+                before[i] = guideRegistered(names[i]);
+            }
+            ensureDeviceShellGuide();
+            ensureTaskNotifier();
+            ensureBuiltinBundles();
+            for (int i = 0; i < names.length; i++) {
+                if (!before[i] && guideRegistered(names[i])) fixed++;
+            }
+            if (fixed > 0) {
+                android.util.Log.w("DSHA", "修回 " + fixed + " 个内置插件的注册");
+            }
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "修内置插件失败: " + e);
+        }
+        return fixed;
+    }
+
+    /** 用户是否**真的**禁用了这个内置插件。
+     *
+     *  .disabled 有两种形态，混在一起就是 bug 源头：
+     *    目录 / 非空 = 真禁用（禁用时把实体 mv 过去了）→ 必须尊重
+     *    空文件      = 异常残留（禁用时实体已丢失，代码只 touch 了个占位）
+     *  空占位不清掉的话，所有补回逻辑都会永久跳过 —— 用户重开 App、重跑步骤⑥、
+     *  甚至覆盖安装都没用，因为标记活在 rootfs 里。这里统一处理，
+     *  避免各处 ensureXxx 各写一遍判断又各漏一处。 */
+    private boolean userDisabledPlugin(String name) {
+        java.io.File mark = new java.io.File(proot.getRootfsDir(),
+                "root/.dsh/profiles/web/node_modules/" + name + ".disabled");
+        if (!mark.exists()) return false;
+        if (mark.isFile() && mark.length() == 0) {
+            //noinspection ResultOfMethodCallIgnored
+            mark.delete();
+            android.util.Log.w("DSHA", "清掉 " + name + " 的空禁用标记（异常残留，不是用户禁用）");
+            return false;
+        }
+        return true;
+    }
+
     private void ensureDeviceShellGuide() {
         try {
             final String NAME = "dsh-device-shell-guide";
@@ -2452,8 +2557,7 @@ public class HarnessController {
             // 用户主动禁用（开关 → .disabled）：尊重用户，不再自动补回！
             // （否则启动时 ensureDeviceShellGuide 发现"注册缺失"会把禁用覆盖掉，
             //   表现就是"内置插件不能禁用"）
-            if (new java.io.File(proot.getRootfsDir(),
-                    "root/.dsh/profiles/web/node_modules/" + NAME + ".disabled").exists()) {
+            if (userDisabledPlugin(NAME)) {
                 // 仅更新实体文件（assets 新版本写到实体目录，重新启用时拿到新版），
                 // 不 touch marker / 不注册 / 不建链接
                 writeAssetTo("device-shell-guide/package.json", new java.io.File(realDir, "package.json"));
@@ -2947,6 +3051,12 @@ public class HarnessController {
                     try {
                         if (waitWebPortUp(60_000)) {
                             setState("", 100, "Web UI 已启动", "", false);
+                            // 全新安装的关键一步：profile 是 dsh 首次启动时才创建的，
+                            // 而 MainActivity 里那次 ensureBuiltinPluginsReady 跑在它之前 ——
+                            // 那时三个内置插件一个也注册不上。以前只在日志里写「启动一次
+                            // WebUI 后会自动补上」，却没有任何代码真的去补，于是全新安装
+                            // 的用户根本没有内置插件（除非碰巧重开一次 App）。
+                            ensureBuiltinPluginsAfterProfileReady();
                         } else {
                             // 超时：释放 busy（否则一直卡灰，靠 10 分钟自愈太慢）
                             setState("", 0, "", "Web UI 启动超时（60s 端口未就绪）\n"
@@ -3618,8 +3728,9 @@ public class HarnessController {
                             java.nio.file.StandardOpenOption.CREATE,
                             java.nio.file.StandardOpenOption.APPEND);
                 }
-            } catch (Throwable ignored) {
-            }
+            } catch (Throwable e) {
+            android.util.Log.w("DSHA", "恢复报告写入失败，用户将看不到恢复结果: " + e);
+        }
         }, "dsha-restore-plugins");
         t.setDaemon(true);
         t.start();

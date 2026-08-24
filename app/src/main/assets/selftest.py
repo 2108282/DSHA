@@ -328,7 +328,13 @@ def check_guide(want_ver):
     # 否则 dsh 根本不会加载它，agent 也就看不到设备操作提示词
     nm = os.path.join(DSH_HOME, "profiles", "web", "node_modules", "dsh-device-shell-guide")
     disabled = os.path.exists(nm + ".disabled")
-    linked = os.path.islink(nm) or os.path.exists(nm)
+    # readlink 优先：proot 下 islink 恒 False，而 exists 对**悬空**符号链接同样是 False，
+    # 两者一起用仍会把「链接在、但指向的实体丢了」误判成「没有链接」，指错修复方向
+    try:
+        os.readlink(nm)
+        linked = True
+    except OSError:
+        linked = os.path.exists(nm)
     registered = False
     prof = os.path.join(DSH_HOME, "profiles", "web", "package.json")
     profile_exists = os.path.isfile(prof)

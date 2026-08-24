@@ -290,8 +290,14 @@ def fix_file(path):
             new_data = b"".join(out_frames)
         else:
             new_data = ("\n".join(kept) + "\n").encode("utf-8")
-        with open(path, "wb") as f:
+        # 原子写：已有 .bak 回滚兜底，但中途被杀仍会留下截断的会话文件，
+        # 那种文件 dsh 读起来是「历史莫名少了一半」，比报错更难查
+        tmp_s = path + ".dsha-tmp"
+        with open(tmp_s, "wb") as f:
             f.write(new_data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_s, path)
     except Exception:
         try:
             os.rename(bak, path)

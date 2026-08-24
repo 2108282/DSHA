@@ -292,11 +292,19 @@ public class DeviceBridgeService extends Service {
         }
         boolean opened = tryReopenWirelessDebug();
         if (opened) {
-            try {
-                Thread.sleep(5000); // 等 adbd 起来
-            } catch (InterruptedException ignored) {
+            // 死等 5 秒两头不讨好：adbd 常常 1 秒内就绪（白等 4 秒），
+            // 而慢设备可能 8 秒才起来（等了还是失败）。改成轮询到端口出现为止。
+            int p2 = -1;
+            long deadline = System.currentTimeMillis() + 12_000;
+            while (System.currentTimeMillis() < deadline) {
+                try {
+                    Thread.sleep(600);
+                } catch (InterruptedException ignored) {
+                    break;
+                }
+                p2 = discoverConnPortSync();
+                if (p2 > 0) break;
             }
-            int p2 = discoverConnPortSync();
             if (p2 > 0) {
                 saveConnectPort(p2);
                 String r3 = c.getProot().execAndRead(

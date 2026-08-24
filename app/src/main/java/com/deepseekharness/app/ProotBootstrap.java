@@ -762,7 +762,8 @@ public class ProotBootstrap {
             if (f.getParentFile() != null) f.getParentFile().mkdirs();
             java.nio.file.Files.write(f.toPath(), bundledOfflineVersion().getBytes(
                     java.nio.charset.StandardCharsets.UTF_8));
-        } catch (Throwable ignored) {
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "离线包版本标记写入失败，升级提示可能重复出现: " + e);
         }
     }
 

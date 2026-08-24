@@ -122,8 +122,14 @@ def main():
 
     try:
         shutil.copy2(patch, patch + ".dsha-bak-" + time.strftime("%Y%m%d-%H%M%S"))
-        with open(patch, "w", encoding="utf-8") as f:
+        # 原子写：直接覆盖的话，进程被杀/掉电会留下半个 YAML，
+        # 而这个文件写坏了 dsh 根本起不来（比不修更糟）
+        tmp = patch + ".dsha-tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, patch)
     except OSError as e:
         print("HEAL_PROFILE: 写入失败：%s" % e)
         return 1

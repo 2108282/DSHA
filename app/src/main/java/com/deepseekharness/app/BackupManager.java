@@ -128,8 +128,9 @@ public final class BackupManager {
                     try {
                         java.nio.file.Files.setPosixFilePermissions(kf.toPath(),
                                 java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
-                    } catch (Throwable ignored) {
-                    }
+                    } catch (Throwable e) {
+            android.util.Log.w("DSHA", "API key 写入备份失败（恢复后需手动重填）: " + e);
+        }
                 } catch (Throwable e) {
                     android.util.Log.w("DSHA", "写 API key 备份文件失败（备份继续）: " + e);
                 }
