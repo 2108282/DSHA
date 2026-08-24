@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-24T08:54:32Z",
+  "generated": "2026-08-24T09:15:10Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -204,8 +204,8 @@
     {
       "path": "app/src/main/assets/rootfs-confirm-install.sh",
       "asset": "rootfs-confirm-install.sh",
-      "size": 7533,
-      "sha256": "606e17a7b000dc93abd10ae1f6db988e9ae1a703c7b86ca140dec8dc9c649710",
+      "size": 8007,
+      "sha256": "bbcd5fb47cf88cfeed73e830b66c83beecc187b90a00fe5a89e9bb7261c198aa",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/rootfs-confirm-install.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/rootfs-confirm-install.sh",

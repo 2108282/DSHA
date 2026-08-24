@@ -64,6 +64,23 @@ public class HarnessService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // Android 8+ 的硬性契约：凡是用 startForegroundService() 拉起的服务，
+        // **必须在 5 秒内**调用 startForeground()，否则系统抛
+        // ForegroundServiceDidNotStartInTimeException 直接杀掉进程。
+        //
+        // 原来 startForeground 只在 onCreate() 里调了一次。服务**首次**创建时没问题，
+        // 但点「重启」时服务已经在跑，onCreate 不会再走，而 onStartCommand 里没有
+        // —— 于是必然超时被强杀。用户看到的就是「点重启就闪退」，而且 crash.log
+        // 是空的（系统强杀不走 UncaughtExceptionHandler，logcat 里也没有
+        // FATAL EXCEPTION），这正是这个 bug 极难定位的原因。
+        //
+        // 所以这里无条件先把前台通知立起来（重复调用是允许且幂等的），之后再干活。
+        try {
+            startForeground(NOTIF_ID,
+                    buildNotification("DSHA运行中", "Web UI 正在后台保持运行"));
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "onStartCommand 里 startForeground 失败: " + e);
+        }
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             c.stopWeb();
             stopKeepAlive();
