@@ -12,7 +12,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JAVA_DIR="$REPO_ROOT/app/src/main/java/com/deepseekharness/app"
-SRCS=("$JAVA_DIR/LanAuth.java" "$JAVA_DIR/AssetPath.java" "$JAVA_DIR/BackupInspector.java")
+SRCS=("$JAVA_DIR/LanAuth.java" "$JAVA_DIR/AssetPath.java" "$JAVA_DIR/BackupInspector.java" "$JAVA_DIR/PluginErrorHint.java")
 TEST="$REPO_ROOT/tools/pure-logic-test/PureLogicTest.java"
 
 for f in "${SRCS[@]}" "$TEST"; do

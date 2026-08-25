@@ -58,6 +58,8 @@ public class LaunchFragment extends Fragment {
     private boolean enterWhenReady = false;
     private boolean insideWeb = false;
     private String lastLog = "";
+    /** 上一次已经提示过的插件故障结论：日志每 1.5 秒刷一次，别重复往活动日志里写。 */
+    private String lastPluginHint = "";
     /** 日志文件指纹（size+mtime），未变化则跳过重读（每 1.5s 轮询时省一次文件 IO） */
     private long lastLogSize = -1;
     private long lastLogMtime = -1;
@@ -213,7 +215,24 @@ public class LaunchFragment extends Fragment {
                 }
                 if (!insideWeb && log != null && !log.equals(lastLog)) {
                     lastLog = log;
-                    logText.setText(log.isEmpty() ? "还没有日志。" : log);
+                    // 插件类故障的原始报错基本读不了（一屏栈 + 中间半行插件名），
+                    // 而它恰恰是「Web 打不开」最常见的原因。认出来就把结论摆在日志上方，
+                    // 别让用户对着栈猜、更别让他去清数据重装（有人这么试过，白费）。
+                    String hint = PluginErrorHint.describe(log);
+                    if (!hint.isEmpty()) {
+                        logText.setText(hint + "\n\n———— 原始日志 ————\n" + log);
+                        if (!hint.equals(lastPluginHint)) {
+                            lastPluginHint = hint;
+                            // 记进活动日志：用户过后回想「刚才到底怎么了」还能查到
+                            try {
+                                c.logActivity("Web 启动受阻，疑似插件问题："
+                                        + hint.replace("\n", " "));
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    } else {
+                        logText.setText(log.isEmpty() ? "还没有日志。" : log);
+                    }
                     logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
                 }
                 mainHandler.postDelayed(tick, 1500);

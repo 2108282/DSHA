@@ -150,6 +150,52 @@ public final class PureLogicTest {
             System.out.println("  FAIL inspect: 用例本身抛异常 " + t);
         }
 
+        // ---------- PluginErrorHint：把「哪个插件把 Web 弄挂了」从日志里认出来 ----------
+        // 用的是用户真实贴过来的报错原文。这类靠正则读别人日志的代码，最容易在上游改一句
+        // 话之后静默失效 —— 有样本才知道它还认得。
+        {
+            String realPending = "Error: dsh: plugin tree failed to load: dsh: 1 entry did not activate\n"
+                    + "dsh-device-shell-guide: pending (waiting for service: systemPrompt)\n"
+                    + "    at boot (file:///usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/"
+                    + "@deepseek-ai/dsh-app-boot/lib/index.js:1187:9)\n";
+            PluginErrorHint.Hint h1 = PluginErrorHint.detect(realPending);
+            ok("hint: 认出 pending 的插件名", h1 != null && "dsh-device-shell-guide".equals(h1.plugin),
+                    h1 == null ? "null" : h1.plugin);
+            ok("hint: 提到缺的服务", h1 != null && h1.what.contains("systemPrompt"));
+            ok("hint: 给了可点的下一步", h1 != null && h1.fix.contains("自检"));
+            ok("hint: describe 可直接上屏",
+                    PluginErrorHint.describe(realPending).startsWith("⚠"));
+
+            PluginErrorHint.Hint h2 = PluginErrorHint.detect(
+                    "Error: cannot resolve profile bundle \"dsh-client-ui-mobile-adapt\"");
+            ok("hint: 认出解析不到的 bundle",
+                    h2 != null && "dsh-client-ui-mobile-adapt".equals(h2.plugin),
+                    h2 == null ? "null" : h2.plugin);
+
+            PluginErrorHint.Hint h3 = PluginErrorHint.detect(
+                    "Error: cannot get property \"systemPrompt\" without inject\n"
+                            + "    at file:///root/.dsh/profiles/web/node_modules/dsh-foo-plugin/lib/index.js:12:3\n");
+            ok("hint: 从堆栈里猜出第三方插件",
+                    h3 != null && "dsh-foo-plugin".equals(h3.plugin),
+                    h3 == null ? "null" : h3.plugin);
+
+            // 关键：官方包不能被当成「出问题的插件」—— 插件故障时堆栈里几乎全是官方路径
+            PluginErrorHint.Hint h4 = PluginErrorHint.detect(
+                    "Error: cannot get property \"x\" without inject\n"
+                            + "    at file:///usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js:1:1\n");
+            ok("hint: 不把官方包当成肇事插件",
+                    h4 != null && h4.plugin.isEmpty(), h4 == null ? "null" : h4.plugin);
+
+            ok("hint: 认出 pnpm 空壳",
+                    PluginErrorHint.detect("_pnpmPlaceholder found in dsh-bar") != null);
+            ok("hint: 认出坏掉的 patch",
+                    PluginErrorHint.detect("YAMLException: bad indentation of /root/.dsh/cordis.patch.yml") != null);
+            ok("hint: 正常日志不误报",
+                    PluginErrorHint.detect("dsh web listening on http://127.0.0.1:3080") == null);
+            ok("hint: 空输入不炸", PluginErrorHint.detect(null) == null
+                    && PluginErrorHint.detect("") == null);
+        }
+
         // ---------- constantTimeEquals ----------
         ok("ct: 相等", LanAuth.constantTimeEquals("abc", "abc"));
         ok("ct: 前缀不算相等", !LanAuth.constantTimeEquals("abc", "ab"));
