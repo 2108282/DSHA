@@ -225,7 +225,10 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.value }}
           name: DSHA ${{ steps.tag.outputs.value }}
-          prerelease: ${{ inputs.prerelease || false }}
+          # tag 里带连字符（-rc1 / -fix 之类）一律当预发布：GitHub 的
+          # releases/latest 会跳过预发布，所以既能发出去给人验机，又不会被
+          # 客户端的更新检查推给所有用户。手滑打错 tag 也不会误发正式版。
+          prerelease: ${{ inputs.prerelease || contains(steps.tag.outputs.value, '-') }}
           generate_release_notes: true
           body: |
             **仅支持 arm64 / Android 8.0+**，APK 已内置完整 Linux 环境。
