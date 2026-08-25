@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-25T13:04:47Z",
+  "generated": "2026-08-25T13:34:22Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -281,8 +281,8 @@
     {
       "path": "app/src/main/assets/webui-polyfill.sh",
       "asset": "webui-polyfill.sh",
-      "size": 2397,
-      "sha256": "a2e40ac5f9e4681e05d2c0f3ef2fe38c52141d37581a1fa4275e711be840ffcc",
+      "size": 4010,
+      "sha256": "61e7355d1c1c14d46c8bf1e954ebc5a38d180dd4f3965efcbdeca4bd798ae543",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/webui-polyfill.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/webui-polyfill.sh",
