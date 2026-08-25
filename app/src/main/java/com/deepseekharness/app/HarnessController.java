@@ -5247,6 +5247,19 @@ public class HarnessController {
             } catch (Throwable ignored) {
             }
             invalidateSteps();
+            // ===== 老备份 → 新版本的适配（恢复流程自己做，别指望「下次启动 Web 时自愈」）=====
+            // 备份里的 profiles/web/package.json 是**备份那个版本**的：可能还注册着已经换掉的
+            // 内置插件（旧 UI 适配 dsh-client-ui-mobile-adapt），也不会有新内置插件的声明。
+            // restore-merge.py 的 bundles 预检会把解析不到的摘掉，但「补回新内置插件」和
+            // 「按新版语义下线旧插件」是 App 侧的事，而它们只挂在启动/安装路径上 ——
+            // 恢复发生在 App 已经启动之后，不显式跑一遍的话得等用户重启 Web 才对齐。
+            // 两个都是幂等且秒级的，直接在这里做完。
+            try {
+                migrateLegacyMobileAdapt();
+                ensureBuiltinBundles();
+            } catch (Throwable t) {
+                android.util.Log.w("DSHA", "恢复后内置插件适配失败（重启 Web 时会再试）: " + t);
+            }
             // 老备份里带着**备份那台机器**的 .bridge_token，恢复出来就和 App 内存里的
             // 不一致 —— WebUI 会弹「需要 token，请在 DSHA 应用内打开」。删掉重新生成。
             HttpShellService.resetTokenAfterRestore();
