@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-25T07:54:02Z",
+  "generated": "2026-08-25T08:31:34Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -303,8 +303,8 @@
     {
       "path": "app/src/main/assets/status-overlay/lib/index.js",
       "asset": "status-overlay/lib/index.js",
-      "size": 7347,
-      "sha256": "c1ee571bd4fcc06663e54192b26e94dca49440b05aa6996fb8ae75d51a0bd2fe",
+      "size": 9543,
+      "sha256": "d6bb1df3fb8786f5f10f4da9a0a1e4e76aa8be16969f0fa7d3bfdd045ed50469",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/status-overlay/lib/index.js",

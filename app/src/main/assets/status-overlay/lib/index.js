@@ -32,8 +32,9 @@ const BRIDGE = 'http://127.0.0.1:3090/app/overlay'
 const TOKEN_PATH = '/root/.dsh/.bridge_token'
 /** 合并窗口：120ms 一次，肉眼看起来仍是连续流动的。 */
 const FLUSH_MS = 120
-/** 悬浮条只有一行，超出的从左边推掉。与 App 侧的上限保持一致。 */
-const MAX_CHARS = 64
+/** 插件侧只做粗截断（防 URL 编码后过长），真正的行数/长度由 App 侧按用户配置决定 ——
+ *  插件不知道用户把「最多显示几行」调成了几。 */
+const MAX_CHARS = 200
 /** 功能关闭 / 没权限时的冷却时长。 */
 const COOLDOWN_MS = 60_000
 /** 单次请求超时：桥就在本机，1.5 秒都不该等。 */
@@ -61,6 +62,30 @@ function toolLabel(name) {
   return '⚙ 正在使用 ' + n
 }
 
+/** 工具参数里挑一个「值得显示的那个」——命令原文最有用，其次是路径/模式/URL。
+ *  arguments 是 JSON 字符串；模型也可能吐出半截的非法 JSON，所以解析失败就放弃。 */
+const ARG_KEYS = ['command', 'cmd', 'script', 'path', 'file_path', 'filePath',
+  'pattern', 'query', 'url', 'prompt', 'description']
+
+function toolDetail(argsJson) {
+  try {
+    if (!argsJson) return ''
+    const o = typeof argsJson === 'string' ? JSON.parse(argsJson) : argsJson
+    if (!o || typeof o !== 'object') return ''
+    for (const k of ARG_KEYS) {
+      const v = o[k]
+      if (typeof v === 'string' && v.trim()) return v.trim()
+    }
+    // 没命中已知键名 → 退而取第一个非空字符串值（新工具也能显示点东西）
+    for (const v of Object.values(o)) {
+      if (typeof v === 'string' && v.trim()) return v.trim()
+    }
+    return ''
+  } catch {
+    return ''
+  }
+}
+
 let token
 function bridgeToken() {
   if (token !== undefined) return token
@@ -75,6 +100,8 @@ function bridgeToken() {
 /** sessionKey → { line, timer, dirty } */
 const state = new Map()
 let cooldownUntil = 0
+/** App 侧回了 SKIP_REASONING（用户不想看思考过程）→ 本进程内不再发这一类。 */
+let skipReasoning = false
 
 function sessionKey(session) {
   try {
@@ -107,6 +134,9 @@ async function send(key, kind, text) {
     if (body === 'DISABLED' || body === 'NO_PERMISSION') {
       // 用户没开这个功能或没授权 —— 进冷却，别一直敲一扇关着的门
       cooldownUntil = Date.now() + COOLDOWN_MS
+    } else if (body === 'SKIP_REASONING') {
+      // 功能开着，只是用户不想看思考过程：别整段冷却，只停这一类
+      skipReasoning = true
     }
   } catch {
     // 桥没起、超时、被拒：这功能不重要，静默降级
@@ -117,7 +147,7 @@ async function send(key, kind, text) {
 function bucket(key) {
   let b = state.get(key)
   if (!b) {
-    b = { line: '', timer: undefined, pending: false }
+    b = { line: '', think: '', timer: undefined, pending: false }
     state.set(key, b)
     // 会话数量不该无限涨（异常情况下也就几十个）
     if (state.size > 16) {
@@ -128,8 +158,9 @@ function bucket(key) {
   return b
 }
 
-/** 合并窗口内只保留最后一次内容，窗口结束时发一次。 */
-function schedule(key, kind) {
+/** 合并窗口内只保留最后一次内容，窗口结束时发一次。
+ *  getter 而不是直接传字符串：窗口这 120ms 里还会继续追加，要发的是**那一刻**的最新值。 */
+function schedule(key, kind, getter) {
   const b = bucket(key)
   if (b.timer) {
     b.pending = true
@@ -137,9 +168,8 @@ function schedule(key, kind) {
   }
   b.timer = setTimeout(() => {
     b.timer = undefined
-    const line = b.line
     b.pending = false
-    void send(key, kind, line)
+    void send(key, kind, getter ? getter() : b.line)
   }, FLUSH_MS)
   // 让 dsh 能正常退出：这个定时器不该拖住事件循环
   if (typeof b.timer?.unref === 'function') b.timer.unref()
@@ -156,19 +186,32 @@ export function apply(ctx) {
 
       if (type === 'assistant/chunk') {
         const chunk = data?.chunk
-        // 只跟正文走；reasoning-delta 是思考过程，默认不往屏幕上贴
-        if (chunk?.type !== 'text-delta') return
+        const isText = chunk?.type === 'text-delta'
+        const isThink = chunk?.type === 'reasoning-delta'
+        if (!isText && !isThink) return
+        if (isThink && skipReasoning) return      // App 侧说过用户不看这个
         const piece = chunk.text
         if (!piece) return
         const b = bucket(key)
-        b.line = tail(b.line + piece)
-        schedule(key, 'text')
+        // 正文与思考各留一条缓冲：思考结束转正文时，两段不该被拼成一句
+        if (isThink) {
+          b.think = tail((b.think || '') + piece)
+          schedule(key, 'reasoning', () => b.think)
+        } else {
+          b.line = tail(b.line + piece)
+          schedule(key, 'text', () => b.line)
+        }
         return
       }
 
       if (type === 'tool/call') {
         const b = bucket(key)
-        b.line = toolLabel(data?.name)
+        // 「正在执行命令」看不出到底要跑什么 —— 把命令原文（或路径/模式）带上，
+        // 这也是悬浮条上就地批准危险命令时唯一的判断依据。
+        const label = toolLabel(data?.name)
+        const detail = toolDetail(data?.arguments)
+        b.line = detail ? label + ': ' + detail : label
+        b.think = ''
         // 工具状态要立刻可见（它替代整行，且不像正文那样高频）
         if (b.timer) {
           clearTimeout(b.timer)
@@ -181,6 +224,7 @@ export function apply(ctx) {
       if (type === 'turn/start') {
         const b = bucket(key)
         b.line = ''
+        b.think = ''
         return
       }
 

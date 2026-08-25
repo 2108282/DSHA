@@ -226,6 +226,20 @@
                 android:paddingStart="@dimen/gap_tight"
                 android:text="屏幕顶部流式显示 AI 输出（需悬浮窗权限；内容旁人可见）" />
 
+            <TextView
+                android:id="@+id/config_overlay_style"
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/touch_min"
+                android:background="@drawable/bg_chip_clickable"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:paddingStart="@dimen/gap_tight"
+                android:paddingEnd="@dimen/gap_tight"
+                android:text="悬浮条外观与行为 ▸ 底色 / 透明度 / 行数 / 停留时间 / 思考过程 / 就地批准" />
+
             <CheckBox
                 android:id="@+id/config_rc6"
                 style="@style/DshaText.Body"

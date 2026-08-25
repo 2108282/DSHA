@@ -599,8 +599,12 @@ public final class HttpShellService {
             String session = getParam(q, "session", "");
             if (!OverlayController.enabled(ctx)) return "DISABLED";
             if (!OverlayController.permitted(ctx)) return "NO_PERMISSION";
+            // 让插件知道用户想不想看这两类内容，省得白发一路 HTTP
+            if ("reasoning".equals(kind) && !OverlayController.showReasoning(ctx)) {
+                return "SKIP_REASONING";
+            }
             OverlayController.push(ctx, session, kind, text);
-            return "OK";
+            return OverlayController.showCommand(ctx) ? "OK" : "OK_NO_CMD";
         } catch (Throwable e) {
             return "ERROR: " + e.getMessage();
         }
@@ -1032,6 +1036,12 @@ public final class HttpShellService {
 
             // 通知是权威渠道（前后台都在），前台再叠一个弹窗当快捷方式
             showConfirmNotification(cmd, myEpoch);
+            // 第三条渠道：悬浮条上就地批准。agent 干活时用户往往并不在 App 里 ——
+            // 拉下通知栏找那条通知、或者切回 App，都比点一下已经浮在最上层的按钮慢。
+            // 三条渠道共用同一个 epoch + latch，谁先点谁生效。
+            OverlayController.askConfirm(ctx, cmd,
+                    () -> resolveConfirm(true, myEpoch),
+                    () -> resolveConfirm(false, myEpoch));
             final MainActivity act = MainActivity.current;
             if (act != null) {
                 final String prompt = "模型试图在设备上执行：\n" + cmd + "\n\n是否允许？";
@@ -1073,6 +1083,7 @@ public final class HttpShellService {
             pendingLatch = null;
             dismissConfirmDialog();
             cancelConfirmNotification();
+            OverlayController.dismissConfirm(ctx);
             confirmBusy.set(false);
         }
     }
