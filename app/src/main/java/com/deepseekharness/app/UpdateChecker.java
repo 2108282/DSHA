@@ -82,11 +82,27 @@ public final class UpdateChecker {
         return false;
     }
 
+    /** 取版本段的数值。
+     *
+     *  原来是 replaceAll("[^0-9]", "") —— 把段里所有非数字**删掉再拼起来**，
+     *  于是预发布号被拼成了一个巨大的数：
+     *      1.1.7-rc81  →  段 "7-rc81"  →  "781"  →  当成 1.1.781
+     *  这个版本比任何正式版都「新」，用户从此**永远收不到更新提示**。
+     *  我们真用过 1.1.7-rc81 这种版本名，也正在用 1.1.7-fix。
+     *
+     *  改成只取前导数字，遇到非数字就停：
+     *      "7-rc81" → 7      "7-fix" → 7      "9" → 9
+     *  这样带后缀的版本与同号正式版比较结果相等（不会互相提示更新），
+     *  与更高版本比较则正常判新。 */
     private static int parseInt(String s) {
+        if (s == null) return 0;
+        int i = 0;
+        while (i < s.length() && s.charAt(i) >= '0' && s.charAt(i) <= '9') i++;
+        if (i == 0) return 0;
         try {
-            return Integer.parseInt(s.replaceAll("[^0-9]", ""));
+            return Integer.parseInt(s.substring(0, i));
         } catch (Exception e) {
-            return 0;
+            return 0;   // 段长到溢出 int：当 0 处理，不如实报也不误判成最新
         }
     }
 }
