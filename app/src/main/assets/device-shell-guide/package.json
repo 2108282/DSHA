@@ -1,7 +1,7 @@
 {
   "name": "dsh-device-shell-guide",
   "description": "DSHA builtin plugin: inject device-shell (ADB/Shizuku) steering into each new conversation's system prompt",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

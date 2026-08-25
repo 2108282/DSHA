@@ -19,6 +19,22 @@
          真正的「状态栏歌词」没有公开接口（只有 Flyme/exTHmUI 认 ticker flag，
          其余机型要 Xposed），所以走自绘悬浮窗这条免 ROOT 的路。 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- 位置：让 agent 能回答「我在哪」「附近有什么」这类问题。
+         运行时权限，且 DSHA 侧还有一道开关（cap_location，**默认关**）——
+         位置是能定位到人的信息，不该因为装了 App 就默认开着。
+         标 required=false：没有 GPS 的设备（部分平板）照样能装。 -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-feature
+        android:name="android.hardware.location"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.sensor.light"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.flash"
+        android:required="false" />
     <!-- ADB 保活：系统休眠会冻结后台网络，加入电池优化白名单后连接才能长期在线。
          一次性弹窗申请（本 App 不上架 Play，不受该权限的商店政策限制）。 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />

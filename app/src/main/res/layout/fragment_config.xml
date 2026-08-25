@@ -241,6 +241,20 @@
                 android:text="悬浮条外观与行为 ▸ 底色 / 透明度 / 行数 / 停留时间 / 思考过程 / 就地批准" />
 
             <CheckBox
+                android:id="@+id/config_cap_sensors"
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="允许 agent 读传感器、开手电（环境光 / 加速度 / 磁力等，无隐私风险）" />
+
+            <CheckBox
+                android:id="@+id/config_cap_location"
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="允许 agent 读取位置（能定位到你本人，默认关闭）" />
+
+            <CheckBox
                 android:id="@+id/config_rc6"
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"

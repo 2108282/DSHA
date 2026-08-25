@@ -30,6 +30,7 @@ public class ConfigFragment extends Fragment {
     private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb, rootShellCb, prorootCb;
     private CheckBox backupKeyCb;
     private CheckBox overlayStreamCb;
+    private CheckBox capSensorsCb, capLocationCb;
     private EditText autoBackupEdit;
     private Button saveBtn;
     private TextView repoLink;
@@ -81,6 +82,38 @@ public class ConfigFragment extends Fragment {
                             .setOnCancelListener(d -> btn.setChecked(false))
                             .show();
                 }
+            });
+        }
+        capSensorsCb = view.findViewById(R.id.config_cap_sensors);
+        capLocationCb = view.findViewById(R.id.config_cap_location);
+        if (capLocationCb != null) {
+            // 与悬浮窗那个开关同一个道理：勾上就当场把系统权限要到，
+            // 要不到就把开关退回去 —— 界面显示「开着」而实际读不到，是最难排查的一类问题。
+            // 位置比悬浮窗更敏感，所以文案要把「agent 随时能读」讲明白再让用户决定。
+            capLocationCb.setOnCheckedChangeListener((btn, checked) -> {
+                if (!checked || !isAdded()) return;
+                if (locationGranted()) return;
+                new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                        .setTitle("需要定位权限")
+                        .setMessage("开启后，运行中的 agent 随时可以读取这台手机的位置"
+                                + "（经纬度、精度、海拔）。\n\n"
+                                + "只在你确实要它回答「我在哪」「附近有什么」这类问题时开启，"
+                                + "平时建议保持关闭。")
+                        .setPositiveButton("去授权", (d, w) -> {
+                            try {
+                                requestPermissions(new String[]{
+                                        android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                        android.Manifest.permission.ACCESS_COARSE_LOCATION}, 101);
+                            } catch (Throwable e) {
+                                btn.setChecked(false);
+                                Toast.makeText(requireContext(),
+                                        "无法申请定位权限，请手动到「应用权限 → 位置」开启",
+                                        Toast.LENGTH_LONG).show();
+                            }
+                        })
+                        .setNegativeButton("算了", (d, w) -> btn.setChecked(false))
+                        .setOnCancelListener(d -> btn.setChecked(false))
+                        .show();
             });
         }
         rc6Cb = view.findViewById(R.id.config_rc6);
@@ -630,6 +663,34 @@ public class ConfigFragment extends Fragment {
         DeviceBridgeService.kickNow(requireContext(), "打开配置页");
     }
 
+    /** 位置权限当前是否已授予（粗略或精确任一即可 —— DeviceSense 两者都能用）。 */
+    private boolean locationGranted() {
+        try {
+            android.content.Context ctx = requireContext();
+            return ctx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    || ctx.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != 101 || capLocationCb == null || !isAdded()) return;
+        // 用户在系统弹窗里选了「不允许」：开关必须跟着退回去。
+        // 只看 grantResults 不够 —— 用户可能只给了「大致位置」，那也算能用。
+        if (locationGranted()) {
+            Toast.makeText(requireContext(), "定位权限已授予，记得点「保存配置」", Toast.LENGTH_SHORT).show();
+        } else {
+            capLocationCb.setChecked(false);
+            Toast.makeText(requireContext(), "未授予定位权限，该能力保持关闭", Toast.LENGTH_LONG).show();
+        }
+    }
+
     @Override
     public void onPause() {
         super.onPause();
@@ -764,6 +825,12 @@ public class ConfigFragment extends Fragment {
                     .putBoolean("lan_mode", lanModeCb.isChecked())
                     .putBoolean("overlay_stream",
                             overlayStreamCb != null && overlayStreamCb.isChecked())
+                    // 传感器/手电没有隐私风险，缺控件时按开启算（与 DeviceSense 的默认一致）
+                    .putBoolean(DeviceSense.K_SENSORS, capSensorsCb == null || capSensorsCb.isChecked())
+                    // 位置反过来：勾了但系统权限没到手就不算开，宁可让用户再点一次，
+                    // 也别在设置里留一条「已开启」的假记录
+                    .putBoolean(DeviceSense.K_LOCATION,
+                            capLocationCb != null && capLocationCb.isChecked() && locationGranted())
                     .putBoolean("use_rc6", rc6Cb.isChecked())
                     .putBoolean("gecko_core", geckoCb != null && geckoCb.isChecked())
                     // 运行时以字符串存，将来加第三种后端不必改存储格式
@@ -832,6 +899,18 @@ public class ConfigFragment extends Fragment {
                     .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                     .getBoolean("overlay_stream", false);
             overlayStreamCb.setChecked(want && OverlayController.permitted(requireContext()));
+        }
+        if (capSensorsCb != null) {
+            capSensorsCb.setChecked(requireContext()
+                    .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .getBoolean(DeviceSense.K_SENSORS, true));
+        }
+        if (capLocationCb != null) {
+            // 同悬浮窗：系统权限可能在设置里被撤掉，撤了就跟着回到关闭
+            boolean wantLoc = requireContext()
+                    .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .getBoolean(DeviceSense.K_LOCATION, false);
+            capLocationCb.setChecked(wantLoc && locationGranted());
         }
         if (prorootCb != null) {
             prorootCb.setChecked("proroot".equals(requireContext()

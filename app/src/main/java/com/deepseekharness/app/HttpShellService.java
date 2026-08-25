@@ -416,6 +416,18 @@ public final class HttpShellService {
                 result = appAsk(path);
             } else if (path.startsWith("/app/overlay")) {
                 result = appOverlay(path);
+            } else if (path.startsWith("/app/location")) {
+                // 位置 / 传感器 / 手电：手机相对服务器真正独有的那几样能力。
+                // 顺序要紧 —— /app/sensors 必须在 /app/sensor 之前判，
+                // 否则 startsWith 会让「列表」被「读单个」抢走。
+                result = DeviceSense.location(ctx, "1".equals(getParam(queryOf(path), "fresh", "")));
+            } else if (path.startsWith("/app/sensors")) {
+                result = DeviceSense.sensorList(ctx);
+            } else if (path.startsWith("/app/sensor")) {
+                result = DeviceSense.sensorRead(ctx, getParam(queryOf(path), "name", "light"));
+            } else if (path.startsWith("/app/torch")) {
+                String on = getParam(queryOf(path), "on", "1");
+                result = DeviceSense.torch(ctx, !"0".equals(on) && !"off".equalsIgnoreCase(on));
             } else if (path.startsWith("/app/export")) {
                 result = appExport(path);
             } else if (cmd.isEmpty()) {
