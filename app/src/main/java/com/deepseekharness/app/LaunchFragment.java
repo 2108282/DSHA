@@ -206,6 +206,7 @@ public class LaunchFragment extends Fragment {
                 webReady = up;
                 applyRunUi(up);
                 refreshHint(); // 每次心跳刷新一次状态行（启动等待期的秒数在这里走字）
+                updateLanAddr(); // 地址 chip 也跟着心跳：局域网后开、WiFi 换网段都能刷新
                 if (up && enterWhenReady && !insideWeb) {
                     enterWhenReady = false;
                     openWeb();
@@ -392,32 +393,77 @@ public class LaunchFragment extends Fragment {
         return t.isEmpty() ? base : base + "?dsha_t=" + android.net.Uri.encode(t);
     }
 
+    /** 启动页那行可点的地址 chip。
+     *
+     *  <p>用户反馈「启动页给的 URL 用不了，AI 找出来 :3080/?dsha_t=... 才是对的」。
+     *  原因是这里<b>只显示局域网地址</b>（3081），而那条链当时是坏的 ——
+     *  {@code stripTokenFromRequestLine} 把请求行的 HTTP 版本吃掉，后端直接 400。
+     *  用手机自带浏览器打开所需要的本机地址（带 dsh 自己的 {@code dsha_t}）
+     *  从来没有在界面上出现过，用户只能让 agent 去日志里挖。
+     *
+     *  <p>现在一行 chip 收两个入口，点开再选本机 / 同 WiFi。另外它以前只在
+     *  onViewCreated 算一次 —— 局域网后来才开、或者 WiFi 换了网段都不会刷新，
+     *  现在跟着心跳走。 */
     private void updateLanAddr() {
+        if (!webReady) {
+            lanAddrText.setVisibility(View.GONE);
+            return;
+        }
+        lanAddrText.setText("在浏览器中打开 ▸ 点这里取地址（本机 / 同 WiFi）");
+        lanAddrText.setVisibility(View.VISIBLE);
+        lanAddrText.setOnClickListener(v -> showBrowserAddrDialog());
+    }
+
+    /** 列出可用的浏览器访问地址。地址里的 token 就是凭据，所以复制后要提醒一句。 */
+    private void showBrowserAddrDialog() {
+        final String local = uiUrl();
         boolean lan = requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false);
-        if (!lan) {
-            lanAddrText.setVisibility(View.GONE);
-            return;
-        }
         String ip = HarnessController.getLanAddress();
-        if (ip == null) {
-            lanAddrText.setVisibility(View.GONE);
-            return;
+        final String lanAddr = (lan && ip != null && !ip.isEmpty())
+                ? "http://" + ip + ":" + LanProxyService.LAN_PORT + "/?token="
+                        + LanProxyService.getLanToken(requireContext())
+                : null;
+
+        final java.util.List<String> items = new java.util.ArrayList<>();
+        final java.util.List<Runnable> acts = new java.util.ArrayList<>();
+
+        items.add("用本机浏览器打开\n" + local);
+        acts.add(() -> AboutDialog.openBrowser(requireContext(), local));
+        items.add("复制本机地址");
+        acts.add(() -> copyAddr("本机地址", local));
+        if (lanAddr != null) {
+            items.add("复制局域网地址（同 WiFi 的其它设备用）\n" + lanAddr);
+            acts.add(() -> copyAddr("局域网地址", lanAddr));
+        } else if (lan) {
+            items.add("局域网已开启，但还没拿到 WiFi 地址（连上 WiFi 再看）");
+            acts.add(() -> { });
+        } else {
+            items.add("局域网访问未开启 —— 去「配置」页打开后再来取地址");
+            acts.add(() -> { });
         }
-        // 注意：局域网访问走 App 侧 LanProxyService 桥（端口 3081 → 后端 3080），
-        // 不是直连 3080（直连需要 lan-bind 补丁成功且 CLI 放行 0.0.0.0，不可靠）
-        // LAN 访问带 token（鉴权：防同 WiFi 任意设备访问 dsh）
-        final String lanTok = LanProxyService.getLanToken(requireContext());
-        final String copyAddr = "http://" + ip + ":" + LanProxyService.LAN_PORT + "/?token=" + lanTok;
-        lanAddrText.setText("局域网访问: " + copyAddr + "  （同 WiFi 设备可打开）");
-        lanAddrText.setVisibility(View.VISIBLE);
-        lanAddrText.setOnClickListener(v -> {
+
+        new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                .setTitle("在浏览器中打开")
+                .setItems(items.toArray(new String[0]), (d, which) -> {
+                    if (which >= 0 && which < acts.size()) acts.get(which).run();
+                })
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void copyAddr(String label, String addr) {
+        try {
             android.content.ClipboardManager cm = (android.content.ClipboardManager)
                     requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("lan", copyAddr));
-            Toast.makeText(requireContext(), "局域网地址已复制", Toast.LENGTH_SHORT).show();
-        });
+            if (cm != null) cm.setPrimaryClip(android.content.ClipData.newPlainText(label, addr));
+            // token 就写在地址里，等于密码 —— 说清楚，别让人随手发到群里
+            Toast.makeText(requireContext(), label + "已复制（里面的 token 相当于密码，别外发）",
+                    Toast.LENGTH_LONG).show();
+        } catch (Throwable e) {
+            Toast.makeText(requireContext(), "复制失败：" + addr, Toast.LENGTH_LONG).show();
+        }
     }
 
     private boolean goExtractIfNeeded() {
