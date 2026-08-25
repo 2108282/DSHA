@@ -728,11 +728,15 @@ public class HarnessController {
             value = "deepseek-harness";
         }
         // ===== 工作区名自适应 =====
-        // 配置值目录不存在源码入口（apps/cli/lib/bin.js 或 lib/bin.js）时，
-        // 自动扫描 /root 认唯一含源码入口的目录并回写——这样「启动/看门狗/
-        // 备份/重置/守卫补丁」全部跟随真实目录，不再各自用旧配置值。
-        // RC6 全局 npm 模式（无源码树）扫不到 → 保持配置值不变。
-        if (!workdirExists(value)) {
+        // 只处理一种漂移：配置指向的目录**根本不存在**（被清理、被重置、换了环境）。
+        // 这时扫描 /root 认出唯一含源码入口的目录并回写，让启动/看门狗/备份/守卫补丁
+        // 全部跟随真实目录。
+        //
+        // 判据**不能**是「有没有源码入口（apps/cli/lib/bin.js）」—— 用户新建的工作区
+        // 就是一个空目录，那样会被当成漂移、立刻被扫描结果覆盖，表现出来就是
+        // 「选了新工作区，一松手就跳回旧的」，新建也一样（新目录永远没有源码入口）。
+        // 有人就这样完全改不动工作区。目录在就尊重用户的选择。
+        if (!workdirDirExists(value)) {
             String detected = scanWorkdirSource();
             if (detected != null) {
                 prefs.edit().putString("workdir", detected).apply();
@@ -740,6 +744,15 @@ public class HarnessController {
             }
         }
         return value;
+    }
+
+    /** 工作目录本身是否存在（不看里面有没有 dsh 源码）。 */
+    private boolean workdirDirExists(String wd) {
+        try {
+            return new java.io.File(proot.getRootfsDir(), "root/" + wd).isDirectory();
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /** 扫描 rootfs /root 下含 harness 源码入口（apps/cli/lib/bin.js / lib/bin.js）的目录名；无则 null。 */
@@ -764,6 +777,18 @@ public class HarnessController {
         String t = v.trim();
         if (!isSafeWorkdir(t)) return; // 非法：拒绝（保持原值）
         prefs.edit().putString("workdir", t).apply();
+        // 用户点「应用」就是明确要用这个工作区，目录不存在就建出来。
+        // 不建的话 getWorkdir() 会认为「配置指向一个不存在的目录」= 漂移，
+        // 立刻扫描回退到旧目录 —— 用户看到的就是刚设的值又跳回去了。
+        try {
+            java.io.File d = new java.io.File(proot.getRootfsDir(), "root/" + t);
+            if (!d.isDirectory()) {
+                //noinspection ResultOfMethodCallIgnored
+                d.mkdirs();
+            }
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "新工作区目录创建失败（仍已保存配置）: " + e);
+        }
     }
 
     private static boolean isSafeWorkdir(String value) {
@@ -5222,6 +5247,9 @@ public class HarnessController {
             } catch (Throwable ignored) {
             }
             invalidateSteps();
+            // 老备份里带着**备份那台机器**的 .bridge_token，恢复出来就和 App 内存里的
+            // 不一致 —— WebUI 会弹「需要 token，请在 DSHA 应用内打开」。删掉重新生成。
+            HttpShellService.resetTokenAfterRestore();
             // issue #22：恢复数据落位后回读备份里的 .dsha-apikey 并回填配置页——
             // 否则离线包用户（无 .env）走自动/迁移恢复后配置页 key 为空、启动注入空 key。
             syncApiKeyFromRootfs();

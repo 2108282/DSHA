@@ -159,7 +159,13 @@ public final class BackupManager {
                     // 不再 2>/dev/null：tar 的报错正是排查依据（execChecked 会带回输出）
                     // --ignore-failed-read：万一还有漏网的坏符号链接，只跳过它，
                     // 别让整包备份失败（数据本身已丢，留着也恢复不了）
-                    + "tar -czf .dsha-backup.tar.gz --ignore-failed-read \"$@\" "
+                    // --exclude .bridge_token：那是**本机**的 3090 桥凭据，不是用户数据。
+                    //   带进备份有两个坏处：① 备份落在公共 Download 目录，任何有存储权限的
+                    //   App 都能读到这台机器的桥 token；② 恢复到另一台机器（或本机重装）后，
+                    //   rootfs 里是旧 token 而 App 内存里是新的，WebUI 直接提示
+                    //   「需要 token，请在 DSHA 应用内打开」——已经有用户这样中招。
+                    + "tar -czf .dsha-backup.tar.gz --ignore-failed-read "
+                    + "--exclude='.dsh/.bridge_token' \"$@\" "
                     + "|| { echo TAR_FAIL; exit 1; }\n"
                     + "test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n"
                     + "echo OK\n";

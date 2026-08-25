@@ -299,6 +299,32 @@ public final class HttpShellService {
         }
     }
 
+    /** 恢复备份后重新对齐 3090 桥的 token。
+     *
+     *  <p>老备份包里带着**备份那台机器**的 {@code .dsh/.bridge_token}（新版备份已经把它
+     *  排除了）。恢复出来之后 rootfs 里是旧 token，而 App 进程内的 {@link #authToken}
+     *  还是当前那个 —— 它是静态字段，{@link #ensureToken()} 只在缓存为空时才读文件。
+     *  于是 App 用自己的 token 拼 WebView 首帧 URL，dsh 后端却按恢复出来的旧 token 校验，
+     *  用户看到的就是「DSHA：需要 token，请在 DSHA 应用内打开，或在 URL 后加 ?dsha_t=…」。
+     *
+     *  <p>处理：删掉恢复出来的 token 文件、清空内存缓存，再让 ensureToken 重新生成并写回，
+     *  两侧重新对齐。dsh 后端自己也缓存了 token（webserver-auth-patch 里的
+     *  {@code __dshaTokenCache}），所以要重启 Web 才彻底生效 —— 恢复流程本来就提示重启。 */
+    public static void resetTokenAfterRestore() {
+        try {
+            java.io.File tf = tokenFileIfPossible();
+            if (tf != null && tf.isFile()) {
+                //noinspection ResultOfMethodCallIgnored
+                tf.delete();
+            }
+            authToken = "";
+            ensureToken();
+            android.util.Log.i("DSHA", "恢复后已重置 3090 桥 token（老备份里带的是别的机器的）");
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "恢复后重置桥 token 失败: " + e);
+        }
+    }
+
     private static boolean tokenMatch(String presented) {
         String token = authToken.isEmpty() ? ensureToken() : authToken;
         return token != null && !token.isEmpty() && LanAuth.constantTimeEquals(token, presented);
