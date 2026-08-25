@@ -188,15 +188,6 @@ DSHA 不只是「能跑起来」。下面每一项都是实装的功能。
 | 开销 | proroot 已无 ptrace 开销 | 无容器层，理论最快 |
 | 沙箱 | 可用 | bubblewrap 被 sepolicy 挡，只能降级 |
 
-值得说一句：Termux 派这半年做得不错，[deepseek-harness-termux](https://github.com/Vengisk/deepseek-harness-termux)
-用精确补丁把 node-pty 编过了、把 `link(2)` 换成 `rename(2)` 绕开 SELinux，
-[deepseek-harness-android](https://github.com/FunnelCakes/deepseek-harness-android)
-的兼容修复清单也很实在 —— 「Termux 派功能残缺」这句话已经过期了。
-
-**DSHA 的差异不在「他们跑不起来」，而在于**：装机不需要命令行、环境是完整的
-glibc 而非逐个补丁维持、以及 App 侧那一整套东西（ADB 直连、悬浮条、备份与恢复体系、
-自检自愈、插件市场）—— 这些是纯脚本方案给不了的。
-
 ---
 
 ## 已知限制
