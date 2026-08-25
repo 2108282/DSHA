@@ -145,8 +145,14 @@ public class WorkspaceFragment extends Fragment {
                         Toast.makeText(requireContext(), "正在清理损坏会话…", Toast.LENGTH_SHORT).show();
                         new Thread(() -> {
                             String r = c.cleanCorruptSessions();
-                            if (getActivity() != null) {
-                                getActivity().runOnUiThread(() -> Toast.makeText(requireContext(),
+                            // lambda 真正执行时 Fragment 可能已 detach，
+                            // requireContext() 会抛 IllegalStateException ——
+                            // 所以先取好 application context 再进 lambda。
+                            android.app.Activity actC = getActivity();
+                            final android.content.Context ctxC =
+                                    actC != null ? actC.getApplicationContext() : null;
+                            if (actC != null && ctxC != null) {
+                                actC.runOnUiThread(() -> Toast.makeText(ctxC,
                                         r, Toast.LENGTH_LONG).show());
                             }
                         }).start();
@@ -161,6 +167,9 @@ public class WorkspaceFragment extends Fragment {
         String path = BackupManager.backupToExternal(requireContext(), c);
         if (!isAdded() || getActivity() == null) return;
         getActivity().runOnUiThread(() -> {
+            // 弹窗必须用 Activity context，而这一刻 Fragment 可能已经 detach ——
+            // requireContext() 那时会抛 IllegalStateException（在 UI 线程上抛 = 闪退）。
+            if (!isAdded() || getActivity() == null) return;
             if (path == null) {
                 String why = BackupManager.lastError();
                 new AlertDialog.Builder(requireContext())
@@ -290,10 +299,19 @@ public class WorkspaceFragment extends Fragment {
                 final String msg = result + (keySynced
                         ? "\n· API key 已同步到配置页"
                         : "\n· 备份里没有 API key，请到「配置」页手动填写");
-                getActivity().runOnUiThread(() -> {
-                    // 用 appCtx（Fragment 可能已 detach，requireContext 会抛）
-                    Toast.makeText(appCtx, msg, Toast.LENGTH_LONG).show();
-                });
+                // 恢复是耗时操作，用户很容易在等待期间切走页面或退出 ——
+                // 那时 Fragment 已 detach，getActivity() 返回 null，
+                // 这里原来直接解引用，正是「操作到一半闪退」的来源。
+                // 拿不到 Activity 就退回用 appCtx 直接弹（Toast 不需要 Activity），
+                // 保证结果仍然告知用户，而不是静默丢掉。
+                android.app.Activity actR = getActivity();
+                if (actR != null && !actR.isFinishing()) {
+                    actR.runOnUiThread(() -> Toast.makeText(appCtx, msg,
+                            Toast.LENGTH_LONG).show());
+                } else {
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(
+                            () -> Toast.makeText(appCtx, msg, Toast.LENGTH_LONG).show());
+                }
             } catch (Exception e) {
                 if (getActivity() != null) {
                     getActivity().runOnUiThread(() -> Toast.makeText(appCtx,

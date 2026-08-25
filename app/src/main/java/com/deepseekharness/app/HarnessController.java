@@ -4154,16 +4154,27 @@ public class HarnessController {
             final SharedPreferences prefs =
                     appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
             if (targetVersion.equals(prefs.getString("backup_before_update_tag", ""))) return; // 已备份过该版本
-            prefs.edit().putString("backup_before_update_tag", targetVersion).apply();
             new Thread(() -> {
                 try {
-                    if (proot.isInstalled()) {
-                        String p = BackupManager.backupToExternal(appContext, this);
-                        if (p != null) {
-                            android.util.Log.i("DSHA", "更新前自动存档完成（准备升级 " + targetVersion + "）: " + p);
-                        }
+                    if (!proot.isInstalled()) return;
+                    String p = BackupManager.backupToExternal(appContext, this);
+                    if (p != null) {
+                        // 标记只在**成功之后**写。原来是备份前就写死，
+                        // 备份一旦失败，这个版本就永远不会再尝试备份了 ——
+                        // 而用户以为「升级前自动存过档」，升级出问题就没救。
+                        prefs.edit().putString("backup_before_update_tag", targetVersion).apply();
+                        logActivity("更新前已自动存档（准备升级 " + targetVersion + "）");
+                    } else {
+                        // 失败必须说出来。原来只在成功时写一行 logcat，
+                        // 失败时一声不响 —— 这正是这个项目最该避免的形态。
+                        String why = BackupManager.lastError();
+                        logActivity("更新前自动存档失败"
+                                + (why == null || why.isEmpty() ? "" : "：" + why)
+                                + " —— 建议到「工作区」页手动备份后再升级");
                     }
-                } catch (Throwable ignored) {
+                } catch (Throwable t) {
+                    logActivity("更新前自动存档异常：" + describe(t)
+                            + " —— 建议手动备份后再升级");
                 }
             }, "dsha-backup-before-update").start();
         } catch (Throwable ignored) {
@@ -4202,9 +4213,17 @@ public class HarnessController {
                     // rootfs 已就绪（有 bash）才备份；未解压/未安装时跳过
                     if (proot.isInstalled() && rootfsFile("root/.dsh").isDirectory()) {
                         String p = BackupManager.backupToExternal(appContext, HarnessController.this);
-                        if (p != null) android.util.Log.i("DSHA", "升级自动备份完成: " + p);
+                        if (p != null) {
+                            logActivity("升级前已自动备份旧环境");
+                        } else {
+                            String why = BackupManager.lastError();
+                            logActivity("升级自动备份失败"
+                                    + (why == null || why.isEmpty() ? "" : "：" + why)
+                                    + " —— 旧环境没有存档，如遇问题请到「工作区」页手动备份");
+                        }
                     }
-                } catch (Throwable ignored) {
+                } catch (Throwable t) {
+                    logActivity("升级自动备份异常：" + describe(t));
                 }
                 // ===== 低版本安装适配：老 rootfs 结构差异集中迁移 =====
                 // 按来源版本分层，逐层升级（幂等，每层只做该层需要的事）：
@@ -4576,11 +4595,26 @@ public class HarnessController {
                     // 真数据 —— 比不备份更糟。
                     if (proot.isInstalled() && hasUserDataInDsh()) {
                         String p = BackupManager.backupToExternalAuto(appContext, HarnessController.this);
-                        if (p != null) android.util.Log.i("DSHA", "第 " + n + " 次启动，自动备份完成: " + p);
+                        if (p != null) {
+                            logActivity("第 " + n + " 次启动，已自动备份");
+                        } else {
+                            // 失败要说出来，而且**把计数退回去**：
+                            // 计数在备份之前就加过了，不退的话这次失败要再等
+                            // N 次启动才会重试，而用户一直以为「每 N 次自动备份」在生效。
+                            prefs.edit().putInt("backup_launch_count", n - 1).apply();
+                            String why = BackupManager.lastError();
+                            logActivity("自动备份失败"
+                                    + (why == null || why.isEmpty() ? "" : "：" + why)
+                                    + " —— 下次启动会重试；也可到「工作区」页手动备份");
+                        }
                     } else {
+                        // 空环境跳过是正常的，但计数不该被这次白白消耗
+                        prefs.edit().putInt("backup_launch_count", n - 1).apply();
                         android.util.Log.i("DSHA", "第 " + n + " 次启动：.dsh 里还没有用户数据，跳过自动备份");
                     }
-                } catch (Throwable ignored) {
+                } catch (Throwable t) {
+                    prefs.edit().putInt("backup_launch_count", n - 1).apply();
+                    logActivity("自动备份异常：" + describe(t) + " —— 下次启动会重试");
                 }
             });
         } catch (Throwable ignored) {
@@ -6260,7 +6294,12 @@ public class HarnessController {
                 if (f.exists()) {
                     Process p = new ProcessBuilder("/system/bin/rm", "-rf", f.getAbsolutePath())
                             .redirectErrorStream(true).start();
-                    p.waitFor();
+                    // 有超时：这是 UI 触发的同步路径，rm 卡住（目录巨大 / 文件系统异常）
+                    // 会把线程永久挂住，用户看到的是「点删除就卡死」。
+                    if (!p.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                        p.destroyForcibly();
+                        android.util.Log.w("DSHA", "rm -rf 超时已放弃: " + f.getAbsolutePath());
+                    }
                 }
             }
         } catch (Throwable ignored) {

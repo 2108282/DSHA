@@ -139,7 +139,11 @@ public class ConfigFragment extends Fragment {
             stopAdbStatusPolling();
             return;
         }
-        final TextView adbStatus = getView().findViewById(R.id.config_adb_status);
+        // getView() 在 Fragment 视图销毁后为 null（同一文件下面第二处就判了空，
+        // 这里漏了）。视图没了直接返回，后面的绑定也没有意义。
+        android.view.View rootV = getView();
+        if (rootV == null) return;
+        final TextView adbStatus = rootV.findViewById(R.id.config_adb_status);
         if (adbStatus == null) { stopAdbStatusPolling(); return; }
         if (!DeviceBridgeService.isAdbEnabled(requireContext())) {
             adbStatus.setText("ADB 已关闭。不用无线调试就保持关闭。");
