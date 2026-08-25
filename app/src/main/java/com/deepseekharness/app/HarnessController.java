@@ -5286,12 +5286,20 @@ public class HarnessController {
                 body += "\n· 备份里有 " + TarGzipExtractor.lastSkipped
                         + " 个异常条目已跳过：" + TarGzipExtractor.lastSkipNote;
             }
-            // 缺失插件：后台静默补装（不阻塞恢复结果返回，失败无感）
+            // 缺失插件：后台静默补装（不阻塞恢复结果返回，失败无感）。
+            // 已弃用的插件不在补装范围内 —— 老备份的 profile 里还注册着旧内置 UI 适配，
+            // 重装后它的 link: 源码不存在，整理脚本会把它报成「可自动补装」。
             java.util.List<String> missing = parseMissingPlugins(out);
             body = stripMachineLines(body);
             if (!missing.isEmpty()) {
-                autoInstallPluginsSilently(missing);
-                body += "\n· " + missing.size() + " 个插件正在后台补装，装好后重启 WebUI 即回到启用状态";
+                java.util.List<String> skipped = autoInstallPluginsSilently(missing);
+                int willInstall = missing.size() - skipped.size();
+                if (willInstall > 0) {
+                    body += "\n· " + willInstall + " 个插件正在后台补装，装好后重启 WebUI 即回到启用状态";
+                }
+                for (String s : skipped) {
+                    body += "\n· 未补装 " + s + "：" + DeprecatedPlugins.reason(s);
+                }
             }
             deleteRecursively(stage);
             // 恢复会把整个 .dsh 换成实体目录（restore-merge.py 里 move_aside + move），
@@ -5436,12 +5444,38 @@ public class HarnessController {
     }
 
     /** 恢复后台静默补装缺失插件：逐个 dsh plugin add，不弹窗不打扰；
-     *  结果写 logcat 与 .dsh/restore-report.txt。装不上也不影响已恢复的数据。 */
-    private void autoInstallPluginsSilently(final java.util.List<String> names) {
+     *  结果写 logcat 与 .dsh/restore-report.txt。装不上也不影响已恢复的数据。
+     *
+     *  <p><b>已弃用的插件一律不装</b>（{@link DeprecatedPlugins}）——「程序替用户装」
+     *  和「用户自己点安装」是两回事，前者不该把一个已经下线的插件带回来。老备份里
+     *  注册着旧内置 UI 适配（{@code link:/root/dsha-mobile-adapt}），重装后那个实体
+     *  不存在，restore-merge.py 就把它报成「可自动补装」——装回来正好和新内置插件打架。
+     *  返回被跳过的名字，调用方据此告诉用户为什么没装。
+     *
+     *  <p>收尾除了 {@code ensureBuiltinBundles()} 还要再跑一次
+     *  {@code migrateLegacyMobileAdapt()}：那个方法是「看到痕迹才动手」的收敛型逻辑，
+     *  而这里是并发线程 —— 主线程调它的时候补装往往还没落地，它看到干净环境就退出了，
+     *  等于白跑。装完再收敛一次，才能兜住清单没覆盖到的情况。 */
+    private java.util.List<String> autoInstallPluginsSilently(final java.util.List<String> names) {
+        final java.util.List<String> skipped = new java.util.ArrayList<>();
+        final java.util.List<String> todo = new java.util.ArrayList<>();
+        for (String name : names) {
+            if (DeprecatedPlugins.isDeprecated(name)) {
+                skipped.add(name);
+                android.util.Log.i("DSHA", "已弃用插件不补装：" + name);
+            } else {
+                todo.add(name);
+            }
+        }
+        if (todo.isEmpty() && skipped.isEmpty()) return skipped;
         Thread t = new Thread(() -> {
             StringBuilder log = new StringBuilder("== 后台补装插件 ==\n");
+            for (String name : skipped) {
+                log.append("– ").append(name).append("：已弃用，未补装（")
+                        .append(DeprecatedPlugins.reason(name)).append("）\n");
+            }
             int ok = 0;
-            for (String name : names) {
+            for (String name : todo) {
                 try {
                     String r = installPlugin(name);
                     boolean good = r != null && r.contains("INSTALL_EXIT=0");
@@ -5452,10 +5486,14 @@ public class HarnessController {
                     log.append("✗ ").append(name).append("：").append(describe(e)).append('\n');
                 }
             }
-            log.append("小结：成功 ").append(ok).append('/').append(names.size()).append('\n');
-            android.util.Log.i("DSHA", "恢复后补装插件完成 " + ok + "/" + names.size());
+            log.append("小结：成功 ").append(ok).append('/').append(todo.size());
+            if (!skipped.isEmpty()) log.append("，跳过已弃用 ").append(skipped.size()).append(" 个");
+            log.append('\n');
+            android.util.Log.i("DSHA", "恢复后补装插件完成 " + ok + "/" + todo.size()
+                    + (skipped.isEmpty() ? "" : "，跳过已弃用 " + skipped.size()));
             try {
-                ensureBuiltinBundles(); // 顺带把内置插件校验补回
+                migrateLegacyMobileAdapt(); // 补装落地后再收敛一次（见方法注释）
+                ensureBuiltinBundles();     // 顺带把内置插件校验补回
             } catch (Throwable ignored) {
             }
             try {
@@ -5472,6 +5510,7 @@ public class HarnessController {
         }, "dsha-restore-plugins");
         t.setDaemon(true);
         t.start();
+        return skipped;
     }
 
     /** 取字符串尾部 n 个字符（日志用，避免把整段安装输出塞进报告） */
