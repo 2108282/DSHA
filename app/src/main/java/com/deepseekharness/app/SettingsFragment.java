@@ -71,7 +71,12 @@ public class SettingsFragment extends Fragment {
         Toast.makeText(requireContext(), "正在自检并修补，约 10~30 秒…", Toast.LENGTH_SHORT).show();
         final android.content.Context app = requireContext().getApplicationContext();
         new Thread(() -> {
-            final String report = HarnessController.get(app).runSelfTest();
+            // 运行时兼容性要第一个查，而且必须在 App 侧查：selftest.py 本身是 python，
+            // 而这类故障会让容器里所有 python 一启动就 abort —— 自检自己就是第一个
+            // 受害者，用户只会看到一屏寄存器。先用不依赖 python 的探针过一遍、
+            // 命中就当场切回 proot，再跑常规自检（这时它已经能起来了）。
+            final String health = HarnessController.get(app).checkRuntimeHealthAndHeal();
+            final String report = health + HarnessController.get(app).runSelfTest();
             // 自检要 10~30 秒，回来时用户很可能已经离开设置页。getActivity() 判空
             // 之后再调 requireActivity() 等于白判 —— 两次调用之间就是那个窗口，
             // 而它抛的 IllegalStateException 落在这个后台线程上就是整进程崩。

@@ -196,6 +196,60 @@ public final class PureLogicTest {
                     && PluginErrorHint.detect("") == null);
         }
 
+        // ---------- RuntimeHealth.parse ----------
+        // 判据全是字符串匹配，所以能在这里用真实现场原文回归。
+        {
+            // 用户贴过来的原文（两段崩溃：assert 调 abort，abort 在信号层再炸一次）
+            String real = "Fatal glibc error: ../sysdeps/unix/sysv/linux/sysconf-sigstksz.h:25"
+                    + " (sysconf_sigstksz): assertion failed: minsigstacksize != 0\n"
+                    + "[proroot] SIGSEGV pc=0x7f addr=0x0 code=-6\n";
+            RuntimeHealth.Probe p = RuntimeHealth.parse(real);
+            ok("health: 认出用户贴的崩溃原文", !p.healthy());
+
+            // 探针完整输出 —— 坏环境
+            p = RuntimeHealth.parse("PROBE_BEGIN\nAUXV: AT_MINSIGSTKSZ:  0x0\nPYEXIT=134\n"
+                    + "Fatal glibc error: sysconf_sigstksz\nPROBE_END\n");
+            ok("health: 坏环境判 fatal", !p.healthy());
+            ok("health: 认出 auxv 为 0", p.minsigstkszZero);
+
+            // 回归：LD_SHOW_AUXV 打的是十六进制。原实现走 Integer.parseInt("0x1400")
+            // 抛异常被吞，minsigstkszZero 一直是 false —— 好机器结论恰好正确，
+            // 掩盖了下面那条「auxv=0x0 但 python 退出码取不到」的漏报。
+            p = RuntimeHealth.parse("PROBE_BEGIN\nAUXV: AT_MINSIGSTKSZ:  0x1400\nPYEXIT=0\nPROBE_END\n");
+            ok("health: 十六进制 0x1400 不误判", p.healthy() && !p.minsigstkszZero);
+
+            // 修好之后才成立的一条：auxv=0x0，而 python3 压根不在（PYEXIT=127，不是 134）
+            p = RuntimeHealth.parse("PROBE_BEGIN\nAUXV: AT_MINSIGSTKSZ:  0x0\nPYEXIT=127\n"
+                    + "bash: python3: command not found\nPROBE_END\n");
+            ok("health: auxv=0x0 单独也能判出来", !p.healthy() && p.minsigstkszZero);
+
+            // 十进制 0（有的 ld.so 版本按十进制打）
+            p = RuntimeHealth.parse("AUXV: AT_MINSIGSTKSZ: 0\nPYEXIT=0\n");
+            ok("health: 十进制 0 也认", !p.healthy());
+
+            // 正常机器：内核压根不提供这一项，glibc 用架构默认常量。
+            // 回归：标记行自己带 MINSIGSTKSZ 字样，\D 会跨过换行在 "PYEXIT=0" 上
+            // 捡到那个 0，把每一台正常机器都判成不兼容并悄悄切回 proot。
+            p = RuntimeHealth.parse("PROBE_BEGIN\nAUXV_NO_MINSIGSTKSZ\nPYEXIT=0\nPROBE_END\n");
+            ok("health: 缺 auxv 项是好事", p.healthy() && p.auxvEntryAbsent);
+            ok("health: 缺 auxv 项时不去解析值", !p.minsigstkszZero);
+
+            // 探针自己没跑成：不能据此判死刑，否则所有人白白失去 proroot 加速
+            ok("health: 空输出不判死刑", RuntimeHealth.parse("").healthy());
+            ok("health: null 不炸", RuntimeHealth.parse(null).healthy());
+
+            // 只有 SIGABRT 才算 python 被打死；其它非零退出码（如 127）不单独构成理由
+            p = RuntimeHealth.parse("AUXV_NO_MINSIGSTKSZ\nPYEXIT=1\nSyntaxError\n");
+            ok("health: 普通非零退出码不误判", p.healthy());
+            eqi("health: 解析退出码", 134,
+                    RuntimeHealth.parse("AUXV_NO_MINSIGSTKSZ\nPYEXIT=134\n").pythonExit);
+
+            // 探针脚本自身不能依赖 python（它正是受害者）
+            String script = RuntimeHealth.probeScript();
+            ok("health: 探针用 LD_SHOW_AUXV 而非 python 取 auxv",
+                    script.contains("LD_SHOW_AUXV") && script.contains("/bin/true"));
+        }
+
         // ---------- constantTimeEquals ----------
         ok("ct: 相等", LanAuth.constantTimeEquals("abc", "abc"));
         ok("ct: 前缀不算相等", !LanAuth.constantTimeEquals("abc", "ab"));

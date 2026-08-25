@@ -5340,6 +5340,44 @@ public class HarnessController {
         }
     }
 
+    /** 【自检项】容器运行时兼容性 —— 跑一次**不依赖 python** 的探针，
+     *  命中致命问题就当场切回 proot。返回拼进自检报告的一段文本。
+     *
+     *  <p>为什么这一项必须在 App 侧而不是写进 selftest.py：selftest.py 本身是 python，
+     *  而这类故障恰恰让容器里所有 python 一启动就 abort —— 最该报告问题的工具会是
+     *  第一个受害者，用户只会看到一屏寄存器。探针只用 shell 与 /bin/true，坏环境下也跑得完。
+     *
+     *  <p>命中就直接切回，不走 noteProrootFailure 的「连续 3 次」计数：那是给偶发失败
+     *  设计的，而这里是确定性的不兼容，重试多少次结果都一样。 */
+    public String checkRuntimeHealthAndHeal() {
+        try {
+            String out = proot.execAndRead(RuntimeHealth.probeScript(), 30_000);
+            RuntimeHealth.Probe p = RuntimeHealth.parse(out);
+            if (p.healthy()) {
+                return "【容器运行时兼容性】✅ " + p.reason + "\n\n";
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append("【容器运行时兼容性】❌ 不兼容\n  ").append(p.reason).append("\n");
+            String cur = prefs.getString("container_runtime", "proroot");
+            if ("proroot".equals(cur)) {
+                prefs.edit().putString("container_runtime", "proot")
+                        .putInt("proroot_fail_streak", 0)
+                        .putString("proroot_last_error", p.reason)
+                        .apply();
+                sb.append("  已自动切回 proot 运行时。").append(p.advice).append("\n");
+                logActivity("自检发现容器运行时不兼容，已切回 proot：" + p.reason);
+            } else {
+                sb.append("  当前已经是 proot 却仍然不兼容 —— 这超出自动修复范围，"
+                        + "请把这份报告发给开发者。\n");
+                logActivity("自检发现 proot 下也不兼容：" + p.reason);
+            }
+            return sb.append("\n").toString();
+        } catch (Throwable t) {
+            // 探针自己没跑成不代表环境坏了，别据此下结论
+            return "【容器运行时兼容性】⚠ 探针未能执行：" + describe(t) + "\n\n";
+        }
+    }
+
     /** issue #22：把 rootfs 里恢复出的 .dsha-apikey 回填到 App 配置页（与 WorkspaceFragment.doRestore 的手动恢复一致）。
      *  .env 只在「在线安装」最后一步写，离线包用户恢复后没有它，key 在备份的 .dsh/.dsha-apikey 里。
      *
