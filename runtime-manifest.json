@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-24T20:14:00Z",
+  "generated": "2026-08-25T03:03:43Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -111,6 +111,17 @@
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/fs-write-patch.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/fs-write-patch.sh",
         "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/fs-write-patch.sh"
+      ]
+    },
+    {
+      "path": "app/src/main/assets/heal-pnpm-shells.py",
+      "asset": "heal-pnpm-shells.py",
+      "size": 7257,
+      "sha256": "1d3ef3ef5509320d05d52312b90c65d5f35d1aaaf1c1f125a7094858e4e0390a",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/heal-pnpm-shells.py",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/heal-pnpm-shells.py",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/heal-pnpm-shells.py"
       ]
     },
     {
@@ -226,8 +237,8 @@
     {
       "path": "app/src/main/assets/selftest.py",
       "asset": "selftest.py",
-      "size": 52397,
-      "sha256": "54eab69d981b46ad84fbc29c8b7c60e248224e9caffa97f15c3ae54397cf8dbd",
+      "size": 61383,
+      "sha256": "f706180548532ab2615cc1a8d2c0c13fa7fa0e8b4e357623b9a9822199564294",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/selftest.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/selftest.py",
@@ -314,8 +325,8 @@
     {
       "path": "app/src/main/assets/device-shell-guide/package.json",
       "asset": "device-shell-guide/package.json",
-      "size": 539,
-      "sha256": "92987ef1c2243cdda63d8ba3b3f55e954a95e8355ab3a18b64e822fb91bca68c",
+      "size": 540,
+      "sha256": "a7a4bea320973800c288808fdaef4e7b59e6b37f7b4b4a441a8eb0409620313f",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/device-shell-guide/package.json",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/device-shell-guide/package.json",
@@ -325,8 +336,8 @@
     {
       "path": "app/src/main/assets/device-shell-guide/lib/index.js",
       "asset": "device-shell-guide/lib/index.js",
-      "size": 9762,
-      "sha256": "cc5614a81a05836b8d3df475f8d8041255fcc0e792fed716c94df864cca54c25",
+      "size": 11246,
+      "sha256": "c3639c7ed20c0459018359baf31e4dbc37d8a17fe63c9c0e659defc3a9365c8f",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/device-shell-guide/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/device-shell-guide/lib/index.js",
