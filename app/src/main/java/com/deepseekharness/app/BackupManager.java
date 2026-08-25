@@ -30,8 +30,14 @@ public final class BackupManager {
      *  并发会互相覆盖 → 加锁串行（防备份损坏）。 */
     private static final Object BACKUP_LOCK = new Object();
 
-    /** 自动备份固定文件名（自动覆盖上一个自动备份；与手动备份独立） */
+    /** 自动备份固定文件名（槽位 1）。 */
     public static final String AUTO_BACKUP_NAME = "DSHA-backup-auto.tar.gz";
+    /** 自动备份固定文件名（槽位 2）—— 与槽位 1 交替使用，见 {@link #backupToExternalAuto}。 */
+    public static final String AUTO_BACKUP_NAME_2 = "DSHA-backup-auto-2.tar.gz";
+
+    private static boolean isAutoName(String n) {
+        return AUTO_BACKUP_NAME.equals(n) || AUTO_BACKUP_NAME_2.equals(n);
+    }
     /** 手动备份最多保留份数（超出删最旧，防 Download/DSHA 无限膨胀） */
     private static final int MAX_MANUAL_KEEP = 10;
 
@@ -40,9 +46,25 @@ public final class BackupManager {
         return backup(ctx, c, null);
     }
 
-    /** 自动备份：固定文件名，自动覆盖上一个自动备份（与手动备份独立，手动每次保留） */
+    /** 自动备份：两个固定名**交替**使用，永远留着上一次那份完整的。
+     *
+     *  <p>原来是一个固定名反复覆盖。两个坏处：这次备份的如果是已经坏掉的环境
+     *  （会话文件被写坏、用户误删了数据），上一份好的就被盖没了；写入中途失败
+     *  （空间不足）还可能留下一个截断文件，而旧的那份已经不在了。手动备份有 10 份轮换，
+     *  偏偏「用户没意识到自己需要它」的自动备份只有一份 —— 顺序反了。
+     *
+     *  <p>交替选名字而不是改名轮转：MediaStore 上改名要多一次 update、多一处可能失败，
+     *  而交替只是换个字符串。自动恢复那边按 {@code DSHA-backup-} 前缀扫描，两个槽都认。 */
     public static String backupToExternalAuto(Context ctx, HarnessController c) {
-        return backup(ctx, c, AUTO_BACKUP_NAME);
+        android.content.SharedPreferences sp =
+                ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE);
+        boolean useSlot2 = !sp.getBoolean("auto_backup_slot2", false);
+        String path = backup(ctx, c, useSlot2 ? AUTO_BACKUP_NAME_2 : AUTO_BACKUP_NAME);
+        // 只有成功才翻转：失败时下次仍写这一槽，不会白白牺牲掉另一槽里的好备份
+        if (path != null) {
+            sp.edit().putBoolean("auto_backup_slot2", useSlot2).apply();
+        }
+        return path;
     }
 
     /** 内部实现。name=null 表示手动备份（时间戳命名，每次独立保留）；否则固定名覆盖。 */
@@ -407,7 +429,7 @@ public final class BackupManager {
                         while (cur.moveToNext()) {
                             String dn = cur.getString(1);
                             if (dn == null || !dn.startsWith("DSHA-backup-") || !dn.endsWith(".tar.gz")) continue;
-                            if (AUTO_BACKUP_NAME.equals(dn)) continue; // 自动备份不动
+                            if (isAutoName(dn)) continue; // 自动备份的两个槽都不动
                             all.add(android.content.ContentUris.withAppendedId(collection, cur.getLong(0)));
                         }
                     }
@@ -416,7 +438,7 @@ public final class BackupManager {
                 File dir = new File(Environment.getExternalStoragePublicDirectory(
                         Environment.DIRECTORY_DOWNLOADS), "DSHA");
                 File[] fs = dir.listFiles((d, n) -> n.startsWith("DSHA-backup-") && n.endsWith(".tar.gz")
-                        && !AUTO_BACKUP_NAME.equals(n));
+                        && !isAutoName(n));
                 if (fs != null) {
                     java.util.Arrays.sort(fs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
                     for (int i = MAX_MANUAL_KEEP; i < fs.length; i++) {
@@ -445,7 +467,7 @@ public final class BackupManager {
                                 if (c2 != null && c2.moveToFirst()) dn = c2.getString(0);
                             } catch (Throwable ignored) {
                             }
-                            if (dn == null || AUTO_BACKUP_NAME.equals(dn)) continue;
+                            if (dn == null || isAutoName(dn)) continue;
                             id2t.put(id, cur.getLong(1));
                         }
                         java.util.List<java.util.Map.Entry<Long, Long>> sorted = new java.util.ArrayList<>(id2t.entrySet());

@@ -98,6 +98,71 @@ def read_dsh_version():
     return "unknown"
 
 
+def write_readme(manifest, extra):
+    """在备份里放一份人话说明（DSHA-README.txt）。
+
+    备份包解开是一堆点开头的目录，谁也看不出哪个是对话、哪个能删。而备份最需要被读懂的
+    时刻恰好是最糟的时刻 —— 手机丢了、环境崩了、人在别的设备上翻这个包。所以这份说明
+    要能独立于 App 存在：写清里面有什么、怎么手动取数据、哪些东西换设备后用不了。
+
+    文件名用 ASCII（中文名在某些解压工具里会乱码），内容用中文。
+    """
+    lines = [
+        "DSHA 备份说明",
+        "=" * 40,
+        "",
+        "备份时间：%s" % manifest.get("createdAt", "?"),
+        "来自版本：DSHA v%s (versionCode %s) · dsh %s" % (
+            manifest.get("appVersion", "?"), manifest.get("appVersionCode", "?"),
+            manifest.get("dshVersion", "?")),
+        "工作目录：%s" % manifest.get("workdir", "?"),
+        "格式版本：%s" % manifest.get("formatVersion", "?"),
+        "",
+        "里面有什么",
+        "-" * 40,
+        ".dsh/sessions/       对话记录。一个会话一个文件，JSONL 纯文本，",
+        "                     用任何文本编辑器都能直接看，不需要 DSHA。",
+        ".dsh/storages/       插件与工具的数据",
+        ".dsh/attachments/    对话里的附件",
+        ".dsh/settings.yaml   WebUI 设置（模型、外观等）",
+        ".dsh/profiles/       插件注册（哪些插件启用、装在哪）",
+        ".dsh/.dsha-apikey    API key（本机 Keystore 加密，见下方注意）",
+        ".dsh/.credentials.yaml  dsh 自己的凭据文件（如果存在）",
+        ".dsha-plugin-src/    本机路径插件的源码内联副本（换设备恢复用）",
+        "<工作目录>/.env      环境变量（只有在线安装的用户才有这个文件）",
+        "",
+        "怎么恢复",
+        "-" * 40,
+        "推荐：打开 DSHA →「工作区」页 →「恢复备份」，选中这个 .tar.gz。",
+        "      恢复前 App 会先检查包是否完整，并告诉你里面有多少会话。",
+        "",
+        "手动：只想取几段对话的话，直接解压，去 .dsh/sessions/ 里找 —— 纯文本。",
+        "      整体还原到容器里的话，把 .dsh 覆盖到 /root/ 下（DSHA 内置终端可操作）。",
+        "",
+        "注意",
+        "-" * 40,
+        "· 这份备份里有你的**全部对话记录**，而它通常放在公共下载目录 —— ",
+        "  任何拿到存储权限的应用都能读。要分享这个文件前请想清楚。",
+        "· API key 用 Android Keystore 加密，密钥不出设备：换手机或清过 App 数据之后",
+        "  这份 key 就解不开了，恢复时 DSHA 会提示你重新填一次，这是正常的。",
+        "· **没有**包含 Ubuntu 环境本体和 node 依赖（那有几百 MB）。恢复后 DSHA 会自动",
+        "  补装缺失的插件；环境本身用安装包重新装一次即可，数据不受影响。",
+        "· 老版本的备份（没有本说明文件的那些）同样可以直接恢复，不必转换格式。",
+    ]
+    if manifest.get("inlinedPlugins"):
+        lines += ["", "内联了这些本机路径插件的源码：",
+                  "  " + ", ".join(manifest["inlinedPlugins"])]
+    body = "\n".join(lines) + "\n"
+    path = os.path.join(_BP_ROOT, ".dsh", "DSHA-README.txt")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        extra.append("DSHA-README.txt")
+    except Exception as e:
+        print("[backup-prepare] 说明文件写入失败（不影响备份）: %s" % e, file=sys.stderr)
+
+
 def main():
     manifest = {
         "formatVersion": 2,
@@ -166,6 +231,9 @@ def main():
             pass
     except Exception as e:
         print("[backup-prepare] manifest 写入失败: %s" % e, file=sys.stderr)
+
+    # 人话说明：备份最需要被读懂的时刻，往往是手机丢了、人在别的设备上翻这个包的时候
+    write_readme(manifest, extra)
 
     if inlined_any and os.path.isdir(INLINE_DIR):
         extra.append(os.path.basename(INLINE_DIR))

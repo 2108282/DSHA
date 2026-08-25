@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-25T08:31:34Z",
+  "generated": "2026-08-25T13:04:47Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -39,8 +39,8 @@
     {
       "path": "app/src/main/assets/backup-prepare.py",
       "asset": "backup-prepare.py",
-      "size": 7254,
-      "sha256": "b8adbf4293f44e8a567102078414be9b67679aa86740a5db8e5eb868388ff7e6",
+      "size": 11198,
+      "sha256": "fbc3f2f03c11565b13c9fd89afea24ca855c57824ebb96509a90a3cf09f6cbbf",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/backup-prepare.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/backup-prepare.py",

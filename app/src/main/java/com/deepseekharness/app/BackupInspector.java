@@ -91,11 +91,18 @@ final class BackupInspector {
                 if (type == '0' || type == 0 || type == '7') {
                     info.uncompressed += size;
                 }
-                if (name.startsWith(".dsh/") || name.equals(".dsh")
-                        || name.startsWith("./.dsh/")) {
+                // 「是不是 DSHA 备份」的判据刻意放得很宽：只要路径里出现 .dsh/ 或几个
+                // 特征文件名就算。历史上所有版本的备份都是 `cd /root && tar … .dsh`
+                // （查过 git，从第一版 c1f7df3 起就是这样），所以前缀一直是 .dsh/；
+                // 但用户可能自己重新打过包、加了顶层目录，或者 tar 实现写成 ./.dsh/。
+                // 判据宁可宽 —— 它只用来给提示，不用来拒绝恢复。
+                if (name.contains(".dsh/") || name.equals(".dsh")
+                        || name.endsWith("/.dsh") || name.contains("/sessions/")
+                        || name.endsWith("settings.yaml")
+                        || name.endsWith(".dsha-backup-manifest.json")) {
                     info.looksLikeDsha = true;
                 }
-                if (name.contains(".dsh/sessions/") && size > 0) {
+                if (name.contains("sessions/") && size > 0) {
                     info.sessionFiles++;
                 }
                 boolean isManifest = name.endsWith(".dsha-backup-manifest.json")

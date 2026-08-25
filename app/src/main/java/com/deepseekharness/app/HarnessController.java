@@ -5220,11 +5220,14 @@ public class HarnessController {
                         + "\n\n换一份再试（「工作区」页可以手动选择备份文件），"
                         + "或者用当前环境重新导出一份。";
             }
-            if (!info.looksLikeDsha) {
-                return "这个文件看起来不是 DSHA 备份 —— 里面没有 .dsh 目录（共 "
-                        + info.entries + " 个条目）。\n"
-                        + "请选 Download/DSHA 下形如 DSHA-backup-*.tar.gz 的文件。";
-            }
+            // 注意这里**不拒绝**：认不出特征只是提示。备份是用户自己选的文件，
+            // 里面装着他的数据；为了一个启发式判据把一份其实能用的老备份拦在门外，
+            // 比恢复一个可疑的包糟得多 —— 尤其人往往是丢了数据才来恢复的。
+            // 真正会拒绝的只有上面那种「读都读不完整」，那种恢复只会得到半个环境。
+            String shapeWarn = info.looksLikeDsha ? ""
+                    : "\n· 注意：这个包里没找到 .dsh 之类的 DSHA 特征（共 " + info.entries
+                            + " 个条目），仍然按你的选择恢复了。如果结果不对，"
+                            + "换一份 Download/DSHA 下的 DSHA-backup-*.tar.gz 再试";
             File rootDir = new File(proot.getRootfsDir(), "root");
             File stage = new File(rootDir, ".dsha-restore-stage");
             deleteRecursively(stage);
@@ -5276,6 +5279,7 @@ public class HarnessController {
                     + info.humanSize()
                     + (info.appVersion.isEmpty() ? "" : " · 来自 v" + info.appVersion)
                     + (info.hasManifest ? "" : "（老格式备份，无清单）")
+                    + shapeWarn
                     + (body.isEmpty() ? "" : "\n" + body);
             // 解压阶段跳过的异常条目也如实告知（宽容 ≠ 悄悄丢东西）
             if (TarGzipExtractor.lastSkipped > 0) {
