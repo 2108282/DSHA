@@ -495,7 +495,18 @@ public class ProotBootstrap {
         }
         if (code != 0) {
             String tail = out.length() > 600 ? out.substring(out.length() - 600) : out;
-            throw new IOException("退出码 " + code + "：\n" + tail);
+            // 退出码本身就带信息，但用户只看到一个裸数字。127 尤其常见且极易误诊成
+            // 网络问题（用户实测：第五步报 127，实际是 npm 不在 PATH 里）。
+            String hint = "";
+            if (code == 127) {
+                hint = "（127 = 命令找不到，通常是某个工具没装成或不在 PATH 里，"
+                        + "不是网络问题）";
+            } else if (code == 137) {
+                hint = "（137 = 被系统 KILL，通常是内存不足）";
+            } else if (code == 126) {
+                hint = "（126 = 文件在但不可执行，多为权限或架构不匹配）";
+            }
+            throw new IOException("退出码 " + code + hint + "：\n" + tail);
         }
         return out;
     }

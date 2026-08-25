@@ -2176,6 +2176,33 @@ public class HarnessController {
             setProgress("⚠ 卓易通环境：请勿切出 App（会被系统杀掉）", 90);
             try { Thread.sleep(2500); } catch (InterruptedException ignored) { }
         }
+        // 前置检查：第五步整个建立在 node/npm 之上。它们不可用时，
+        // 原来的表现是一条 300 字符的 npm 命令加一个裸「退出码 127」——
+        // 用户完全无法从中知道「其实是步骤③没装成」。
+        try {
+            String probe = proot.execAndRead(
+                    "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; "
+                    + "printf 'node=%s npm=%s\\n' "
+                    + "\"$(command -v node 2>/dev/null || echo MISSING)\" "
+                    + "\"$(command -v npm 2>/dev/null || echo MISSING)\"");
+            if (probe != null && probe.contains("MISSING")) {
+                boolean noNode = probe.contains("node=MISSING");
+                throw new Exception("第五步需要 Node 环境，但容器里"
+                        + (noNode ? "找不到 node" : "找不到 npm")
+                        + "。\n\n"
+                        + "这一般说明步骤③（Node 运行时）没有真正装成 —— "
+                        + "它可能显示过成功，但产物没落到 /usr/local/bin。\n"
+                        + "下一步：回到分步安装页重跑 ③ Node 运行时，"
+                        + "看到它输出版本号后再跑本步骤。\n"
+                        + "（探测结果：" + probe.trim() + "）");
+            }
+        } catch (Exception probeFail) {
+            if (probeFail.getMessage() != null
+                    && probeFail.getMessage().startsWith("第五步需要 Node")) {
+                throw probeFail;
+            }
+            // 探测本身失败（容器不可用等）不阻断，让后面的真实命令去报错
+        }
         // 预构建包源已暂停（catbox 匿名站包体被污染/损坏，含 WSL 脚本非官方产物）。
         // 当前唯一可靠路径 = 直连 GitHub 源码构建（多镜像 fallback + 工具链齐全，已验证稳定）。
         installHarnessFromSource();
@@ -2785,8 +2812,18 @@ public class HarnessController {
     /** @param stallMs 大于 0 时启用静默看门狗：这么久一个字都不吐就判卡死。
      *                 只给会持续打印进度的命令用（pnpm/apt/npm）；tar、xz 正常
      *                 也会长时间静默，传 0 走无超时的老路，免得误杀。 */
-    private void runStep(String stage, int percent, String cmd, long stallMs) throws Exception {
+    private void runStep(String stage, int percent, String cmdIn, long stallMs)
+            throws Exception {
+        String cmd = cmdIn;
         setProgress(stage, percent);
+        // 安装步骤此前完全依赖容器的默认 PATH。用户实测（1.1.7）第五步直接抛
+        // 「退出码 127」——127 就是 command not found：node/npm 装在
+        // /usr/local/bin，而某些 rootfs 的非登录 shell 默认 PATH 里没有它，
+        // 于是 npm 压根找不到。整条 exec 只回一个裸数字，用户看不懂，
+        // 我们也无从判断是网络问题还是环境问题。
+        // 这里统一前置补全，$PATH 拼在后面保留原有值（幂等、对正常环境无影响）。
+        cmd = "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; "
+                + cmd;
         // 输出重定向到日志、失败时回吐尾部 —— 但这样一来标准输出就没内容了，
         // 静默看门狗看不到进度。所以启用看门狗时改成 tee：日志照留，同时有输出可判活。
         String fullCmd = stallMs > 0
