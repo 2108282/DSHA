@@ -11,13 +11,14 @@
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 
 # 允许用环境变量指向别的 dsh 目录：这样才能拿损坏的 profile 喂给自检验证它的判断，
 # 否则任何测试都会读到真实环境的健康数据，「自检会不会误判」根本没法验。
-SELFTEST_VERSION = "13"   # 报问题时对账用：能分清「提示没更新」和「走了别的分支」
+SELFTEST_VERSION = "14"   # 报问题时对账用：能分清「提示没更新」和「走了别的分支」
 DSH_HOME = os.environ.get("DSHA_DSH_HOME", "/root/.dsh")
 SESSIONS = DSH_HOME + "/sessions"
 GUIDE_DIR = "/root/dsha-device-shell-guide"
@@ -562,6 +563,28 @@ def check_l2s():
 
 
 # ===================== 5.6 dsh Web 服务鉴权 =====================
+PENDING_RE = re.compile(r"([\w@/.-]+):\s*pending \\(waiting for service")
+
+
+def scan_boot_blockers(log_text):
+    """从 dsh-web.log 里认出「entry 未激活」这类致命启动失败。
+
+    真实事故（1.1.7）：内置插件 dsh-device-shell-guide 用模块级
+    `export const inject = ['systemPrompt']` 声明硬依赖，而极简模式
+    不提供这个服务 —— 插件永远 pending，dsh 判定 entry 未激活，
+    **整个 plugin tree 加载失败，Web 完全起不来**。
+    日志里写得明明白白，而自检以前只会说「可能只是还没启动」。
+    """
+    if "did not activate" not in log_text:
+        return None
+    names = []
+    for m in PENDING_RE.finditer(log_text):
+        n = m.group(1)
+        if n not in names:
+            names.append(n)
+    return names or ["（日志里没给出插件名）"]
+
+
 def check_web_auth():
     """dsh 的 Web 服务（3080）必须有 token 鉴权。
 
@@ -751,6 +774,51 @@ def check_sanitize_log():
             "最近一次启动补好了链接：%s" % linked[0].split(":", 1)[-1].strip())
     else:
         add("SKIP", "profile 校准记录", "最近一次没有需要处理的项")
+
+
+def check_official_bundles():
+    """web profile 里必须有官方核心 bundle，否则 Web 一定起不来。
+
+    真实事故（1.1.7）：sanitizeProfileBundles 的 bundleResolvable 没查
+    源码模式的 node_modules、也没查 .pnpm store，于是把
+    @deepseek-ai/dsh-base 和 @deepseek-ai/dsh-web-app 判成「解析不到」
+    并摘掉。那个方法的本意是「宁可少个插件也要让 Web 起来」，
+    结果摘掉内核，Web 100% 起不来 —— 而且清数据、重装、清除环境
+    全都救不回来，因为每次启动又摘一遍。
+
+    这一项独立于 bundles 可解析性检查：那个只管「列表里的能不能加载」，
+    管不了「该有的是不是还在」。
+    """
+    pf = os.path.join(DSH_HOME, "profiles", "web", "package.json")
+    if not os.path.isfile(pf):
+        add("SKIP", "官方核心插件", "profile 还没生成")
+        return
+    try:
+        with open(pf, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception as e:
+        add("FAIL", "官方核心插件",
+            "profile package.json 无法解析：%s\n"
+            "    下一步：从备份恢复，或删掉 %s 让 dsh 重建" % (e, pf))
+        return
+    bundles = d.get("dsh", {}).get("profile", {}).get("bundles", []) or []
+    official = [b for b in bundles if str(b).startswith("@deepseek-ai/")]
+    if official:
+        add("PASS", "官方核心插件", "%d 个在列：%s" % (len(official), ", ".join(official)))
+    else:
+        add("FAIL", "官方核心插件",
+            "**bundles 里没有任何 @deepseek-ai/* —— Web 起不来的直接原因**\n"
+            "    当前 bundles：%s\n"
+            "    成因：旧版本的 profile 校准把官方核心误判为「解析不到」并摘掉了\n"
+            "    下一步：升级到修复版后启动一次会自动补回；\n"
+            "      想立刻修，在终端跑：\n"
+            "      python3 - <<'EOF'\n"
+            "      import json;p='%s';d=json.load(open(p))\n"
+            "      b=d['dsh']['profile'].setdefault('bundles',[])\n"
+            "      for x in ['@deepseek-ai/dsh-web-app','@deepseek-ai/dsh-base']:\n"
+            "          if x not in b: b.insert(0,x)\n"
+            "      json.dump(d,open(p,'w'),indent=2);print('已补回',b)\n"
+            "      EOF" % (bundles, pf))
 
 
 def check_pnpm_shells():
@@ -952,6 +1020,29 @@ def check_web_boot():
         ("Invalid or unexpected token",
          "某个 js 文件损坏（下载中断多见）—— 重跑步骤⑤覆盖安装"),
     )
+    # 先看「entry 未激活」：比下面的模式更具体，能点出是哪个插件把 Web 拖死的。
+    # 一个插件声明了环境里不存在的服务 → 它永远 pending → dsh 判定 entry 未激活
+    # → **整棵 plugin tree 加载失败**，其它插件全都无辜受害。
+    blockers = scan_boot_blockers(tail)
+    if blockers:
+        add("FAIL", "Web 启动状态",
+            "**插件未激活，整个 plugin tree 加载失败 → Web 起不来**\n"
+            "    卡住的插件：%s\n"
+            "    成因：插件声明了当前环境不提供的服务（模块级 inject 是硬依赖，\n"
+            "      服务缺失就永远 pending）。极简模式没有 systemPrompt 是最常见的一种。\n"
+            "    下一步：\n"
+            "      · 内置插件 → 升级 App 到修复版（已改为运行时作用域注入）\n"
+            "      · 第三方插件 → 到「插件」页禁用它，或让作者改用 ctx.inject(deps, cb)\n"
+            "      · 想立刻起来：在终端把它从 bundles 里摘掉\n"
+            "        python3 - <<'EOF'\n"
+            "        import json;p='%s/profiles/web/package.json';d=json.load(open(p))\n"
+            "        b=d['dsh']['profile']['bundles'];bad=%r\n"
+            "        d['dsh']['profile']['bundles']=[x for x in b if x not in bad]\n"
+            "        json.dump(d,open(p,'w'),indent=2);print('剩余',d['dsh']['profile']['bundles'])\n"
+            "        EOF"
+            % (", ".join(blockers), DSH_HOME, blockers))
+        return
+
     hit = None
     for pat, why in fatal:
         if pat in tail:
@@ -1113,6 +1204,7 @@ def main():
         (check_web_auth, ()),
         (check_dsh_dupes, ()),
         (check_sessions, ()),
+        (check_official_bundles, ()),
         (check_pnpm_shells, ()),
         (check_runtime_env, ()),
         (check_public_data, ()),

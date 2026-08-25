@@ -920,6 +920,37 @@ public class HarnessController {
             java.io.File nmDir = new java.io.File(proot.getRootfsDir(),
                     "root/.dsh/profiles/web/node_modules");
 
+            // ===== 先救回被摘掉的官方核心 =====
+            // web profile 必然包含 @deepseek-ai/dsh-base 与 @deepseek-ai/dsh-web-app
+            // （前者是内核，后者提供 Web UI）。bundles 里一个 @deepseek-ai/* 都没有，
+            // 只可能是被早前版本的 sanitizeProfileBundles 误摘了 ——
+            // 那样 Web 100% 起不来，且清数据/重装/清除环境都救不回来
+            // （rootfs 数据在卸载后保留，每次启动又摘一遍）。
+            boolean hasOfficial = false;
+            for (int i = 0; i < bundles.length(); i++) {
+                if (bundles.optString(i, "").startsWith("@deepseek-ai/")) {
+                    hasOfficial = true;
+                    break;
+                }
+            }
+            java.util.List<String> restored = new java.util.ArrayList<>();
+            if (!hasOfficial) {
+                // 官方核心放在最前：dsh 按顺序加载，内核要先于依赖它的插件
+                org.json.JSONArray rebuilt = new org.json.JSONArray();
+                for (String core : new String[]{"@deepseek-ai/dsh-base",
+                        "@deepseek-ai/dsh-web-app"}) {
+                    rebuilt.put(core);
+                    restored.add(core);
+                }
+                for (int i = 0; i < bundles.length(); i++) {
+                    String n = bundles.optString(i, "");
+                    if (!n.isEmpty()) rebuilt.put(n);
+                }
+                bundles = rebuilt;
+                profObj.put("bundles", bundles);
+                logActivity("profile 缺官方核心 bundle，已补回 dsh-base / dsh-web-app（Web 起不来的直接原因）");
+            }
+
             org.json.JSONArray keep = new org.json.JSONArray();
             java.util.List<String> linked = new java.util.ArrayList<>();
             java.util.List<String> dropped = new java.util.ArrayList<>();
@@ -939,16 +970,24 @@ public class HarnessController {
                         continue;
                     }
                 }
+                // 官方核心：绝不摘。摘掉它 Web 必然起不来，与本方法的意图正好相反。
+                // 解析不到更可能是我们的判据查漏了地方（源码模式 / .pnpm / 作用域子路径）。
+                if (isProtectedBundle(name)) {
+                    keep.put(name);
+                    continue;
+                }
                 // 救不回来：摘掉，让 Web 至少能起来
                 dropped.add(name);
                 if (deps != null) deps.remove(name);
             }
-            if (dropped.isEmpty() && linked.isEmpty()) return;
+            if (dropped.isEmpty() && linked.isEmpty() && restored.isEmpty()) return;
             profObj.put("bundles", keep);
             java.nio.file.Files.write(pf.toPath(),
                     root.toString(2).getBytes(StandardCharsets.UTF_8));
             String rec = "== " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
                     java.util.Locale.US).format(new java.util.Date()) + " ==\n"
+                    + (restored.isEmpty() ? "" : "补回官方核心: " + restored
+                    + "（此前被误摘，Web 无法启动）\n")
                     + (linked.isEmpty() ? "" : "补链接后保留: " + linked + "\n")
                     + (dropped.isEmpty() ? "" : "解析不到已摘除: " + dropped
                     + "（否则 dsh 启动会崩）\n");
@@ -981,7 +1020,64 @@ public class HarnessController {
             if (new java.io.File(new java.io.File(proot.getRootfsDir(), g + "/" + name),
                     "package.json").isFile()) return true;
         }
+        // ===== 以下三路是补上的（此前全都没查，导致官方 bundle 被误判为不可解析）=====
+        // ① 源码模式：dsh 装在工作区里，官方包在 <workdir>/node_modules 下，
+        //    压根不在 /usr/local/lib。只查全局的话，源码模式环境里所有官方
+        //    bundle 都会被判成「解析不到」。
+        try {
+            String wd = detectWorkdir();
+            if (wd != null && !wd.isEmpty()) {
+                if (new java.io.File(new java.io.File(proot.getRootfsDir(),
+                        "root/" + wd + "/node_modules/" + name), "package.json").isFile()) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        // ② @deepseek-ai 作用域包在 dsh 自己的 node_modules 下还有一层
+        String shortName = name.substring(name.lastIndexOf('/') + 1);
+        String[] scoped = {
+                "usr/local/lib/node_modules/@deepseek-ai",
+                "usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai",
+        };
+        for (String g : scoped) {
+            if (new java.io.File(new java.io.File(proot.getRootfsDir(), g + "/" + shortName),
+                    "package.json").isFile()) return true;
+        }
+        // ③ pnpm store：实体在 .pnpm/<name>@<ver>/node_modules/<name>，
+        //    nmDir 下只是符号链接。assets 里的 fix-stale-bundles.sh 一直查了这一路，
+        //    Java 这套却没有 —— 同一个判断两套实现、其中一套更弱，
+        //    正是本项目反复栽的那个模式。
+        try {
+            java.io.File pnpm = new java.io.File(nmDir, ".pnpm");
+            String key = name.replace("@", "").replace("/", "+") + "@";
+            String[] kids = pnpm.list();
+            if (kids != null) {
+                for (String k : kids) {
+                    if (k.startsWith(key)) return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
         return false;
+    }
+
+    /** 官方核心 bundle 一律不摘。
+     *
+     *  sanitizeProfileBundles 的设计意图是「宁可少一个插件，也别让 Web 起不来」，
+     *  但它对官方 @deepseek-ai/* 没有任何保护 —— 一旦判据出错把
+     *  @deepseek-ai/dsh-base 或 dsh-web-app 摘掉，Web 就**必然**起不来，
+     *  结果和设计意图完全相反。
+     *
+     *  用户实测现场（1.1.7）：bundles 从 5 个变成
+     *      [ "dsh-client-ui-mobile-adapt", "dsh-task-notifier" ]
+     *  官方两个核心全没了，Web 60 秒端口未就绪、proroot 连续失败 3 次回退 proot，
+     *  而且清数据、重装、清除环境都救不回来 —— 因为每次启动又摘一遍。
+     *
+     *  assets 里的 fix-stale-bundles.sh 从一开始就有这个保护（非内置插件
+     *  解析不到只警告不删），Java 这套却没有。 */
+    private static boolean isProtectedBundle(String name) {
+        return name.startsWith("@deepseek-ai/");
     }
 
     /** 三个内置插件是否都已注册（bundles 与 dependencies 双在）。 */
@@ -2831,6 +2927,8 @@ public class HarnessController {
           // PATH 包装器 + bash 工具 lib 补丁加载守卫（双保险；不设 BASH_ENV——它会污染
           // RC6 插件初始化时子 shell 的环境，导致 dsh web 加载插件失败(index 24 崩溃)）
           .append("export DSH_CONFIRM=1 && ")
+          // 不让 dsh 去拉系统浏览器（我们用 GeckoView 内嵌显示）
+          .append("export BROWSER=true && ")
           // 预创建常见插件数据目录：只建 /root/.dsh/plugins（无副作用）。
           // 注意：不再建 /root/.codex/pets —— deepseek-pet 插件把「空 pets 目录」
           // 当错误（no pet packages found）→ 整个插件树加载失败！
@@ -2947,6 +3045,7 @@ public class HarnessController {
                     apiKeyExportLine() +
                     "export DSH_PERMISSION_MODE=" + shellArg(getPermissionMode()) + "\n" +
                     "export DSH_CONFIRM=1\n" +
+                    "export BROWSER=true\n" +
                     // 工作区目录先于 cd 创建：RC6 模式没有源码树，不建目录的话
                     // 看门狗重启第一步 cd || exit 1 必失败 → 自动重启形同虚设。
                     // 不建 /root/.codex/pets（deepseek-pet 空目录会崩插件树）：
@@ -3732,7 +3831,7 @@ public class HarnessController {
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
      *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
      *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
-    private static final String BUILTIN_ASSET_VERSION = "10";
+    private static final String BUILTIN_ASSET_VERSION = "11";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
      *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，

@@ -18,8 +18,30 @@
 /** 消息身份：dsh 持久化回放时强校验 message.id（缺 id → 整个会话历史拒绝加载） */
 import { randomUUID } from 'node:crypto'
 
-/** 依赖的服务：systemPrompt（标准模式）+ agent 核心（极简模式走 pre-step） */
-export const inject = ['systemPrompt']
+/*
+ * 这里**故意不写模块级 inject**。
+ *
+ * 用户实测报错（1.1.7）：
+ *   Error: dsh: plugin tree failed to load: dsh: 1 entry did not activate
+ *     dsh-device-shell-guide: pending (waiting for service: systemPrompt)
+ *
+ * 模块级 `export const inject = ['systemPrompt']` 是**硬依赖**：服务没提供，
+ * 插件就永远 pending，dsh 判定 entry 未激活 → 整个 plugin tree 加载失败 →
+ * **Web 完全起不来**。而本文件开头的注释自己就写着「极简模式不加载
+ * systemPrompt」—— 明知有环境没有这个服务，却把它声明成必需，
+ * 等于让插件在那些环境里把整个 Web 拖死。
+ *
+ * 两条看似可行的路都不通：
+ *  · 对象形式 `inject: { required: [], optional: ['systemPrompt'] }`
+ *    —— 模块级 inject 必须是数组，对象的键会被当成服务名，
+ *    报 `pending (waiting for services: required, optional)`，更糟；
+ *  · 运行时判空 `if (ctx.systemPrompt)` —— 读未声明的服务直接抛
+ *    `cannot get property "systemPrompt" without inject`，不会返回 undefined。
+ *
+ * 正解是运行时作用域注入 ctx.inject(deps, cb)：**不阻塞插件激活**，
+ * 服务就绪时才跑回调，服务不存在就不跑。官方 dsh-web-app 注入
+ * systemPrompt 用的就是这个写法（packages/bundle/web-app/src/index.ts）。
+ */
 
 /** 注入到系统提示的引导段（针对 DSHA 手机端环境）。 */
 const PROMPT = [
@@ -105,11 +127,15 @@ const PROMPT = [
  * @param {import('@deepseek-ai/cordis').Context} ctx
  */
 export function apply(ctx) {
-  // 通道 1：标准模式 systemPrompt 注入
-  ctx.systemPrompt.section({
-    name: 'dsh:device-shell-guide',
-    order: 150,
-    text: PROMPT,
+  // 通道 1：标准模式 systemPrompt 注入。
+  // 用作用域注入而不是模块级 inject —— 极简模式没有这个服务，
+  // 硬依赖会让插件永远 pending 并拖垮整个 Web 启动。
+  ctx.inject(['systemPrompt'], (promptCtx) => {
+    promptCtx.systemPrompt.section({
+      name: 'dsh:device-shell-guide',
+      order: 150,
+      text: PROMPT,
+    })
   })
 
   // 通道 2：极简模式（minimal 不加载 systemPrompt）→ 在用户消息后插入引导
