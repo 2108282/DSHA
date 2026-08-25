@@ -5778,6 +5778,15 @@ public class HarnessController {
                 final String bundled = proot.bundledOfflineVersion();
                 final String installed = proot.installedOfflineVersion();
                 if ("0".equals(bundled) || bundled.equals(installed)) return; // 无内置包/无更新
+                // 标记不相等 ≠ 内置包更新。用旧离线包打的本地测试包装上来同样会「不等」，
+                // 照旧提示的话用户一点「升级」就把环境降级了（dsh 从 0.1.1-rc.2 退回
+                // 0.1.0-rc.6，还得自己再更新回去）。漏提示只是晚点拿到新环境，误提示是把
+                // 正在用的环境弄旧 —— 代价不对称，所以拿不准就不提示。
+                if (!OfflineVersion.isNewer(bundled, installed)) {
+                    android.util.Log.i("DSHA", "内置离线环境 " + bundled + " 不比已解压的 "
+                            + installed + " 新 → 不提示升级");
+                    return;
+                }
                 final SharedPreferences prefs =
                         appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE);
                 if (bundled.equals(prefs.getString("ignored_offline_version", ""))) return; // 已忽略

@@ -3,6 +3,7 @@
 #   LanAuth      —— 局域网桥/3090 桥的凭据判定与请求行改写
 #   AssetPath    —— 增量更新清单里 asset 名当路径用之前的校验
 #   RuntimeHealth —— 容器运行时兼容性探针的输出解析（判据全是字符串匹配）
+#   OfflineVersion —— 离线包版本标记比大小（比错了会把用户环境降级）
 #
 # 为什么单独一个脚本而不是接进 gradle：这些类刻意不碰 Android API，用 javac 编几个
 # 文件就能跑完，秒级、离线、不占 SDK 与 gradle 缓存。手机上的工作区跑一次完整 gradle
@@ -13,7 +14,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JAVA_DIR="$REPO_ROOT/app/src/main/java/com/deepseekharness/app"
-SRCS=("$JAVA_DIR/LanAuth.java" "$JAVA_DIR/AssetPath.java" "$JAVA_DIR/BackupInspector.java" "$JAVA_DIR/PluginErrorHint.java" "$JAVA_DIR/RuntimeHealth.java")
+SRCS=("$JAVA_DIR/LanAuth.java" "$JAVA_DIR/AssetPath.java" "$JAVA_DIR/BackupInspector.java" "$JAVA_DIR/PluginErrorHint.java" "$JAVA_DIR/RuntimeHealth.java" "$JAVA_DIR/OfflineVersion.java")
 TEST="$REPO_ROOT/tools/pure-logic-test/PureLogicTest.java"
 
 for f in "${SRCS[@]}" "$TEST"; do

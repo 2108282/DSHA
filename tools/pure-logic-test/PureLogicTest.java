@@ -256,6 +256,36 @@ public final class PureLogicTest {
         ok("ct: 更长不算相等", !LanAuth.constantTimeEquals("abc", "abcd"));
         ok("ct: null 不相等", !LanAuth.constantTimeEquals("abc", null));
 
+        // ---------- OfflineVersion（离线包标记比大小） ----------
+        // 回归：maybeOfferOfflineUpgrade 原先拿「标记不相等」当「有新版」，注释写的却是
+        // 「内置 > 已解压」。于是用旧离线包打的本地测试包装上来也弹「发现新版内置环境」，
+        // 用户点了升级，rootfs 被重解压成更旧的环境：dsh 从 0.1.1-rc.2 退回 0.1.0-rc.6。
+        ok("offline: 修订位往上走算新",
+                OfflineVersion.isNewer("dsh-0.1.1-rc.2", "dsh-0.1.0-rc.6"));
+        ok("offline: 反过来不算新（这就是降级那条路）",
+                !OfflineVersion.isNewer("dsh-0.1.0-rc.6", "dsh-0.1.1-rc.2"));
+        ok("offline: 同标记不算新",
+                !OfflineVersion.isNewer("dsh-0.1.1-rc.2", "dsh-0.1.1-rc.2"));
+        ok("offline: rc 号本身也要比",
+                OfflineVersion.isNewer("dsh-0.1.1-rc.10", "dsh-0.1.1-rc.2"));
+        // 少了「预发布位」，0.1.1 正式版会因为末尾没数字而被判成比 0.1.1-rc.2 旧
+        ok("offline: 正式版比同号 rc 新",
+                OfflineVersion.isNewer("dsh-0.1.1", "dsh-0.1.1-rc.9"));
+        ok("offline: rc 不比同号正式版新",
+                !OfflineVersion.isNewer("dsh-0.1.1-rc.9", "dsh-0.1.1"));
+        ok("offline: 10 比 9 大（不是字典序）",
+                OfflineVersion.isNewer("dsh-0.1.10-rc.1", "dsh-0.1.9-rc.1"));
+        ok("offline: 没有标记的老环境视为最旧",
+                OfflineVersion.isNewer("dsh-0.1.1-rc.2", "0"));
+        ok("offline: 解析不出版本 → 不算新（拿不准不提示）",
+                !OfflineVersion.isNewer("nightly", "dsh-0.1.1-rc.2"));
+        ok("offline: 另一侧解析不出也不算新",
+                !OfflineVersion.isNewer("dsh-0.1.1-rc.2", "nightly"));
+        eqi("offline: 无法比较有专门的返回值", OfflineVersion.NOT_COMPARABLE,
+                OfflineVersion.compare("nightly", "dsh-0.1.1-rc.2"));
+        ok("offline: 0.1.1.0 与 0.1.1 是同一个版本",
+                OfflineVersion.compare("dsh-0.1.1.0", "dsh-0.1.1") == 0);
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"
