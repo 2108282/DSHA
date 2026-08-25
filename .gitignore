@@ -34,3 +34,6 @@ bundle/
 # 之前有一份 adb-shell.cpython-312.pyc 混进了 APK
 __pycache__/
 *.pyc
+
+# 别的 App 的备份包会被误存到仓库根目录（一份 62MB 的 rikkahub 备份差点被 git add）
+*_backup_*.zip
