@@ -55,6 +55,44 @@ Android 10+ 的 W^X 策略不允许从应用可写目录（`filesDir`）执行�
 - 作者已将开发重心转向另一个项目（proroom），更新频率会下降
 - 因闭源，Termux 官方仓库拒绝收录（见 proroot issue #21）
 
+## 内置移动端适配插件（dsh-mobile-nav）
+
+- 上游：[mexiaosqwq/dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)
+- 包名：`@dsh-external/dsh-mobile-nav`
+- 版本：`v2.1.1`（按 tag 固定，不跟 main 漂移）
+- 许可：**MIT** —— 许可证全文随文件一并分发于 `app/src/main/assets/mobile-nav/LICENSE`
+
+随 APK 分发的是上游仓库里的构建产物，未作任何修改：
+
+| 文件 | sha256 |
+| --- | --- |
+| `lib/client.js` | `6c6ee969b3de2d7f04eafd4b70319c8f9c8891a72a21090fb5878636be6b2e04` |
+| `lib/index.js` | `855d07192c12ac831830e87246216dbc74ad8c83a6d67ae00ee7e89a378591ef` |
+| `package.json` | `b80273b3cb53a7c2aac643a6838c7d4d39f98374c22ee467692f977d41fc61ab` |
+| `cordis.patch.yml` | `427367650ec107cf5fd35cc6496398c629680f57cd6f7b980a3622fd70e082ef` |
+| `LICENSE` | `0d50650e8ee0e00996facf70e6d246dddb836e27c4ce7027cdcf800ac5758f4b` |
+
+### 为什么随包分发
+
+装机要离线可用，这是相对同类项目的主要优势；而移动端适配是「手机上能不能正常用」
+的前提，不该依赖首启联网。插件是单文件构建产物（~132KB），纯前端 DOM/CSS 改造 ——
+零网络请求、无 `eval`/`new Function`，外部依赖只有官方浏览器侧共享的 `react` 与
+`@deepseek-ai/dsh-client-ui-primitives`，随包带上代价很小。
+
+### 关系说明
+
+我们只负责把上游产物打进 APK 并做安置/注册，插件的功能与 UI 行为归上游维护。
+界面细节问题建议直接反馈到上游仓库。
+
+### 替换历史
+
+这次更换之前内置的是 `dsh-client-ui-mobile-adapt`
+（[Hotsteel2901](https://github.com/Hotsteel2901/dsh-client-ui-mobile-adapt)，MIT），
+因作者长期停更而换掉。升级时 App 会自动把旧插件从 profile 的 `bundles` /
+`dependencies` 摘掉并删除实体（`migrateLegacyMobileAdapt`）—— 两个插件改造同一批
+DOM 元素，同时激活会互相打架（抽屉/浮层出两份、事件绑定两遍）。如果你此前手动
+禁用过旧插件，新插件会沿用「已禁用」状态，不会被悄悄打开。
+
 ## 其他
 
 - Ubuntu arm64 rootfs（`assets/offline-rootfs.bin`）：各软件包遵循各自许可

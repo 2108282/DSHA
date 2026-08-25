@@ -1,6 +1,6 @@
 #!/bin/bash
 # fix-stale-bundles.sh — 只清理【确定失效的内置 bundle 引用】，绝不误删第三方插件。
-# 原则：第三方插件（非 dsh-client-ui-mobile-adapt / dsh-device-shell-guide / @deepseek-ai/*）
+# 原则：第三方插件（非 @dsh-external/dsh-mobile-nav / dsh-device-shell-guide / @deepseek-ai/*）
 # 即使暂时解析不到也只警告不清除——它们的实体可能还在 .pnpm，误删会丢插件。
 # 启动前由 App 调用；幂等。
 set -u
@@ -17,7 +17,7 @@ if not bundles:
 nm = os.path.join(os.path.dirname(pf), 'node_modules')
 
 # 内置插件白名单：解析失败才清（这些是 App 管理的，能重新注册）
-BUILTIN = {'dsh-client-ui-mobile-adapt', 'dsh-device-shell-guide', 'dsh-task-notifier'}
+BUILTIN = {'@dsh-external/dsh-mobile-nav', 'dsh-device-shell-guide', 'dsh-task-notifier'}
 
 def resolvable(name):
     sub = name.split('/')[-1]
@@ -30,10 +30,10 @@ def resolvable(name):
             return True
     if os.path.isfile(os.path.join(nm, name, 'package.json')):
         return True
-    # DSHA 内置插件实体（/root/dsha-mobile-adapt 等）——不在 @deepseek-ai 全局，
+    # DSHA 内置插件实体（/root/dsha-mobile-nav 等）——不在 @deepseek-ai 全局，
     # 也不是 nm 下实体（是符号链接）。不认这里会把正常内置插件当 stale 清掉。
-    for real in ('/root/dsha-mobile-adapt', '/root/dsha-device-shell-guide', '/root/dsha-task-notifier'):
-        if name in ('dsh-client-ui-mobile-adapt', 'dsh-device-shell-guide', 'dsh-task-notifier') and os.path.isfile(os.path.join(real, 'package.json')):
+    for real in ('/root/dsha-mobile-nav', '/root/dsha-device-shell-guide', '/root/dsha-task-notifier'):
+        if name in ('@dsh-external/dsh-mobile-nav', 'dsh-device-shell-guide', 'dsh-task-notifier') and os.path.isfile(os.path.join(real, 'package.json')):
             return True
     pnpm = os.path.join(nm, '.pnpm')
     if os.path.isdir(pnpm):

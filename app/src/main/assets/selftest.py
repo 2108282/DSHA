@@ -858,7 +858,7 @@ def check_sanitize_log():
         try:
             _pkg = json.loads(read(os.path.join(DSH_HOME, "profiles", "web", "package.json"), 200000))
             _b = (((_pkg.get("dsh") or {}).get("profile") or {}).get("bundles")) or []
-            for _n in ("dsh-device-shell-guide", "dsh-client-ui-mobile-adapt", "dsh-task-notifier"):
+            for _n in ("dsh-device-shell-guide", "@dsh-external/dsh-mobile-nav", "dsh-task-notifier"):
                 if _n not in _b:
                     still_missing.append(_n)
         except Exception:

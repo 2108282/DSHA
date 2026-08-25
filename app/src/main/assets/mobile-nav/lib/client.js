@@ -1,0 +1,2880 @@
+window.__ModuleLoader__.load({ id: "@dsh-external/dsh-mobile-nav", factory: (require) => {
+var __modules = {};
+__modules["core/reconciler-core.js"] = function (require, module, exports) {
+"use strict";
+// reconciler-core.ts — DOM-free reconciler engine shared by every mobile DOM
+// reconciler task. Deliberately has ZERO import statements:
+//  - the custom client bundler cannot resolve `../` requires from
+//    src/client/effects, and a file without imports has nothing to resolve;
+//  - node:test imports it directly (Node's native type stripping) without a
+//    DOM or DSH runtime, so registration / dirty routing / coalescing /
+//    error-isolation can be covered by plain unit tests.
+//
+// The browser half (phone-chrome.ts) is a thin adapter: it owns the
+// MutationObserver and requestAnimationFrame scheduler, feeds mutation keys
+// into `note()`, and delegates task lifecycle to `register()` /
+// `activate()` / `deactivate()`. `scopes` are opaque dirty keys — the core
+// never interprets them (an attribute name like 'data-sidebar-collapsed' or
+// the tree sentinel '*').
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.createReconcilerCore = createReconcilerCore;
+function createReconcilerCore(options) {
+    const onError = options.onError ??
+        ((taskName, error, phase) => {
+            console.error(`[dsh-mobile-nav] reconciler task ${taskName}${phase === 'dispose' ? ' dispose' : ''} failed`, error);
+        });
+    const registered = new Set();
+    let active = null;
+    let dirty = new Set();
+    let forceAll = false;
+    let pending = null;
+    const runEnsure = (task) => {
+        try {
+            task.ensure();
+        }
+        catch (error) {
+            onError(task.name, error, 'ensure');
+        }
+    };
+    const runDispose = (task) => {
+        try {
+            task.dispose();
+        }
+        catch (error) {
+            onError(task.name, error, 'dispose');
+        }
+    };
+    const flush = () => {
+        if (pending !== null) {
+            pending();
+            pending = null;
+        }
+        if (active === null) {
+            dirty.clear();
+            forceAll = false;
+            return;
+        }
+        if (forceAll) {
+            for (const task of active)
+                runEnsure(task);
+        }
+        else if (dirty.size > 0) {
+            for (const task of active) {
+                const scopes = task.scopes;
+                if (scopes === undefined || scopes.some((key) => dirty.has(key)))
+                    runEnsure(task);
+            }
+        }
+        dirty.clear();
+        forceAll = false;
+    };
+    const schedule = () => {
+        if (pending !== null)
+            return;
+        pending = options.requestFrame(() => {
+            pending = null;
+            flush();
+        });
+    };
+    const register = (task) => {
+        registered.add(task);
+        if (active !== null) {
+            active.add(task);
+            runEnsure(task);
+        }
+        return () => {
+            registered.delete(task);
+            if (active !== null) {
+                active.delete(task);
+                runDispose(task);
+            }
+        };
+    };
+    const activate = () => {
+        if (active !== null)
+            return;
+        active = new Set(registered);
+        forceAll = true;
+        flush();
+    };
+    const deactivate = () => {
+        if (pending !== null) {
+            pending();
+            pending = null;
+        }
+        dirty.clear();
+        forceAll = false;
+        if (active !== null) {
+            const snapshot = active;
+            active = null;
+            for (const task of snapshot)
+                runDispose(task);
+        }
+    };
+    return {
+        get size() {
+            return registered.size;
+        },
+        register,
+        activate,
+        deactivate,
+        note: (keys) => {
+            for (const key of keys)
+                dirty.add(key);
+            schedule();
+        },
+        flush,
+    };
+}
+};
+__modules["effects/aionui-compat.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.installAionuiCompat = installAionuiCompat;
+exports.createPreviewCloseTask = createPreviewCloseTask;
+exports.createSheetRiseTask = createSheetRiseTask;
+const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
+/** dsh-web-ui 兼容：explorer / preview 列的显隐标记与升起动画（同域同机制，合并一处）。 */
+function installAionuiCompat(ctx) {
+    (0, phone_chrome_ts_1.installMobileEffect)(ctx, 'dsh-mobile-nav: aionui explorer close marker', () => {
+        const onChevronClick = (event) => {
+            const target = event.target;
+            if (target === null || !target.closest('.aionui-collapse-chevron'))
+                return;
+            (0, phone_chrome_ts_1.getFrame)()?.removeAttribute('data-aionui-explorer-open');
+        };
+        document.addEventListener('click', onChevronClick, true);
+        return () => document.removeEventListener('click', onChevronClick, true);
+    });
+    (0, phone_chrome_ts_1.installMobileEffect)(ctx, 'dsh-mobile-nav: preview sheet open marker', () => {
+        const closePreview = () => {
+            (0, phone_chrome_ts_1.getFrame)()?.removeAttribute('data-aionui-preview-open');
+            (0, phone_chrome_ts_1.getFrame)()?.removeAttribute('data-mobile-preview-full');
+        };
+        const onTap = (event) => {
+            const target = event.target;
+            if (target === null)
+                return;
+            const row = target.closest('[data-aionui-explorer-col] [class*="_treeRow"]');
+            if (row === null)
+                return;
+            if (row.querySelector('[class*="_treeArrow"]:not([class*="_treeArrowEmpty"])') !== null)
+                return;
+            // Temporarily spoof platform, userAgent, and appVersion to Win32 desktop to bypass Android check
+            const originalPlatform = navigator.platform;
+            const originalUserAgent = navigator.userAgent;
+            const originalAppVersion = navigator.appVersion;
+            try {
+                Object.defineProperty(navigator, 'platform', { value: 'Win32', configurable: true });
+                Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', configurable: true });
+                Object.defineProperty(navigator, 'appVersion', { value: '5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', configurable: true });
+                (0, phone_chrome_ts_1.getFrame)()?.setAttribute('data-aionui-preview-open', '');
+            }
+            finally {
+                setTimeout(() => {
+                    Object.defineProperty(navigator, 'platform', { value: originalPlatform, configurable: true });
+                    Object.defineProperty(navigator, 'userAgent', { value: originalUserAgent, configurable: true });
+                    Object.defineProperty(navigator, 'appVersion', { value: originalAppVersion, configurable: true });
+                }, 1000);
+            }
+        };
+        const onCollapse = (event) => {
+            const target = event.target;
+            if (target === null)
+                return;
+            if (target.closest('[data-aionui-preview-col] [class*="_panelCollapse"]') !== null) {
+                closePreview();
+            }
+        };
+        document.addEventListener('click', onTap, true);
+        document.addEventListener('click', onCollapse, true);
+        return () => {
+            document.removeEventListener('click', onTap, true);
+            document.removeEventListener('click', onCollapse, true);
+        };
+    });
+}
+function createPreviewCloseTask() {
+    return {
+        name: 'preview-close-sync',
+        // Only acts when the suite hides the col via inline style. Deliberately
+        // NOT scoped to data-aionui-preview-open: our own open marker is set
+        // before the suite necessarily flips its inline visibility, so waking on
+        // that marker would read the still-hidden style as a "suite close" and
+        // immediately undo the file-row tap.
+        scopes: ['style'],
+        ensure: () => {
+            const pv = document.querySelector('[data-aionui-preview-col]');
+            if (pv === null)
+                return;
+            if (pv.style.visibility === 'hidden') {
+                (0, phone_chrome_ts_1.getFrame)()?.removeAttribute('data-aionui-preview-open');
+                (0, phone_chrome_ts_1.getFrame)()?.removeAttribute('data-mobile-preview-full');
+            }
+        },
+        dispose: () => { },
+    };
+}
+function createSheetRiseTask() {
+    const cols = ['[data-aionui-explorer-col]', '[data-aionui-preview-col]'];
+    const seen = new Map();
+    const play = (el) => {
+        el.animate([
+            { opacity: 0, transform: 'translateY(28px)' },
+            { opacity: 1, transform: 'none' },
+        ], { duration: 280, easing: 'cubic-bezier(.16, 1, .3, 1)', fill: 'backwards' });
+    };
+    return {
+        name: 'sheet-rise-replay',
+        // The flush runs on the next frame, by which time React has rendered the
+        // opened col, so the frame markers / inline style / class changes are
+        // reliable triggers — no '*'.
+        scopes: [
+            'style',
+            'class',
+            'data-aionui-explorer-open',
+            'data-aionui-preview-open',
+            'data-mobile-preview-full',
+        ],
+        ensure: () => {
+            for (const sel of cols) {
+                const el = document.querySelector(sel);
+                if (el === null)
+                    continue;
+                const visible = getComputedStyle(el).visibility === 'visible';
+                const prev = seen.get(sel) ?? false;
+                if (visible && !prev)
+                    play(el);
+                seen.set(sel, visible);
+            }
+        },
+        dispose: () => {
+            seen.clear();
+        },
+    };
+}
+};
+__modules["effects/stats-line.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.createStatsLineTask = createStatsLineTask;
+// The official conversation status row (turns / steps / LLM time / TTFT /
+// cache) has a hashed class, so the stylesheet cannot target it directly.
+// Mark the exact row on narrow screens by text: a [class*=_root] that
+// carries the metrics text and no textarea (the composer card also ends in
+// _root and can mention turns in its model line). The CSS then lays the
+// marked row out as ONE horizontally scrolling line with every metric
+// reachable.
+function createStatsLineTask() {
+    // The composer root renders the TPS readout ("TPS 89.4 tok/s") as its
+    // own row BELOW the status strip; fold it into the strip so every
+    // metric scrolls together. The suite re-renders its own tree, so this
+    // must be idempotent and re-run on every mutation. Where the readout
+    // came from is recorded so disposal can put it back — on a
+    // narrow→wide transition the desktop layout must be the official one
+    // again, and `[data-mobile-nav="stats"]` is not covered by the
+    // desktop hide rules.
+    let tpsOrigin = null;
+    const moveTps = (stats) => {
+        if ([...stats.children].some((c) => /^TPS\s+\d/.test((c.textContent ?? '').trim())))
+            return;
+        const stack = stats.closest('[class*="_composerStack"]');
+        if (stack === null)
+            return;
+        for (const el of stack.querySelectorAll('div')) {
+            const text = (el.textContent ?? '').trim();
+            if (!/^TPS\s+\d/.test(text))
+                continue;
+            if (el.children.length > 0)
+                continue;
+            // The composer stack can be rebuilt by React between mutations:
+            // refresh the origin every time we actually move the TPS readout, so
+            // disposal returns it where it currently belongs.
+            if (el.parentElement !== null) {
+                tpsOrigin = { parent: el.parentElement, next: el.nextSibling };
+            }
+            stats.appendChild(el);
+            return;
+        }
+    };
+    const mark = () => {
+        for (const root of document.querySelectorAll('[data-phase] [class*="_root"]')) {
+            // The status row lives inside the composer stack; message-area
+            // blocks can also mention turns/steps and must be skipped.
+            if (root.closest('[class*="_composerStack"]') === null)
+                continue;
+            // The todo plan strip also lives in the composer stack and its root
+            // ends in _root. Its items may legitimately contain "步"/"steps" in
+            // their text, so never mistake it (or any interactive dock panel)
+            // for the stats strip.
+            if (root.matches('[data-testid="todo-panel"]'))
+                continue;
+            if (root.querySelector('button') !== null)
+                continue;
+            const text = root.textContent ?? '';
+            if (!/(turns|steps|\bLLM\b|轮|步)/.test(text))
+                continue;
+            if (root.querySelector('textarea') !== null)
+                continue;
+            root.setAttribute('data-mobile-nav', 'stats');
+            moveTps(root);
+            return;
+        }
+    };
+    // Scope decision: the TPS readout updates are childList/characterData text
+    // mutations inside the composer stack, so this task can only wake on the
+    // tree key. A subtree-scoped observer would need one observer per
+    // container, which the single full-tree observer design intentionally
+    // avoids; the expensive composer-stack scan stays the cost of re-anchoring
+    // markers that React rebuilds every token.
+    return {
+        name: 'stats-line',
+        scopes: ['*'],
+        ensure: mark,
+        dispose: () => {
+            // Hand the official layout back: return the TPS readout to its own
+            // row, then drop the marker that drives the one-line strip.
+            if (tpsOrigin !== null && tpsOrigin.parent.isConnected) {
+                // Find the TPS readout only inside the marked stats strip we moved
+                // it into — a global text search could pick up a different element.
+                for (const stats of document.querySelectorAll('[data-mobile-nav="stats"]')) {
+                    const tps = [...stats.querySelectorAll('div')].find((el) => el.children.length === 0 && /^TPS\s+\d/.test((el.textContent ?? '').trim()));
+                    if (tps !== undefined) {
+                        tpsOrigin.parent.insertBefore(tps, tpsOrigin.next);
+                        break;
+                    }
+                }
+            }
+            for (const el of document.querySelectorAll('[data-mobile-nav="stats"]')) {
+                el.removeAttribute('data-mobile-nav');
+            }
+            tpsOrigin = null;
+        },
+    };
+}
+};
+__modules["effects/preview-fullscreen.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.createPreviewFullscreenTask = createPreviewFullscreenTask;
+const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
+function createPreviewFullscreenTask(t) {
+    let button = null;
+    const syncLabel = (target) => {
+        const full = (0, phone_chrome_ts_1.getFrame)()?.hasAttribute('data-mobile-preview-full') ?? false;
+        const label = t(full ? 'previewExitFullscreen' : 'previewFullscreen');
+        if (target.getAttribute('aria-label') === label)
+            return;
+        target.setAttribute('aria-label', label);
+        target.title = label;
+    };
+    const onClick = () => {
+        (0, phone_chrome_ts_1.getFrame)()?.toggleAttribute('data-mobile-preview-full');
+        if (button !== null)
+            syncLabel(button);
+    };
+    return {
+        name: 'preview-fullscreen-toggle',
+        scopes: ['data-aionui-preview-open', 'data-mobile-preview-full'],
+        ensure: () => {
+            const col = document.querySelector('[data-aionui-preview-col]');
+            if (col === null)
+                return;
+            if (button === null) {
+                button = document.createElement('button');
+                button.type = 'button';
+                button.dataset.mobileNav = 'preview-full-toggle';
+                button.innerHTML = [
+                    '<svg class="dsh-mobile-nav-full-in" viewBox="0 0 16 16" fill="none" aria-hidden="true">',
+                    '<path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+                    '</svg>',
+                    '<svg class="dsh-mobile-nav-full-out" viewBox="0 0 16 16" fill="none" aria-hidden="true">',
+                    '<path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+                    '</svg>',
+                ].join('');
+                button.addEventListener('click', onClick);
+            }
+            syncLabel(button);
+            if (button.parentElement !== col)
+                col.appendChild(button);
+        },
+        dispose: () => {
+            button?.remove();
+            button = null;
+        },
+    };
+}
+};
+__modules["effects/git-chip-reparent.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.createGitChipTask = createGitChipTask;
+function createGitChipTask() {
+    return {
+        name: 'git-chip-reparent',
+        scopes: ['*'],
+        ensure: () => {
+            const chip = document.querySelector('[data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor]');
+            if (chip === null)
+                return;
+            const card = document.querySelector('textarea')?.closest('[class*="_card"]');
+            if (card == null)
+                return;
+            if (chip.parentElement !== card)
+                card.insertBefore(chip, card.firstChild);
+        },
+        dispose: () => {
+            const chip = document.querySelector('[data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor]');
+            const dock = document.querySelector('[data-slot="conversation.input.dock"]');
+            if (chip !== null && dock !== null && chip.parentElement !== dock)
+                dock.appendChild(chip);
+        },
+    };
+}
+};
+__modules["effects/settings-toolbar-reparent.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.createSettingsToolbarTask = createSettingsToolbarTask;
+function createSettingsToolbarTask() {
+    let origin = null;
+    return {
+        name: 'settings-toolbar-reparent',
+        scopes: ['*'],
+        ensure: () => {
+            const dialog = document.querySelector('[aria-modal="true"]');
+            if (dialog === null)
+                return;
+            const nav = dialog.querySelector(':scope > [class*="_nav"]');
+            const header = dialog.querySelector('[class*="_header"]:not([class*="_headerActions"])');
+            if (nav === null || header === null)
+                return;
+            if (header.parentElement === nav)
+                return;
+            // The dialog DOM can be rebuilt by React between mutations: refresh
+            // the origin every time we actually move the header, so disposal
+            // restores it where it currently belongs, not where it was first seen.
+            if (header.parentElement !== null) {
+                origin = { parent: header.parentElement, next: header.nextSibling };
+            }
+            nav.appendChild(header);
+        },
+        dispose: () => {
+            if (origin === null)
+                return;
+            const header = document.querySelector('[aria-modal="true"] [class*="_header"]:not([class*="_headerActions"])');
+            if (header !== null && origin.parent.isConnected) {
+                origin.parent.insertBefore(header, origin.next);
+            }
+            origin = null;
+        },
+    };
+}
+};
+__modules["effects/overlay-backdrop-fab.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.createOverlayTask = createOverlayTask;
+const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
+function createOverlayTask(t, toggleSidebar) {
+    let backdrop = null;
+    let fab = null;
+    const drawerOpen = () => {
+        const frame = (0, phone_chrome_ts_1.getFrame)();
+        return frame !== null && !frame.hasAttribute('data-sidebar-collapsed');
+    };
+    const heroPhase = () => document.querySelector('[data-phase="active"]') === null;
+    return {
+        name: 'overlay-backdrop-fab',
+        scopes: ['*', 'data-sidebar-collapsed', 'data-phase'],
+        ensure: () => {
+            const frame = (0, phone_chrome_ts_1.getFrame)();
+            if (frame === null)
+                return;
+            if (drawerOpen() && backdrop === null) {
+                backdrop = document.createElement('div');
+                backdrop.dataset.mobileNav = 'backdrop';
+                backdrop.setAttribute('role', 'button');
+                backdrop.setAttribute('aria-label', t('backdrop'));
+                backdrop.addEventListener('click', toggleSidebar);
+                frame.appendChild(backdrop);
+            }
+            else if (!drawerOpen() && backdrop !== null) {
+                backdrop.remove();
+                backdrop = null;
+            }
+            if (heroPhase() && !drawerOpen() && fab === null) {
+                fab = document.createElement('button');
+                fab.type = 'button';
+                fab.dataset.mobileNav = 'fab';
+                fab.setAttribute('aria-label', t('open'));
+                fab.title = t('open');
+                fab.innerHTML =
+                    '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true" width="18" height="18">' +
+                        '<path fill-rule="evenodd" clip-rule="evenodd" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C4.29683 14.1164 5.13612 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C5.13612 1.88307 4.29683 1.88358 3.65076 1.95353C3.47672 1.97129 3.30027 1.98546 3.10872 1.9954L4.1828 1.91166Z" fill="currentColor"/>' +
+                        '</svg>';
+                fab.addEventListener('click', toggleSidebar);
+                frame.appendChild(fab);
+            }
+            else if ((!heroPhase() || drawerOpen()) && fab !== null) {
+                fab.remove();
+                fab = null;
+            }
+        },
+        dispose: () => {
+            backdrop?.remove();
+            backdrop = null;
+            fab?.remove();
+            fab = null;
+        },
+    };
+}
+};
+__modules["effects/phone-chrome.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DESKTOP_QUERY = exports.MOBILE_QUERY = void 0;
+exports.installMobileEffect = installMobileEffect;
+exports.findFrame = findFrame;
+exports.getFrame = getFrame;
+exports.installFrameController = installFrameController;
+exports.installReconciler = installReconciler;
+exports.addReconcilerTask = addReconcilerTask;
+exports.installPhoneChrome = installPhoneChrome;
+exports.installOverlayInteractions = installOverlayInteractions;
+exports.registerReconcileTasks = registerReconcileTasks;
+const reconciler_core_ts_1 = require("./core/reconciler-core.js");
+const aionui_compat_ts_1 = require("./effects/aionui-compat.js");
+const stats_line_ts_1 = require("./effects/stats-line.js");
+const preview_fullscreen_ts_1 = require("./effects/preview-fullscreen.js");
+const git_chip_reparent_ts_1 = require("./effects/git-chip-reparent.js");
+const settings_toolbar_reparent_ts_1 = require("./effects/settings-toolbar-reparent.js");
+const overlay_backdrop_fab_ts_1 = require("./effects/overlay-backdrop-fab.js");
+// The custom client bundler cannot resolve `../` requires from src/client/effects,
+// so this mirrors the namespace id from src/client/locales.ts. Keep in sync.
+const NS = 'mobileNav';
+/** Same breakpoint as the shell's SIDEBAR_AUTO_COLLAPSE (viewport < 1024). */
+exports.MOBILE_QUERY = '(max-width: 1023px)';
+/** Desktop no-op boundary, kept next to the mobile query for one source of truth. */
+exports.DESKTOP_QUERY = '(min-width: 1024px)';
+/**
+ * Re-arm a mobile-only DOM effect on every width change. Replaces the
+ * repeated matchMedia + change-listener scaffold so all breakpoint strings
+ * live in one place.
+ */
+function installMobileEffect(ctx, label, install) {
+    ctx.effect(() => {
+        const narrow = window.matchMedia(exports.MOBILE_QUERY);
+        let cleanup;
+        const arm = () => {
+            cleanup?.();
+            cleanup = narrow.matches ? install(narrow) : undefined;
+        };
+        arm();
+        narrow.addEventListener('change', arm);
+        return () => {
+            narrow.removeEventListener('change', arm);
+            cleanup?.();
+        };
+    }, label);
+}
+/** The AppFrame element: direct parent of the shell overlay layer. */
+function findFrame() {
+    return document.querySelector('[data-shell-overlay]')?.parentElement ?? null;
+}
+/** Resolve the plugin-owned frame marker, falling back to the raw shell frame. */
+function getFrame() {
+    return document.querySelector('[data-mobile-nav="frame"]') ?? findFrame();
+}
+/**
+ * Frame marker controller: owns `data-mobile-nav="frame"` and every plugin
+ * marker that can survive on the shell-owned frame. Installed once at apply
+ * time so effects no longer each need to find/set/clear the frame. Returns a
+ * disposer that unregisters the task and resets the installed flag, so a
+ * same-environment plugin reload can rebuild the reconciler from scratch.
+ */
+function installFrameController() {
+    if (frameControllerInstalled)
+        return () => { };
+    frameControllerInstalled = true;
+    let frame = null;
+    const removeTask = addReconcilerTask({
+        name: 'frame-marker',
+        scopes: ['*'],
+        ensure: () => {
+            frame = findFrame();
+            if (frame !== null && !frame.hasAttribute('data-mobile-nav')) {
+                frame.setAttribute('data-mobile-nav', 'frame');
+            }
+        },
+        dispose: () => {
+            if (frame !== null) {
+                frame.removeAttribute('data-mobile-nav');
+                frame.removeAttribute('data-mobile-preview-full');
+                frame.removeAttribute('data-aionui-explorer-open');
+                frame.removeAttribute('data-aionui-preview-open');
+            }
+            frame = null;
+        },
+    });
+    return () => {
+        removeTask();
+        frameControllerInstalled = false;
+    };
+}
+let frameControllerInstalled = false;
+let reconcileTasksRegistered = false;
+let reconcilerInstalled = false;
+// The DOM-free core owns the task registry, dirty-key routing, and coalesced
+// flush scheduling; this module is the thin browser adapter that feeds it
+// MutationObserver records and drives its lifecycle from the mobile effect.
+const core = (0, reconciler_core_ts_1.createReconcilerCore)({
+    requestFrame: (flush) => {
+        let id = 0;
+        const run = () => {
+            id = 0;
+            flush();
+        };
+        id = requestAnimationFrame(run);
+        return () => {
+            if (id !== 0)
+                cancelAnimationFrame(id);
+        };
+    },
+});
+/**
+ * One full-tree MutationObserver for every mobile DOM reconciler. Tasks can be
+ * registered from React or plain effects; they only run while the mobile
+ * breakpoint is active and are re-armed automatically on width changes.
+ */
+function installReconciler(ctx) {
+    if (reconcilerInstalled)
+        return () => { };
+    reconcilerInstalled = true;
+    installMobileEffect(ctx, 'dsh-mobile-nav: DOM reconciler', () => {
+        // Coalesce every mutation burst (typing, animations, per-token TPS
+        // re-renders) into one dirty-key pass per animation frame. Each task
+        // declares scopes so only intersecting tasks run on a given flush.
+        const observer = new MutationObserver((records) => {
+            const keys = new Set();
+            for (const record of records) {
+                keys.add(record.type === 'attributes' && record.attributeName !== null ? record.attributeName : '*');
+            }
+            core.note(keys);
+        });
+        observer.observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: [
+                'style',
+                'class',
+                'data-phase',
+                'data-sidebar-collapsed',
+                'data-aionui-explorer-open',
+                'data-aionui-preview-open',
+                'data-mobile-preview-full',
+            ],
+        });
+        core.activate();
+        return () => {
+            observer.disconnect();
+            core.deactivate();
+        };
+    });
+    return () => {
+        reconcilerInstalled = false;
+    };
+}
+/** Register a reconciler task. The returned disposer removes it immediately. */
+function addReconcilerTask(task) {
+    return core.register(task);
+}
+/**
+ * Phone chrome: KEEP the system status bar (no fullscreen) and make it
+ * blend into the page. On narrow screens:
+ * - The viewport meta gains viewport-fit=cover, so env(safe-area-inset-top)
+ *   is the real status-bar / notch height and the stylesheet can push every
+ *   surface below it (off notched phones, or in a browser tab where the
+ *   layout viewport already sits below the status bar, the inset is 0 and
+ *   nothing shifts).
+ * - A theme-color meta tracks the shell background (the official theme is
+ *   toggled by body[data-ds-dark-theme], which flips --dsw-alias-bg-base):
+ *   Android then paints the status bar / URL bar with the page's own base
+ *   color, so the status bar reads as part of the UI instead of a foreign
+ *   strip. The drawer paints the same strip on iOS / notch displays.
+ * - gesturestart is suppressed as the legacy-iOS fallback for double-tap
+ *   zoom; modern browsers are covered by the stylesheet's
+ *   touch-action: manipulation (which keeps pan and pinch zoom).
+ */
+function installPhoneChrome(ctx) {
+    installMobileEffect(ctx, 'dsh-mobile-nav: status bar theme + viewport + zoom guard', () => {
+        const viewport = document.querySelector('meta[name="viewport"]');
+        const originalViewport = viewport?.content ?? '';
+        const themeMeta = document.createElement('meta');
+        themeMeta.name = 'theme-color';
+        const bodyBg = () => getComputedStyle(document.body).backgroundColor;
+        const sync = () => {
+            if (viewport !== null) {
+                // iOS Safari auto-zooms when focusing any field below 16px unless the
+                // viewport meta carries maximum-scale=1. The host page may set that
+                // flag; this rewrite REPLACES the meta, so carry the token forward
+                // instead of dropping it (dispose restores the original anyway).
+                const locked = /(^|,)\s*maximum-scale\s*=/.test(viewport.content);
+                viewport.content = `width=device-width, initial-scale=1${locked ? ', maximum-scale=1' : ''}, viewport-fit=cover`;
+            }
+            themeMeta.content = bodyBg();
+            if (themeMeta.parentElement === null)
+                document.head.appendChild(themeMeta);
+        };
+        const restore = () => {
+            if (viewport !== null)
+                viewport.content = originalViewport;
+            themeMeta.remove();
+        };
+        const onGestureStart = (event) => event.preventDefault();
+        const observer = new MutationObserver(() => {
+            themeMeta.content = bodyBg();
+        });
+        observer.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] });
+        document.addEventListener('gesturestart', onGestureStart);
+        sync();
+        return () => {
+            observer.disconnect();
+            document.removeEventListener('gesturestart', onGestureStart);
+            restore();
+        };
+    });
+}
+/**
+ * Drawer close interactions that are plain event listeners, not DOM
+ * reconciliation:
+ * - Escape closes the drawer (yielding to any open modal dialog, which owns
+ *   its own Escape handling).
+ * - Tapping a navigation target inside the drawer (session row, task board /
+ *   ssh takeover entries, search results) closes the drawer so the content
+ *   it opened gets the whole screen. Session-row action buttons (kebab) are
+ *   excluded — they open a menu that must survive the tap.
+ */
+function installOverlayInteractions(ctx) {
+    installMobileEffect(ctx, 'dsh-mobile-nav: drawer close (Escape + navigate)', () => {
+        const toggleSidebar = () => ctx.layout.toggleSidebar();
+        const drawerOpen = () => {
+            const frame = getFrame();
+            return frame !== null && !frame.hasAttribute('data-sidebar-collapsed');
+        };
+        const onKeyDown = (event) => {
+            if (event.key !== 'Escape')
+                return;
+            if (document.querySelector('[aria-modal="true"]') !== null)
+                return;
+            if (drawerOpen())
+                toggleSidebar();
+        };
+        // Capture phase: run before the shell or a plugin processes the click,
+        // so takeover panels never render under the open drawer.
+        const onDrawerClick = (event) => {
+            if (document.querySelector('[aria-modal="true"]') !== null)
+                return;
+            if (!drawerOpen())
+                return;
+            const target = event.target;
+            if (target === null)
+                return;
+            const drawer = document.querySelector('[data-mobile-nav="frame"] > :first-child');
+            if (drawer === null || !drawer.contains(target))
+                return;
+            if (target.closest('[class*="sessionRow"] button') !== null)
+                return;
+            const navigates = target.closest('button[data-dsh-taskboard-entry], button[data-dsh-ssh-entry], [class*="newSession"], [class*="sessionRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"]');
+            if (navigates !== null)
+                toggleSidebar();
+        };
+        document.addEventListener('keydown', onKeyDown, true);
+        document.addEventListener('click', onDrawerClick, true);
+        return () => {
+            document.removeEventListener('keydown', onKeyDown, true);
+            document.removeEventListener('click', onDrawerClick, true);
+        };
+    });
+}
+/**
+ * Register the shared DOM reconciler tasks. Returns a disposer that
+ * unregisters every task and resets the flag, so a same-environment plugin
+ * reload can rebuild the reconciler from scratch.
+ */
+function registerReconcileTasks(ctx) {
+    if (reconcileTasksRegistered)
+        return () => { };
+    reconcileTasksRegistered = true;
+    const t = ctx.locale.bind(NS);
+    const removeTasks = [
+        addReconcilerTask((0, preview_fullscreen_ts_1.createPreviewFullscreenTask)(t)),
+        addReconcilerTask((0, git_chip_reparent_ts_1.createGitChipTask)()),
+        addReconcilerTask((0, settings_toolbar_reparent_ts_1.createSettingsToolbarTask)()),
+        addReconcilerTask((0, aionui_compat_ts_1.createPreviewCloseTask)()),
+        addReconcilerTask((0, aionui_compat_ts_1.createSheetRiseTask)()),
+        addReconcilerTask((0, stats_line_ts_1.createStatsLineTask)()),
+        addReconcilerTask((0, overlay_backdrop_fab_ts_1.createOverlayTask)(t, () => ctx.layout.toggleSidebar())),
+    ];
+    return () => {
+        for (const remove of removeTasks)
+            remove();
+        reconcileTasksRegistered = false;
+    };
+}
+};
+__modules["components/MobileNavToggle.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.MobileNavToggle = MobileNavToggle;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const dsh_client_ui_primitives_1 = require("@deepseek-ai/dsh-client-ui-primitives");
+const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
+/**
+ * Mobile-only icon buttons next to the session title:
+ * - toggle: opens the directory drawer on narrow screens.
+ * - files: toggles the dsh-web-ui explorer sheet directly — one tap opens,
+ *   a second tap closes it, no drawer round-trip. (The drawer footer keeps
+ *   a Files entry for the hero/blank phases where this header does not
+ *   exist.)
+ * Hidden entirely on wide screens (CSS media query).
+ */
+function MobileNavToggle({ toggleSidebar, t }) {
+    const toggleExplorer = () => {
+        const frame = (0, phone_chrome_ts_1.getFrame)();
+        if (frame === null)
+            return;
+        if (frame.hasAttribute('data-aionui-explorer-open')) {
+            frame.removeAttribute('data-aionui-explorer-open');
+        }
+        else {
+            // The preview sheet outranks the explorer in compat.css (two stacked
+            // sheets read as one broken overlay): opening the explorer must yield
+            // the preview, or the Files action appears dead while preview is up.
+            frame.removeAttribute('data-aionui-preview-open');
+            frame.setAttribute('data-aionui-explorer-open', '');
+        }
+    };
+    return ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsx)("button", { type: "button", "data-mobile-nav": "toggle", "aria-label": t('open'), title: t('open'), onClick: () => toggleSidebar(), children: (0, jsx_runtime_1.jsx)(dsh_client_ui_primitives_1.IconPanelLeftOutline16, { size: 16 }) }), (0, jsx_runtime_1.jsx)("button", { type: "button", "data-mobile-nav": "files", "aria-label": t('files'), title: t('files'), onClick: toggleExplorer, children: (0, jsx_runtime_1.jsx)(dsh_client_ui_primitives_1.IconFolderOpenOutline16, { size: 16 }) })] }));
+}
+};
+__modules["components/MobileDrawerFooter.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.MobileDrawerFooter = MobileDrawerFooter;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const dsh_client_ui_primitives_1 = require("@deepseek-ai/dsh-client-ui-primitives");
+const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
+/**
+ * Mobile-only drawer footer actions, relocated from the session header to the
+ * drawer footer (beside Settings):
+ * - Files: opens the dsh-web-ui aionui explorer as a floating bottom sheet
+ *   (the explorer column is hidden on mobile until this marker is set, so
+ *   the suite's own persisted-expanded state can never cover the UI on load).
+ * - Session log: the official session-log-export controller, so the
+ *   progress/result dialog is shared with the desktop flow.
+ * Hidden entirely on wide screens (CSS media query).
+ */
+function MobileDrawerFooter({ useSessions, downloadSessionLog, toggleSidebar, t }) {
+    const sessionId = useSessions((state) => state.current);
+    const openExplorer = () => {
+        // Yield the preview sheet first (compat.css gives preview precedence
+        // over explorer), then open the explorer and close the drawer.
+        (0, phone_chrome_ts_1.getFrame)()?.removeAttribute('data-aionui-preview-open');
+        (0, phone_chrome_ts_1.getFrame)()?.setAttribute('data-aionui-explorer-open', '');
+        toggleSidebar();
+    };
+    return ((0, jsx_runtime_1.jsxs)("div", { "data-mobile-nav": "drawer-actions", children: [(0, jsx_runtime_1.jsxs)("button", { type: "button", "data-mobile-nav": "explorer", "aria-label": t('files'), title: t('files'), onClick: openExplorer, children: [(0, jsx_runtime_1.jsx)(dsh_client_ui_primitives_1.IconPanelLeftOutline16, { size: 14 }), (0, jsx_runtime_1.jsx)("span", { children: t('files') })] }), (0, jsx_runtime_1.jsxs)("button", { type: "button", "data-mobile-nav": "session-log", "aria-label": t('sessionLog'), title: t('sessionLog'), disabled: sessionId === undefined, onClick: () => {
+                    if (sessionId !== undefined)
+                        downloadSessionLog(sessionId);
+                }, children: [(0, jsx_runtime_1.jsx)(dsh_client_ui_primitives_1.IconDownloadOutline16, { size: 14 }), (0, jsx_runtime_1.jsx)("span", { children: t('sessionLog') })] })] }));
+}
+};
+__modules["styles/base.css.js"] = function (require, module, exports) {
+"use strict";
+// base — split from src/client/mobile.css.ts (2026-08-16), order preserved.
+// Do not reorder: styles/index.ts concatenates in this exact order.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.BASE_CSS = void 0;
+exports.BASE_CSS = `
+/* ---------- base control styles (rendered at any width, hidden where unused) ---------- */
+
+[data-mobile-nav="toggle"],
+[data-mobile-nav="files"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, inherit);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+[data-mobile-nav="toggle"]:hover,
+[data-mobile-nav="files"]:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, .06));
+}
+[data-mobile-nav="toggle"]:focus-visible,
+[data-mobile-nav="files"]:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary, #4f6ef7);
+  outline-offset: 1px;
+}
+
+/* Drawer footer actions: the relocated Session log download plus the Files
+   action that opens the dsh-web-ui explorer sheet. */
+[data-mobile-nav="drawer-actions"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+[data-mobile-nav="session-log"],
+[data-mobile-nav="explorer"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, .12));
+  border-radius: 12px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary, inherit);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+[data-mobile-nav="session-log"]:hover:not(:disabled),
+[data-mobile-nav="explorer"]:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, .06));
+}
+[data-mobile-nav="session-log"]:disabled {
+  color: var(--dsw-alias-label-dimmed, rgba(0, 0, 0, .35));
+  cursor: default;
+}
+
+/* Floating fallback button (hero / blank phases without a session header).
+   The top clears the camera band below the status bar; when the client has
+   set viewport-fit=cover the safe-area inset moves it below the notch too. */
+[data-mobile-nav="fab"] {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 72px);
+  left: 10px;
+  z-index: 21;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, .12));
+  border-radius: 50%;
+  background: var(--dsw-alias-button-floating-fill, #ffffff);
+  color: var(--dsw-alias-label-primary, inherit);
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .18);
+  -webkit-tap-highlight-color: transparent;
+}
+[data-mobile-nav="fab"]:hover {
+  background: var(--dsw-alias-button-floating-hover, rgba(0, 0, 0, .08));
+}
+[data-mobile-nav="fab"]:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary, #4f6ef7);
+  outline-offset: 2px;
+}
+
+/* Dimmed backdrop under the open drawer; above every column, below the drawer. */
+[data-mobile-nav="backdrop"] {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, .45);
+  cursor: pointer;
+  animation: dsh-mobile-nav-fade .2s var(--ds-ease-in-out, ease-in-out);
+  -webkit-tap-highlight-color: transparent;
+}
+@keyframes dsh-mobile-nav-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+/* Settings sheet entrance: the official dialog mounts with no animation at
+   all, so it snaps in. Fade + slight rise/scale reads as a proper sheet. */
+@keyframes dsh-mobile-nav-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* Preview sheet rise: the aionui preview column opens as a bottom sheet. */
+@keyframes dsh-mobile-nav-sheet-up {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+`;
+};
+__modules["styles/layout.css.js"] = function (require, module, exports) {
+"use strict";
+// layout — split from src/client/mobile.css.ts (2026-08-16), order preserved.
+// Self-contained: the mobile media query opens and closes in this file.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.LAYOUT_CSS = void 0;
+exports.LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
+
+@media (max-width: 1023px) {
+  /* --- Phone chrome ---
+     The system status bar stays visible (no fullscreen). Two adjustments
+     make it behave:
+     - touch-action: manipulation kills double-tap-to-zoom (and the 300ms
+       tap delay) while keeping pan and pinch zoom; the client also
+       suppresses legacy-iOS gesturestart as a fallback.
+     - With the client's viewport-fit=cover, env(safe-area-inset-top) is the
+       status bar / notch height; the rules below push the app content below
+       it so the status bar never covers anything. Off notched phones (or in
+       a normal browser tab where the layout viewport already sits below the
+       status bar) the inset is 0 and nothing shifts. */
+  html,
+  body {
+    touch-action: manipulation !important;
+  }
+
+  /* AppFrame: the drawer takes the sidebar column out of grid flow, so the
+     remaining in-flow items (center, details) land in tracks 1..2: give the
+     center every pixel and keep the details track at zero. The top padding
+     clears the status bar / notch for every in-flow surface (session header,
+     messages, composer); the absolutely-positioned drawer is unaffected (its
+     containing block is the frame's padding box, i.e. still the frame top). */
+  [data-mobile-nav="frame"] {
+    position: relative !important;
+    grid-template-columns: minmax(0, 1fr) 0 0 !important;
+    padding-top: env(safe-area-inset-top, 0px) !important;
+  }
+
+  /* The sidebar column (first grid child) becomes a left drawer. The drawer
+     hugs the sidebar content exactly (the wide sidebar carries an inline
+     width, ~280px): a fixed 92vw box would leave a white strip where the
+     container background shows beside the content.
+     Closed state: translateX(-110%) — more than -100% of the max-content
+     width — guarantees the whole drawer (and its shadow, had it one) leaves
+     the viewport. A mere -100% leaves a sliver on screen; -105% (as used
+     before) left 14px of the drawer plus a long 32px-blur shadow gradient
+     visible along the left edge of the main UI. No box-shadow at all: the
+     dimmed backdrop already separates drawer from content. */
+  [data-mobile-nav="frame"] > :first-child {
+    position: absolute !important;
+    inset: 0 auto 0 0 !important;
+    width: max-content;
+    max-width: 92vw;
+    z-index: 40 !important;
+    transform: translateX(-110%);
+    transition: transform .28s var(--ds-ease-in-out, ease-in-out);
+    background: var(--dsw-alias-bg-base, #ffffff);
+    /* Keep the drawer's own content below the status bar / notch: the drawer
+       spans the full frame height (its absolute containing block is the
+       frame's padding box, so the frame's own safe-area padding does NOT
+       reach it). The drawer background paints the status-bar strip, which
+       the client's theme-color meta matches, so the strip reads seamless. */
+    padding-top: env(safe-area-inset-top, 0px) !important;
+    /* Kill the official sidebarCol right border: with the backdrop the edge
+       reads cleanly, and the settings dialog (width:100% of this box) stays
+       pixel-flush with the drawer. */
+    border-right: none !important;
+  }
+
+  /* Expanded state (frame without data-sidebar-collapsed) slides the drawer in.
+     The open state must be transform:none — NOT translateX(0): an identity
+     transform still makes the drawer the containing block for fixed-position
+     descendants (the settings dialog's .VOzbGW_overlay is portaled into the
+     sidebar DOM). With the identity transform the wide settings sheet
+     (100vw-16) overflows the 280px drawer, the dialog's focus scrolls the
+     overflow:hidden drawer to scrollLeft=102, and every static child (plus the
+     fixed overlay) shifts 102px off-screen. With transform:none the overlay is
+     viewport-anchored: it dims the full screen and the sheet sits at left:8. */
+  [data-mobile-nav="frame"]:not([data-sidebar-collapsed]) > :first-child {
+    transform: none !important;
+  }
+
+  /* Drag handles are useless on touch and would float over the drawer. */
+  [data-side="sidebar"],
+  [data-side="details"] {
+    display: none !important;
+  }
+
+  /* --- Conversation text on mobile ---
+     The official message flow keeps desktop's 32px side gutters and 16px
+     type. On a phone: shrink the type a notch and widen the lines by
+     trimming the gutters (the sidebar drawer list keeps its size). The
+     flow's scroll container is the only _scroll element holding markdown
+     <p> paragraphs — the composer's own scroll (textarea) is excluded
+     via :has(p). */
+  /* The official main scroll body reserves scrollbar-gutter for desktop
+     scrollbars (8px), which shoves every column off-center on a phone.
+     Classic desktop scrollbars (Edge/Chrome) also occupy ~8-17px in a
+     phone-sized viewport, shifting the column further. Mobile scrolling
+     is touch/wheel, so remove the scrollbar entirely on phones: the
+     column is then exactly centered in every browser. */
+  [data-phase] [class*="_scrollBody"] {
+    scrollbar-gutter: auto !important;
+    scrollbar-width: none;
+  }
+  [data-phase] [class*="_scrollBody"]::-webkit-scrollbar {
+    display: none !important;
+    width: 0;
+    height: 0;
+  }
+  /* Message action rows (copy / run-time badges) can overflow the right
+     edge on narrow screens — keep them inside the message width. */
+  [data-phase] [class*="_actions"] {
+    overflow: hidden;
+  }
+  [data-phase] [class*="_actions"] [class*="_timeEnd"] {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+
+  [data-phase] [class*="_scroll"]:not([class*="_scrollBody"]):has(p) {
+    padding-left: 20px;
+    padding-right: 20px;
+    font-size: 15px !important;
+  }
+  /* The official markdown styles set an explicit 16px on paragraphs and
+     list items, so the container's inherited 15px is not enough. User
+     messages render their text in a div whose class carries _text_
+     (16px too) — cover it as well. */
+  [data-phase] [class*="_scroll"]:not([class*="_scrollBody"]):has(p) p,
+  [data-phase] [class*="_scroll"]:not([class*="_scrollBody"]):has(p) li,
+  [data-phase] [class*="_scroll"]:not([class*="_scrollBody"]):has(p) [class*="_text_"] {
+    font-size: 15px !important;
+  }
+
+  /* Markdown tables: the official table uses width:max-content, so on a phone
+     it hugs the content and leaves dead space beside/inside the table. Force
+     the table to fill the message column and let the table wrapper handle
+     overflow if a cell is genuinely too wide. */
+  [data-phase] table {
+    width: 100%;
+    max-width: 100%;
+  }
+  [data-phase] th,
+  [data-phase] td {
+    max-width: none;
+    min-width: 0;
+  }
+
+  /* User bubbles: the official stack is capped at min(525px, 82%), which on a
+     phone leaves a large blank strip on the left and pushes the bubble high.
+     On mobile let the user message fill the same full width as assistant
+     messages (the bubble background then spans the whole message column). */
+  [data-phase] [class*="_userStack"],
+  [data-phase] [class*="_userStack"] [class*="_bubble"] {
+    box-sizing: border-box;
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  /* --- Composer bottom row on mobile ---
+     The official row contains two lanes: tools (plus + permission/mode
+     controls) and trailing (model + context + send). The previous rules made
+     the modes lane flex:none, so its full intrinsic width collided with the
+     model selector on narrow phones. Keep fixed hit targets fixed, but let
+     text-bearing controls shrink and ellipsize before they paint over the
+     trailing lane. */
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) {
+    box-sizing: border-box;
+    container-type: inline-size;
+    container-name: dsh-mobile-composer;
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding-left: 6px;
+    padding-right: 6px;
+    /* The dropdown menu is absolutely positioned inside this row; any
+       overflow: hidden here would clip it. Inner lanes keep their own
+       overflow clipping, so the row itself can stay visible. */
+    overflow: visible;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > :first-child {
+    flex: 0 1 auto;
+    min-width: 0;
+    gap: 6px;
+    /* The permission dropdown (Menu, side: top) pops upward from inside the
+       tools lane; overflow hidden here would crop it, same as the row. Text
+       ellipsis is handled by the trigger label itself. */
+    overflow: visible;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 6px;
+    /* Must not clip the model dropdown; the model trigger clips its own label. */
+    overflow: visible;
+  }
+  /* PermissionSelect / plan controls share the tools lane. Let the
+     permission label use the remaining tools width, while the lower-priority
+     plan slot keeps an icon-sized target instead of stealing model width. */
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: none;
+    gap: 4px;
+    /* The permission Menu list (side: top) pops upward out of this lane;
+       overflow hidden crops it. The trigger label clips its own text. */
+    overflow: visible;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) > [class*="_trigger"] {
+    flex: 1 1 auto;
+    min-width: 28px;
+    max-width: 100%;
+    display: flex !important;
+    overflow: hidden;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) > [class*="_trigger"] > [class*="_triggerLabel"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+  /* Slot wrappers such as the live plan chip are not trigger elements. Do
+     not force them into an icon-sized box: their child button would overflow
+     that wrapper and paint over PermissionSelect. Keep the wrapper intrinsic;
+     the model lane below is the one that sacrifices width. */
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) > :not([class*="_trigger"]) {
+    flex: 0 1 auto;
+    min-width: 34px;
+    max-width: max-content;
+    overflow: visible;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) > [class*="_wrap"] > [class*="_chip"] {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+  @container dsh-mobile-composer (max-width: 359px) {
+    [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) > [class*="_trigger"] > [class*="_triggerLabel"] {
+      display: none !important;
+    }
+  }
+  /* Model selector: flexible and shrinkable, but never clipped.
+     The root must be overflow:visible so the dropdown menu can render.
+     The trigger itself clips the label text. */
+  [data-phase] [class*="_card"]:has(textarea) [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="menu"]) {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: visible;
+  }
+  @container dsh-mobile-composer (max-width: 359px) {
+    [data-phase] [class*="_card"]:has(textarea) [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="menu"]) {
+      flex-basis: auto;
+    }
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="menu"]) > [class*="_trigger"] {
+    display: flex !important;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="menu"]) > [class*="_trigger"] > [class*="_triggerLabel"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class*="_root"]:has(> [class*="_trigger"]):not(:has(> [class*="_trigger"][aria-haspopup="menu"])) {
+    flex: 0 0 auto;
+  }
+
+  /* Model switcher menu: center the dropdown on the now-shrinkable trigger,
+     but never let it exceed the viewport on narrow phones. */
+  [data-phase] [class*="_card"]:has(textarea) [class*="_root"]:has(> [class*="_trigger"]) > [class*="_menu"] {
+    left: 50% !important;
+    right: auto !important;
+    transform: translateX(-50%) !important;
+    max-width: min(320px, calc(100vw - 16px));
+    box-sizing: border-box;
+  }
+
+  /* --- Fix composer row overflow at narrow widths (320px-360px) ---
+     Force every direct child of the tools and trailing lanes to shrink,
+     so they can fit within the available space without causing horizontal
+     overflow. The fixed-size icon buttons are exempt: officially both are
+     flex:none at a fixed size (plus 28x28, send 34x34) and must stay put,
+     not participate in adaptation. */
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > :first-child > :not([class*="_add"]) {
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] > :not([class*="_primary"]) {
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  /* Pin the plus button at the left edge of the tools lane: official
+     flex:none 28x28, never squeezed by narrower viewports. */
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > :first-child > [class*="_add"] {
+    flex: none;
+  }
+  /* The context meter in the trailing lane is another fixed-size icon
+     control: its trigger is officially width:28px flex:none, but the root
+     itself is shrinkable, so a squeezed root lets the trigger paint over
+     the pinned send button. Keep the whole meter at its natural size; it
+     has no aria-haspopup marker, so the model-selector rules do not apply. */
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] > [class*="_root"] {
+    flex: none;
+    min-width: 0;
+  }
+  /* Pin the send button to the right edge of the trailing lane.
+     The lane is stretched (flex:1 1 auto) so leftover space would otherwise
+     pile up on its right and let the button drift as model/context labels
+     change size. margin-left:auto absorbs that free space, keeping the
+     button glued to the right edge at its official fixed 34x34 size. */
+  [data-phase] [class*="_card"]:has(textarea) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] > [class*="_primary"] {
+    flex: none;
+    margin-left: auto;
+  }
+
+  /* --- Session header on mobile ---
+     Keep the host-owned metadata in one responsive row. The conversation
+     title and running/subagent status keep their lanes; the mode text is the
+     first to ellipsize when space runs out, while Files keeps its hit area. */
+  [data-mobile-nav="frame"] [data-phase] header {
+    padding-left: 16px;
+    padding-right: 8px;
+  }
+  [data-mobile-nav="frame"] [data-phase] header > :first-child {
+    display: flex !important;
+    align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    gap: 2px;
+    padding-left: 20px;
+  }
+  [data-mobile-nav="frame"] [data-phase] header > :first-child > :first-child {
+    display: flex !important;
+    align-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 2px;
+  }
+  /* The directory toggle stays at the far left of the header. */
+  [data-mobile-nav="toggle"] {
+    position: absolute !important;
+    left: 8px !important;
+    top: 12px !important;
+    z-index: 2 !important;
+  }
+  /* Files remains in flow and is ordered as the rightmost plugin action. */
+  [data-mobile-nav="files"] {
+    position: static !important;
+    left: auto !important;
+    right: auto !important;
+    top: auto !important;
+    z-index: auto !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [class*="_headerActions"] {
+    display: flex !important;
+    align-items: center;
+    box-sizing: border-box;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: calc(100% - 32px);
+    margin-left: auto;
+    justify-content: flex-end;
+    gap: 2px;
+  }
+  /* The title takes the remaining width and never paints outside it; the
+     metadata lane's mode text is what shrinks first. */
+  [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+  /* Mode label: preserve its icon and scale with the viewport — it yields
+     space to the title and subagent status first, but can use more width on
+     wider screens up to 220px before ellipsizing. */
+  [data-mobile-nav="frame"] [data-phase] header [class*="_label"]:has(> svg) {
+    order: 1;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: min(22vw, 220px);
+    display: block;
+    position: relative;
+    box-sizing: border-box;
+    padding-left: 18px;
+    padding-right: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [class*="_label"]:has(> svg) > svg {
+    position: absolute !important;
+    left: 0 !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+  }
+  /* Running/subagent controls keep their full status text and hit area; they
+     do not give up width to the mode label. NOTE: the real subagent lineage
+     root has class="ZKlsPq_root " — a TRAILING SPACE from the plugin's
+     template-literal className — so [class*="_root"] never matches it. Use
+     [class*="_root"] and exclude the switcher root ([class*="_switcherRoot"])
+     so only the count/job roots get pinned (the switcher must stay shrinkable
+     so its own title can ellipsize). */
+  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) {
+    order: 2;
+    flex: 0 0 auto;
+    min-width: max-content;
+    max-width: max-content;
+    white-space: nowrap !important;
+    position: static;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) > button,
+  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) > button * {
+    white-space: nowrap !important;
+  }
+  /* The lineage count's leading "/" (ZKlsPq_separator — official desktop
+     chrome rendered only for a root session inside the crumbs) looks like a
+     stray extra breadcrumb level on small screens; hide it. The crumbSep "/"
+     between ancestry segments (subagent sessions) is a real separator and
+     stays. */
+  [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] [class*="_separator"] {
+    display: none !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [data-mobile-nav="files"] {
+    order: 3;
+    flex: 0 0 28px;
+    width: 28px;
+  }
+  /* Session log download: gone from the header row on mobile (the utilities
+     seat holds only the session-log-export capsule). */
+  [data-mobile-nav="frame"] [data-phase] header > :first-child > :last-child {
+    display: none !important;
+  }
+  /* Header crowding on narrow phones.
+     A background-job trigger in the header actions, or the subagent lineage
+     count ("N 个子代理") living inside the crumbs nav, consumes the width the
+     mode label would otherwise use. This squeezes the crumbs nav so hard that
+     the subagent count is clipped by the nav's overflow:hidden — the text
+     looks overwritten and the trigger's right edge stops being reliably
+     tappable. Mode text is the lowest-priority item, so it is compressed
+     first. The lineage root (dsh-client-ui-subagent) sits in the crumbs for
+     BOTH running and idle descendants, so we key the guards on that root
+     rather than the transient running-state dot — otherwise the count gets
+     clipped again the moment agents go idle. Match roots with
+     [class*="_root"] (the real class carries a trailing space; [class*="_root"]
+     matches nothing). */
+  @media (max-width: 440px) {
+    [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] {
+      padding-right: 8px;
+    }
+    [data-mobile-nav="frame"] [data-phase] header [class*="_headerActions"]:has([class*="_root"]) [class*="_label"]:has(> svg),
+    [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]) [class*="_label"]:has(> svg) {
+      max-width: 18px;
+      min-width: 18px;
+      padding-left: 18px;
+      padding-right: 0 !important;
+    }
+  }
+  /* When the subagent lineage (any state) AND a background job are present
+     together, even the mode icon is not enough room by itself. Keep the full
+     subagent count (the reported-overwritten text) by compacting the job
+     trigger to its dot/chevron, and keep mode icon-only so the crumbs nav can
+     also hold a small right-hand gap — the subagent text should never sit
+     flush against the mode component. */
+  @media (max-width: 559px) {
+    [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] {
+      padding-right: 8px;
+    }
+    [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]) [class*="_headerActions"] [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) [class*="_count"] {
+      display: none !important;
+    }
+    [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]):has([class*="_headerActions"] [class*="_root"]) [class*="_label"]:has(> svg) {
+      max-width: 18px;
+      min-width: 18px;
+      padding-left: 18px;
+      padding-right: 0 !important;
+    }
+  }
+  @media (max-width: 359px) {
+    [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]):has([class*="_headerActions"] [class*="_root"]) [class*="_label"]:has(> svg) {
+      display: none !important;
+    }
+  }
+
+  /* --- Header popovers on mobile (dsh-client-ui-jobs / dsh-client-ui-subagent) --- */
+  /* The official entries sit in the session header actions. Their popovers
+     are anchored to the trigger's left edge, so clamp them to the viewport. */
+  [data-mobile-nav="frame"] [data-phase] header [class*="_menu"] {
+    left: 8px !important;
+    right: auto !important;
+    width: min(336px, calc(100vw - 16px));
+    max-width: none;
+    max-height: min(420px, calc(100dvh - 120px));
+  }
+  /* --- Settings dialog on mobile ---
+     Desktop: 800px two-column flex (188px nav + content). Mobile: a
+     near-full-width sheet — nav tabs wrap into rows on top, option rows
+     stay horizontal (title+description left, control right). Structural
+     selectors are scoped to the unique aria-modal dialog; every
+     settings-specific rule is gated with
+     :has(> :first-child > :last-child > button) — the settings nav tab
+     list holds <button> tabs, so the transient export dialog (the same
+     primitives Modal, header(title+close)+description+body) keeps its
+     official centered card layout. Requires :has() support
+     (Chromium 105+, 2022).
+
+     The directory picker (dsh-client-ui-directory-picker-browse) must be
+     excluded too: its footer bar holds <button> children AND its breadcrumb
+     trail (role="navigation") — which the role gate relies on to exclude
+     it — is REPLACED by the path input in edit mode (pencil button), so
+     without the ZuhsRW exclusion clicking the pencil would suddenly match
+     this sheet rule: the dialog jumps to the top of the screen, the header
+     (with the path input) is hidden by the > :first-child > :first-child
+     display:none rule below, and the user can no longer type a path
+     (issue #12, 2026-08-16). The picker family keeps the official layout
+     on mobile in every mode. */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) {
+    position: absolute !important;
+    left: 8px !important;
+    /* Fixed top (no translateY): a transform on the panel combined with the
+       panel overflowing the max-content drawer shifts the fixed overlay's
+       coordinate frame, dragging the whole sidebar content off-screen. The
+       safe-area inset keeps the sheet below the status bar / notch. */
+    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    /* Height follows the content (no dead space under a short page); it
+       caps at 100dvh-24 (less the safe-area top) and the options area
+       scrolls only then. */
+    height: auto;
+    max-height: min(800px, calc(100vh - 24px - env(safe-area-inset-top, 0px)));
+    max-height: min(800px, calc(100dvh - 24px - env(safe-area-inset-top, 0px)));
+    flex-direction: column !important;
+    border-radius: 14px !important;
+    animation: dsh-mobile-nav-sheet-in .22s var(--ds-ease-out, ease-in-out);
+  }
+  /* The settings sheet's dimmed mask fades in with the panel (the mask is
+     the first child of the overlay that directly contains the sheet). */
+  :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"]))) > :first-child {
+    animation: dsh-mobile-nav-fade .18s var(--ds-ease-out, ease-in-out);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])),
+    :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"]))) > :first-child {
+      animation: none !important;
+    }
+  }
+  /* The export dialog (not the settings sheet) must never overflow the
+     viewport: the official centered card can be wider than 390px. */
+  [aria-modal="true"]:not(:has(> :first-child > :last-child > button)) {
+    max-width: calc(100vw - 32px);
+  }
+  /* Nav bar: hide the "Settings" caption (redundant on a full-width sheet)
+     and wrap the tab list so every tab is visible — a horizontal scroll cut
+     the last tab ("Plugins") off with no affordance to scroll. */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child {
+    width: 100%;
+    flex-direction: row !important;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px 8px;
+  }
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child > :first-child {
+    display: none !important;
+  }
+  /* The tab list scrolls in the space left by the toolbar: the toolbar
+     (config file + close) is reparented INTO this nav row by a client
+     reconciler task (settings-toolbar-reparent), so the tab list must be
+     anchored by its class, NOT by :last-child (the reparented toolbar
+     becomes the nav's new last child). */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class*="_navList"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-direction: row !important;
+    flex-wrap: wrap;
+    gap: 6px;
+    overflow: visible;
+  }
+  /* Content toolbar (Open configuration file + close): grouped flush to
+     the right edge, and reparented INTO the nav row on mobile so it shares
+     one line with the tabs (user feedback 2026-08-16 — the toolbar's own
+     row left a full-width dead gap under the tabs). Anchored by class: the
+     header leaves the content subtree, so :first-child/:last-child anchors
+     would now hit the options area. Children carry official auto-margins
+     that would defeat flex-end, so neutralize them. The close button gets
+     a round tappable base so it reads as its own control, not part of the
+     outline button. */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) [class*="_header"]:not([class*="_headerActions"]) {
+    flex: 0 0 auto;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    padding: 0 0 0 4px;
+    min-height: 40px;
+  }
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) [class*="_header"]:not([class*="_headerActions"]) > * {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) [class*="_header"]:not([class*="_headerActions"]) > :last-child {
+    width: 32px;
+    height: 32px;
+    border-radius: 50% !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, .06)) !important;
+  }
+  /* Appearance mode cards: the official cube row renders three tall
+     vertical cards (~268px) that eat half the sheet. Turn them into a
+     compact horizontal trio (icon + label inline, equal widths).
+     Relies on the official cube-row class name of this version. */
+  [aria-modal="true"] [class*="_cubeRow"] {
+    gap: 6px;
+  }
+  [aria-modal="true"] [class*="_cubeRow"] > * {
+    flex: 1 1 0;
+    flex-direction: row !important;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 8px;
+    min-height: 0;
+  }
+  /* Content: the options scroll area gets bottom breathing room so the last
+     row never sits flush against the sheet's rounded corner. */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > :last-child {
+    padding: 0 12px 24px;
+  }
+}
+`;
+};
+__modules["styles/compat.css.js"] = function (require, module, exports) {
+"use strict";
+// compat — split from src/client/mobile.css.ts (2026-08-16), order preserved.
+// Self-contained: every rule here is mobile-only and the media query opens
+// and closes in this file. Concatenation order still matters for the
+// cascade (compat intentionally overrides layout), just not for syntax.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.COMPAT_CSS = void 0;
+exports.COMPAT_CSS = `@media (max-width: 1023px) {
+  /* ---------- dsh-web-ui family compatibility ----------
+     The linxin666 plugin suite extends the shell frame directly:
+       - aionui-panel appends two trailing grid columns (explorer / preview)
+         plus absolute drag handles to [data-dsh-frame]; its 5-track inline
+         grid is already overridden above, but the handles and columns would
+         still float over the main UI. On mobile the columns leave the grid
+         as floating bottom sheets and keep their own visibility state —
+         the suite's collapse chevron / preview tabs still work, so no
+         feature is lost. The task-board / ssh plugins inject sidebar
+         entries and center-column takeover panels; the entries need
+         spacing and the kanban needs scrollable columns. */
+
+  /* Touch devices: the drag handles are useless — the floating expand
+     button is the opener. */
+  .aionui-explorer-handle,
+  .aionui-preview-handle {
+    display: none !important;
+  }
+
+  /* Shared base: both columns leave the grid as floating panels. The
+     explorer is gated shut by default (its own persisted expanded state
+     must never cover the mobile UI on load); the header Files action opens
+     it via the frame marker below, and the sheet's own collapse chevron
+     clears it. Preview stays owned by the suite (hidden while no tab is
+     open). The per-column rules below override the geometry. */
+  [data-aionui-explorer-col],
+  [data-aionui-preview-col] {
+    position: fixed !important;
+    z-index: 55 !important;
+    background: var(--aion-bg-base, #ffffff) !important;
+    border-left: none !important;
+  }
+  /* Explorer (file tree) bottom sheet: bottom edge aligned exactly with
+     the composer card's bottom line — the card sits 36px above the
+     viewport bottom (8px composer padding + the 28px stats strip below
+     the card), so the sheet uses the same 36px bottom offset. */
+  [data-aionui-explorer-col] {
+    visibility: hidden !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: auto !important;
+    bottom: 36px !important;
+    width: auto !important;
+    height: min(55dvh, 460px) !important;
+    max-height: calc(100dvh - 44px) !important;
+    border-radius: 14px !important;
+    overflow: hidden !important;
+    box-shadow: 0 -4px 28px rgba(0, 0, 0, .18) !important;
+    animation: dsh-mobile-nav-sheet-up .24s var(--ds-ease-out, ease-in-out) !important;
+  }
+  /* Preview (file content) bottom sheet. Gated shut by default: the suite
+     persists open preview tabs in localStorage and restores them on load,
+     which would pop the sheet over the fresh UI. The client only sets the
+     frame marker after the user taps a file row in the explorer; the
+     suite's own collapse chevron clears it via the visibility watcher. */
+  [data-aionui-preview-col] {
+    visibility: hidden !important;
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: auto !important;
+    bottom: 40px !important;
+    width: auto !important;
+    height: min(50dvh, 420px) !important;
+    max-height: calc(100dvh - 48px) !important;
+    border-radius: 14px !important;
+    overflow: hidden !important;
+    box-shadow: 0 -4px 28px rgba(0, 0, 0, .18) !important;
+    z-index: 56 !important;
+    animation: dsh-mobile-nav-sheet-up .24s var(--ds-ease-out, ease-in-out) !important;
+    /* Fullscreen toggle (issue #8): animate the geometry change instead of
+       snapping. visibility is deliberately not listed, so opening/closing
+       the sheet stays instant; the open/close keyframes own transform. */
+    transition:
+      left .24s var(--ds-ease-out, ease-in-out),
+      right .24s var(--ds-ease-out, ease-in-out),
+      top .24s var(--ds-ease-out, ease-in-out),
+      bottom .24s var(--ds-ease-out, ease-in-out),
+      width .24s var(--ds-ease-out, ease-in-out),
+      height .24s var(--ds-ease-out, ease-in-out),
+      border-radius .24s var(--ds-ease-out, ease-in-out),
+      box-shadow .24s var(--ds-ease-out, ease-in-out),
+      padding-top .24s var(--ds-ease-out, ease-in-out) !important;
+  }
+  /* User-opened preview sheet (frame marker, set on file-row tap). */
+  [data-mobile-nav="frame"][data-aionui-preview-open] [data-aionui-preview-col] {
+    visibility: visible !important;
+  }
+  /* The Files action opens the explorer sheet (frame marker). */
+  [data-mobile-nav="frame"][data-aionui-explorer-open] [data-aionui-explorer-col] {
+    visibility: visible !important;
+  }
+  /* While the preview sheet is up, the explorer sheet yields (two stacked
+     bottom sheets would read as one broken overlay). Closing the preview
+     via its collapse chevron / tab close clears the marker, and the
+     explorer sheet returns. Same specificity as the explorer-open rule, so
+     this must stay AFTER it. */
+  [data-mobile-nav="frame"][data-aionui-preview-open] [data-aionui-explorer-col] {
+    visibility: hidden !important;
+  }
+  /* The open drawer must never sit under a sheet: while the frame is in the
+     narrow-expanded state both sheets yield (later in the file than the
+     open marker rule, so it wins at equal specificity). The fullscreen
+     toggle has its own drawer-open rule at the end of its section. */
+  [data-mobile-nav="frame"]:not([data-sidebar-collapsed]) [data-aionui-explorer-col],
+  [data-mobile-nav="frame"]:not([data-sidebar-collapsed]) [data-aionui-preview-col] {
+    visibility: hidden !important;
+    display: none !important;
+  }
+  /* The suite's own expand button reads the store state we bypass on
+     mobile — hide it; the header Files action is the opener. */
+  .aionui-floating-expand {
+    display: none !important;
+  }
+
+  /* Preview sheet fullscreen toggle (issue #8): a fixed button parked in the
+     sheet's titlebar row, just left of the suite's collapse chevron (24px at
+     right:8px of the sheet, and the sheet spans 8px..(100vw-8px)). The top
+     calc mirrors the sheet geometry above (bottom 40px + min(50dvh, 420px));
+     when the frame carries "data-mobile-preview-full" the sheet goes
+     fullscreen and the button moves to the viewport corner. */
+  [data-mobile-nav="preview-full-toggle"] {
+    position: absolute !important;
+    right: 36px !important;
+    top: 8px !important;
+    z-index: 57 !important;
+    display: none !important;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--aion-text-secondary, var(--dsw-alias-label-secondary, inherit));
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    /* Native look: same size/radius/hover language as the suite's tab-bar
+       icon buttons (the 20px panelCollapse next to it). The button lives
+       INSIDE the preview column, so it rides the sheet's own open
+       animation and geometry transition — no curve matching needed. */
+    transition: background-color .15s, top .24s var(--ds-ease-out, ease-in-out);
+  }
+  [data-mobile-nav="preview-full-toggle"]:hover {
+    background: var(--aion-bg-3, rgba(0, 0, 0, .22));
+  }
+  [data-mobile-nav="preview-full-toggle"]:active {
+    background: var(--aion-bg-active, rgba(0, 0, 0, .28));
+  }
+  [data-mobile-nav="preview-full-toggle"]:focus-visible {
+    outline: 2px solid var(--dsw-alias-state-business-primary, #4f6ef7);
+    outline-offset: 2px;
+  }
+  [data-mobile-nav="preview-full-toggle"] svg {
+    width: 14px;
+    height: 14px;
+  }
+  /* Keep the last tab (and the "+" URL-tab trigger) from sliding under the
+     fullscreen toggle: reserve the right end of the preview tab row. */
+  [data-aionui-preview-col] [class*="_tabScroll"] {
+    padding-right: 34px !important;
+  }
+  /* Visible only while the preview sheet is open. Visibility itself is
+     inherited from the column, so the sheet's own hide rules (collapse,
+     drawer open) cover the button too. */
+  [data-mobile-nav="frame"][data-aionui-preview-open] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] {
+    display: inline-flex !important;
+  }
+  /* Icon swap on the frame fullscreen marker. */
+  [data-mobile-nav="preview-full-toggle"] .dsh-mobile-nav-full-out {
+    display: none !important;
+  }
+  [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] .dsh-mobile-nav-full-in {
+    display: none !important;
+  }
+  [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] .dsh-mobile-nav-full-out {
+    display: inline !important;
+  }
+  /* Fullscreen preview: the sheet fills the whole viewport (notch included);
+     the safe-area padding drops the titlebar row below the status bar, and
+     the toggle follows the titlebar into the top corner. */
+  [data-mobile-nav="frame"][data-aionui-preview-open][data-mobile-preview-full] [data-aionui-preview-col] {
+    inset: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: 100dvh !important;
+    max-height: none !important;
+    box-sizing: border-box !important;
+    padding-top: env(safe-area-inset-top, 0px) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    z-index: 57 !important;
+    animation: none !important;
+  }
+  /* Fullscreen: the column fills the viewport, so the button follows the
+     titlebar row down below the notch. */
+  [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] {
+    top: calc(env(safe-area-inset-top, 0px) + 8px) !important;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-aionui-preview-col],
+    [data-mobile-nav="preview-full-toggle"] {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+
+  /* dsh-web-ui sidebar entries (task board / ssh) sit flush against each
+     other — give the injected rows breathing room. */
+  button[data-dsh-taskboard-entry],
+  button[data-dsh-ssh-entry] {
+    margin-bottom: 8px !important;
+  }
+
+  /* Task board: five kanban columns at minmax(0,1fr) crush into ~78px phone
+     strips. Give every column a usable minimum and let the row scroll. */
+  [data-dsh-taskboard-board] > [class*="_columns"] {
+    grid-template-columns: repeat(5, minmax(240px, 1fr)) !important;
+    overflow-x: auto !important;
+  }
+  /* The floating button must not float over a takeover panel (task board /
+     ssh own the center column while active). */
+  html[data-dsh-taskboard-active] [data-mobile-nav="fab"],
+  html[data-dsh-ssh-active] [data-mobile-nav="fab"],
+  html[data-dsh-taskboard-active] [data-mobile-nav="backdrop"],
+  html[data-dsh-ssh-active] [data-mobile-nav="backdrop"] {
+    display: none !important;
+  }
+  /* Board header: let the search field take the slack instead of squeezing
+     the action buttons. */
+  [data-dsh-taskboard-board] > [class*="_boardHeader"] [class*="_search"] {
+    flex: 1 1 auto !important;
+    min-width: 80px !important;
+  }
+
+  /* ---------- dsh-web-ui polish: plugin market search ----------
+     The market tab row (Discover / Themes / Installed + the plugin search
+     box) is a no-wrap flex: at 390px the tabs plus the ~218px search box
+     (~475px total) overflow the ~334px sheet and the search box runs off
+     the right edge of the screen (it also forces a horizontal scrollbar on
+     the sheet's options area). Let the row wrap: the tabs keep the first
+     line and the search box gets its own full-width second line. */
+
+  [aria-modal="true"] [class*="_tabs"] {
+    flex-wrap: wrap !important;
+    row-gap: 8px !important;
+  }
+  [aria-modal="true"] [class*="_searchInline"] {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* ---------- dshmarket polish: Tasks operations popup ----------
+     Upstream .opPanel is a small dropdown pinned to the right edge of its
+     ~54px trigger button; on a phone it reads as stuck to the sheet edge
+     instead of centered. Promote it to a fixed, viewport-centered card:
+     no ancestor between the popup and the viewport carries a transform,
+     so position:fixed centers against the real viewport (a plain left:50%
+     would resolve against the tiny relative trigger wrapper and land even
+     further right). The upstream 86vw width cap, 70vh max-height and
+     internal scroll all still apply; the close button stays inside. */
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_opPanel"] {
+    position: fixed !important;
+    top: 50% !important;
+    bottom: auto !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translate(-50%, -50%) !important;
+  }
+
+  /* ---------- dshmarket polish: header title row ----------
+     The title row (icon + title + repo link + version + optional
+     "Update market" / "Update all" buttons) is a nowrap flex whose
+     natural width (~450px with both update buttons) exceeds the ~334px
+     sheet. Flex then crushes the flexible items below their content
+     width and every label wraps word-by-word — the "text turns
+     vertical" report. Trigger is state-dependent (the buttons only
+     exist while plugin updates are pending), which explains the
+     sometimes-horizontal/sometimes-vertical flapping. Let the row wrap
+     instead: line 1 keeps icon + title + repo + version, the update
+     buttons get their own full-width-feeling second line, and the title
+     itself is locked to one ellipsized line no matter what follows it. */
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_titleRow"] {
+    flex-wrap: wrap !important;
+    row-gap: 6px !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_titleRow"] [class*="_title"] {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_titleRow"] button {
+    white-space: nowrap !important;
+  }
+
+  /* ---------- dshmarket 1.20+ compat: keep the settings nav visible ----------
+     Upstream Market.module.css hides the host dialog's nav on phones
+     ([role=dialog]:has([data-dsh-market-root]) > nav { display:none } at
+     max-width:560px) so the market can take over the dialog; its comment
+     assumes the host keeps "its own close button in the content header".
+     Our host's only close ✕ lives inside that very nav, so the market
+     would leave no categories and no way back or out (dead-end UI,
+     2026-08-23). Mirror upstream's exact media condition and restore the
+     nav: categories row + ✕ stay above the inline market page. */
+  @media (max-width: 560px) {
+    [data-mobile-nav="frame"] [role="dialog"]:has([data-dsh-market-root]) > nav {
+      display: flex !important;
+    }
+  }
+
+  /* ---------- dsh-usage-stats polish: usage & balance panel ----------
+     The panel's stats row shows three token counters side by side
+     (today / month / total). The counters use tabular nowrap figures whose
+     min-content width overflows the ~336px panel body on a phone: figures
+     clip at the row's edges and the panel grows a horizontal scrollbar.
+     Stack the three counters vertically — full-width rows, so the figures
+     always fit. */
+
+  [class*="usg_"][class*="_statsRow"] {
+    flex-direction: column !important;
+  }
+  [class*="usg_"][class*="_stat"]:not([class*="_statsRow"]) {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  /* ---------- dsh-web-ui polish: settings sheet ----------
+     The official dialog is a desktop two-column form; on a phone the
+     label/control split leaves a huge dead gap and long descriptions wrap
+     into tall stacks. Stack each row (text above, control full-width) and
+     keep the nav tabs on ONE horizontally scrolling row. */
+
+  /* Nav tabs: single scrolling row instead of the 3-per-row grid — seven
+     categories wrap into three rows on a phone (~130px of sheet height);
+     one row with a thin scrollbar keeps every tab reachable and returns
+     that space to the options area (user feedback 2026-08-16). An earlier
+     one-row attempt had no scroll affordance and silently cut the last
+     tab off; the thin scrollbar IS the affordance. Scoped to the frame
+     marker: the desktop dialog keeps its official vertical nav column. */
+  [data-mobile-nav="frame"] [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class*="_navList"] {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    gap: 6px !important;
+    width: 100% !important;
+    scrollbar-width: thin !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  /* Hairline scrollbar for the tab row: the default WebKit scrollbar reads
+     fat on a phone; 2px keeps the scroll affordance without the bulk. */
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_navList"]::-webkit-scrollbar {
+    height: 2px !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_navList"]::-webkit-scrollbar-thumb {
+    background: var(--dsw-alias-border-l2, rgba(0, 0, 0, .22)) !important;
+    border-radius: 1px !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_navList"]::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_navCell"] {
+    flex: 0 0 auto !important;
+    white-space: nowrap !important;
+    padding: 6px 8px !important;
+    gap: 6px !important;
+    font-size: 13px !important;
+    justify-content: flex-start !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_navCell"] svg {
+    width: 14px !important;
+    height: 14px !important;
+    flex: none !important;
+  }
+  /* Content toolbar: the "Open configuration file" button is hidden on
+     mobile — it is rarely needed on a phone and steals ~180px from the
+     tab row's scroll area (user feedback 2026-08-16). Only the close ✕
+     stays, flush right in the nav row. Desktop untouched (frame scoped). */
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_header"]:not([class*="_headerActions"]) [class*="_actions"] {
+    display: none !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_header"]:not([class*="_headerActions"]) [class*="_actions"] [class*="_action"]:not([class*="_actions"]) {
+    font-size: 13px !important;
+    padding: 6px 12px !important;
+    min-height: 0 !important;
+  }
+  /* Setting rows: text on top, control below at full width. Compound
+     "_row*" families are excluded: the Models page names its whole card
+     list "_rows" (plus "_rowCard/_rowHead/_rowIdentity/_rowActions"), and
+     the bare-substring match used to hand the list's first/last cards a
+     width:100% that - on the official content-box cards (+14px padding,
+     1px border) - ran 30px past their siblings and off-screen. */
+  [aria-modal="true"] [class*="_section"] [class*="_row"]:not([class*="_rows"]):not([class*="_rowCard"]):not([class*="_rowHead"]):not([class*="_rowIdentity"]):not([class*="_rowActions"]) {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+  [aria-modal="true"] [class*="_section"] [class*="_row"]:not([class*="_rows"]):not([class*="_rowCard"]):not([class*="_rowHead"]):not([class*="_rowIdentity"]):not([class*="_rowActions"]) > :first-child {
+    width: 100% !important;
+    max-width: none !important;
+  }
+  [aria-modal="true"] [class*="_section"] [class*="_row"]:not([class*="_rows"]):not([class*="_rowCard"]):not([class*="_rowHead"]):not([class*="_rowIdentity"]):not([class*="_rowActions"]) > :last-child {
+    width: 100% !important;
+    max-width: none !important;
+  }
+  /* Appearance mode group: give the cube row a consistent bordered
+     segmented look (the official borders differ per state). */
+  [aria-modal="true"] [class*="_cubeRow"] > * {
+    border: 1px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, .12)) !important;
+  }
+
+  /* ---------- dsh-web-ui polish: explorer sheet ----------
+     The aionui explorer was designed for a desktop side column: compact the
+     header, search box and tree rows so a phone shows more entries, and pad
+     the scroll bottom so the last row never sits flush on the edge. */
+
+  [data-aionui-explorer-col] [class*="_tabBar"]:not([class*="_tabBarRight"]) {
+    height: 36px !important;
+  }
+  [data-aionui-explorer-col] [class*="_tabBtn"],
+  [data-aionui-explorer-col] [class*="_tabBtnActive"] {
+    padding: 0 12px !important;
+    font-size: 13px !important;
+  }
+  [data-aionui-explorer-col] [class*="_searchBox"] {
+    height: 32px !important;
+    font-size: 13px !important;
+  }
+  [data-aionui-explorer-col] [class*="_treeRow"] {
+    height: 30px !important;
+    font-size: 13px !important;
+  }
+  [data-aionui-explorer-col] [class*="_treeRow"] svg {
+    width: 14px !important;
+    height: 14px !important;
+  }
+  [data-aionui-explorer-col] [class*="_scrollArea"] {
+    padding-bottom: 28px !important;
+  }
+
+  /* ---------- dsh-web-ui polish: drawer footer ----------
+     The injected footer actions (Files + Session log) become two equal pill
+     buttons instead of text-width capsules. */
+
+  /* The official footerActions row also hosts the remote-web-ui entry
+     row (two icon buttons); without wrapping the two groups squeeze each
+     other on one line. Wrap so each group gets its own full-width row. */
+  [data-mobile-nav="frame"] [class*="_footerActions"] {
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+  }
+  [data-mobile-nav="drawer-actions"] {
+    width: 100% !important;
+  }
+  [data-mobile-nav="drawer-actions"] > button {
+    flex: 1 1 0 !important;
+    padding: 0 8px !important;
+    white-space: nowrap !important;
+  }
+
+  /* ---------- dsh-web-ui polish: floating pet ----------
+     The whale-girl pet (dsh-pet) floats at the viewport corner with a
+     persisted, draggable position. On phones the pet is scaled down so
+     it does not dominate the screen; the plugin's own drag + persist
+     still work (the position itself is left alone — the mobile default
+     position is seeded via the pet API to just above the composer). */
+
+  body > [class*="_float"]:has([class*="_sprite"][role="button"]) {
+    transform: scale(.66);
+    transform-origin: bottom right;
+  }
+  /* While a modal dialog (settings sheet / export) owns the screen the pet
+     floats ABOVE it and covers the dialog content; modal semantics say the
+     background is inert, so hide the pet for the modal's lifetime. */
+  body:has([aria-modal="true"]) > [class*="_float"]:has([class*="_sprite"][role="button"]) {
+    display: none !important;
+  }
+
+  /* ---------- dsh-web-ui polish: conversation stats line ----------
+     The official session-status row (turns / steps / LLM time / TTFT /
+     cache) is long. The client marks the exact row with
+     [data-mobile-nav="stats"] (text-anchored, hashed classes can't be
+     targeted). Layout: ONE fixed-height (28px) flex strip that scrolls
+     horizontally — the full metrics stream stays reachable by swiping,
+     the row never grows vertically, no ellipsis or fade, 12px gaps
+     between metric groups, a 2px scrollbar as the swipe affordance. */
+
+  [data-mobile-nav="stats"] {
+    display: flex !important;
+    flex-flow: row nowrap !important;
+    align-items: center !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    max-height: 28px !important;
+    box-sizing: border-box !important;
+    white-space: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--dsw-alias-border-l1, rgba(0, 0, 0, .28)) transparent !important;
+    padding: 0 0 4px !important;
+    line-height: 20px !important;
+    font-size: 12px !important;
+  }
+  [data-mobile-nav="stats"]::-webkit-scrollbar {
+    height: 2px !important;
+  }
+  [data-mobile-nav="stats"]::-webkit-scrollbar-thumb {
+    background: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) !important;
+    border-radius: 2px !important;
+  }
+  [data-mobile-nav="stats"]::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+  [data-mobile-nav="stats"] > * {
+    display: flex !important;
+    flex: 0 0 auto !important;
+    flex-flow: row nowrap !important;
+    align-items: center !important;
+    width: max-content !important;
+    min-width: max-content !important;
+    max-width: none !important;
+    white-space: nowrap !important;
+    margin-right: 12px !important;
+    padding: 0 !important;
+  }
+  [data-mobile-nav="stats"] > *:last-child {
+    margin-right: 0 !important;
+  }
+  [data-mobile-nav="stats"] * {
+    white-space: nowrap !important;
+  }
+
+  /* ---------- dsh-genui panel dock ----------
+     The genui panel docks above the composer (conversation.input.dock,
+     id genui-panel). On a phone its business-blue outline, generous chrome
+     and single-line ellipsis read as an unfinished artifact: long titles
+     truncate mid-word ("…default b···") with the chevron glued to the
+     ellipsis, and the pill crowds the composer. Mobile treatment: neutral
+     card border matching the composer, tighter chrome so the full title
+     fits, chevron with breathing room. Scoped to the mobile frame marker —
+     desktop keeps genui's own styling untouched. */
+
+  [data-mobile-nav="frame"] [data-genui-panel] {
+    margin: 6px 12px 4px !important;
+    border-color: var(--dsw-alias-border-l1, rgba(0, 0, 0, .12)) !important;
+    border-radius: 12px !important;
+  }
+  [data-mobile-nav="frame"] [data-genui-panel] [class*="_panelToggle"] {
+    padding: 7px 12px !important;
+    gap: 8px !important;
+  }
+  [data-mobile-nav="frame"] [data-genui-panel] [class*="_panelBadge"] {
+    padding: 0 7px !important;
+    border-radius: 5px !important;
+    font-size: 10.5px !important;
+    line-height: 1.7 !important;
+  }
+  [data-mobile-nav="frame"] [data-genui-panel] [class*="_panelTitle"] {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    font-size: 12.5px !important;
+    line-height: 1.45 !important;
+  }
+  [data-mobile-nav="frame"] [data-genui-panel] [class*="_panelChevron"] {
+    flex: none !important;
+    margin-left: 0 !important;
+    padding-left: 4px !important;
+  }
+
+  /* ---------- git-graph branch chip: inside the composer card ----------
+     The branch chip (conversation.input.dock) floats between the dock rows
+     and the input card; on a phone it reads as a stray capsule crowding the
+     composer. A client reconciler task (git-chip-reparent) reparents the
+     chip INTO the composer card; these rules pin it to the card's top-left
+     and give the card a dedicated chip row. The card is position: relative
+     by the official stylesheet, so the absolute anchor resolves against it.
+     The plugin's own sheet sets all four offsets on the anchor, so
+     right/bottom must be neutralized too. Scope is the frame marker + the
+     anchor attribute (NOT the dock slot — the reparenting moves the chip
+     out of the dock's subtree). Desktop untouched: the frame marker only
+     exists below 1024px, and the effect restores the chip to the dock when
+     the viewport widens. Chip row geometry (2026-08-16, user feedback):
+     48px padding left a 16px dead gap between the chip and the input line
+     and made the composer read too tall; the row is now 40px = chip (24px)
+     at top 12px + ~4px to the textarea — the chip sits slightly lower and
+     the gap is compressed without touching the official height budget
+     further. */
+
+  [data-mobile-nav="frame"] [data-gitgraph-chip-anchor] {
+    position: absolute !important;
+    top: 12px !important;
+    left: 12px !important;
+    right: auto !important;
+    bottom: auto !important;
+    z-index: 1 !important;
+  }
+  [data-mobile-nav="frame"] [class*="_card"]:has([data-gitgraph-chip-anchor]) {
+    padding-top: 40px !important;
+  }
+
+  /* ---------- dsh-meme 表情选择卡片：右缘安全距离 ----------
+     The meme picker (conversation.input.overlay, id meme-picker) is
+     absolutely positioned left:0 inside the composer's overlay anchor with
+     width:min(360px,90vw). That 90vw resolves against the VIEWPORT, not the
+     anchor, and with the picker's own padding+border the border-box
+     (377px on a 390px phone) exceeds the 356px anchor — the card's right
+     edge then runs past the anchor and off the right screen edge, while the
+     left edge keeps the anchor's 17px safe inset. Stretch the card to the
+     anchor on both sides (left/right 0, width auto, border-box) so the
+     right gap mirrors the left; cap at the card's original border-box size
+     (360px content + 24px padding + 2px border) so tablets keep the
+     intended card width instead of stretching. Desktop is untouched: the
+     frame marker only exists below 1024px. */
+  [data-mobile-nav="frame"] .meme-picker {
+    left: 0 !important;
+    right: 0 !important;
+    width: auto !important;
+    box-sizing: border-box !important;
+    max-width: 386px !important;
+  }
+
+  /* dsh-meme 网格缩略图：自适应铺满卡片,保留 8px 间隙。
+     dsh-meme 的 .mp-grid 是 flex-wrap + 固定 76px 的 .mp-cell(行内 style 再压到 74px):
+     3 列(390px 手机)时每行右侧剩 ~78px 空白,卡片没有铺满。换成响应式 grid:
+     repeat(auto-fill, minmax(64px,1fr)) 让列数随可用宽度伸缩、卡片 width:100% +
+     aspect-ratio:1 随轨道自适应(方形,cover 裁切不变),gap 仍是 dsh-meme 的 8px。
+     行内 width/height 用 !important 覆盖;手机端约 4 列、平板端约 5 列,均满宽。 */
+  [data-mobile-nav="frame"] .meme-picker .mp-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)) !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) transparent !important;
+  }
+  [data-mobile-nav="frame"] .meme-picker .mp-cell {
+    width: 100% !important;
+    height: auto !important;
+    aspect-ratio: 1 !important;
+  }
+  /* dsh-meme 网格右侧滚动条：默认 WebKit 滚动条在手机上看太粗,压成 4px
+     细条——保留滚动指示又不占横向空间,thumb 圆角浅色、轨道透明。 */
+  [data-mobile-nav="frame"] .meme-picker .mp-grid::-webkit-scrollbar {
+    width: 4px !important;
+  }
+  [data-mobile-nav="frame"] .meme-picker .mp-grid::-webkit-scrollbar-thumb {
+    background: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) !important;
+    border-radius: 999px !important;
+  }
+  [data-mobile-nav="frame"] .meme-picker .mp-grid::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+
+  /* ---------- agent preset 模式选择菜单：手机端紧凑底部弹层 ----------
+     The official agent-preset menu (role=menu, portal mounted on body) uses
+     position:fixed + max-height:820px + bottom:12px, so on a phone it
+     stretches from the trigger down to 12px above the screen bottom —
+     effectively filling the screen. Turn it into a polished bottom sheet:
+     cap the height, center it horizontally (the official max-width 360px
+     left-anchors at left:12px, leaving 12/18px asymmetric gaps), add a
+     drag-handle affordance, breathing room, and softer top radius; the
+     inner viewport keeps scrolling. Scoped to the agent-preset item class
+     (cubgiG_*) so other role=menu dropdowns (model/access mode) are
+     untouched. Desktop ≥1024px is outside the media query, so it keeps the
+     official large dropdown. */
+  /* agent-preset 菜单依赖 @deepseek-ai/dsh-client-ui-agent-preset 的 CSS Module 哈希 (cubgiG_*)，升级该包时需验证此选择器是否仍有效 */
+  [role="menu"]:has([class*="cubgiG_item"]) {
+    top: auto !important;
+    left: 50% !important;
+    right: auto !important;
+    bottom: 12px !important;
+    transform: translateX(-50%) !important;
+    width: min(100% - 24px, 360px) !important;
+    max-width: 360px !important;
+    max-height: min(55dvh, 440px) !important;
+    padding: 30px 6px 10px !important;
+    border-radius: 16px !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"])::before {
+    content: '';
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--dsw-alias-border-l2, rgba(0, 0, 0, .22)) !important;
+    pointer-events: none;
+  }
+  /* 菜单内部滚动条：默认 WebKit 滚动条在竖屏太粗,会占 ~15px 宽度把文字描述
+     挤窄,导致描述换行/截断不自然。压成 4px 细条(与表情网格一致),文字区域
+     恢复自适应宽度。 */
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"] {
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) transparent !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"]::-webkit-scrollbar {
+    width: 4px !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"]::-webkit-scrollbar-thumb {
+    background: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) !important;
+    border-radius: 999px !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"]::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+
+/* 搜索框底部间距修复 */
+[aria-modal="true"] [class*="tabSearchRow"] {
+  padding: 2px 4px 16px !important;
+}
+
+
+/* ===== 已安装列表：路径单行截断 ===== */
+[class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > div > [class*="spec"] {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  max-width: 100% !important;
+  font-size: 12px !important;
+}
+[class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > div > [class*="nm"] {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  max-width: 100% !important;
+}
+/* ===== 已安装列表：手机端纵向重排 ===== */
+@media (max-width: 1023px) {
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) {
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    gap: 4px 10px !important;
+  }
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > div:first-child {
+    flex: 1 1 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > [class*="grow"] {
+    flex: 1 1 auto !important;
+  }
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > button {
+    flex: 0 0 auto !important;
+  }
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > button[class*="switch"] {
+    order: 3 !important;
+  }
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > button:not([class*="switch"]) {
+    order: 2 !important;
+  }
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > [class*="owner"] {
+    order: 1 !important;
+  }
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > [class*="grow"] {
+    order: 0 !important;
+  }
+}
+/* ===== 市场卡片图片容器：横向滚动 ===== */
+[data-mobile-nav="frame"] [class*="cardShots"] {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  scrollbar-width: thin !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  gap: 8px !important;
+  padding: 4px 0 !important;
+}
+[data-mobile-nav="frame"] [class*="cardShots"] > [class*="cardShot"] {
+  flex: 0 0 min(100%, 420px) !important;
+  width: min(100%, 420px) !important;
+  max-width: 100% !important;
+  height: auto !important;
+  display: block !important;
+  object-fit: contain !important;
+}
+[data-mobile-nav="frame"] [class*="cardShots"]::-webkit-scrollbar {
+  height: 4px !important;
+}
+[data-mobile-nav="frame"] [class*="cardShots"]::-webkit-scrollbar-thumb {
+  background: var(--ds-border-color, #ccc) !important;
+  border-radius: 4px !important;
+}
+}
+
+`;
+};
+__modules["styles/misc.css.js"] = function (require, module, exports) {
+"use strict";
+// misc — split from src/client/mobile.css.ts (2026-08-16), order preserved.
+// Self-contained: each section (composer / tablet / desktop) carries its own
+// media query.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.MISC_CSS = void 0;
+exports.MISC_CSS = `@media (max-width: 1023px) {
+  /* ---------- hero composer on mobile ----------
+     The official hero card carries a 2-line textarea plus a tall tool row,
+     which reads oversized on a phone. Tighten the empty-state rhythm: keep
+     the official centered hero, shrink the textarea line box, slim the card
+     padding and the tool row, and close the gap under the headline. */
+
+  [data-phase="hero"] [class*="_card"]:has(textarea) {
+    padding-top: 6px !important;
+    gap: 8px !important;
+  }
+  /* The official composer autosizes the textarea and writes an inline
+     height (2 lines on the hero empty state) on the textarea's scroll/grow
+     wrappers. :placeholder-shown lets us collapse the EMPTY state to one
+     line with !important; as soon as the user types, the pseudo-class no
+     longer matches and the autosizer's inline height takes over again — so
+     multi-line growth keeps working. */
+  [data-phase="hero"] textarea:placeholder-shown {
+    height: 28px !important;
+  }
+  [data-phase="hero"] [class*="_card"]:has(textarea:placeholder-shown) > [class*="_scroll"],
+  [data-phase="hero"] [class*="_card"]:has(textarea:placeholder-shown) [class*="_grow"] {
+    height: 28px !important;
+  }
+  [data-phase="hero"] [class*="_card"]:has(textarea) > [class*="_row"] {
+    padding-top: 2px !important;
+  }
+  [data-phase="hero"] [class*="_headline"] {
+    line-height: 1.15 !important;
+    margin-bottom: 0 !important;
+  }
+  [data-phase="hero"] [class*="_stack"] {
+    gap: 0 !important;
+  }
+
+  /* ---------- composer dock: swap git branch chip with the todo card ----------
+     The git-graph branch chip (conversation.input.dock, order 100) floats
+     alone at the bottom-left above the input card, with a dead zone to its
+     right; the full-width todo card (order 0) sits above it. Swap them so
+     the chip reads as the stack's top row and the todo card fills the row
+     above the composer. The dock container itself is display:contents
+     (inline style) — its children are direct flex items of the composer
+     stack, so order on the children is what reorders them. Only the chip
+     needs an order change: -1 puts it before the todo card (order 0) and
+     before the input card (order 0, later in DOM). The todo card must KEEP
+     its order 0 — raising it past the input card's order 0 would drop it
+     below the composer entirely (2026-08-16 regression, fixed). The queue
+     strip (order 20) keeps hugging the input card. Desktop untouched (this
+     block lives inside the max-width: 1023px media query). */
+  [data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor] {
+    order: -1 !important;
+  }
+  /* Mobile tap target + feedback for the branch chip (git-graph, 24px
+     desktop spec). Two real-world problems: ① the chip is tiny and sits
+     right above the expandable todo card — mis-taps land on the todo card;
+     ② opening the popover waits for the host's /git/branches round-trip
+     (~700ms on device) with zero feedback, so users tap again and toggle
+     the popover closed. Enlarge the target, kill double-tap zoom delay,
+     and give an instant pressed state so a tap reads as registered. */
+  [data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor] [data-gitgraph-chip] {
+    touch-action: manipulation !important;
+    min-height: 34px !important;
+    padding: 0 12px !important;
+    font-size: 13px !important;
+  }
+  [data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor] [data-gitgraph-chip]:active {
+    transform: scale(.96) !important;
+    transition: transform .12s !important;
+  }
+
+  /* ---------- ask question composer (ask_user_question): kill iOS Safari
+      input-focus auto-zoom ----------
+      Safari on iPhone enlarges the whole viewport when a focused <input> /
+      <textarea> computes font-size < 16px, and only reverts on blur. The ask
+      dialog is a modal composer takeover, so taps outside never blur the
+      field and the magnification persists until the field loses focus
+      (e.g. the dialog is dismissed). The ask
+      composer's custom-answer <input> (.customInput) and optionless free-form
+      <textarea> (.customTextarea) both ship at 14px (ui-user-questions
+      QuestionComposer.module.css). Raise them to 16px on mobile so Safari
+      sees a >=16px field and skips the zoom entirely. Scoped to the ask
+      composer's stable [data-question-key] root (AGENTS.md: scope hashed-class
+      selectors to the owning region, prefer stable data-* markers); the
+      class-name suffix match follows the plugin's established harness
+      CSS-module convention (verified against the live app: generated names
+      end with the original local name, e.g. uV2eYG_input / qDHVXG_searchInput). */
+  [data-question-key] [class*="_customInput"],
+  [data-question-key] [class*="_customTextarea"] {
+    font-size: 16px !important;
+  }
+}
+
+/* ---------- tablet / wide mobile: keep sheets from becoming full-width ----------
+   Below 768px the near-full-width sheets are the right call for a phone.
+   On wider but still sub-desktop viewports (foldables, tablet portrait,
+   desktop-mode tall windows) the same full-bleed sheet leaves content
+   clustered at the left edge with a large dead zone on the right. Cap and
+   center the modal sheets and the aionui bottom sheets instead. */
+@media (min-width: 768px) and (max-width: 1023px) {
+  /* All modal dialogs: centered, never edge-to-edge. The settings sheet has
+     a higher-specificity full-width rule above, so repeat its selector here
+     to win; the generic export/other-modal rule is covered by the second
+     selector. */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])),
+  [aria-modal="true"]:not(:has(> :first-child > :last-child > button)) {
+    left: 0 !important;
+    right: 0 !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    width: min(calc(100vw - 32px), 720px) !important;
+    max-width: min(calc(100vw - 32px), 720px) !important;
+  }
+
+  /* The dsh-web-ui explorer / preview bottom sheets: same treatment — keep
+     the mobile bottom-sheet behavior, but stop them spanning the full width. */
+  [data-aionui-explorer-col],
+  [data-aionui-preview-col] {
+    left: 0 !important;
+    right: 0 !important;
+    width: min(calc(100vw - 32px), 720px) !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+
+  /* Settings sections (e.g. Agent presets) often carry a desktop max-width
+     (720px) that leaves a dead strip on the right once the sheet is capped to
+     the same width; let them fill the sheet body instead. */
+  [aria-modal="true"] [class*="_section"] {
+    width: 100% !important;
+    max-width: none !important;
+  }
+}
+
+/* ---------- desktop: the mobile controls must never appear ---------- */
+
+@media (min-width: 1024px) {
+  [data-mobile-nav="toggle"],
+  [data-mobile-nav="files"],
+  [data-mobile-nav="fab"],
+  [data-mobile-nav="backdrop"],
+  [data-mobile-nav="session-log"],
+  [data-mobile-nav="explorer"],
+  [data-mobile-nav="drawer-actions"] {
+    display: none !important;
+  }
+}
+`;
+};
+__modules["styles/index.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.MOBILE_CSS = void 0;
+const base_css_ts_1 = require("./styles/base.css.js");
+const layout_css_ts_1 = require("./styles/layout.css.js");
+const compat_css_ts_1 = require("./styles/compat.css.js");
+const misc_css_ts_1 = require("./styles/misc.css.js");
+/**
+ * All mobile styles, concatenated in the exact order of the original
+ * single-file stylesheet (base → layout → compat → misc, where misc keeps
+ * composer → tablet → desktop). Injected as ONE <style data-plugin> tag —
+ * do not reorder.
+ */
+exports.MOBILE_CSS = [base_css_ts_1.BASE_CSS, layout_css_ts_1.LAYOUT_CSS, compat_css_ts_1.COMPAT_CSS, misc_css_ts_1.MISC_CSS].join('\n');
+};
+__modules["i18n/locales.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.en = exports.zh = exports.NS = void 0;
+/** `mobileNav` namespace dictionaries: drawer controls. */
+exports.NS = 'mobileNav';
+/** Simplified Chinese dictionary (the key-set source of truth). */
+exports.zh = {
+    'open': '打开目录',
+    'close': '收起目录',
+    'backdrop': '点击关闭目录',
+    'sessionLog': '导出会话日志',
+    'files': '文件浏览',
+    'previewFullscreen': '全屏预览',
+    'previewExitFullscreen': '退出全屏',
+};
+/** English dictionary, key-identical to the Chinese source of truth. */
+exports.en = {
+    'open': 'Open directory',
+    'close': 'Close directory',
+    'backdrop': 'Click to close directory',
+    'sessionLog': 'Session log',
+    'files': 'Files',
+    'previewFullscreen': 'Fullscreen preview',
+    'previewExitFullscreen': 'Exit fullscreen',
+};
+};
+__modules["index.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.inject = void 0;
+exports.apply = apply;
+const MobileNavToggle_tsx_1 = require("./components/MobileNavToggle.js");
+const MobileDrawerFooter_tsx_1 = require("./components/MobileDrawerFooter.js");
+const index_ts_1 = require("./styles/index.js");
+const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
+const aionui_compat_ts_1 = require("./effects/aionui-compat.js");
+const locales_ts_1 = require("./i18n/locales.js");
+/** Required services (cordis fiber inject — the loader passes all module exports as an object plugin). */
+exports.inject = ['slots', 'layout', 'locale', 'sessionLogDownload'];
+/**
+ * Mobile-adaptive shell, browser half: injects the mobile stylesheet, then
+ * contributes the directory toggle to the session header and the backdrop +
+ * floating button to the shell overlay.
+ * @param ctx - client root context.
+ */
+function apply(ctx) {
+    ctx.effect(() => ctx.locale.register(locales_ts_1.NS, { zh: locales_ts_1.zh, en: locales_ts_1.en }), 'dsh-mobile-nav: dictionaries');
+    ctx.effect(() => {
+        const tag = document.createElement('style');
+        tag.dataset.plugin = '@dsh-external/dsh-mobile-nav';
+        tag.dataset.pluginCss = '@dsh-external/dsh-mobile-nav/mobile.css';
+        tag.textContent = index_ts_1.MOBILE_CSS;
+        document.head.appendChild(tag);
+        // Keep this stylesheet last in <head> so its overrides win over the
+        // host UI's own styles (some host rules also use !important).
+        setTimeout(() => {
+            if (tag.isConnected)
+                document.head.appendChild(tag);
+        }, 0);
+        return () => {
+            tag.remove();
+        };
+    }, 'dsh-mobile-nav: styles');
+    // Hard-fix the installed-plugins list text layout: the host market UI
+    // injects its own CSS after this plugin's stylesheet, so CSS overrides can
+    // be beaten. Inline !important styles win over every external rule. Keep
+    // the selector on outer rows only; irowActions/irowTrailing are nested
+    // flex containers and must retain the market's own action geometry.
+    ctx.effect(() => {
+        const mq = window.matchMedia('(max-width: 1023px)');
+        const rowSelector = '[class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"])';
+        const set = (el, props) => {
+            for (const [key, value] of Object.entries(props)) {
+                el.style.setProperty(key, value, 'important');
+            }
+        };
+        const unset = (el, props) => {
+            for (const key of props)
+                el.style.removeProperty(key);
+        };
+        const rowProps = ['flex-wrap', 'align-items', 'gap'];
+        const firstProps = ['flex', 'max-width', 'min-width'];
+        const textProps = ['white-space', 'overflow', 'text-overflow', 'max-width'];
+        const clear = () => {
+            document.querySelectorAll(rowSelector).forEach((row) => {
+                unset(row, rowProps);
+                const first = row.children[0];
+                if (first)
+                    unset(first, firstProps);
+                row.querySelectorAll(':scope > button, :scope > [class*="owner"], :scope > [class*="grow"]').forEach((el) => {
+                    unset(el, ['order']);
+                });
+                const spec = row.querySelector('[class*="spec"]');
+                const nm = row.querySelector('[class*="nm"]');
+                if (spec)
+                    unset(spec, textProps);
+                if (nm)
+                    unset(nm, textProps);
+            });
+        };
+        const apply = () => {
+            document.querySelectorAll(rowSelector).forEach((row) => {
+                set(row, {
+                    'flex-wrap': 'wrap',
+                    'align-items': 'center',
+                    'gap': '4px 10px',
+                });
+                const first = row.children[0];
+                if (first) {
+                    set(first, {
+                        'flex': '1 1 100%',
+                        'max-width': '100%',
+                        'min-width': '0',
+                    });
+                }
+                const spec = row.querySelector('[class*="spec"]');
+                const nm = row.querySelector('[class*="nm"]');
+                if (spec) {
+                    set(spec, {
+                        'white-space': 'nowrap',
+                        'overflow': 'hidden',
+                        'text-overflow': 'ellipsis',
+                        'max-width': '100%',
+                    });
+                }
+                if (nm) {
+                    set(nm, {
+                        'white-space': 'nowrap',
+                        'overflow': 'hidden',
+                        'text-overflow': 'ellipsis',
+                        'max-width': '100%',
+                    });
+                }
+            });
+        };
+        const arm = () => {
+            clear();
+            if (mq.matches)
+                apply();
+        };
+        arm();
+        const mo = new MutationObserver(() => {
+            if (mq.matches)
+                apply();
+        });
+        mo.observe(document.documentElement, { childList: true, subtree: true });
+        mq.addEventListener('change', arm);
+        return () => {
+            mo.disconnect();
+            mq.removeEventListener('change', arm);
+            clear();
+        };
+    }, 'dsh-mobile-nav: installed-list-inline-styles');
+    // Shared mobile infrastructure: frame marker ownership and the single
+    // full-tree reconciler. Installed inside one effect so a plugin reload in
+    // the same JS environment tears the whole reconciler down and rebuilds it.
+    ctx.effect(() => {
+        const stops = [
+            (0, phone_chrome_ts_1.installFrameController)(),
+            (0, phone_chrome_ts_1.installReconciler)(ctx),
+            (0, phone_chrome_ts_1.registerReconcileTasks)(ctx),
+        ];
+        return () => {
+            for (const stop of stops)
+                stop();
+        };
+    }, 'dsh-mobile-nav: reconciler infrastructure');
+    // Drawer close interactions: Escape and navigation taps inside the drawer.
+    (0, phone_chrome_ts_1.installOverlayInteractions)(ctx);
+    (0, phone_chrome_ts_1.installPhoneChrome)(ctx);
+    (0, aionui_compat_ts_1.installAionuiCompat)(ctx);
+    ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+        name: 'conversation.session.header.actions',
+        id: 'mobile-nav-toggle',
+        order: 10,
+        locale: locales_ts_1.NS,
+        inject: () => ({
+            toggleSidebar: () => ctx.layout.toggleSidebar(),
+        }),
+    }, MobileNavToggle_tsx_1.MobileNavToggle));
+    // Session log download, relocated from the session header to the drawer
+    // footer on mobile (the header capsule is hidden by CSS); the drawer
+    // footer also hosts the Files action that opens the dsh-web-ui explorer
+    // sheet.
+    //
+    // Footer stacking relies on the list-slot sort by (priority, order):
+    // dsh-remote-web-ui leaves it unset (default 0, its two icon buttons stay
+    // on top) and dsh-usage-stats uses 10. Order 5 keeps the Files + Session
+    // log pills directly under the icon row with the usage/balance badge
+    // below them — instead of a tie at 10 where registration order could
+    // wedge the badge between the icons and the pills.
+    ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+        name: 'sidebar.footer.action',
+        id: 'mobile-nav-session-log',
+        order: 5,
+        locale: locales_ts_1.NS,
+        inject: () => ({
+            downloadSessionLog: (sessionId) => ctx.sessionLogDownload.download(sessionId),
+            toggleSidebar: () => ctx.layout.toggleSidebar(),
+        }),
+    }, MobileDrawerFooter_tsx_1.MobileDrawerFooter));
+}
+};
+var __cache = {};
+function __localRequire(id) {
+  if (id.charCodeAt(0) !== 46) return require(id);
+  id = id.slice(2);
+  var cached = __cache[id];
+  if (cached) return cached.exports;
+  var module = { exports: {} };
+  __cache[id] = module;
+  __modules[id](__localRequire, module, module.exports);
+  return module.exports;
+}
+var module = { exports: {} };
+__modules["index.js"](__localRequire, module, module.exports);
+return module.exports; } });

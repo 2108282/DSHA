@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-25T05:46:57Z",
+  "generated": "2026-08-25T06:41:19Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -83,8 +83,8 @@
     {
       "path": "app/src/main/assets/fix-stale-bundles.sh",
       "asset": "fix-stale-bundles.sh",
-      "size": 2701,
-      "sha256": "2a4ee482882c082e396bcfc35eccb02eba12c4f1695d5221b2ab55a467ee32e5",
+      "size": 2703,
+      "sha256": "1d02c796bf12991c19a9d2a309fd5aa6d0a762e9e2342f23234bb98002b9d5c9",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/fix-stale-bundles.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/fix-stale-bundles.sh",
@@ -116,8 +116,8 @@
     {
       "path": "app/src/main/assets/heal-pnpm-shells.py",
       "asset": "heal-pnpm-shells.py",
-      "size": 7257,
-      "sha256": "1d3ef3ef5509320d05d52312b90c65d5f35d1aaaf1c1f125a7094858e4e0390a",
+      "size": 7261,
+      "sha256": "7f6b7df58c844cf535698fccec3047566848248e84030f3d60f5b18ff8f44524",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/heal-pnpm-shells.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/heal-pnpm-shells.py",
@@ -237,8 +237,8 @@
     {
       "path": "app/src/main/assets/selftest.py",
       "asset": "selftest.py",
-      "size": 67431,
-      "sha256": "e653c59a3db44e8aa8f77aabc36a9cc50f0da0542bdfc124b295664ce591bf91",
+      "size": 67433,
+      "sha256": "e9a20f7263700471ba1ead52fa66903435b11879c6179f43ac3c58dc8c5f4b18",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/selftest.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/selftest.py",
@@ -290,39 +290,6 @@
       ]
     },
     {
-      "path": "app/src/main/assets/mobile-adapt/package.json",
-      "asset": "mobile-adapt/package.json",
-      "size": 1417,
-      "sha256": "c4dc887de1082b9a4d4e0e80c9e697b4ab4e11649c3083a2ff435e80c199939f",
-      "urls": [
-        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-adapt/package.json",
-        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/mobile-adapt/package.json",
-        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-adapt/package.json"
-      ]
-    },
-    {
-      "path": "app/src/main/assets/mobile-adapt/lib/client.js",
-      "asset": "mobile-adapt/lib/client.js",
-      "size": 19227,
-      "sha256": "94d3c4953320af1f53679ede48bc202f9aa48e0d2b3820e5bb860d3601240d0f",
-      "urls": [
-        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-adapt/lib/client.js",
-        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/mobile-adapt/lib/client.js",
-        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-adapt/lib/client.js"
-      ]
-    },
-    {
-      "path": "app/src/main/assets/mobile-adapt/lib/index.js",
-      "asset": "mobile-adapt/lib/index.js",
-      "size": 186,
-      "sha256": "2e30b5b0a3bc024c73ba258ac8942ebce89db30a8c403435cb18a7fe46547e89",
-      "urls": [
-        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-adapt/lib/index.js",
-        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/mobile-adapt/lib/index.js",
-        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-adapt/lib/index.js"
-      ]
-    },
-    {
       "path": "app/src/main/assets/device-shell-guide/package.json",
       "asset": "device-shell-guide/package.json",
       "size": 540,
@@ -364,6 +331,39 @@
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/task-notifier/lib/index.js",
         "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/lib/index.js"
+      ]
+    },
+    {
+      "path": "app/src/main/assets/mobile-nav/package.json",
+      "asset": "mobile-nav/package.json",
+      "size": 2137,
+      "sha256": "b80273b3cb53a7c2aac643a6838c7d4d39f98374c22ee467692f977d41fc61ab",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-nav/package.json",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/mobile-nav/package.json",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-nav/package.json"
+      ]
+    },
+    {
+      "path": "app/src/main/assets/mobile-nav/lib/client.js",
+      "asset": "mobile-nav/lib/client.js",
+      "size": 132303,
+      "sha256": "6c6ee969b3de2d7f04eafd4b70319c8f9c8891a72a21090fb5878636be6b2e04",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-nav/lib/client.js",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/mobile-nav/lib/client.js",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-nav/lib/client.js"
+      ]
+    },
+    {
+      "path": "app/src/main/assets/mobile-nav/lib/index.js",
+      "asset": "mobile-nav/lib/index.js",
+      "size": 317,
+      "sha256": "855d07192c12ac831830e87246216dbc74ad8c83a6d67ae00ee7e89a378591ef",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-nav/lib/index.js",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/mobile-nav/lib/index.js",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-nav/lib/index.js"
       ]
     }
   ]
