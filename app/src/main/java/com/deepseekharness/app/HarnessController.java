@@ -3210,6 +3210,7 @@ public class HarnessController {
             java.io.File oldNm = new java.io.File(nm, OLD);
             java.io.File oldDisabled = new java.io.File(nm, OLD + ".disabled");
             java.io.File pf = new java.io.File(rootfs, "root/.dsh/profiles/web/package.json");
+            java.io.File snap = new java.io.File(rootfs, "root/dsha-builtin.txt");
 
             boolean inProfile = false;
             String txt = null;
@@ -3217,7 +3218,17 @@ public class HarnessController {
                 txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
                 inProfile = txt.contains(OLD);
             }
-            if (!inProfile && !oldReal.exists() && !oldMarker.exists()
+            boolean snapStale = false;
+            String snapTxt = null;
+            if (snap.isFile()) {
+                try {
+                    snapTxt = new String(java.nio.file.Files.readAllBytes(snap.toPath()),
+                            StandardCharsets.UTF_8);
+                    snapStale = snapTxt.contains(OLD) || !snapTxt.contains(NEW);
+                } catch (Throwable ignored) {
+                }
+            }
+            if (!inProfile && !snapStale && !oldReal.exists() && !oldMarker.exists()
                     && !oldNm.exists() && !oldDisabled.exists()) {
                 return;     // 干净环境（或已经迁过）→ 零成本退出
             }
@@ -3284,6 +3295,25 @@ public class HarnessController {
                     new java.io.File(rootfs, "root/dsha-mobile-adapt.log")}) {
                 try {
                     purgeForPlace(f);
+                } catch (Throwable ignored) {
+                }
+            }
+            // 4) 内置插件快照换名。listPlugins 的「隐藏自带」是**精确名字匹配**
+            //    （names.removeAll(builtin)），快照里没有新名的话，新内置插件会被
+            //    当成用户自己装的显示在列表里。
+            if (snapStale && snapTxt != null) {
+                try {
+                    StringBuilder out = new StringBuilder();
+                    boolean hasNew = false;
+                    for (String line : snapTxt.split("\n")) {
+                        String t = line.trim();
+                        if (t.isEmpty() || OLD.equals(t)) continue;
+                        if (NEW.equals(t)) hasNew = true;
+                        out.append(t).append('\n');
+                    }
+                    if (!hasNew) out.append(NEW).append('\n');
+                    java.nio.file.Files.write(snap.toPath(),
+                            out.toString().getBytes(StandardCharsets.UTF_8));
                 } catch (Throwable ignored) {
                 }
             }
