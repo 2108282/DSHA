@@ -24,69 +24,37 @@ public final class LanProxyService {
      *  首次生成后存 prefs（跨重启保持），启动页显示带 token 的地址。 */
     private static volatile String lanToken = "";
 
-    /** 获取 LAN token（首次生成 16 位随机并持久化） */
+    /** 获取 LAN token（首次生成 16 位随机并持久化）。
+     *
+     *  <p>鉴权改成 fail-closed 之后，「token 为空」等于桥拒绝一切请求，所以这里
+     *  必须保证拿得到值：先把新生成的值认到内存里再落盘，持久化失败（prefs 异常、
+     *  存储满）顶多是下次启动换一个 token，不该让局域网功能整个不可用。
+     *  原来的写法把赋值放在 try 的最后一行，任一步抛异常都会留下空 token。 */
     public static String getLanToken(android.content.Context ctx) {
         if (!lanToken.isEmpty()) return lanToken;
+        String t = "";
         try {
-            String t = ctx.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+            t = ctx.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                     .getString("lan_token", "");
-            if (t.isEmpty()) {
-                t = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        } catch (Throwable ignored) {   // 含 ctx == null
+        }
+        if (t == null || t.isEmpty()) {
+            t = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+            lanToken = t;               // 先认账
+            try {
                 ctx.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                         .edit().putString("lan_token", t).apply();
+            } catch (Throwable ignored) {
             }
-            lanToken = t;
-        } catch (Throwable ignored) {
+            return t;
         }
-        return lanToken;
+        lanToken = t;
+        return t;
     }
 
-    /** 校验请求是否带正确 token（?token= / X-DSHA-Token / Cookie: dsha_token=）。
-         *  token 只应从 URL 查询串、显式 header 或本站 Cookie 中读取，避免无鉴权放行。 */
-        private static boolean tokenOk(String head, String token) {
-            if (token == null || token.isEmpty()) return true; // 无 token 配置（旧版兼容）→ 放行
-            for (String l : head.split("\\r?\\n")) {
-                int i = l.indexOf(':');
-                if (i <= 0) continue;
-                String key = l.substring(0, i).trim();
-                String v = l.substring(i + 1).trim();
-                if (key.equalsIgnoreCase("X-DSHA-Token")) {
-                    return constantTimeEquals(token, v);
-                }
-                if (key.equalsIgnoreCase("Cookie")) {
-                    for (String c : v.split(";")) {
-                        c = c.trim();
-                        if (c.startsWith("dsha_token=")) {
-                            return constantTimeEquals(token, c.substring("dsha_token=".length()));
-                        }
-                    }
-                }
-            }
-            // query 参数校验（?token=xxx）
-            int tq = head.indexOf("token=");
-            if (tq >= 0) {
-                String v = head.substring(tq + 6);
-                int amp = v.indexOf('&');
-                if (amp >= 0) v = v.substring(0, amp);
-                int sp = v.indexOf(' ');
-                if (sp >= 0) v = v.substring(0, sp);
-                if (v.indexOf('\r') >= 0) v = v.substring(0, v.indexOf('\r'));
-                return constantTimeEquals(token, v.trim());
-            }
-            return false;
-        }
+    // 凭据判定、请求行改写、定长比较都在 LanAuth —— 那是一组纯字符串逻辑，
+    // 抽出去是为了能在没有设备的情况下真跑断言（tools/lan-auth-test.sh）。
 
-        private static boolean constantTimeEquals(String a, String b) {
-            if (a == null || b == null) return false;
-            int diff = 0;
-            for (int i = 0; i < a.length(); i++) {
-                char ca = a.charAt(i);
-                char cb = i < b.length() ? b.charAt(i) : 0;
-                diff |= ca ^ cb;
-            }
-            diff |= a.length() ^ b.length();
-            return diff == 0;
-        }
     /** 桥监听端口：WebUI 默认 3080，桥用 3081 避免端口冲突（用户访问 http://<手机IP>:3081/） */
     public static final int LAN_PORT = 3081;
     /** 全局后端端口：每次 start 时用当前配置覆盖（自定义端口场景必须跟随 WebUI）。 */
@@ -125,7 +93,9 @@ public final class LanProxyService {
         if (backend == LAN_PORT) backend = 3080; // 与桥监听端口冲突时回退默认（配置页已拦截，这里兜底）
         backendPort = backend;
         logPath = rootfsDir + "/root/dsh-lan.log";
-        if (ctx != null) getLanToken(ctx); // 初始化 token
+        // 无条件初始化 token：鉴权是 fail-closed 的，空 token 会让桥拒绝一切请求。
+        // getLanToken 内部已容忍 ctx == null（退化为内存 token，本次会话仍可用）。
+        getLanToken(ctx);
         running = true;
         // 连接线程池：固定 8 线程（防局域网扫描/大量连接耗尽），daemon 线程
         pool = java.util.concurrent.Executors.newFixedThreadPool(8, r -> {
@@ -186,14 +156,53 @@ public final class LanProxyService {
 
     public static boolean isRunning() { return running; }
 
-    /** 状态日志：同时写 logcat 与 rootfs /root/dsh-lan.log（App 终端 tail 可见） */
+    /** 日志上限与连接日志节流。
+     *
+     *  <p>桥的日志写在 rootfs 里（App 私有目录，主人的磁盘常年 97%），而
+     *  「连接来自 X」这类行是<b>不需要通过鉴权就能触发</b>的 —— 同一 WiFi 下一次
+     *  端口扫描、或者随便一个循环 connect，就能让这个文件一直涨。属于放大面：
+     *  攻击者不需要 token 也能消耗我们的磁盘。轮转 + 同 IP 节流两头掐。 */
+    private static final long LOG_MAX_BYTES = 512 * 1024;
+    private static final Object LOG_LOCK = new Object();
+    private static final java.util.Map<String, Long> lastConnLog =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 同一来源 IP 60 秒内只记一次连接日志。 */
+    private static boolean shouldLogConn(String ip) {
+        long now = System.currentTimeMillis();
+        Long last = lastConnLog.get(ip);
+        if (last != null && now - last < 60000) return false;
+        if (lastConnLog.size() > 256) lastConnLog.clear();   // 不让它无界增长
+        lastConnLog.put(ip, now);
+        return true;
+    }
+
+    /** 状态日志：同时写 logcat 与 rootfs /root/dsh-lan.log（App 终端 tail 可见）。
+     *  超过 {@link #LOG_MAX_BYTES} 轮转一次，最多占两倍上限。 */
     private static void log(String msg) {
         Log.i(TAG, msg);
-        if (!logPath.isEmpty()) {
-            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(logPath, true)) {
-                String line = "[" + new java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.ROOT).format(new java.util.Date())
-                        + "] " + msg + "\n";
-                fo.write(line.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String p = logPath;
+        if (p.isEmpty()) return;
+        synchronized (LOG_LOCK) {
+            try {
+                java.io.File f = new java.io.File(p);
+                if (f.length() > LOG_MAX_BYTES) {
+                    java.io.File old = new java.io.File(p + ".1");
+                    //noinspection ResultOfMethodCallIgnored
+                    old.delete();
+                    if (!f.renameTo(old)) {
+                        // 改名失败（权限/占用）→ 直接清空。宁可丢历史也不涨到爆盘。
+                        try (java.io.FileOutputStream trunc = new java.io.FileOutputStream(f, false)) {
+                            trunc.write(("[日志超过 " + (LOG_MAX_BYTES / 1024)
+                                    + "KB，已截断]\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        }
+                    }
+                }
+                try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f, true)) {
+                    String line = "[" + new java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.ROOT).format(new java.util.Date())
+                            + "] " + msg + "\n";
+                    fo.write(line.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
             } catch (Exception ignored) {
             }
         }
@@ -203,7 +212,8 @@ public final class LanProxyService {
 
     private static void handle(Socket client) {
         String clientIp = client.getInetAddress() == null ? "" : client.getInetAddress().getHostAddress();
-        log("连接来自: " + clientIp);
+        final boolean logConn = shouldLogConn(clientIp);
+        if (logConn) log("连接来自: " + clientIp);
         try (Socket clientSock = client) {
             InputStream cin = clientSock.getInputStream();
             OutputStream cout = clientSock.getOutputStream();
@@ -218,24 +228,11 @@ public final class LanProxyService {
                 String reqLine = head.substring(0, nl).trim();
                 if (reqLine.isEmpty()) break;
 
-                // ===== LAN 鉴权：无 token 返回 401（防同 WiFi 任意设备访问）=====
-                if (!tokenOk(head, lanToken)) {
-                    String deny = "HTTP/1.1 401 Unauthorized\r\n"
-                            + "Content-Type: text/plain\r\n"
-                            + "Content-Length: 30\r\n"
-                            + "Connection: close\r\n\r\n"
-                            + "Unauthorized: need token";
-                    cout.write(deny.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
-                    cout.flush();
-                    break;
-                }
-
-                // ===== CORS：局域网设备浏览器跨域访问（http://<手机IP>:3081 前端
-                // JS 请求 /api/... → Origin 不同）。后端（Host 已重写为 127.0.0.1）
-                // 看到 loopback 但 Origin 是局域网 IP → 被 dsh 的 Origin 校验拒绝
-                // → 浏览器 ERR_HTTP_RESPONSE_CODE_FAILURE。桥负责放行：
-                // 1) OPTIONS 预检直接回 204 + CORS 头（不转发后端）
-                // 2) 普通请求转发时附加 CORS 响应头（见 rewriteLocation 处）
+                // ===== CORS 预检：放在鉴权**之前** =====
+                // 预检请求不携带凭据（浏览器不会给 OPTIONS 带 Cookie），所以放在
+                // 401 后面必然被拒 —— 而 CORS 规范要求预检必须回 2xx，否则真正的
+                // 请求根本发不出去。这里只回 CORS 头、不转发后端、不读任何数据，
+                // 提到鉴权前不泄漏任何东西。
                 if (reqLine.toUpperCase(java.util.Locale.ROOT).startsWith("OPTIONS ")) {
                     String cors = "HTTP/1.1 204 No Content\r\n"
                             + "Access-Control-Allow-Origin: *\r\n"
@@ -247,6 +244,31 @@ public final class LanProxyService {
                     cout.write(cors.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
                     cout.flush();
                     break; // 预检结束，关连接
+                }
+
+                // ===== LAN 鉴权：无凭据返回 401（防同 WiFi 任意设备访问）=====
+                int auth = LanAuth.tokenOk(head, lanToken);
+                if (auth == LanAuth.AUTH_DENY) {
+                    // 原来这里写死 Content-Length: 30，而 body 实际 24 字节。浏览器
+                    // 等不到声明的长度就报 ERR_CONTENT_LENGTH_MISMATCH，用户看到的是
+                    // 一个网络错误，而不是「要 token」——真实原因被自己藏起来了。
+                    byte[] body = (lanToken.isEmpty()
+                            ? "401 未授权：局域网访问 token 尚未生成。请回到 DSHA 重新开一次局域网访问，"
+                              + "在启动页复制带 token 的完整地址。"
+                            : "401 未授权：地址里缺少 token。请在 DSHA 启动页复制完整地址"
+                              + "（形如 http://<手机IP>:3081/?token=...）。")
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    String deny = "HTTP/1.1 401 Unauthorized\r\n"
+                            + "Content-Type: text/plain; charset=utf-8\r\n"
+                            + "Content-Length: " + body.length + "\r\n"
+                            + "Connection: close\r\n\r\n";
+                    cout.write(deny.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+                    cout.write(body);
+                    cout.flush();
+                    if (lanToken.isEmpty() && logConn) {
+                        log("拒绝 " + clientIp + "：本机 token 未生成，桥按 fail-closed 拒绝全部请求");
+                    }
+                    break;
                 }
 
                 boolean upgrade = containsIgnoreCase(head, "Upgrade: websocket")
@@ -286,12 +308,22 @@ public final class LanProxyService {
                         outHead = outHead.replace("\r\n\r\n",
                                 "\r\nAccess-Control-Allow-Origin: *\r\n\r\n");
                     }
+                    // 凭据来自 URL ?token= → 回设 Cookie。之后的静态资源、XHR 和
+                    // **WebSocket 握手**都会自动带上，页面里不必到处拼 token，
+                    // 用户也不用担心刷新后丢凭据。SameSite=Strict 保证它不会跟着
+                    // 跨站请求发出去；不加 Secure —— 局域网是 http，加了浏览器直接
+                    // 不存。追加而非覆盖：后端自己也发 dsha_t，两个都要留。
+                    if (auth == LanAuth.AUTH_OK_SET_COOKIE) {
+                        outHead = outHead.replace("\r\n\r\n",
+                                "\r\nSet-Cookie: " + LanAuth.COOKIE_NAME + "=" + lanToken
+                                        + "; Path=/; SameSite=Strict; Max-Age=2592000\r\n\r\n");
+                    }
                     cout.write(outHead.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
                     cout.flush();
 
                     if (upgraded) {
-                        // WebSocket：双向透传直到关闭
-                        pumpBidirectional(cin, cout, bin, bout);
+                        // WebSocket：双向透传直到任一侧关闭
+                        pumpBidirectional(clientSock, back, cin, cout, bin, bout);
                         break;
                     }
                     // 普通响应体
@@ -389,13 +421,40 @@ public final class LanProxyService {
         }
     }
 
-    private static void pumpBidirectional(InputStream aIn, OutputStream aOut, InputStream bIn, OutputStream bOut) {
-        Thread t1 = new Thread(() -> { try { pumpStream(aIn, bOut); } catch (Throwable ignored) {} });
-        Thread t2 = new Thread(() -> { try { pumpStream(bIn, aOut); } catch (Throwable ignored) {} });
-        t1.setDaemon(true); t2.setDaemon(true);
-        t1.start(); t2.start();
-        try { t1.join(60000); } catch (InterruptedException ignored) {}
-        try { t2.join(60000); } catch (InterruptedException ignored) {}
+    /** WebSocket 升级后的双向透传：跑到任一侧关闭为止。
+     *
+     *  <p>原来是两个新线程各 {@code join(60000)} —— <b>连接只要活过 60 秒就被我们
+     *  自己切断</b>：join 返回后外层 break，try-with-resources 一路关掉 socket。
+     *  局域网 WebUI 的表现是聊到一分钟左右消息流断掉、必须刷新页面。叠加
+     *  {@code SoTimeout=120000} 还有第二刀：WS 空闲两分钟也算超时。而 WS 本来就
+     *  该长时间空闲，超时判据在这里没有意义。
+     *
+     *  <p>现在两侧 SoTimeout 归零，打开 TCP keepalive 让 OS 去发现真正死掉的连接；
+     *  一个方向留在当前线程跑（每条 WS 少占一个线程），任一方向结束就立刻关掉两个
+     *  socket，另一方向随即从 read 退出，不会有线程挂住。 */
+    private static void pumpBidirectional(Socket clientSock, Socket back,
+                                          InputStream cin, OutputStream cout,
+                                          InputStream bin, OutputStream bout) {
+        try {
+            clientSock.setSoTimeout(0);
+            back.setSoTimeout(0);
+            clientSock.setKeepAlive(true);
+            back.setKeepAlive(true);
+        } catch (Throwable ignored) {
+        }
+        Runnable closeBoth = () -> {
+            try { clientSock.close(); } catch (Throwable ignored) {}
+            try { back.close(); } catch (Throwable ignored) {}
+        };
+        Thread up = new Thread(() -> {
+            try { pumpStream(cin, bout); } catch (Throwable ignored) {}
+            closeBoth.run();          // 客户端先断 → 立刻收掉后端方向
+        }, "lanproxy-ws-up");
+        up.setDaemon(true);
+        up.start();
+        try { pumpStream(bin, cout); } catch (Throwable ignored) {}
+        closeBoth.run();              // 后端先断 → 同理
+        try { up.join(3000); } catch (InterruptedException ignored) {}
     }
 
     private static long contentLength(String head) {
@@ -425,7 +484,7 @@ public final class LanProxyService {
                     if (first) {
                         first = false;
                         // 请求行：剥离 token 查询参数（LAN 鉴权 token 不转发给后端）
-                        sb.append(stripTokenFromRequestLine(l)).append("\r\n");
+                        sb.append(LanAuth.stripTokenFromRequestLine(l)).append("\r\n");
                         continue;
                     }
                     if (key.equalsIgnoreCase("Host")) {
@@ -459,18 +518,6 @@ public final class LanProxyService {
             }
             return sb.toString();
         }
-
-        /** 请求行里的 ?token=xxx 只用于本站鉴权：转发后端前剥离，避免 token 进后端日志。 */
-            private static String stripTokenFromRequestLine(String line) {
-                int q = line.indexOf('?');
-                if (q < 0) return line;
-                String path = line.substring(0, q);
-                String query = line.substring(q + 1);
-                String cleaned = query.replaceAll("[&]?token=[^&]*", "");
-                if (cleaned.endsWith("&")) cleaned = cleaned.substring(0, cleaned.length() - 1);
-                if (cleaned.isEmpty()) return path;
-                return path + "?" + cleaned;
-            }
 
             /** 响应头里 Location 重写：127.0.0.1:<backendPort> → 局域网IP:3081（防跳回本机）。
              *  每次实时取 IP（WiFi 切换后 IP 变化也能正确重写，不缓存旧值）。 */
