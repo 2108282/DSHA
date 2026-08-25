@@ -2983,7 +2983,21 @@ public class HarnessController {
                   + "[ -d /root/.codex/pets ] && [ -z \"$(ls -A /root/.codex/pets 2>/dev/null)\" ] "
                   + "&& rmdir /root/.codex/pets 2>/dev/null; ")
           // 局域网模式：补丁成功后绑定 0.0.0.0 并打印访问地址；失败只提示，不影响启动
-          .append(lanReady ? "echo '[DSHA] 局域网访问(App桥): http://$(hostname -I 2>/dev/null | cut -d' ' -f1):3081' && "
+          //
+          // 这条 echo 原来是：
+          //   echo '[DSHA] 局域网访问(App桥): http://$(hostname -I ... | cut -d' ' -f1):3081'
+          // 两个毛病：① $() 在**单引号**里不展开，② `cut -d' '` 的单引号先把外层单引号
+          // 闭合了，于是 echo 拿到两个参数，用户看到的是字面
+          //   http://$(hostname -I 2>/dev/null | cut -d  -f1):3081
+          // 现在把 IP 先取到变量里（命令替换在引号外），再用「单引号段 + 变量」相邻拼接，
+          // 不出现引号嵌套。execRootfs 是 ProcessBuilder 直传 bash -c，没有二次解析。
+          //
+          // 刻意**不打印 token**：完整地址在启动页可一键复制，而这里的输出会进
+          // dsh 日志、被 agent 与第三方插件读到，没必要多一个泄漏面。
+          .append(lanReady
+                  ? "LANIP=$(hostname -I 2>/dev/null | cut -d' ' -f1); "
+                    + "echo '[DSHA] 局域网访问(App桥): http://'${LANIP:-手机IP}':"
+                    + LanProxyService.LAN_PORT + "/  完整地址含 token，请在 App 启动页复制' && "
                   : lan ? "echo '[DSHA] 局域网未开启(官方 0.0.0.0 未放行)，仅本机可访问' && " : "")
           // 先拉起看门狗（后台），再 exec WebUI（前台阻塞）——顺序不能反，否则看门狗永不启动
           .append("nohup bash /root/dsh-watchdog.sh >> /root/dsh-watchdog.log 2>&1 & ")

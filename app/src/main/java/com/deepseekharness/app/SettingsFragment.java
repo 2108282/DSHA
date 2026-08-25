@@ -72,8 +72,12 @@ public class SettingsFragment extends Fragment {
         final android.content.Context app = requireContext().getApplicationContext();
         new Thread(() -> {
             final String report = HarnessController.get(app).runSelfTest();
-            if (getActivity() == null) return;
-            requireActivity().runOnUiThread(() -> {
+            // 自检要 10~30 秒，回来时用户很可能已经离开设置页。getActivity() 判空
+            // 之后再调 requireActivity() 等于白判 —— 两次调用之间就是那个窗口，
+            // 而它抛的 IllegalStateException 落在这个后台线程上就是整进程崩。
+            android.app.Activity act = getActivity();
+            if (act == null) return;
+            act.runOnUiThread(() -> {
                 if (isAdded()) showSelfTestDialog(report);
             });
         }, "dsha-selftest").start();
@@ -157,33 +161,46 @@ public class SettingsFragment extends Fragment {
 
     private void checkUpdate() {
         Toast.makeText(requireContext(), "正在检查更新…", Toast.LENGTH_SHORT).show();
+        // 网络请求最长 16 秒（两个源各 8 秒），这段时间里用户很可能已经离开设置页。
+        // 所以凡是需要 Fragment 还 attached 的东西，全在这里（UI 线程、必然 attached）
+        // 先取好：requireContext() 一旦在后台线程或延迟到 UI 回调里执行，
+        // 抛的是 IllegalStateException —— 在后台线程上抛就是整个进程崩。
+        final android.content.Context appCtx = requireContext().getApplicationContext();
+        String v;
+        try {
+            v = appCtx.getPackageManager().getPackageInfo(appCtx.getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            v = "?";
+        }
+        final String cur = v;
         new Thread(() -> {
             String tag = UpdateChecker.checkLatestVersion();
-            String current;
-            try {
-                current = requireContext().getPackageManager()
-                        .getPackageInfo(requireContext().getPackageName(), 0).versionName;
-            } catch (Exception e) {
-                current = "?";
-            }
-            final String cur = current;
-            if (!isAdded()) return;
-            requireActivity().runOnUiThread(() -> {
+            // 原来这里是 if (!isAdded()) return; requireActivity()... ——
+            // 两句之间仍有窗口，且 lambda 内部又用了三次 requireContext()。
+            android.app.Activity act = getActivity();
+            if (act == null || !isAdded()) return;
+            act.runOnUiThread(() -> {
                 if (tag == null) {
-                    Toast.makeText(requireContext(), "检查失败，请稍后再试", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(appCtx, "检查失败，请稍后再试", Toast.LENGTH_SHORT).show();
                     return;
                 }
                 if (!UpdateChecker.isNewer(tag, cur)) {
-                    Toast.makeText(requireContext(), "当前 v" + cur + " 已是最新", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(appCtx, "当前 v" + cur + " 已是最新", Toast.LENGTH_SHORT).show();
                     return;
                 }
                 // 更新前自动存档：检测到新版先静默备份一次（同一版本只备份一次）
                 c.backupBeforeUpdate(tag);
-                new AlertDialog.Builder(requireContext())
+                // 弹窗必须用 Activity context，而这一刻可能已经 detach 了
+                android.app.Activity a2 = getActivity();
+                if (a2 == null || a2.isFinishing() || !isAdded()) {
+                    Toast.makeText(appCtx, "发现新版本 " + tag, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                new AlertDialog.Builder(a2)
                         .setTitle("发现新版本 " + tag)
                         .setMessage("当前版本 v" + cur + "\n是否前往下载？")
                         .setPositiveButton("更新", (d, w) -> AboutDialog.openBrowser(
-                                requireContext(), "https://github.com/qiannianhuanxiang/DSHA/releases/latest"))
+                                appCtx, "https://github.com/qiannianhuanxiang/DSHA/releases/latest"))
                         .setNegativeButton("取消", null)
                         .show();
             });

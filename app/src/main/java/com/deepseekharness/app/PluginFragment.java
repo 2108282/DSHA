@@ -453,6 +453,15 @@ public class PluginFragment extends Fragment {
         a.runOnUiThread(r);
     }
 
+    /** 用 application context 在主线程弹 Toast：不依赖 Fragment 是否还 attached。
+     *  用于「结论必须让用户看到」的场合（导入/导出结果），
+     *  {@link #runOnUiThreadSafely} 在 detach 后会静默丢弃，不适合这种场合。 */
+    private static void toastOnMain(android.content.Context appCtx, String msg) {
+        if (appCtx == null || msg == null) return;
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                Toast.makeText(appCtx, msg, Toast.LENGTH_LONG).show());
+    }
+
     private void showMarket() {
         if (!items.isEmpty()) {
             refreshMarketView();
@@ -505,18 +514,25 @@ public class PluginFragment extends Fragment {
 
     private void exportPlugins() {
         say("正在导出插件…");
+        final android.content.Context appCtx = requireContext().getApplicationContext();
         new Thread(() -> {
             String path = c.exportPlugins();
+            // 导出路径是用户接下来要用的信息，不能因为切走页面就丢（Toast 走
+            // application context），而 say() 是更新本页文本，留在 attached 分支。
+            if (path == null) {
+                toastOnMain(appCtx, "导出失败：打包出错");
+            } else if ("NO_PLUGINS".equals(path)) {
+                toastOnMain(appCtx, "没有可导出的插件");
+            } else {
+                toastOnMain(appCtx, "插件包已导出到 " + path);
+            }
             runOnUiThreadSafely(() -> {
                 if (path == null) {
                     say("导出失败（打包出错）");
-                    Toast.makeText(requireContext(), "导出失败：打包出错", Toast.LENGTH_LONG).show();
                 } else if ("NO_PLUGINS".equals(path)) {
                     say("没有已启用的插件可导出（先去市场安装或确认插件已启用）");
-                    Toast.makeText(requireContext(), "没有可导出的插件", Toast.LENGTH_LONG).show();
                 } else {
                     say("已导出：" + path);
-                    Toast.makeText(requireContext(), "插件包已导出到 " + path, Toast.LENGTH_LONG).show();
                 }
             });
         }).start();
@@ -536,27 +552,30 @@ public class PluginFragment extends Fragment {
             android.net.Uri uri = data.getData();
             if (uri == null) return;
             say("正在导入插件…");
+            // 拷贝 + 解包可能要几十秒，用户很容易在这期间离开插件页。原来后台线程里
+            // 直接用 requireContext()：detach 后抛 IllegalStateException，被外层
+            // catch (Exception) 吞掉，然后 catch 分支又走 runOnUiThreadSafely ——
+            // 那时 isAdded() 已是 false，直接 return。结果是导入既没做成、
+            // 也没有任何提示。先在 UI 线程取好 application context。
+            final android.content.Context appCtx = requireContext().getApplicationContext();
             new Thread(() -> {
                 try {
-                    File tmp = new File(requireContext().getCacheDir(), "plugin-import.tar.gz");
-                    try (java.io.InputStream in = requireContext().getContentResolver().openInputStream(uri);
+                    File tmp = new File(appCtx.getCacheDir(), "plugin-import.tar.gz");
+                    try (java.io.InputStream in = appCtx.getContentResolver().openInputStream(uri);
                          java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
                         byte[] buf = new byte[65536];
                         int n;
                         while (in != null && (n = in.read(buf)) != -1) out.write(buf, 0, n);
                     }
                     boolean ok = c.importPlugins(tmp);
+                    // Toast 走 application context + 主 Looper：结论不该因为
+                    // 用户切走页面就消失（这是「静默失败」的老毛病）
+                    toastOnMain(appCtx, ok ? "导入成功，重启 WebUI 生效" : "导入失败");
                     runOnUiThreadSafely(() -> {
-                        if (ok) {
-                            Toast.makeText(requireContext(), "导入成功，重启 WebUI 生效", Toast.LENGTH_LONG).show();
-                            showInstalled();
-                        } else {
-                            Toast.makeText(requireContext(), "导入失败", Toast.LENGTH_LONG).show();
-                        }
+                        if (ok) showInstalled();
                     });
                 } catch (Exception e) {
-                    runOnUiThreadSafely(() ->
-                            Toast.makeText(requireContext(), "导入失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
+                    toastOnMain(appCtx, "导入失败：" + e.getMessage());
                 }
             }).start();
         }

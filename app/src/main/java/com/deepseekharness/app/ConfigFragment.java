@@ -156,21 +156,25 @@ public class ConfigFragment extends Fragment {
                 String r = c.getProot().execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py id 2>&1 | head -2");
                 final boolean connected = r != null && r.contains("uid=");
                 final String detail = r == null ? "" : r.replace("\n", " ").trim();
-                if (isAdded()) requireActivity().runOnUiThread(() -> {
+                // 轮询线程每隔几秒回来一次，而 requireActivity() 在 Fragment detach 后
+                // 抛 IllegalStateException —— 抛在这个后台线程上就是整个进程崩。
+                // isAdded() 与 requireActivity() 之间还有窗口，所以直接取 getActivity()。
+                android.app.Activity act = getActivity();
+                if (act != null && isAdded()) act.runOnUiThread(() -> {
                     TextView tv = getView() != null ? getView().findViewById(R.id.config_adb_status) : null;
-                    if (tv == null) return;
+                    if (tv == null) return;     // detach 后 getView() 就是 null，这里天然收口
                     if (connected) {
-                        tv.setTextColor(requireContext().getColor(R.color.ok));
+                        tv.setTextColor(tv.getContext().getColor(R.color.ok));
                         tv.setText("● ADB 运行中（已连接，uid=2000 shell）\n" + (detail.length() > 80 ? detail.substring(0, 80) : detail));
                     } else {
-                        tv.setTextColor(requireContext().getColor(R.color.warn));
+                        tv.setTextColor(tv.getContext().getColor(R.color.warn));
                         tv.setText("○ ADB 未连接（无线调试可能未开启）\n点下方「无线配对」或查看手机「开发者选项→无线调试」");
                     }
                     // 3090 桥绑定失败（端口被别的应用占了）时一并摊开说——否则表现出来
                     // 只是「确认弹窗不出现 / agent 调什么都超时」，很难定位
                     String bridgeErr = HttpShellService.bindError();
                     if (bridgeErr != null && !bridgeErr.isEmpty()) {
-                        tv.setTextColor(requireContext().getColor(R.color.err));
+                        tv.setTextColor(tv.getContext().getColor(R.color.err));
                         tv.setText(tv.getText() + "\n⚠ 命令桥未启动：" + bridgeErr);
                     }
                 });
@@ -249,10 +253,13 @@ public class ConfigFragment extends Fragment {
             new Thread(() -> {
                 RuntimeUpdater.Result probe =
                         RuntimeUpdater.checkAndApply(appCtx, c, true);   // dryRun
-                if (!isAdded()) return;
-                requireActivity().runOnUiThread(() -> {
+                // 探测要联网，回来时用户可能已经离开配置页。requireActivity() /
+                // requireContext() 这时都会抛 IllegalStateException。
+                android.app.Activity act = getActivity();
+                if (act == null || !isAdded()) return;
+                act.runOnUiThread(() -> {
                     if (probe.updated == 0) {
-                        Toast.makeText(requireContext(), probe.message, Toast.LENGTH_LONG).show();
+                        Toast.makeText(appCtx, probe.message, Toast.LENGTH_LONG).show();
                         refreshRuntimeStatus();
                         return;
                     }
@@ -268,7 +275,14 @@ public class ConfigFragment extends Fragment {
                     }
                     sb.append("\n只更新脚本，不动 rootfs 与应用本体；");
                     sb.append("每个文件都会校验 sha256，不符就保留原版本。");
-                    new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                    // 弹窗必须用 Activity context；这一刻拿不到就退回 Toast，
+                    // 不能让「有更新」这件事被静默吞掉。
+                    android.app.Activity a2 = getActivity();
+                    if (a2 == null || a2.isFinishing() || !isAdded()) {
+                        Toast.makeText(appCtx, probe.message, Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    new androidx.appcompat.app.AlertDialog.Builder(a2)
                             .setTitle("脚本更新")
                             .setMessage(sb.toString())
                             .setPositiveButton("下载并应用", (d, w) -> doRuntimeUpdate(appCtx))
@@ -283,9 +297,21 @@ public class ConfigFragment extends Fragment {
         Toast.makeText(requireContext(), "下载中…", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
             RuntimeUpdater.Result r = RuntimeUpdater.checkAndApply(appCtx, c, false);
-            if (!isAdded()) return;
-            requireActivity().runOnUiThread(() -> {
-                new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+            // 这里是真正的下载，耗时更长，用户离开页面的概率更高。
+            android.app.Activity act = getActivity();
+            if (act == null || !isAdded()) {
+                // 结果不能悄悄丢掉：更新已经落盘了，至少让用户看到一次
+                new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                        Toast.makeText(appCtx, r.message, Toast.LENGTH_LONG).show());
+                return;
+            }
+            act.runOnUiThread(() -> {
+                android.app.Activity a2 = getActivity();
+                if (a2 == null || a2.isFinishing() || !isAdded()) {
+                    Toast.makeText(appCtx, r.message, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                new androidx.appcompat.app.AlertDialog.Builder(a2)
                         .setTitle(r.ok ? "更新完成" : "部分失败")
                         .setMessage(r.message)
                         .setPositiveButton("知道了", null)
