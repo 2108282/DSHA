@@ -701,6 +701,16 @@ public class PluginFragment extends Fragment {
      *  预检只发一两个 HTTP 请求（读仓库 package.json + 查 registry），很快。
      *  结论明确「装不上」时给出原因并让用户自己决定要不要硬试，而不是替他放弃 ——
      *  规范 §3 也要求「展示但禁用，不要隐藏」。 */
+    /** 后台装一个插件并把结果显示出来（市场里几条路都用它，别再各写一份线程）。
+     *  必须在 UI 线程调用 —— say 与 showInstallResult 都只能在 UI 线程跑。 */
+    private void installInBackground(final String pkg, final String display, final String spec) {
+        say("正在安装 " + pkg + " …");
+        new Thread(() -> {
+            String out = c.installPlugin(pkg, spec);
+            runOnUiThreadSafely(() -> showInstallResult(pkg, display, out));
+        }, "dsha-install").start();
+    }
+
     private void startAutoInstall(String[] it, String owner, String repo) {
         final String display = it[0];
         say("正在预检 " + display + " …");
@@ -710,6 +720,29 @@ public class PluginFragment extends Fragment {
             final String[] pre = c.precheckForMarket(spec, hint);
             final String verdict = pre[0], why = pre[1];
             final String pkg = pre[2] != null ? pre[2] : (hint != null ? hint : spec);
+
+            // 已弃用的插件不拦着不让装 —— 那是用户自己的选择；但要先把冲突说清楚。
+            // 清单是 DeprecatedPlugins，跟恢复流程的静默补装共用一份（那边直接不装：
+            // 程序替用户做决定和用户自己点，是两回事）。
+            // 包名和仓库名都比一遍：清单里存的是包名，而这个项目栽过「仓库名≠包名」的坑。
+            final String deprecated = DeprecatedPlugins.isDeprecated(pkg) ? pkg
+                    : DeprecatedPlugins.isDeprecated(repo) ? repo : null;
+            if (deprecated != null) {
+                runOnUiThreadSafely(() -> {
+                    say("⚠️ 已弃用：" + display);
+                    new android.app.AlertDialog.Builder(requireContext())
+                            .setTitle("⚠️ 已被内置功能接替：" + display)
+                            .setMessage(DeprecatedPlugins.reason(deprecated)
+                                    + "\n\n两边改造同一批界面元素，同时启用的表现是抽屉和浮层出两份、"
+                                    + "点一下响应两次。"
+                                    + "\n\n仓库：\n" + it[6])
+                            .setPositiveButton("仍然安装",
+                                    (d, w) -> installInBackground(pkg, display, spec))
+                            .setNegativeButton("算了", null)
+                            .show();
+                });
+                return;
+            }
 
             // 一路顺畅：不打扰用户，直接装
             if ("ok".equals(verdict)) {
@@ -728,13 +761,8 @@ public class PluginFragment extends Fragment {
                         .setMessage(why + "\n\n仓库：\n" + it[6])
                         // 即使预检说装不上也保留「仍然试试」—— 预检是启发式的，
                         // 不该替用户做最终决定（万一作者刚发布、或仓库结构特殊）
-                        .setPositiveButton("仍然安装", (d, w) -> {
-                            say("正在安装 " + pkg + " …");
-                            new Thread(() -> {
-                                String out = c.installPlugin(pkg, spec);
-                                runOnUiThreadSafely(() -> showInstallResult(pkg, display, out));
-                            }, "dsha-install").start();
-                        })
+                        .setPositiveButton("仍然安装",
+                                (d, w) -> installInBackground(pkg, display, spec))
                         .setNeutralButton("复制仓库链接", (d, w) -> {
                             android.content.ClipboardManager cm = (android.content.ClipboardManager)
                                     requireContext().getSystemService(
