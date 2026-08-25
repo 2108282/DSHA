@@ -63,6 +63,41 @@ public class SettingsFragment extends Fragment {
         view.findViewById(R.id.settings_update).setOnClickListener(v -> checkUpdate());
         View selfTest = view.findViewById(R.id.settings_selftest);
         if (selfTest != null) selfTest.setOnClickListener(v -> runSelfTest());
+        View reextract = view.findViewById(R.id.settings_reextract);
+        if (reextract != null) reextract.setOnClickListener(v -> confirmReextract());
+    }
+
+    /** 重新解压内置环境：容器被弄坏之后的自助修复入口。
+     *
+     *  <p>为什么要单独有个入口：这个动作原先只能从「发现新版内置环境」那个弹窗进去，
+     *  而弹窗只在 APK 内置包比已解压的新时才出现。于是环境一旦被弄坏，用户就只剩
+     *  卸载重装 —— 而卸载会把 rootfs 连对话记录一起带走。真机上真的发生过：一次全局
+     *  npm 安装中途断了，把 /usr/local/lib/node_modules 连 npm 自己一起带走，之后
+     *  安装步骤只报一个裸 127，用户无路可走。
+     *
+     *  <p>数据保护在重解压流程里（ProotBootstrap 会先备份 .dsh 与各工作区 .env，
+     *  解压完再还原），所以这里只负责把话说清楚：什么会保留、什么会回到出厂状态。 */
+    private void confirmReextract() {
+        new AlertDialog.Builder(requireContext())
+                .setTitle("重新解压内置环境")
+                .setMessage("用 APK 里自带的环境覆盖当前容器，约数分钟。\n\n"
+                        + "会保留：配置、API Key、对话记录（自动备份后还原）。\n"
+                        + "会回到出厂状态：自己在容器里额外装的东西（apt 包、全局 npm 包、插件）。\n\n"
+                        + "适用场景：dsh 或 npm 不见了、安装步骤报 127、环境怎么修都不对。")
+                .setPositiveButton("重新解压", (d, w) -> {
+                    try {
+                        android.content.Intent i =
+                                new android.content.Intent(requireContext(), ExtractActivity.class);
+                        i.putExtra("force_extract", true);
+                        i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                                | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                        startActivity(i);
+                    } catch (Throwable t) {
+                        Toast.makeText(requireContext(), "打不开解压页：" + t, Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("算了", null)
+                .show();
     }
 
     /** 一键自检 & 修补：后台跑检查并顺手修掉能自动修的（补链接 / 修空壳 /

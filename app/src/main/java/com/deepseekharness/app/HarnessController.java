@@ -2468,6 +2468,17 @@ public class HarnessController {
                 + "echo \"已有可用的 dsh（离线包自带 $(node -p \\\"require('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').version\\\" 2>/dev/null || echo 未知)），跳过 npm 安装\"; "
                 + "echo '如需升级到最新 RC，可在「设置」页手动更新'; "
                 + "else "
+                // npm 自己都不在了的情况要单独说清楚。真机上出过：一次全局 npm 安装中途
+                // 断了，把 /usr/local/lib/node_modules 连 npm 一起带走，于是这一步只报一个
+                // 裸 127（command not found），用户既看不懂也无路可走 —— 而这时候需要的
+                // 不是重试网络，是重解压环境。
+                + "if ! command -v npm >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then "
+                + "echo '环境已损坏：npm 或 node 不在 PATH 里 —— 这不是网络问题。'; "
+                + "echo '常见原因：上一次全局 npm 安装中途断了，把 /usr/local/lib/node_modules 连 npm 自己一起带走了。'; "
+                + "echo '修法：到「设置」页点「重新解压内置环境」，配置、API Key 与对话记录会保留，修完再回来装。'; "
+                + "echo '--- /usr/local/bin ---'; ls -la /usr/local/bin 2>&1 | head -15; "
+                + "echo '--- /usr/local/lib/node_modules ---'; ls -la /usr/local/lib/node_modules 2>&1 | head -15; "
+                + "exit 1; fi; "
                 // 优先 @next（官方最新 rc）；npmmirror 镜像同步滞后时回退 pin rc.8，再回退官方源
                 + "(npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmmirror.com 2>&1 || " +
                 "npm install -g @deepseek-ai/dsh@0.1.1-rc.2 --force --registry=https://registry.npmmirror.com 2>&1 || " +
