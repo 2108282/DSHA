@@ -1122,7 +1122,16 @@ def check_bundles():
             "    打开一次「插件」页会自动补链接；或到「市场」重装该插件"
             % (len(missing), len(bundles), "、".join(missing)))
     else:
-        add("PASS", "profile bundles", "%d 个全部可解析" % len(bundles))
+        official = [b for b in bundles if str(b).startswith("@deepseek-ai/")]
+        detail = "%d 个全部可解析：%s" % (len(bundles), "、".join(str(b) for b in bundles))
+        if not official:
+            add("FAIL", "profile bundles",
+                detail + "\n"
+                "    **一个 @deepseek-ai/* 都没有** —— 官方核心不在列表里，\n"
+                "    dsh 的服务（systemPrompt 等）没人提供，插件会永远 pending\n"
+                "    并把整个 Web 启动拖死。见下面「官方核心插件」那项的修复命令")
+        else:
+            add("PASS", "profile bundles", detail)
 
 
 # ===================== 8. 备份可用性 =====================
