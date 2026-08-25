@@ -222,7 +222,7 @@ public final class TarGzipExtractor {
                     }
                     if (out.getParentFile() != null) out.getParentFile().mkdirs();
                     // 符号链接目标安全校验：目标必须在 dest 内（绝不指向系统文件/外部目录）
-                    if (linkSafeWithin(dest, out, linkname)) {
+                    if (linkSafeWithin(dest, out, linkname, false)) {
                         try {
                             Os.symlink(linkname, out.getAbsolutePath());
                         } catch (Throwable ignored) {
@@ -236,7 +236,8 @@ public final class TarGzipExtractor {
                     }
                     if (out.getParentFile() != null) out.getParentFile().mkdirs();
                     // 硬链接目标同样必须留在 dest 内（不允许链到已有敏感文件）
-                    if (linkSafeWithin(dest, out, linkname)) {
+                    // 硬链接按 dest 基准校验，与下面 new File(dest, linkname) 保持一致
+                    if (linkSafeWithin(dest, out, linkname, true)) {
                         try {
                             Os.link(new File(dest, linkname).getAbsolutePath(), out.getAbsolutePath());
                         } catch (Throwable ignored) {
@@ -251,14 +252,21 @@ public final class TarGzipExtractor {
         }
     }
 
-    /** 链接目标安全校验：非绝对路径且 normalize 后仍落在 dest 内。 */
-    private static boolean linkSafeWithin(File dest, File out, String linkname) {
+    /** 链接目标安全校验：非绝对路径且 normalize 后仍落在 dest 内。
+     *
+     *  @param relativeToDest true 时按「linkname 相对 dest」解析（tar 的硬链接语义），
+     *                        false 时按「相对 out 所在目录」解析（符号链接语义）。
+     *  这个参数是必须的：两种链接的基准本来就不同，而此前统一按 out 的父目录校验，
+     *  硬链接实际却用 new File(dest, linkname) —— 校验和使用对不上，
+     *  形如 ../../etc/x 的 linkname 能通过校验却链到 dest 之外。 */
+    private static boolean linkSafeWithin(File dest, File out, String linkname,
+                                          boolean relativeToDest) {
         if (linkname == null || linkname.isEmpty()) return false;
         String trimmed = new File(linkname).getPath();
         if (new File(trimmed).isAbsolute()) return false;
         try {
             java.nio.file.Path root = dest.toPath().toAbsolutePath().normalize();
-            java.nio.file.Path base = out.getParentFile() == null
+            java.nio.file.Path base = relativeToDest || out.getParentFile() == null
                     ? root
                     : out.getParentFile().toPath().toAbsolutePath().normalize();
             java.nio.file.Path target = base.resolve(trimmed).normalize();

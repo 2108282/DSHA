@@ -2252,11 +2252,20 @@ public class HarnessController {
                 hit = txt.contains("isulad") || txt.contains("/lxc/") || txt.contains("zhuoyi");
             }
             if (!hit) {
-                // 兜底：部分版本 cgroup 看不出来，看内核版本串里的 ohos/harmony 标识
+                // 兜底判据要收紧。原来只要 /proc/version 里有 ohos/harmony 就算命中 ——
+                // 但华为 EMUI / HarmonyOS 4 及更早本身就是安卓系，内核串里同样可能
+                // 出现 harmony 字样。那些机器不是卓易通容器，误判会让它们被无谓地
+                // 降到串行安装（明显变慢）还弹出莫名其妙的「卓易通环境」提示。
+                // 所以要求「内核标识 + 容器特征」同时成立：真正跑在 anco 里时，
+                // /proc/1/cmdline 不是 Android 的 init，或存在 iSulad 的运行时目录。
                 String v = new String(java.nio.file.Files.readAllBytes(
                         new java.io.File("/proc/version").toPath()),
                         java.nio.charset.StandardCharsets.UTF_8).toLowerCase();
-                hit = v.contains("ohos") || v.contains("harmony");
+                boolean kernelMark = v.contains("ohos") || v.contains("harmony");
+                boolean containerMark = new java.io.File("/dev/isulad").exists()
+                        || new java.io.File("/system/etc/anco").exists()
+                        || new java.io.File("/vendor/etc/anco").exists();
+                hit = kernelMark && containerMark;
             }
         } catch (Throwable ignored) {
         }
