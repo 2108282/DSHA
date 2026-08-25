@@ -1197,7 +1197,7 @@ def check_guard(want_guard, want_step6, want_assets):
 
 
 def main():
-    print("=== DSHA 自检 v%s" % SELFTEST_VERSION + " · %s ===" % time.strftime("%Y-%m-%d %H:%M:%S"))
+    print("=== DSHA 自检 & 修补 v%s" % SELFTEST_VERSION + " · %s ===" % time.strftime("%Y-%m-%d %H:%M:%S"))
     # 先确认「检查本身做得了」。做不了就只报这一条，别拿一屏 FAIL 去吓人
     env_ok = preflight()
     for fn, args in (

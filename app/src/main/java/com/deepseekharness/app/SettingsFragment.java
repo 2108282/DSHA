@@ -65,9 +65,10 @@ public class SettingsFragment extends Fragment {
         if (selfTest != null) selfTest.setOnClickListener(v -> runSelfTest());
     }
 
-    /** 一键自检：后台跑只读检查，结果用可滚动弹窗展示（可一键复制发给开发者） */
+    /** 一键自检 & 修补：后台跑检查并顺手修掉能自动修的（补链接 / 修空壳 /
+     *  修坏掉的 patch.yml 等），结果用可滚动弹窗展示（可一键复制发给开发者） */
     private void runSelfTest() {
-        Toast.makeText(requireContext(), "正在自检，约 10~30 秒…", Toast.LENGTH_SHORT).show();
+        Toast.makeText(requireContext(), "正在自检并修补，约 10~30 秒…", Toast.LENGTH_SHORT).show();
         final android.content.Context app = requireContext().getApplicationContext();
         new Thread(() -> {
             final String report = HarnessController.get(app).runSelfTest();
@@ -91,14 +92,14 @@ public class SettingsFragment extends Fragment {
         scroll.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(420)));
         new AlertDialog.Builder(requireContext())
-                .setTitle("自检结果")
+                .setTitle("自检 & 修补结果")
                 .setView(scroll)
                 .setPositiveButton("复制", (d, w) -> {
                     android.content.ClipboardManager cm = (android.content.ClipboardManager)
                             requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
                     if (cm != null) {
-                        cm.setPrimaryClip(android.content.ClipData.newPlainText("DSHA 自检", report));
-                        Toast.makeText(requireContext(), "已复制自检结果", Toast.LENGTH_SHORT).show();
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("DSHA 自检 & 修补", report));
+                        Toast.makeText(requireContext(), "已复制自检 & 修补结果", Toast.LENGTH_SHORT).show();
                     }
                 })
                 .setNegativeButton("关闭", null)
