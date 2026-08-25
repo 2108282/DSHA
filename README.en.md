@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <b>English</b> · <a href="README.md">简体中文</a> · <a href="CHANGELOG.md">Changelog</a> · <a href="AGENTS.md">AGENTS.md (for AI / contributors)</a>
+  <b>English</b> · <a href="README.md">简体中文</a> · <a href="CHANGELOG.md">Changelog</a> · <a href="docs/security-model.en.md">Security model</a> · <a href="AGENTS.md">AGENTS.md (for AI / contributors)</a>
 </p>
 
 > 🤖 If you are an AI agent or a new contributor, read **[AGENTS.md](AGENTS.md)** first
@@ -219,6 +219,8 @@ Listed up front so you don't discover them after installing:
 | Zhuoyitong / HarmonyOS anco | ❓ Unverified | Should work in theory, no device regression yet |
 | Floating bar | ⚠️ Needs permission | Drawn with `TYPE_APPLICATION_OVERLAY`; the real status-bar ticker API isn't reachable without root |
 | Data location | ⚠️ Needs file permission | If "All files access" is denied, data stays private and dies with uninstall (the self-check states which case you're in) |
+
+👉 For **what each permission actually exposes and what the agent can reach on your phone**, see the [security model](docs/security-model.en.md) — including the weaknesses we list ourselves.
 
 ---
 

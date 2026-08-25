@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="README.en.md">English</a> · <b>简体中文</b> · <a href="CHANGELOG.md">更新记录</a> · <a href="AGENTS.md">AGENTS.md（给 AI / 开发者）</a>
+  <a href="README.en.md">English</a> · <b>简体中文</b> · <a href="CHANGELOG.md">更新记录</a> · <a href="docs/security-model.md">安全模型</a> · <a href="AGENTS.md">AGENTS.md（给 AI / 开发者）</a>
 </p>
 
 > 🤖 下一个 AI / 开发者请先读 **[AGENTS.md](AGENTS.md)**（项目结构、启动契约、踩过的坑），不要先全库扫描。
@@ -212,6 +212,8 @@ glibc 而非逐个补丁维持、以及 App 侧那一整套东西（ADB 直连�
 | 卓易通 / 鸿蒙 anco | ❓ 未验证 | 理论可行，尚无真机回归 |
 | 悬浮条 | ⚠️ 需要授权 | 用 `TYPE_APPLICATION_OVERLAY` 自绘；免 ROOT 拿不到真正的「状态栏歌词」接口 |
 | 数据位置 | ⚠️ 需要文件权限 | 「所有文件访问」被拒时数据留在私有目录，卸载即丢（自检会明确告知当前状态） |
+
+👉 **每项权限到底暴露了什么、agent 碰得到你手机的哪些部分**，见 [安全模型](docs/security-model.md) —— 包括我们自己列出的已知弱点。
 
 ---
 

@@ -38,6 +38,8 @@ concurrency:
 
 permissions:
   contents: write                # 创建 Release、上传附件需要
+  id-token: write                # 构建证明（attestation）签发需要
+  attestations: write            # 把证明写回仓库的 attestation 存储
 
 jobs:
   # Job 1：原生 arm64 预装 rootfs（node-pty 必须编 arm64）
@@ -227,6 +229,19 @@ jobs:
           echo "file=$NAME" >> "$GITHUB_OUTPUT"
           echo "sha=$(sha256sum "$NAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           ls -lh "$NAME"
+
+      # 构建证明：让任何人都能验证这个 APK 确实是本仓库这个 tag 的 CI 产出，
+      # 而不是别人重打包的同名文件。sha256 只能证明「文件没被改过」，证明不了来源 ——
+      # 而我们的分发方式恰恰是「从 GitHub 下 APK 手动侧载」，来源是最需要被证明的一环。
+      #
+      #   gh attestation verify deepseekharness-arm64-vX.Y.Z.apk --repo qiannianhuanxiang/DSHA
+      #
+      # 这条不阻断发布：老版本 runner 或权限缺失时只是没有证明，不该因此发不出包。
+      - name: Attest build provenance
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: ${{ steps.apk.outputs.file }}
 
       - name: Resolve tag
         id: tag
