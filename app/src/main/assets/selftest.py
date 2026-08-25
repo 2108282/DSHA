@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""DSHA 一键自检（只读，绝不改环境）。
+"""DSHA 一键自检 & 修补。
 
 把过去要人工一条条粘的终端命令固化成一次运行：环境、3090 桥、ADB 通道、
 设备引导插件、write 补丁、会话健康、内置插件、备份、守卫、版本标记。
 每项给 PASS / FAIL / SKIP，FAIL 带下一步怎么办。
 
+绝大多数项是只读的，但有几项会动手修（能自动修好的就别让用户干等）：
+补插件链接、修 pnpm 空壳、补回被摘掉的官方 bundle、去掉插件的模块级硬依赖。
+每次改动前都留 .bak，并在报告里说清改了什么。
+
 用法（期望版本由 App 传入，脚本自己不硬编码）：
   python3 selftest.py --script-ver 9 --guard-ver 10 --step6 4 --assets 7 --guide-ver 0.1.6
 """
+import glob
 import json
 import os
 import re
@@ -18,7 +23,7 @@ import time
 
 # 允许用环境变量指向别的 dsh 目录：这样才能拿损坏的 profile 喂给自检验证它的判断，
 # 否则任何测试都会读到真实环境的健康数据，「自检会不会误判」根本没法验。
-SELFTEST_VERSION = "14"   # 报问题时对账用：能分清「提示没更新」和「走了别的分支」
+SELFTEST_VERSION = "15"   # 报问题时对账用：能分清「提示没更新」和「走了别的分支」
 DSH_HOME = os.environ.get("DSHA_DSH_HOME", "/root/.dsh")
 SESSIONS = DSH_HOME + "/sessions"
 GUIDE_DIR = "/root/dsha-device-shell-guide"
@@ -441,6 +446,104 @@ def check_guide(want_ver):
         add("PASS", "设备引导插件", "v%s，已注册进 profile，注入消息带 id" % ver)
 
 
+# ============== 4.5 插件模块级硬依赖（Web 起不来的头号原因）==============
+# 目标：内置的 dsh-device-shell-guide 在所有可能的落点。
+# linkPlugin 是 Java 递归复制而不是符号链接，所以同一份代码会有多个副本，
+# 改一个不够 —— 曾经就是因为只改了源目录、profile 里那份还是旧的而白折腾。
+GUIDE_TARGET_PATTERNS = (
+    GUIDE_DIR + "/lib/index.js",
+    DSH_HOME + "/profiles/*/node_modules/dsh-device-shell-guide/lib/index.js",
+    DSH_HOME + "/profiles/*/node_modules/.pnpm/*/node_modules/dsh-device-shell-guide/lib/index.js",
+)
+# 模块级 inject 数组里含 systemPrompt（行首声明，不含 apply 里的 ctx.inject）
+HARD_INJECT_RE = re.compile(
+    r"^[ \t]*export\s+const\s+inject\s*=\s*\[[^\]]*['\"]systemPrompt['\"][^\]]*\][ \t]*;?[ \t]*$",
+    re.M)
+HARD_INJECT_NOTE = (
+    "// [DSHA 自检修补] 这里原来有一行模块级 inject 声明（硬依赖 systemPrompt）。\n"
+    "// 模块级 inject 是**硬依赖**：极简模式不提供 systemPrompt 服务，插件就永远\n"
+    "// pending，dsh 判定 entry 未激活 → 整棵 plugin tree 加载失败、Web 起不来。\n"
+    "// 已改成 apply() 里的 ctx.inject 作用域注入（不阻塞激活），与官方 dsh-web-app 一致。\n"
+    "// 原件在同目录 .dsha-bak。")
+SECTION_RE = re.compile(
+    r"ctx\.systemPrompt\.section\(\{\s*name:\s*['\"]dsh:device-shell-guide['\"],\s*"
+    r"order:\s*150,\s*text:\s*PROMPT,?\s*\}\)", re.S)
+SECTION_NEW = ("ctx.inject(['systemPrompt'], (pc) => {\n"
+               "    pc.systemPrompt.section({ name: 'dsh:device-shell-guide', "
+               "order: 150, text: PROMPT })\n  })")
+
+
+def heal_hard_inject():
+    """检出并修掉内置引导插件的模块级硬依赖。
+
+    用户侧症状是这一行：
+        dsh: plugin tree failed to load: dsh: 1 entry did not activate
+        dsh-device-shell-guide: pending (waiting for service: systemPrompt)
+    Web 完全起不来，清数据、重装、清环境都无效（rootfs 数据卸载后保留）。
+    1.1.7 的内置插件（0.1.9）就是模块级 inject 的写法，已有三个用户中招。
+
+    **两处必须一起改**：只删掉 inject 声明而不把 section 调用包进 ctx.inject，
+    运行时读未声明的服务会直接抛 `cannot get property "systemPrompt" without
+    inject` —— 从「插件不激活」变成「插件一跑就炸」，比原来更糟。所以任一处没
+    匹配上就整体回滚，只报告不动手。
+    """
+    files = []
+    for pat in GUIDE_TARGET_PATTERNS:
+        files.extend(sorted(glob.glob(pat)))
+    if not files:
+        add("SKIP", "插件硬依赖检查", "找不到设备引导插件的任何副本（还没跑过步骤⑥）")
+        return
+
+    healed, already, failed = [], [], []
+    for path in files:
+        try:
+            body = read(path, 400000)
+            if not body:
+                continue
+            if not HARD_INJECT_RE.search(body):
+                already.append(path)
+                continue
+            patched = HARD_INJECT_RE.sub(HARD_INJECT_NOTE, body)
+            patched, n = SECTION_RE.subn(SECTION_NEW, patched)
+            if n == 0:
+                # 插件代码和我们认识的不一样了 —— 不敢只改一半
+                failed.append(path)
+                continue
+            bak = path + ".dsha-bak"
+            if not os.path.exists(bak):        # 只留第一份原件，别被二次修补覆盖
+                with open(bak, "w", encoding="utf-8") as f:
+                    f.write(body)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(patched)
+            healed.append(path)
+        except Exception as e:
+            failed.append("%s（%r）" % (path, e))
+
+    if healed:
+        add("FAIL", "插件硬依赖已修补",
+            "改好了 %d 处（原件存 .dsha-bak）：\n    %s\n"
+            "    这就是 `1 entry did not activate` 让 Web 起不来的原因。\n"
+            "    **现在回启动页点「重启」**，Web 就能起来了。\n"
+            "    根治在 1.1.7-fix 之后的版本（内置插件 0.1.10 起改成作用域注入）"
+            % (len(healed), "\n    ".join(healed)))
+    elif failed:
+        add("FAIL", "插件硬依赖修不了",
+            "发现硬依赖但代码结构与预期不符，没敢只改一半（只删声明会让插件运行时直接抛错）：\n"
+            "    %s\n"
+            "    应急：把它从 profile 摘掉先让 Web 起来 ——\n"
+            "    python3 - <<'EOF'\n"
+            "import json\n"
+            "p='%s/profiles/web/package.json'; d=json.load(open(p))\n"
+            "b=d['dsh']['profile'].get('bundles') or []\n"
+            "d['dsh']['profile']['bundles']=[x for x in b if x!='dsh-device-shell-guide']\n"
+            "json.dump(d,open(p,'w'),indent=2); print('已摘掉，回启动页点重启')\n"
+            "EOF"
+            % ("\n    ".join(failed), DSH_HOME))
+    else:
+        add("PASS", "插件硬依赖检查",
+            "%d 个副本都是作用域注入（不会阻塞 plugin tree 加载）" % len(already))
+
+
 # ===================== 5. write 发布补丁 =====================
 def check_repair_log():
     """App 侧内置插件修复的落盘记录。
@@ -563,7 +666,7 @@ def check_l2s():
 
 
 # ===================== 5.6 dsh Web 服务鉴权 =====================
-PENDING_RE = re.compile(r"([\w@/.-]+):\s*pending \\(waiting for service")
+PENDING_RE = re.compile(r"([\w@/.-]+):\s*pending \(waiting for service")
 
 
 def scan_boot_blockers(log_text):
@@ -1207,6 +1310,7 @@ def main():
         (check_adb, (arg("script-ver"),)),
         (check_adb_keepalive, (arg("adb-on", "1") == "1", arg("battery-opt", ""))),
         (check_guide, (arg("guide-ver"),)),
+        (heal_hard_inject, ()),
         (check_repair_log, ()),
         (check_write_patch, ()),
         (check_l2s, ()),

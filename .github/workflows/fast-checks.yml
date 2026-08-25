@@ -86,3 +86,25 @@ jobs:
       - name: 跑 LanAuth 断言集
         run: bash tools/lan-auth-test.sh
 
+  # ---------- Job 3：assets 脚本层「能不能跑起来」 ----------
+  # assets 下的 .py/.sh/.js 是唯一的远程代码通道（runtime 增量更新会把它们推给
+  # 所有已安装用户），却不经过 gradle、没有编译期检查。一个写错的正则就能让整个
+  # 功能哑火：selftest.py 的 PENDING_RE 曾把 raw string 里的 \( 写成 \\( ——
+  # 模块级 re.compile 直接抛 re.error，`python3 selftest.py` 一启动就退出，
+  # 而「让用户跑自检把报告贴过来」是排查问题的第一步。ast 语法检查看不出这种错。
+  scripts:
+    name: assets 脚本自检
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 语法 + 字面量正则 + shell/js 检查
+        run: python3 tools/check-asset-scripts.py
+
+      - name: selftest 的插件硬依赖修补断言
+        # 这一项会改用户 rootfs 里的插件源码，改错的代价是把「插件不激活」
+        # 变成「插件一跑就炸」，必须有断言兜着。
+        run: python3 tools/selftest-heal-test.py
+
+
