@@ -27,7 +27,7 @@ DeepSeek Harness（`@deepseek-ai/dsh`）是 DeepSeek 官方的 agent harness，�
 它是为 glibc Linux 写的，直接在安卓上跑会撞上一堆事：原生模块编译不过、`link(2)` 被
 SELinux 挡住、沙箱起不来、前端按桌面布局排版。
 
-**DSHA 把这些全部封在一个 APK 里。** 装 APK、填 API key、点启动 —— 不需要 Termux、
+**DSHA 把这些全部封在一个 APK 里。** 装 APK、填 API key(或跳过)、点启动 —— 不需要 Termux、
 不需要 ROOT、不需要敲一行命令。里面是一个完整的 Ubuntu 24.04 环境：`apt` 能用、
 交互式 PTY 能用、需要编译的原生模块能装，跟你在服务器上用是同一套东西。
 
