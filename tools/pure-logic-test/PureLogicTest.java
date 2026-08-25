@@ -285,6 +285,18 @@ public final class PureLogicTest {
                 OfflineVersion.compare("nightly", "dsh-0.1.1-rc.2"));
         ok("offline: 0.1.1.0 与 0.1.1 是同一个版本",
                 OfflineVersion.compare("dsh-0.1.1.0", "dsh-0.1.1") == 0);
+        // CI 实际写进 assets 的就是纯整数（仓库根 OFFLINE_VERSION，改离线包内容时 +1）。
+        // 上面那些 dsh-x.y.z 的用例是防呆：谁再往标记里写版本号，比较也不会错到降级。
+        ok("offline: 整数标记 2 比 1 新（老用户升级路径）",
+                OfflineVersion.isNewer("2", "1"));
+        ok("offline: 装回老离线包不算新（1 vs 2）",
+                !OfflineVersion.isNewer("1", "2"));
+        ok("offline: 本地包写的 0 谁都不如（0 vs 1）",
+                !OfflineVersion.isNewer("0", "1"));
+        ok("offline: 从无标记环境升到 2 算新",
+                OfflineVersion.isNewer("2", "0"));
+        ok("offline: 10 比 9 新（整数不走字典序）",
+                OfflineVersion.isNewer("10", "9"));
 
         System.out.println();
         System.out.println(fail == 0

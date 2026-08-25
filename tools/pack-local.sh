@@ -131,10 +131,12 @@ s2_asset() {
   fi
   ls -la "$dst"
 
-  # 版本标记必须跟包里的内容一致：App 靠它判断「内置环境是否比已解压的新」。
-  # v1.1.9-rc1 就踩过 —— 仓库里的标记写着 dsh-0.1.1-rc.2，而这份离线包里烤的是
-  # 0.1.0-rc.6，用户装上后被提示「发现新版内置环境」，点了升级反而把 dsh 降级了。
-  # 所以标记不从仓库带，每次按包内实际的 dsh 版本现写（CI 那边同理，见 release.yml）。
+  # 版本标记：**离线包内容的版本号，由 CI 从仓库根的 OFFLINE_VERSION 取**，不是 dsh 的
+  # 版本号。本地包一律写 0 —— 这是原设计（见 android-build.yml 那段注释），因为本地用的
+  # 离线包内容不受 OFFLINE_VERSION 管，写任何非 0 值都可能骗过 App 的比较：
+  # v1.1.9-rc1 就踩过 —— 仓库里当时跟踪着一份写着 dsh-0.1.1-rc.2 的标记，而包里烤的
+  # 是 dsh 0.1.0-rc.6，用户装上后被提示「发现新版内置环境」，点了升级反而把 dsh 降级了。
+  # 包里实际的 dsh 版本只打进日志，不参与判断 —— 它是给人看的，用来确认包对不对。
   local vfile=app/src/main/assets/offline-rootfs.version
   local pkgrel=./usr/local/lib/node_modules/@deepseek-ai/dsh/package.json
   local tmpd
@@ -145,13 +147,11 @@ s2_asset() {
       "$tmpd/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json" 2>/dev/null || true)"
   fi
   rm -rf "$tmpd"
+  printf '0\n' > "$vfile"
   if [ -n "$dshver" ]; then
-    printf 'dsh-%s\n' "$dshver" > "$vfile"
-    echo "版本标记按包内实际 dsh 写成：dsh-$dshver"
+    echo "包内 dsh 版本：$dshver（仅记录；标记写 0，App 不会拿本地包去提示升级）"
   else
-    # 读不出来就把标记清成 0：App 见 "0" 直接不提示升级，比留一个骗人的版本号安全
-    printf '0\n' > "$vfile"
-    echo "警告：离线包里读不出 @deepseek-ai/dsh 版本，标记写 0（App 不会提示升级）"
+    echo "警告：离线包里读不出 @deepseek-ai/dsh 版本 —— 包可能不完整，标记已写 0"
   fi
   echo OK
 }

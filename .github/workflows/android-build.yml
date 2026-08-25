@@ -35,15 +35,22 @@ jobs:
           test -s bundle/offline-rootfs.tar.gz
           ls -lh bundle/offline-rootfs.tar.gz
 
-# 离线包版本标记：与 App 内置包同步 bump（可用 OFFLINE_VERSION env 覆盖）。
-# 默认 1 = 首次 CI 重建离线包（含预置内置插件）→ 老用户（rootfs 无标记=0）
-# 会收到一次升级提示；之后内容再变时 bump 2、3… 才再次提示。
-# 注意：本地 build.sh 不重建离线包，assets 里默认 version=0 保证不误弹。
+# 离线包版本标记：**离线包内容的版本号，不是 dsh 的版本号**，取仓库根的 OFFLINE_VERSION。
+# 什么时候 +1：改过 offline-provision.sh / ci-make-offline-bundle.sh /
+# provision-builtin-plugins.sh 或内置插件资源（也就是上面 cache key 会变、包会重建）之后。
+# 内容没变就别动它 —— 用户会白重解压 300MB；内容变了忘记加，用户就永远拿不到新环境。
+# 历史：这个值从引入起一直是默认的 1（没人 bump 过），所以「发现新版内置环境」在线上
+# 从未真正触发。2026-08-26 起改成读仓库里的文件，让「该 bump 了」这件事能在 diff 里
+# 被看见、被 review，而不是藏在一个谁都想不起来的 env 默认值里。
+# 只收纯整数：App 侧靠它比大小，混进 dsh-0.1.1-rc.2 这种格式就会判错 —— 真机上出过
+# 「提示可解压更新、解压完反而降级」，见 OfflineVersion.java 开头那段。
+# 本地打包（tools/pack-local.sh）一律写 0 —— 本地包的内容不由这里管，写 0 就不会误弹。
 # 缓存命中时也要生成（缓存只存 tar.gz，version 需每次生成）。
       - name: Write offline version
         run: |
           set -euo pipefail
-          VER="${OFFLINE_VERSION:-1}"
+          VER="${OFFLINE_VERSION:-$(tr -d ' \n\r' < OFFLINE_VERSION)}"
+          case "$VER" in ''|*[!0-9]*) echo "OFFLINE_VERSION 必须是纯整数，实际：'$VER'" >&2; exit 1 ;; esac
           printf '%s\n' "$VER" > bundle/offline-rootfs.version
           echo "offline-rootfs.version=$VER"
 

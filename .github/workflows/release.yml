@@ -66,10 +66,16 @@ jobs:
           test -s bundle/offline-rootfs.tar.gz
           ls -lh bundle/offline-rootfs.tar.gz
 
+      # 离线包内容的版本号（不是 dsh 版本号），取仓库根的 OFFLINE_VERSION。
+      # 改过 provision 相关脚本或内置插件资源之后把它 +1，用户才会收到「发现新版内置
+      # 环境」；内容没变别动它，否则用户白重解压 300MB。只收纯整数 —— App 侧靠它比
+      # 大小，混进 dsh-0.1.1-rc.2 这种格式会判错（真机上出过「提示可更新、解压完反而
+      # 降级」）。完整说明在 android-build.yml 同名步骤上方。
       - name: Write offline version
         run: |
           set -euo pipefail
-          VER="${OFFLINE_VERSION:-1}"
+          VER="${OFFLINE_VERSION:-$(tr -d ' \n\r' < OFFLINE_VERSION)}"
+          case "$VER" in ''|*[!0-9]*) echo "OFFLINE_VERSION 必须是纯整数，实际：'$VER'" >&2; exit 1 ;; esac
           printf '%s\n' "$VER" > bundle/offline-rootfs.version
           echo "offline-rootfs.version=$VER"
 
