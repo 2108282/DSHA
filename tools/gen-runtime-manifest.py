@@ -101,12 +101,37 @@ def main():
         print("MANIFEST_OK 与工作区一致（%d 个文件）" % len(items))
         return 0
 
+    total = sum(i["size"] for i in items)
+
+    # 内容没变就不重写 —— 只有 generated 时间戳会变的话，重写只会制造噪声 diff。
+    #
+    # 这不是洁癖：build.sh 每次构建都跑本脚本，于是清单**每次构建都变脏**。
+    # 脏得太频繁，它的脏就不再是信号，最后必然被当成「构建产物，不用管」而漏提交。
+    # 2026-08-25 就是这么漏的：commit 952c3e1 提交了 selftest.py 却没带清单，
+    # main 上清单记的还是旧 sha256 —— 客户端下到新文件、校验对不上、整批丢弃，
+    # 界面上什么都不说。脚本热更新对所有用户静默失效。
+    #
+    # 改成内容不变则原样保留（含旧时间戳），清单一变脏就是真有脚本改动，
+    # 那时的脏必须跟着这一轮 commit 走。
+    if os.path.isfile(OUT):
+        try:
+            with open(OUT, encoding="utf-8") as f:
+                old = json.load(f)
+            if {i["asset"]: (i["sha256"], i["size"]) for i in old.get("files", [])} \
+                    == {i["asset"]: (i["sha256"], i["size"]) for i in items}:
+                print("MANIFEST_UNCHANGED %s：%d 个文件与清单一致，未改写"
+                      % (OUT, len(items)))
+                return 0
+        except Exception as e:      # 清单坏了/格式变了 → 照常重写
+            print("（现有清单读不出来，重新生成：%s）" % e)
+
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
         f.write("\n")
-    total = sum(i["size"] for i in items)
     print("MANIFEST_WRITTEN %s：%d 个文件，共 %.1f KB"
           % (OUT, len(items), total / 1024.0))
+    print("⚠ 清单已变更，请与本轮脚本改动**一起 commit**"
+          "（清单落后于文件 = 客户端热更新校验失败且无提示）")
     return 0
 
 

@@ -90,6 +90,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 发版时清单落后 = 用户装了新包、脚本热更新那条通道却是坏的（静默）。
+      # 这里刻意**不阻断**：tag 已经推了，为一个几 KB 的清单让整次发布失败不划算，
+      # 而 manifest-check.yml 已经在 push/PR 阶段阻断过一次。同证书指纹核对的取舍一致。
+      - name: Check runtime manifest freshness (warn only)
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if python3 tools/gen-runtime-manifest.py --check; then
+            echo "清单与 assets 一致"
+          else
+            echo "::warning title=runtime 清单落后于 assets::本次发布的 APK 内置脚本比仓库清单新，脚本层热更新会校验失败。发完补一次 gen-runtime-manifest.py + sign-runtime-manifest.sh 并提交。"
+          fi
+
       - name: Download offline bundle
         uses: actions/download-artifact@v4
         with:

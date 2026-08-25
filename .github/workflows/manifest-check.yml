@@ -1,0 +1,63 @@
+name: Manifest check
+
+# runtime 增量更新清单的守门人。
+#
+# 为什么值得一条独立 workflow：清单（runtime-manifest.json）与 assets 里的脚本
+# 是「同一份事实的两处记录」——本项目反复栽在这个模式上。清单落后于文件时，
+# 客户端 RuntimeUpdater 的行为是：
+#     本地 hash ≠ 清单 hash → 判定有更新 → 下载 → 校验下载内容是否等于清单 hash
+# 下载到的是仓库里的新文件，校验目标却是清单里的旧值，**永远不符 → 整批丢弃**，
+# 而且界面上什么都不显示。脚本层热更新对所有用户静默失效，没人会发现。
+# 2026-08-25 真出过一次（952c3e1 提交 selftest.py 未带清单）。
+#
+# 跑在 ubuntu-latest、秒级完成，刻意不放进 android-build.yml：那条流水线要抢
+# arm64 runner 和 rootfs cache，和 release 互相排队，不适合承担快速反馈的活。
+
+on:
+  push:
+    branches: [main, 'arena/**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: manifest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  manifest:
+    name: runtime 清单一致性
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 清单是否与 assets 脚本一致
+        run: |
+          set -uo pipefail
+          if python3 tools/gen-runtime-manifest.py --check; then
+            exit 0
+          fi
+          echo "::error title=runtime 清单落后于 assets::清单里的 sha256 与仓库文件不符。这会让脚本层热更新对所有用户静默失效（下载到新文件、校验旧哈希、整批丢弃、界面无提示）。修复：在仓库根目录跑 python3 tools/gen-runtime-manifest.py && bash tools/sign-runtime-manifest.sh，然后把 runtime-manifest.json 与 runtime-manifest.sig 一起提交。"
+          exit 1
+
+      - name: 清单签名是否仍然匹配
+        # 只用仓库内置的公钥做离线验签，不需要任何 secret。
+        # 抓的是比漏提交更隐蔽的一种错：清单更新了但忘了重签 —— 客户端
+        # verifyManifest 不过会整批拒绝，比 hash 不符更彻底，且同样无提示。
+        run: |
+          set -uo pipefail
+          PUB=app/src/main/assets/runtime-update-pubkey.pem
+          if [ ! -f runtime-manifest.sig ] || [ ! -f "$PUB" ]; then
+            echo "::warning::缺少 runtime-manifest.sig 或内置公钥，跳过验签"
+            exit 0
+          fi
+          RAW=$(mktemp)
+          base64 -d < runtime-manifest.sig > "$RAW"
+          if openssl dgst -sha256 -verify "$PUB" -signature "$RAW" runtime-manifest.json; then
+            echo "清单签名有效"
+          else
+            echo "::error title=清单签名不匹配::runtime-manifest.sig 不是当前 runtime-manifest.json 的签名，客户端会拒绝整批更新。修复：bash tools/sign-runtime-manifest.sh 重签后一起提交。"
+            rm -f "$RAW"
+            exit 1
+          fi
+          rm -f "$RAW"
