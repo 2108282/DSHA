@@ -37,7 +37,15 @@ fi
 
 KEYPEM="$(mktemp /tmp/dsha-sign-XXXXXX.pem)"
 RAWSIG=""
-cleanup() { rm -f "$KEYPEM" "$RAWSIG"; }
+# 先留一份现有签名：自验不过时还原回去。**绝不能留下一个坏签名** ——
+# 客户端 verifyManifest 验不过会整批拒绝更新，而 build.sh 对签名失败只是
+# warning 不阻断，坏签名会一路跟着 commit 出去，谁都不会注意。
+PREV_SIG=""
+if [ -f "$SIGFILE" ]; then
+  PREV_SIG="$(mktemp /tmp/dsha-prevsig-XXXXXX)"
+  cp "$SIGFILE" "$PREV_SIG"
+fi
+cleanup() { rm -f "$KEYPEM" "$RAWSIG" "$PREV_SIG"; }
 trap cleanup EXIT INT TERM
 
 # PKCS12 → 无密码 PEM 私钥（只在临时文件里存在几秒）
@@ -61,6 +69,13 @@ if [ -f "$PUBKEY" ]; then
     echo "SIGN_OK: $(wc -c < "$SIGFILE") 字节签名，已用 assets 内公钥自验通过"
   else
     echo "SIGN_FAIL: 自验不通过 —— 公钥与 keystore 不匹配，客户端会拒绝这批更新"
+    if [ -n "$PREV_SIG" ]; then
+      cp "$PREV_SIG" "$SIGFILE"
+      echo "         已还原上一份签名（不把坏签名留在仓库里）"
+    else
+      rm -f "$SIGFILE"
+      echo "         已删掉刚写出的坏签名"
+    fi
     exit 1
   fi
 else

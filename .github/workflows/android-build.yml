@@ -138,10 +138,17 @@ jobs:
       - name: Report signing fingerprint
         run: |
           set -euo pipefail
-          # 把证书指纹打进日志：发布前肉眼比一眼，就能确认没换签名
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
-          "$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk \
-            | grep -i "SHA-256 digest" || true
+          OUT=$("$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk)
+          echo "$OUT" | grep -i "SHA-256 digest" || true
+          # 与线上发布密钥比对。这条流水线的产物只是 artifact、不对外发布，所以不阻断；
+          # 但指纹不一致时这个包装不到已装正式版的设备上（Android 只允许同签名覆盖），
+          # 拿去验机会白折腾一趟，值得在日志里说清楚。
+          if ! echo "$OUT" | grep -qi "E7:E3:A3:1A:75:94:6F:26"; then
+            echo "::warning::此 artifact 的签名与线上发布密钥不同，无法覆盖安装到已装正式版的设备（只能卸载重装，rootfs 会丢）。"
+          else
+            echo "签名与线上发布密钥一致，可直接覆盖安装"
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

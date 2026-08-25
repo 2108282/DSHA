@@ -191,6 +191,30 @@ single-flight guard, and never lower `SCRIPT_VERSION` — old installs keep thei
 - Artifact `dsha-debug-apk` uploads the raw `app-debug.apk`; GitHub wraps every artifact download in a ZIP, so testers must unzip before installing.
 - Local build: `./build.sh` (needs Gradle 8.5, SDK 34, NDK 26, `local.properties` with `sdk.dir`).
 
+### Signing — two different keys, never mix them
+
+- **Published APKs are signed with a debug keystore.** `secrets.DSHA_KEYSTORE_B64` holds a
+  `debug.keystore` (alias `androiddebugkey`, cert SHA-256 `E7:E3:A3:1A:75:94:6F:26…`) — the
+  wrong file was uploaded when the secret was first created, and every release since v1.1.7
+  carries that signature. Android only allows same-signature upgrades, so switching keys now
+  would force every user to uninstall, and the rootfs lives in the private dir (it would be
+  gone). Treat it as **the** publish key: it is a tool-generated file that AGP silently
+  regenerates when the SDK dir is wiped, so a backup lives at
+  `/workspace/DSHA-ACTUAL-PUBLISH-KEY-debug.keystore`. Key rotation (APK Signature Scheme v3)
+  is a separate, unscheduled task; see `DSHA-签名现状与风险.md` in the workspace.
+- `DSHA-release.keystore` (alias `dsha`, RSA 4096, `ED:8A:AE:A2…`) is used **only** to sign
+  the incremental-update manifest (`tools/sign-runtime-manifest.sh`; the matching public key
+  ships as `assets/runtime-update-pubkey.pem`). Never export `DSHA_KEYSTORE` pointing at the
+  publish key *before* the manifest is signed — that script reads the env var first, and a
+  manifest signed with the wrong key makes every client reject the whole update batch. It now
+  restores the previous `.sig` when self-verification fails, so a bad signature can't slip
+  into a commit.
+- `release.yml` **fails** when the APK fingerprint doesn't match the publish key. Shipping a
+  package users cannot install is worse than a failed release. (It used to warn only — and it
+  had the wrong expected fingerprint, so it warned on every single build and nobody looked.)
+- `./build.sh` points APK signing at the publish key automatically (after the manifest is
+  signed), so locally built packages can be installed over an official release.
+
 ## Coding conventions
 
 - Comments and UI strings are **Chinese**; commit messages are Chinese with a `type:` prefix that explains **why** (match `git log`).

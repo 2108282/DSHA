@@ -190,12 +190,26 @@ jobs:
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
           OUT=$("$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk)
           echo "$OUT" | grep -i "SHA-256 digest" || true
-          # 项目 release keystore 的证书指纹前缀（RSA 4096）
-          if ! echo "$OUT" | grep -qi "ED:8A:AE:A2:07:F5:1B:F1"; then
-            echo "::warning::证书指纹与预期的 release keystore 不一致，请人工确认"
-          else
-            echo "签名指纹核对通过"
+          # 线上包实际使用的发布证书指纹前缀。
+          #
+          # 这里原来填的是 ED:8A:AE:A2:07:F5:1B:F1（项目 release keystore），于是
+          # **从 v1.1.7 起每次构建都在 warning** —— 因为 secret DSHA_KEYSTORE_B64 里
+          # 存的其实是一份 debug keystore（alias androiddebugkey，指纹 E7:E3:A3:1A…），
+          # 当初设 secret 时传错了文件。设成不阻断，这条噪声就一直没人看。
+          #
+          # 已发布的 v1.1.7 用的就是这份密钥，用户手上的包也是它签的。Android 只允许
+          # 同签名覆盖安装，换密钥等于逼所有人卸载重装（rootfs 在私有目录，卸载即丢），
+          # 所以现在**以线上实际密钥为准**，密钥轮换（v3 rotation）单独排期处理。
+          # 详见工作区 DSHA-签名现状与风险.md。
+          #
+          # 期望值改对之后，不匹配就意味着真出事了（secret 被换/丢失、或者退回了
+          # 每次新生成的 debug keystore）—— 那样签出来的包用户根本装不上，
+          # 发出去比发布失败糟得多。所以从 warning 改成直接 fail。
+          if ! echo "$OUT" | grep -qi "E7:E3:A3:1A:75:94:6F:26"; then
+            echo "::error::证书指纹与线上发布密钥不一致 —— 这个包用户装不上（无法覆盖安装），已中止发布。请核对 secret DSHA_KEYSTORE_B64。"
+            exit 1
           fi
+          echo "签名指纹核对通过（与线上发布密钥一致）"
 
       - name: Rename APK
         id: apk

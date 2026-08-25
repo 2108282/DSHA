@@ -45,16 +45,24 @@ android {
 
     signingConfigs {
         debug {
-            // 正式签名：发布包一律用项目自己的 release keystore（RSA 4096，
-            // 指纹 ED:8A:AE:A2:07:F5:1B:F1…，完整值见 DSHA-release-keystore-credentials.txt）。debug keystore 的密码是公开的
-            // （android/android），谁都能用它签出「看起来是官方更新」的包，
-            // 绝不能用于发布。
+            // APK 签名。**线上包实际用的不是 DSHA-release.keystore**：secret
+            // DSHA_KEYSTORE_B64 里存的是一份 debug keystore（alias androiddebugkey，
+            // 证书指纹 E7:E3:A3:1A:75:94:6F:26…），当初设 secret 时传错了文件，
+            // v1.1.7 起发出去的包都是它签的。Android 只允许同签名覆盖安装，换密钥
+            // 等于逼所有用户卸载重装（rootfs 在私有目录，卸载即丢），所以现在以线上
+            // 实际密钥为准，密钥轮换（v3 rotation）单独排期。
+            // 完整查证与三条路的取舍见工作区 DSHA-签名现状与风险.md。
             //
-            // 用法：DSHA_KEYSTORE=/path/to/DSHA-release.keystore
+            // 用法：DSHA_KEYSTORE=/path/to/keystore
             //       DSHA_KEYSTORE_PASSWORD / DSHA_KEY_ALIAS / DSHA_KEY_PASSWORD
-            //       （CI 走同名 secrets，见 .github/workflows/android-build.yml）
-            // 没给 keystore 时仍会退回 AGP 默认 debug keystore，但会大声警告 ——
-            // 那种包只能自己调试用，装出去会造成签名不一致、用户无法覆盖升级。
+            //       （CI 走同名 secrets；本地 ./build.sh 会自动指向线上发布密钥）
+            // 一个也没给时会退回 AGP 默认 debug keystore，并大声警告 —— 那种包每次
+            // 构建的指纹都不同，装出去谁也升级不了，只能自己调试用。
+            //
+            // 另有一把**不同的**钥匙：DSHA-release.keystore（alias dsha，RSA 4096，
+            // 指纹 ED:8A:AE:A2…）现在只用来签增量更新清单
+            // （tools/sign-runtime-manifest.sh，公钥内置在 assets/runtime-update-pubkey.pem）。
+            // 两把钥匙各管一件事，不要混用。
             def ksPath = System.getenv("DSHA_KEYSTORE") ?: project.findProperty("dsha.keystore")
             if (ksPath != null && !ksPath.toString().isEmpty() && file(ksPath).exists()) {
                 storeFile file(ksPath)

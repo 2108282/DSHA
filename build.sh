@@ -28,6 +28,28 @@ if command -v python3 >/dev/null 2>&1; then
   bash tools/sign-runtime-manifest.sh || echo "（清单签名失败，继续构建）"
 fi
 
+# ---- APK 签名：必须与线上包一致，否则装不上 ----
+# 线上包（v1.1.7 起）是用一份 debug keystore 签的 —— secret 当初传错了文件，详见
+# 工作区 DSHA-签名现状与风险.md。Android 只允许同签名覆盖安装，所以本地出的包想装到
+# 已经装过正式版的机器上，就必须用同一把钥匙；用 DSHA-release.keystore 签出来的包会
+# 因为签名冲突直接装不上（之前那个 1.1.7-fix 测试包就是这样）。
+#
+# **顺序要紧**：这段必须放在上面的清单签名之后。sign-runtime-manifest.sh 优先读环境
+# 变量 DSHA_KEYSTORE，提前导出会让它拿 debug keystore 去签增量更新清单，而客户端内置
+# 的公钥（assets/runtime-update-pubkey.pem）对应的是 DSHA-release.keystore —— 验签不过，
+# 热更新会被整批拒绝。两把钥匙各管一件事，别混。
+DSHA_PUBLISH_KEYSTORE="${DSHA_PUBLISH_KEYSTORE:-/workspace/DSHA-ACTUAL-PUBLISH-KEY-debug.keystore}"
+if [ -f "$DSHA_PUBLISH_KEYSTORE" ]; then
+  export DSHA_KEYSTORE="$DSHA_PUBLISH_KEYSTORE"
+  export DSHA_KEYSTORE_PASSWORD="${DSHA_KEYSTORE_PASSWORD:-android}"
+  export DSHA_KEY_ALIAS="${DSHA_KEY_ALIAS:-androiddebugkey}"
+  export DSHA_KEY_PASSWORD="${DSHA_KEY_PASSWORD:-android}"
+  echo "==> APK 用线上发布密钥签名（可直接覆盖安装）"
+else
+  echo "==> 注意：找不到线上发布密钥 $DSHA_PUBLISH_KEYSTORE"
+  echo "    本地包将用 gradle.properties 里的密钥签名，装不到已装正式版的机器上"
+fi
+
 "$GRADLE_BIN" :app:assembleDebug
 
 APK="app/build/outputs/apk/debug/app-debug.apk"
