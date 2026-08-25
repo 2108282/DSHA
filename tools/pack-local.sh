@@ -130,6 +130,29 @@ s2_asset() {
       || { cp -f "$ROOTFS_SRC" "$dst" && echo "复制就位"; }
   fi
   ls -la "$dst"
+
+  # 版本标记必须跟包里的内容一致：App 靠它判断「内置环境是否比已解压的新」。
+  # v1.1.9-rc1 就踩过 —— 仓库里的标记写着 dsh-0.1.1-rc.2，而这份离线包里烤的是
+  # 0.1.0-rc.6，用户装上后被提示「发现新版内置环境」，点了升级反而把 dsh 降级了。
+  # 所以标记不从仓库带，每次按包内实际的 dsh 版本现写（CI 那边同理，见 release.yml）。
+  local vfile=app/src/main/assets/offline-rootfs.version
+  local pkgrel=./usr/local/lib/node_modules/@deepseek-ai/dsh/package.json
+  local tmpd
+  tmpd="$(mktemp -d)"
+  local dshver=""
+  if tar -xzf "$ROOTFS_SRC" -C "$tmpd" "$pkgrel" 2>/dev/null; then
+    dshver="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
+      "$tmpd/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json" 2>/dev/null || true)"
+  fi
+  rm -rf "$tmpd"
+  if [ -n "$dshver" ]; then
+    printf 'dsh-%s\n' "$dshver" > "$vfile"
+    echo "版本标记按包内实际 dsh 写成：dsh-$dshver"
+  else
+    # 读不出来就把标记清成 0：App 见 "0" 直接不提示升级，比留一个骗人的版本号安全
+    printf '0\n' > "$vfile"
+    echo "警告：离线包里读不出 @deepseek-ai/dsh 版本，标记写 0（App 不会提示升级）"
+  fi
   echo OK
 }
 

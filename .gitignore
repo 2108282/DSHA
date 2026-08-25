@@ -17,6 +17,10 @@ captures/
 app/src/main/assets/offline-rootfs.tar.gz
 app/src/main/assets/offline-rootfs.bin
 app/src/main/assets/offline-rootfs.tar
+# 版本标记必须和上面那个包同步生成 —— 跟着仓库走就会与实际内容脱节：
+# v1.1.9-rc1 时仓库里写的是 dsh-0.1.1-rc.2，包里烤的却是 0.1.0-rc.6，
+# 用户被提示「发现新版内置环境」，点升级反而降级了。CI 与 tools/pack-local.sh 都会现写。
+app/src/main/assets/offline-rootfs.version
 bundle/
 
 # 系统/编辑器
