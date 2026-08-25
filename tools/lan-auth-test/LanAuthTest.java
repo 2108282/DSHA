@@ -73,6 +73,14 @@ public final class LanAuthTest {
                 LanAuth.tokenOk(req("GET /api/ws",
                         "Upgrade: websocket\r\nCookie: dsha_token=" + T), T));
 
+        // ---------- queryTokenFromTarget（3090 桥也用这一份）----------
+        eq("target: 正常取值", "abc", LanAuth.queryTokenFromTarget("/exec?cmd=ls&token=abc"));
+        // 回归：3090 桥原来是 query.indexOf("token=")，xtoken= 的尾部先命中 → 取到 junk 而误拒
+        eq("target: 不被同后缀参数抢先", "abc",
+                LanAuth.queryTokenFromTarget("/exec?xtoken=junk&token=abc"));
+        eq("target: 无 token 参数", null, LanAuth.queryTokenFromTarget("/exec?cmd=ls"));
+        eq("target: 无 query", null, LanAuth.queryTokenFromTarget("/exec"));
+
         // ---------- constantTimeEquals ----------
         ok("ct: 相等", LanAuth.constantTimeEquals("abc", "abc"));
         ok("ct: 前缀不算相等", !LanAuth.constantTimeEquals("abc", "ab"));

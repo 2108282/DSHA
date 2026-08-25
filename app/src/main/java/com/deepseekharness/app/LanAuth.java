@@ -80,6 +80,17 @@ final class LanAuth {
         if (sp1 < 0) return null;
         int sp2 = reqLine.indexOf(' ', sp1 + 1);
         String target = sp2 > sp1 ? reqLine.substring(sp1 + 1, sp2) : reqLine.substring(sp1 + 1);
+        return queryTokenFromTarget(target);
+    }
+
+    /** 从请求目标（{@code /p?a=1&token=xxx}）取 token 参数值，没有则 null。
+     *
+     *  <p>HttpShellService（3090 桥）也用这一份：它原来自己写了
+     *  {@code query.indexOf("token=")}，同样没有参数名边界 ——
+     *  {@code ?xtoken=junk&token=真值} 会先命中 {@code xtoken=} 取到 junk 而误拒。
+     *  两处各写一套判断正是这个项目反复栽的模式，合并到一份并配上断言。 */
+    static String queryTokenFromTarget(String target) {
+        if (target == null) return null;
         int q = target.indexOf('?');
         if (q < 0) return null;
         String query = target.substring(q + 1);

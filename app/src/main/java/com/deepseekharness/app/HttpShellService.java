@@ -242,7 +242,12 @@ public final class HttpShellService {
         while (running) {
             try {
                 Socket client = ss.accept();
-                client.setSoTimeout(120_000);
+                // 读超时 15 秒（原来 120 秒）。这个超时只管「读请求头」这一段 ——
+                // 命令执行与等用户点确认期间并不 read，不受影响。
+                // 而池子只有 4 个线程：同一台手机上任何 App 都能连 loopback，
+                // 4 个「连上不说话」的连接就能让桥停摆两分钟，agent 的确认弹窗和
+                // 命令全部超时。请求头 15 秒到不齐的客户端本来也不正常。
+                client.setSoTimeout(15_000);
                 java.util.concurrent.ExecutorService p = pool;
                 if (p == null) {
                     try { client.close(); } catch (IOException ignored) { }
@@ -296,18 +301,7 @@ public final class HttpShellService {
 
     private static boolean tokenMatch(String presented) {
         String token = authToken.isEmpty() ? ensureToken() : authToken;
-        return token != null && !token.isEmpty() && constantTimeEquals(token, presented);
-    }
-
-    private static boolean constantTimeEquals(String a, String b) {
-        if (a == null || b == null) return false;
-        int diff = a.length() ^ b.length();
-        for (int i = 0; i < a.length(); i++) {
-            char ca = a.charAt(i);
-            char cb = i < b.length() ? b.charAt(i) : 0;
-            diff |= ca ^ cb;
-        }
-        return diff == 0;
+        return token != null && !token.isEmpty() && LanAuth.constantTimeEquals(token, presented);
     }
 
     private void handle(Socket client) {
@@ -333,22 +327,26 @@ public final class HttpShellService {
             // 鉴权：token 必须匹配（通过 ?token= 或 X-Token header）
             boolean authed = false;
             String t = "";
-            // 只认 query 中的 token（EXCLUSIVE：跳过 path 其他位置的 token=）
-            int qm = path.indexOf('?');
-            String query = qm >= 0 ? path.substring(qm + 1) : "";
-            int tq = query.indexOf("token=");
-            if (tq >= 0) {
-                t = query.substring(tq + 6);
-                int amp = t.indexOf('&');
-                if (amp >= 0) t = t.substring(0, amp);
-                try { t = URLDecoder.decode(t, "UTF-8"); } catch (Exception ignored) { }
-                if (!t.isEmpty()) authed = tokenMatch(t.trim());
+            // 解析与 LanProxyService 共用 LanAuth 那一份。原来这里是
+            // query.indexOf("token=")，没有参数名边界：?xtoken=junk&token=真值
+            // 会先命中 xtoken= 取到 junk 而误拒。两处各写一套判断正是本项目
+            // 反复栽的模式，合并后由 tools/lan-auth-test.sh 一起覆盖。
+            String qt = LanAuth.queryTokenFromTarget(path);
+            if (qt != null && !qt.isEmpty()) {
+                try { qt = URLDecoder.decode(qt, "UTF-8"); } catch (Exception ignored) { }
+                t = qt;
+                authed = tokenMatch(qt.trim());
             }
             if (!authed) {
                 // 也支持 header 传 token（agent 引导用 curl -H）
                 try {
                     String hdr;
+                    int lines = 0;
                     while ((hdr = reader.readLine()) != null && !hdr.isEmpty()) {
+                        // 桥绑在 loopback，但同一台手机上任何 App 都能连 loopback。
+                        // 池子只有 4 个线程 —— 不设上限的话，一个只管发头不发空行的
+                        // 连接就能占住一个线程直到读超时。行数封顶 + 下面的读超时兜底。
+                        if (++lines > 64) break;
                         if (hdr.toLowerCase().startsWith("x-token:")) {
                             String hv = hdr.substring(8).trim();
                             if (!hv.isEmpty() && tokenMatch(hv)) authed = true;

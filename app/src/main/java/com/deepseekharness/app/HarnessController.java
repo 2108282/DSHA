@@ -3349,7 +3349,8 @@ public class HarnessController {
      *  整段覆盖。此前的补回只挂在「Web 启动成功后」——Web 起不来、或用户没重启 Web，
      *  就永远轮不到，自检报了错也只能让人去终端手改。这不叫修好。
      *  现在插件页每次打开都会静默跑一次。 */
-    private volatile long lastBuiltinRepairAt = 0;
+    private final java.util.concurrent.atomic.AtomicLong lastBuiltinRepairAt =
+            new java.util.concurrent.atomic.AtomicLong(0);
 
     public int repairBuiltinPlugins() {
         return repairBuiltinPlugins(false);
@@ -3364,8 +3365,14 @@ public class HarnessController {
             // 而这里要读写 rootfs 里的 package.json —— 频繁跑纯属浪费 IO。
             // 注册丢失不是高频事件，20 秒的窗口足够。
             long now = System.currentTimeMillis();
-            if (!force && now - lastBuiltinRepairAt < 20_000) return 0;
-            lastBuiltinRepairAt = now;
+            if (force) {
+                lastBuiltinRepairAt.set(now);
+            } else {
+                // volatile 上的「先读再写」在并发下会让两个线程一起通过节流，
+                // 各自把 rootfs 里的 package.json 读一遍写一遍。CAS 只让一个进来。
+                long prev = lastBuiltinRepairAt.get();
+                if (now - prev < 20_000 || !lastBuiltinRepairAt.compareAndSet(prev, now)) return 0;
+            }
             java.io.File pkg = new java.io.File(proot.getRootfsDir(),
                     "root/.dsh/profiles/web/package.json");
             if (!pkg.isFile()) return 0;   // profile 还没生成，启动一次 Web 再说
