@@ -71,10 +71,30 @@ public final class RuntimeUpdater {
         return new File(ctx.getFilesDir(), "runtime-overlay");
     }
 
-    /** 覆盖层里某个资产的落点。名字里的 / 会被保留（内置插件是多级路径）。 */
+    /** 覆盖层里某个资产的落点。名字里的 / 会被保留（内置插件是多级路径）。
+     *
+     *  <p>越界一律落到一个哨兵名上，绝不返回覆盖层之外的路径：清单虽然是签名的，
+     *  但让签名成为唯一屏障太单薄，而且我们自己的生成脚本也可能产出带 {@code ../}
+     *  的 asset 名（{@code os.path.relpath} + assets 下的外部符号链接）。
+     *  规范化后比对前缀，比逐个字符判断可靠（能一并处理符号链接）。 */
     public static File overlayFile(Context ctx, String asset) {
-        return new File(overlayDir(ctx), asset);
+        File dir = overlayDir(ctx);
+        if (!AssetPath.isSafe(asset)) return new File(dir, REJECTED_NAME);
+        File f = new File(dir, asset);
+        try {
+            String base = dir.getCanonicalPath();
+            String want = f.getCanonicalPath();
+            if (!want.equals(base) && !want.startsWith(base + File.separator)) {
+                return new File(dir, REJECTED_NAME);
+            }
+        } catch (Throwable e) {
+            return new File(dir, REJECTED_NAME);   // 算不出规范路径就当越界（fail-closed）
+        }
+        return f;
     }
+
+    /** 越界 asset 的统一落点：读它一定读不到东西，写它也只污染覆盖层内一个文件。 */
+    private static final String REJECTED_NAME = "__rejected_asset__";
 
     public static final class Item {
         public String asset;
@@ -310,8 +330,11 @@ public final class RuntimeUpdater {
                         it.urls.add(us.optString(j, ""));
                     }
                 }
-                // 缺字段的条目直接丢：宁可少更新，不要写入来源不明的内容
-                if (!it.asset.isEmpty() && it.sha256.length() == 64 && !it.urls.isEmpty()) {
+                // 缺字段的条目直接丢：宁可少更新，不要写入来源不明的内容。
+                // asset 名还要过一次路径校验 —— 它会被当成覆盖层下的相对路径直接落盘，
+                // 带 ../ 就能写到私有目录别处（shared_prefs 里有 API key 密文和 LAN token）。
+                if (!it.asset.isEmpty() && it.sha256.length() == 64 && !it.urls.isEmpty()
+                        && AssetPath.isSafe(it.asset)) {
                     out.add(it);
                 }
             }

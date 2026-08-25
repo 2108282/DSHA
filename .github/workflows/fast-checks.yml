@@ -66,12 +66,13 @@ jobs:
           fi
           rm -f "$RAW"
 
-  # ---------- Job 2：局域网桥的凭据判定 / 请求行改写 ----------
-  # LanAuth 全是手写的 HTTP 头与查询串切分，出错时的症状隔着一层（「页面能打开但
-  # 一直转圈」= WebSocket 401、「打不开」= 后端收到畸形请求行 400），读代码看不出来。
-  # 它刻意不依赖 Android API，javac 编两个文件就能跑完断言。
-  lan-auth:
-    name: LanAuth 断言
+  # ---------- Job 2：无 Android 依赖的纯逻辑 ----------
+  # LanAuth（凭据判定 / 请求行改写）和 AssetPath（清单 asset 名当路径用之前的校验）
+  # 全是手写字符串处理，出错时症状隔着一层：「页面能打开但一直转圈」= WebSocket 401、
+  # 「打不开」= 后端收到畸形请求行 400、asset 名带 ../ = 文件静静落到私有目录别处。
+  # 这些类刻意不碰 Android API，javac 编几个文件就能跑完断言。
+  pure-logic:
+    name: 纯逻辑断言（LanAuth / AssetPath）
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -83,8 +84,8 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: 跑 LanAuth 断言集
-        run: bash tools/lan-auth-test.sh
+      - name: 跑纯逻辑断言集
+        run: bash tools/pure-logic-test.sh
 
   # ---------- Job 3：assets 脚本层「能不能跑起来」 ----------
   # assets 下的 .py/.sh/.js 是唯一的远程代码通道（runtime 增量更新会把它们推给

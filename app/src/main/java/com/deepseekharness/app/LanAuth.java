@@ -11,7 +11,7 @@ package com.deepseekharness.app;
  *   <li>剥离 token 时把 HTTP 版本一起吃掉 → 后端收到 {@code GET /} 直接 400；</li>
  *   <li>{@code [&]?token=} 没有参数名边界 → 误删 {@code csrf_token=}。</li>
  * </ul>
- * 抽成无 Android 依赖的类之后，{@code tools/lan-auth-test.sh} 能用 javac 直接编译
+ * 抽成无 Android 依赖的类之后，{@code tools/pure-logic-test.sh} 能用 javac 直接编译
  * 运行断言，不需要设备、不需要 SDK、不需要联网。这类字符串处理必须能真跑。
  */
 final class LanAuth {

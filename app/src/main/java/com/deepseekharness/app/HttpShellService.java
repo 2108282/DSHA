@@ -330,7 +330,7 @@ public final class HttpShellService {
             // 解析与 LanProxyService 共用 LanAuth 那一份。原来这里是
             // query.indexOf("token=")，没有参数名边界：?xtoken=junk&token=真值
             // 会先命中 xtoken= 取到 junk 而误拒。两处各写一套判断正是本项目
-            // 反复栽的模式，合并后由 tools/lan-auth-test.sh 一起覆盖。
+            // 反复栽的模式，合并后由 tools/pure-logic-test.sh 一起覆盖。
             String qt = LanAuth.queryTokenFromTarget(path);
             if (qt != null && !qt.isEmpty()) {
                 try { qt = URLDecoder.decode(qt, "UTF-8"); } catch (Exception ignored) { }

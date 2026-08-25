@@ -1,15 +1,15 @@
 package com.deepseekharness.app;
 
 /**
- * LanAuth 的断言集。用 javac 直接编译运行，不需要设备、SDK、网络：
+ * 无 Android 依赖的纯逻辑断言集（LanAuth + AssetPath）。用 javac 直接编译运行，
+ * 不需要设备、SDK、网络：
  *
- * <pre>bash tools/lan-auth-test.sh</pre>
+ * <pre>bash tools/pure-logic-test.sh</pre>
  *
- * 每条用例都对应一个真实踩过的坑，不是为了凑覆盖率 —— 局域网桥的凭据判定和请求行
- * 改写全是手写字符串切分，出错时的表现是「页面能开但转圈」「后端 400」这类隔一层的
- * 症状，只靠读代码看不出来。
+ * 每条用例都对应一个真实踩过的坑，不是为了凑覆盖率 —— 这些手写的字符串切分出错时
+ * 症状都隔着一层（400 / 一直转圈 / 静默泄漏 / 文件落到别处），只靠读代码看不出来。
  */
-public final class LanAuthTest {
+public final class PureLogicTest {
 
     private static int pass = 0;
     private static int fail = 0;
@@ -80,6 +80,25 @@ public final class LanAuthTest {
                 LanAuth.queryTokenFromTarget("/exec?xtoken=junk&token=abc"));
         eq("target: 无 token 参数", null, LanAuth.queryTokenFromTarget("/exec?cmd=ls"));
         eq("target: 无 query", null, LanAuth.queryTokenFromTarget("/exec"));
+
+        // ---------- AssetPath：清单 asset 名当路径用之前的校验 ----------
+        // asset 名会被直接拼成覆盖层下的相对路径落盘，带 ../ 就能覆盖 shared_prefs
+        // （API key 密文、LAN token 都在里面）或者往 rootfs 里投文件。
+        ok("asset: 普通文件名", AssetPath.isSafe("selftest.py"));
+        ok("asset: 多级路径", AssetPath.isSafe("device-shell-guide/lib/index.js"));
+        ok("asset: 允许点开头", AssetPath.isSafe(".keep"));
+        ok("asset: 拒绝上跳", !AssetPath.isSafe("../shared_prefs/deepseekharness.xml"));
+        ok("asset: 拒绝中间上跳", !AssetPath.isSafe("a/../../b.py"));
+        ok("asset: 拒绝绝对路径", !AssetPath.isSafe("/etc/passwd"));
+        ok("asset: 拒绝反斜杠", !AssetPath.isSafe("a\\..\\b"));
+        ok("asset: 拒绝空段", !AssetPath.isSafe("a//b.py"));
+        ok("asset: 拒绝单点段", !AssetPath.isSafe("./a.py"));
+        ok("asset: 拒绝目录形", !AssetPath.isSafe("lib/"));
+        ok("asset: 拒绝空串", !AssetPath.isSafe(""));
+        ok("asset: 拒绝 null", !AssetPath.isSafe(null));
+        ok("asset: 拒绝空格", !AssetPath.isSafe("a b.py"));
+        ok("asset: 拒绝 NUL 截断", !AssetPath.isSafe("a.py\u0000.txt"));
+        ok("asset: 拒绝超长", !AssetPath.isSafe(new String(new char[300]).replace('\0', 'a')));
 
         // ---------- constantTimeEquals ----------
         ok("ct: 相等", LanAuth.constantTimeEquals("abc", "abc"));

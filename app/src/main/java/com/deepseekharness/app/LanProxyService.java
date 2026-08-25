@@ -53,7 +53,7 @@ public final class LanProxyService {
     }
 
     // 凭据判定、请求行改写、定长比较都在 LanAuth —— 那是一组纯字符串逻辑，
-    // 抽出去是为了能在没有设备的情况下真跑断言（tools/lan-auth-test.sh）。
+    // 抽出去是为了能在没有设备的情况下真跑断言（tools/pure-logic-test.sh）。
 
     /** 桥监听端口：WebUI 默认 3080，桥用 3081 避免端口冲突（用户访问 http://<手机IP>:3081/） */
     public static final int LAN_PORT = 3081;
