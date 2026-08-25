@@ -285,20 +285,30 @@ public class WorkspaceFragment extends Fragment {
                 }
                 if (getActivity() == null) return;
                 // .env 读不到就找 .dsha-apikey（离线包安装用户走这条 —— issue #22）
+                boolean keyUndecryptable = false;
                 if (!keySynced) {
                     String k2 = c.getProot().execAndRead("cat /root/.dsh/.dsha-apikey 2>/dev/null");
                     if (k2 != null) {
                         k2 = k2.trim();
                         if (!k2.isEmpty() && !k2.contains(" ") && !k2.contains("\n") && k2.length() >= 8) {
-                            c.setApiKey(k2);
-                            keySynced = true;
+                            // 备份里那份是加过密的：不解密就把 base64(iv):base64(ct)
+                            // 当 key 写进配置，对话必然鉴权失败而界面看着「已填」
+                            String plain = c.decryptKeyFromBackup(k2);
+                            if (plain != null) {
+                                c.setApiKey(plain);
+                                keySynced = true;
+                            } else {
+                                keyUndecryptable = true;
+                            }
                         }
                     }
                 }
                 // 读不到就如实说，别再无条件提示「已同步」（issue #22 的第二个问题）
                 final String msg = result + (keySynced
                         ? "\n· API key 已同步到配置页"
-                        : "\n· 备份里没有 API key，请到「配置」页手动填写");
+                        : keyUndecryptable
+                                ? "\n· 备份里的 API key 无法解密（换了设备或清过 App 数据），请到「配置」页重新填写"
+                                : "\n· 备份里没有 API key，请到「配置」页手动填写");
                 // 恢复是耗时操作，用户很容易在等待期间切走页面或退出 ——
                 // 那时 Fragment 已 detach，getActivity() 返回 null，
                 // 这里原来直接解引用，正是「操作到一半闪退」的来源。

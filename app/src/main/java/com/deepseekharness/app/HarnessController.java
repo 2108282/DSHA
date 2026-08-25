@@ -659,6 +659,38 @@ public class HarnessController {
         return plain == null || plain.isEmpty() ? "" : encryptKey(plain);
     }
 
+    /** 备份里那份 API key 的还原。返回明文；不是密文格式就原样返回（兼容老备份里
+     *  存的是明文的情况）；是密文但解不开则返回 null。
+     *
+     *  <p><b>为什么必须有这个方法</b>：备份时用 encryptKeyForBackup 加了密，而两条恢复
+     *  路径（syncApiKeyFromRootfs / WorkspaceFragment.doRestore）过去都是把文件内容
+     *  **原样**写进配置 —— 从来没解密。于是恢复之后配置里的 key 是
+     *  {@code base64(iv):base64(ct)} 这串密文，启动时 export 给 dsh 的也是它，
+     *  对话必然鉴权失败；而配置页看着「key 已填」，用户根本无从判断。
+     *
+     *  <p>解不开的情形是真实存在的：加密用的是 Android Keystore 里的密钥，**不出设备**。
+     *  换手机、或者清除 App 数据导致 Keystore 条目重建之后，老备份里的密文就永久解不开。
+     *  那种情况下宁可不回填，让用户重新填一次 —— 写一串解不开的密文进去，
+     *  等于把「要重填 key」这件事藏起来，换成一个查不出原因的鉴权失败。 */
+    public String decryptKeyFromBackup(String raw) {
+        if (raw == null) return null;
+        String t = raw.trim();
+        if (t.isEmpty()) return null;
+        if (!looksEncryptedKey(t)) return t;      // 老备份：明文，直接用
+        String dec = decryptKey(t);
+        return dec == null || dec.isEmpty() ? null : dec;
+    }
+
+    /** 是否是 encryptKey 产出的密文形状：{@code base64(iv):base64(ct)}，两段都是 base64。
+     *  真实的 API key（sk-… / 十六进制串）不含 {@code :}，所以这个判据足够分开两者。 */
+    private static boolean looksEncryptedKey(String s) {
+        int i = s.indexOf(':');
+        if (i <= 0 || i == s.length() - 1) return false;
+        if (s.indexOf(':', i + 1) >= 0) return false;    // 只允许一个分隔符
+        String iv = s.substring(0, i), ct = s.substring(i + 1);
+        return iv.matches("[A-Za-z0-9+/=]{8,}") && ct.matches("[A-Za-z0-9+/=]{8,}");
+    }
+
 
     public String getPort() {
         // 兜底校验：空/非数字/越界全部回退默认 3080（否则 --port 后是空串导致启动失败）
@@ -5176,6 +5208,23 @@ public class HarnessController {
     public String restoreFromBackup(File backup) {
         try {
             if (!proot.isInstalled()) return "环境未就绪，请先完成环境解压/安装后再恢复";
+            // ===== 恢复前体检（只读走一遍整个包）=====
+            // 恢复用的是宽容解压（坏条目跳过继续），这对「个别文件损坏」是对的，但它会把
+            // 「整个包被截断」掩盖成「恢复完成，N 个异常条目已跳过」—— 用户以为好了，
+            // 其实少了一半会话。而备份被截断很常见：存储写满、云同步传一半、拷贝中断。
+            // gzip 自带 CRC 与长度尾部，完整读一遍就能发现，且不需要额外的校验文件，
+            // 所以对用户从别处拷来、通过 SAF 选中的包同样有效。
+            BackupInspector.Info info = BackupInspector.inspect(backup);
+            if (!info.readable) {
+                return "这份备份不能用：" + info.error
+                        + "\n\n换一份再试（「工作区」页可以手动选择备份文件），"
+                        + "或者用当前环境重新导出一份。";
+            }
+            if (!info.looksLikeDsha) {
+                return "这个文件看起来不是 DSHA 备份 —— 里面没有 .dsh 目录（共 "
+                        + info.entries + " 个条目）。\n"
+                        + "请选 Download/DSHA 下形如 DSHA-backup-*.tar.gz 的文件。";
+            }
             File rootDir = new File(proot.getRootfsDir(), "root");
             File stage = new File(rootDir, ".dsha-restore-stage");
             deleteRecursively(stage);
@@ -5221,6 +5270,13 @@ public class HarnessController {
             }
             String body = out.replace("RESTORE_OK", "").replace("RESTORE_PARTIAL", "")
                     .replace("RESTORE_EMPTY", "").trim();
+            // 把体检结果摆出来：用户至少能判断「恢复进来的是不是我想要的那份」，
+            // 而不是只看到一句「恢复完成」。跨版本时版本号尤其有用。
+            body = "· 备份内容：" + info.sessionFiles + " 个会话文件 · 解压后约 "
+                    + info.humanSize()
+                    + (info.appVersion.isEmpty() ? "" : " · 来自 v" + info.appVersion)
+                    + (info.hasManifest ? "" : "（老格式备份，无清单）")
+                    + (body.isEmpty() ? "" : "\n" + body);
             // 解压阶段跳过的异常条目也如实告知（宽容 ≠ 悄悄丢东西）
             if (TarGzipExtractor.lastSkipped > 0) {
                 body += "\n· 备份里有 " + TarGzipExtractor.lastSkipped
@@ -5265,7 +5321,13 @@ public class HarnessController {
             HttpShellService.resetTokenAfterRestore();
             // issue #22：恢复数据落位后回读备份里的 .dsha-apikey 并回填配置页——
             // 否则离线包用户（无 .env）走自动/迁移恢复后配置页 key 为空、启动注入空 key。
-            syncApiKeyFromRootfs();
+            String keyState = syncApiKeyFromRootfs();
+            if ("undecryptable".equals(keyState)) {
+                // 解不开不是错误，但必须说出来 —— 否则用户拿着一个「看起来已填」的
+                // 配置去对话，只会收到查不出原因的鉴权失败
+                body += "\n· 备份里的 API key 无法解密（换了设备或清过 App 数据），"
+                        + "请到「配置」页重新填写";
+            }
             return (ok ? "恢复完成" : "恢复完成（部分内容已跳过，详见下方）")
                     + (body.isEmpty() ? "" : "\n" + body)
                     + "\n重启 WebUI 生效";
@@ -5275,18 +5337,30 @@ public class HarnessController {
     }
 
     /** issue #22：把 rootfs 里恢复出的 .dsha-apikey 回填到 App 配置页（与 WorkspaceFragment.doRestore 的手动恢复一致）。
-     *  .env 只在「在线安装」最后一步写，离线包用户恢复后没有它，key 在备份的 .dsh/.dsha-apikey 里。 */
-    private void syncApiKeyFromRootfs() {
+     *  .env 只在「在线安装」最后一步写，离线包用户恢复后没有它，key 在备份的 .dsh/.dsha-apikey 里。
+     *
+     *  @return 空串 = 备份里没有 key（或不像 key）；{@code "ok"} = 已回填；
+     *          {@code "undecryptable"} = 有但解不开（换机 / Keystore 重置），需要用户重填。 */
+    private String syncApiKeyFromRootfs() {
         try {
             String k = proot.execAndRead("cat /root/.dsh/.dsha-apikey 2>/dev/null");
-            if (k == null) return;
+            if (k == null) return "";
             k = k.trim();
-            // 只接受形如密钥的值（避免把脚本输出/错误信息当 key 写进配置）
-            if (!k.isEmpty() && !k.contains(" ") && k.length() >= 8) {
-                setApiKey(k);
-                android.util.Log.i("DSHA", "恢复后已从 .dsha-apikey 回填 API key（issue #22）");
+            if (k.isEmpty() || k.contains(" ") || k.length() < 8) return "";
+            // 过去这里是 setApiKey(k) —— 直接把**密文**写进了配置。
+            // 备份时是加过密的（encryptKeyForBackup），不解密就等于把
+            // base64(iv):base64(ct) 当成 key export 给 dsh，对话必然鉴权失败，
+            // 而配置页看着「已填」，用户完全无从判断。
+            String plain = decryptKeyFromBackup(k);
+            if (plain == null) {
+                android.util.Log.w("DSHA", "备份里的 API key 解不开（换机或 Keystore 重置）—— 不回填，等用户重填");
+                return "undecryptable";
             }
+            setApiKey(plain);
+            android.util.Log.i("DSHA", "恢复后已从 .dsha-apikey 回填 API key（issue #22）");
+            return "ok";
         } catch (Throwable ignored) {
+            return "";
         }
     }
 
