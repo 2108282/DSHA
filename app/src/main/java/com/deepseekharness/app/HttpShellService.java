@@ -388,6 +388,8 @@ public final class HttpShellService {
                 result = appVibrate(path);
             } else if (path.startsWith("/app/ask")) {
                 result = appAsk(path);
+            } else if (path.startsWith("/app/overlay")) {
+                result = appOverlay(path);
             } else if (path.startsWith("/app/export")) {
                 result = appExport(path);
             } else if (cmd.isEmpty()) {
@@ -578,6 +580,29 @@ public final class HttpShellService {
             return Integer.parseInt(getParam(q, k, String.valueOf(def)).trim());
         } catch (Exception e) {
             return def;
+        }
+    }
+
+    /**
+     * {@code /app/overlay?session=&kind=delta|tool|text|done|clear&text=} ——
+     * 把 agent 正在生成的内容送到屏幕顶部的流式悬浮条（{@link OverlayController}）。
+     *
+     * <p>返回值刻意分三种，让插件侧能自己降级：{@code DISABLED}（用户没开这个功能）、
+     * {@code NO_PERMISSION}（没给悬浮窗权限）、{@code OK}。插件拿到前两种就该停止推送 ——
+     * 流式增量是高频调用，白发一路 HTTP 纯属烧电。
+     */
+    private String appOverlay(String path) {
+        try {
+            String q = queryOf(path);
+            String kind = getParam(q, "kind", "delta");
+            String text = getParam(q, "text", "");
+            String session = getParam(q, "session", "");
+            if (!OverlayController.enabled(ctx)) return "DISABLED";
+            if (!OverlayController.permitted(ctx)) return "NO_PERMISSION";
+            OverlayController.push(ctx, session, kind, text);
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + e.getMessage();
         }
     }
 

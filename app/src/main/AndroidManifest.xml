@@ -14,6 +14,11 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 流式悬浮条（把 agent 正在生成的内容显示在屏幕顶部）。
+         默认关闭、需要用户在系统设置里单独授予；不给也只是这一个功能不可用。
+         真正的「状态栏歌词」没有公开接口（只有 Flyme/exTHmUI 认 ticker flag，
+         其余机型要 Xposed），所以走自绘悬浮窗这条免 ROOT 的路。 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- ADB 保活：系统休眠会冻结后台网络，加入电池优化白名单后连接才能长期在线。
          一次性弹窗申请（本 App 不上架 Play，不受该权限的商店政策限制）。 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />

@@ -912,6 +912,7 @@ public class HarnessController {
             builtinReal.put("@dsh-external/dsh-mobile-nav", "/root/dsha-mobile-nav");
             builtinReal.put("dsh-device-shell-guide", "/root/dsha-device-shell-guide");
             builtinReal.put("dsh-task-notifier", "/root/dsha-task-notifier");
+            builtinReal.put("dsh-status-overlay", "/root/dsha-status-overlay");
 
             String[] globalRoots = {
                     "usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules",
@@ -1164,6 +1165,7 @@ public class HarnessController {
         if ("dsh-device-shell-guide".equals(pkgName)) return "device-shell-guide";
         if ("@dsh-external/dsh-mobile-nav".equals(pkgName)) return "mobile-nav";
         if ("dsh-task-notifier".equals(pkgName)) return "task-notifier";
+        if ("dsh-status-overlay".equals(pkgName)) return "status-overlay";
         return null;
     }
 
@@ -1331,6 +1333,7 @@ public class HarnessController {
                     {"@dsh-external/dsh-mobile-nav", "/root/dsha-mobile-nav"},
                     {"dsh-device-shell-guide", "/root/dsha-device-shell-guide"},
                     {"dsh-task-notifier", "/root/dsha-task-notifier"},
+                    {"dsh-status-overlay", "/root/dsha-status-overlay"},
             };
             boolean changed = false;
             org.json.JSONObject deps = root.optJSONObject("dependencies");
@@ -1633,6 +1636,7 @@ public class HarnessController {
             boolean before = guideRegistered("dsh-device-shell-guide");
             ensureDeviceShellGuide();
             ensureTaskNotifier();
+            ensureStatusOverlay();
             ensureBuiltinBundles();
             boolean after = guideRegistered("dsh-device-shell-guide");
             if (!before && after && !builtinPatchedOnce) {
@@ -1658,6 +1662,8 @@ public class HarnessController {
                 if (!proot.isInstalled()) return;
                 ensureDeviceShellGuide();
                 ensureTaskNotifier();
+                ensureStatusOverlay();
+            ensureStatusOverlay();
                 ensureBuiltinBundles();
                 if (!guideRegistered("dsh-device-shell-guide")) {
                     boolean disabled = new java.io.File(proot.getRootfsDir(),
@@ -2065,6 +2071,7 @@ public class HarnessController {
         // 任务完成通知插件：turn/end → 3090 桥发 App 通知（替代轮询）
         try {
             ensureTaskNotifier();
+            ensureStatusOverlay();
         } catch (Throwable ignored) {
         }
         // 极简模式设备引导已并入 device-shell-guide 插件（home patch 覆盖官方极简 bash 描述）
@@ -3448,6 +3455,87 @@ public class HarnessController {
     /** 确保「任务完成通知」插件已注入 rootfs 并注册为 web profile bundle：
      *  监听 turn/end → 3090 桥发 App 通知（替代轮询会话文件，更准）。
      *  幂等：marker 存在跳过；失败不影响安装。 */
+    /** 确保「流式悬浮条」插件已注入 rootfs 并注册为 web profile bundle：
+     *  监听 session/event → 节流后经 3090 桥把 agent 正在生成的内容送到屏幕顶部
+     *  （{@link OverlayController}），工具调用显示成「正在执行命令」这类人话。
+     *
+     *  <p>插件<b>始终注册</b>，可见性由配置页那个开关控制：它只挂一个事件监听，
+     *  读不到桥 token（桌面环境 / 桥没起）或收到 DISABLED 就自己进冷却，开销可以忽略。
+     *  反过来「按需安装」要等重启 Web 才生效，体验更差。
+     *
+     *  <p>幂等：marker 存在且语法正常则跳过；失败不影响安装。 */
+    private void ensureStatusOverlay() {
+        try {
+            final String NAME = "dsh-status-overlay";
+            final String REAL = "/root/dsha-status-overlay";
+            java.io.File realDir = new java.io.File(proot.getRootfsDir(), "root/dsha-status-overlay");
+            java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/node_modules/" + NAME);
+            java.io.File marker = new java.io.File(proot.getRootfsDir(),
+                    "root/dsha-status-overlay-installed");
+            if (userDisabledPlugin(NAME)) {
+                // 用户禁用 → 只更新实体（重新启用时拿到的是新版），不注册
+                writeAssetTo("status-overlay/package.json", new java.io.File(realDir, "package.json"));
+                writeAssetTo("status-overlay/cordis.patch.yml", new java.io.File(realDir, "cordis.patch.yml"));
+                writeAssetTo("status-overlay/lib/index.js", new java.io.File(realDir, "lib/index.js"));
+                return;
+            }
+            if (marker.exists() && nmLink.exists()) {
+                // 语法自愈：热更新推来的脚本万一是坏的，删 marker 强制用 APK 内置版重注入
+                String syn = proot.execAndRead(
+                        "node --check /root/dsha-status-overlay/lib/index.js 2>&1 | head -2; echo SYNTAX=${PIPESTATUS[0]}");
+                if (syn != null && syn.contains("SYNTAX=1")) {
+                    android.util.Log.w("DSHA", "status-overlay JS 语法错误，删 marker 强制重注入");
+                    //noinspection ResultOfMethodCallIgnored
+                    marker.delete();
+                } else {
+                    return;
+                }
+            }
+            writeAssetTo("status-overlay/package.json", new java.io.File(realDir, "package.json"));
+            writeAssetTo("status-overlay/cordis.patch.yml", new java.io.File(realDir, "cordis.patch.yml"));
+            writeAssetTo("status-overlay/lib/index.js", new java.io.File(realDir, "lib/index.js"));
+            if (nmLink.getParentFile() != null) {
+                //noinspection ResultOfMethodCallIgnored
+                nmLink.getParentFile().mkdirs();
+            }
+            if (!nmLink.exists()) {
+                try {
+                    java.nio.file.Files.createSymbolicLink(nmLink.toPath(),
+                            java.nio.file.Paths.get(REAL));
+                } catch (Throwable linkErr) {
+                    // 私有目录不一定支持符号链接（历史上栽过）→ 退回递归复制
+                    java.io.File nmDir = nmLink.getParentFile();
+                    if (nmDir != null) linkPlugin(NAME, REAL, nmDir);
+                }
+            }
+            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+            if (pf.isFile()) {
+                String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
+                org.json.JSONObject root = new org.json.JSONObject(txt);
+                org.json.JSONObject deps = root.optJSONObject("dependencies");
+                if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
+                if (!deps.has(NAME)) deps.put(NAME, "link:" + REAL);
+                org.json.JSONObject dshObj = root.optJSONObject("dsh");
+                if (dshObj == null) { dshObj = new org.json.JSONObject(); root.put("dsh", dshObj); }
+                org.json.JSONObject profile = dshObj.optJSONObject("profile");
+                if (profile == null) { profile = new org.json.JSONObject(); dshObj.put("profile", profile); }
+                org.json.JSONArray bundles = profile.optJSONArray("bundles");
+                if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
+                boolean found = false;
+                for (int i = 0; i < bundles.length(); i++) {
+                    if (NAME.equals(bundles.optString(i, ""))) { found = true; break; }
+                }
+                if (!found) bundles.put(NAME);
+                java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
+            }
+            java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
+            android.util.Log.i("DSHA", "流式悬浮条插件已注册");
+        } catch (Throwable ignored) {
+            // 可选功能，失败不该影响安装或启动
+        }
+    }
+
     private void ensureTaskNotifier() {
         try {
             final String NAME = "dsh-task-notifier";
@@ -3553,6 +3641,7 @@ public class HarnessController {
             }
             ensureDeviceShellGuide();
             ensureTaskNotifier();
+            ensureStatusOverlay();
             ensureBuiltinBundles();
             StringBuilder diag = new StringBuilder();
             for (int i = 0; i < names.length; i++) {
@@ -4067,7 +4156,7 @@ public class HarnessController {
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
      *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
      *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
-    private static final String BUILTIN_ASSET_VERSION = "12";
+    private static final String BUILTIN_ASSET_VERSION = "13";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
      *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，
@@ -4080,7 +4169,7 @@ public class HarnessController {
                     "cat /root/.dsh/builtin-assets.version 2>/dev/null || echo NONE");
             if (r != null && r.trim().equals(BUILTIN_ASSET_VERSION)) return;
             proot.execAndRead(
-                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed; "
+                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
                     + "echo refreshed");
             android.util.Log.i("DSHA", "内置插件资产版本变化 → 已删 marker，本次⑥将重注入新资产");
         } catch (Throwable ignored) {
@@ -4436,7 +4525,7 @@ public class HarnessController {
                                 "cat /root/.dsh/builtin-assets.version 2>/dev/null || echo NONE");
                         if (r == null || !r.trim().equals(BUILTIN_ASSET_VERSION)) {
                             proot.execAndRead(
-                                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed; echo cleaned");
+                                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; echo cleaned");
                             android.util.Log.i("DSHA", "迁移(≤v1.1.1)：已删内置插件 marker，等待重注入");
                         }
                         // 2) 老版本无离线包版本标记 → 写当前（避免误弹升级提示）
@@ -4450,7 +4539,7 @@ public class HarnessController {
                         // 旧版 profile 可能缺 dependencies 字段 / 用 file: 依赖，
                         // 触发一次 fix-stale-bundles 自愈（App 启动时会跑，这里显式跑一次）
                         proot.execAndRead(
-                                "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed; "
+                                "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
                                 + "echo 'v1.0.x 迁移：删 marker 强制重注入'");
                         android.util.Log.i("DSHA", "迁移(v1.0.x)完成");
                     }
@@ -6573,6 +6662,7 @@ public class HarnessController {
             "@dsh-external/dsh-mobile-nav",
             "dsh-device-shell-guide",
             "dsh-task-notifier",
+            "dsh-status-overlay",
     };
 
     private static String builtinPluginHit(String spec) {

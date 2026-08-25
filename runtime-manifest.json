@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-25T06:41:19Z",
+  "generated": "2026-08-25T07:54:02Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -83,8 +83,8 @@
     {
       "path": "app/src/main/assets/fix-stale-bundles.sh",
       "asset": "fix-stale-bundles.sh",
-      "size": 2703,
-      "sha256": "1d02c796bf12991c19a9d2a309fd5aa6d0a762e9e2342f23234bb98002b9d5c9",
+      "size": 2824,
+      "sha256": "c352f0ceb7b9d50a45499318723d72ca4e9383501912248d3a391b4fddbff7a0",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/fix-stale-bundles.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/fix-stale-bundles.sh",
@@ -237,8 +237,8 @@
     {
       "path": "app/src/main/assets/selftest.py",
       "asset": "selftest.py",
-      "size": 67433,
-      "sha256": "e9a20f7263700471ba1ead52fa66903435b11879c6179f43ac3c58dc8c5f4b18",
+      "size": 67478,
+      "sha256": "2ddc457aeb6be4e67e21cf639808ad19c8421e4605f77df5f0cbd46877d2c6d4",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/selftest.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/selftest.py",
@@ -287,6 +287,28 @@
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/webui-polyfill.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/webui-polyfill.sh",
         "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/webui-polyfill.sh"
+      ]
+    },
+    {
+      "path": "app/src/main/assets/status-overlay/package.json",
+      "asset": "status-overlay/package.json",
+      "size": 539,
+      "sha256": "e2b667e1e04fda127cdf2a00f891b529999d0f1878cf134ad19b78aa8d8a605c",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/package.json",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/status-overlay/package.json",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/package.json"
+      ]
+    },
+    {
+      "path": "app/src/main/assets/status-overlay/lib/index.js",
+      "asset": "status-overlay/lib/index.js",
+      "size": 7347,
+      "sha256": "c1ee571bd4fcc06663e54192b26e94dca49440b05aa6996fb8ae75d51a0bd2fe",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/lib/index.js",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/status-overlay/lib/index.js",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/lib/index.js"
       ]
     },
     {

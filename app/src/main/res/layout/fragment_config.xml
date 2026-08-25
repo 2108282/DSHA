@@ -218,6 +218,15 @@
                 android:text="局域网访问（同网段设备可打开，注意安全）" />
 
             <CheckBox
+                android:id="@+id/config_overlay_stream"
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/touch_min"
+                android:paddingStart="@dimen/gap_tight"
+                android:text="屏幕顶部流式显示 AI 输出（需悬浮窗权限；内容旁人可见）" />
+
+            <CheckBox
                 android:id="@+id/config_rc6"
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"

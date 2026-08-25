@@ -14,6 +14,7 @@ SRC=/root/patches/builtin
 DEST_MOBILE=/root/dsha-mobile-nav
 DEST_GUIDE=/root/dsha-device-shell-guide
 DEST_NOTIFIER=/root/dsha-task-notifier
+DEST_OVERLAY=/root/dsha-status-overlay
 PROFILE_DIR=/root/.dsh/profiles/web
 NM="$PROFILE_DIR/node_modules"
 PF="$PROFILE_DIR/package.json"
@@ -22,6 +23,7 @@ PF="$PROFILE_DIR/package.json"
 MARK_MOBILE="${DEST_MOBILE}-installed"
 MARK_GUIDE="${DEST_GUIDE}-installed"
 MARK_NOTIFIER="${DEST_NOTIFIER}-installed"
+MARK_OVERLAY="${DEST_OVERLAY}-installed"
 BUILTIN_SNAPSHOT=/root/dsha-builtin.txt
 
 echo "==> 预置 DSHA 内置插件"
@@ -82,6 +84,24 @@ if [ -d "$SRC/task-notifier" ]; then
   fi
 else
   echo "  WARN: 缺 task-notifier 源（/root/patches/builtin/task-notifier），跳过"
+fi
+
+# 流式悬浮条（把 agent 输出实时显示在屏幕顶部）。默认功能是关着的，插件本身仍要装好，
+# 否则用户打开开关后还得等一次 Web 重启才生效。
+if [ -d "$SRC/status-overlay" ]; then
+  mkdir -p "$DEST_OVERLAY/lib"
+  cp -f "$SRC/status-overlay/package.json" "$DEST_OVERLAY/" 2>/dev/null || true
+  cp -f "$SRC/status-overlay/cordis.patch.yml" "$DEST_OVERLAY/" 2>/dev/null || true
+  cp -f "$SRC/status-overlay/lib/index.js" "$DEST_OVERLAY/lib/" 2>/dev/null || true
+  if [ -s "$DEST_OVERLAY/package.json" ] && [ -s "$DEST_OVERLAY/lib/index.js" ]; then
+    touch "$MARK_OVERLAY"
+    echo "  ✓ status-overlay 已预置"
+  else
+    rm -f "$MARK_OVERLAY"
+    echo "  ERROR: status-overlay 实体不完整 → 不立 marker" >&2
+  fi
+else
+  echo "  WARN: 缺 status-overlay 源（/root/patches/builtin/status-overlay），跳过"
 fi
 
 # ---------- 2) 注册到 web profile（merge，不覆盖已有插件） ----------

@@ -29,6 +29,7 @@ public class ConfigFragment extends Fragment {
     private EditText apiKeyEdit, portEdit;
     private CheckBox confirmShellCb, checkUpdateCb, desktopModeCb, lanModeCb, rc6Cb, geckoCb, adbCb, rootShellCb, prorootCb;
     private CheckBox backupKeyCb;
+    private CheckBox overlayStreamCb;
     private EditText autoBackupEdit;
     private Button saveBtn;
     private TextView repoLink;
@@ -50,6 +51,36 @@ public class ConfigFragment extends Fragment {
         desktopModeCb = view.findViewById(R.id.config_desktop_mode);
         backupKeyCb = view.findViewById(R.id.config_backup_key);
         lanModeCb = view.findViewById(R.id.config_lan_mode);
+        overlayStreamCb = view.findViewById(R.id.config_overlay_stream);
+        if (overlayStreamCb != null) {
+            // 勾上时才要权限：没授权就直接引导过去，别让用户勾了个不生效的开关
+            overlayStreamCb.setOnCheckedChangeListener((btn, checked) -> {
+                if (!checked) {
+                    OverlayController.teardown(requireContext().getApplicationContext());
+                    return;
+                }
+                if (!OverlayController.permitted(requireContext())) {
+                    new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                            .setTitle("需要悬浮窗权限")
+                            .setMessage("在屏幕顶部实时显示 AI 输出需要「显示在其他应用上层」权限。\n\n"
+                                    + "顺便提醒：开启后内容会直接显示在屏幕上，旁边的人也看得见。")
+                            .setPositiveButton("去开启", (d, w) -> {
+                                try {
+                                    startActivity(new android.content.Intent(
+                                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            android.net.Uri.parse("package:" + requireContext().getPackageName())));
+                                } catch (Throwable e) {
+                                    Toast.makeText(requireContext(),
+                                            "打不开系统设置，请手动到「应用权限 → 显示在其他应用上层」开启",
+                                            Toast.LENGTH_LONG).show();
+                                }
+                            })
+                            .setNegativeButton("算了", (d, w) -> btn.setChecked(false))
+                            .setOnCancelListener(d -> btn.setChecked(false))
+                            .show();
+                }
+            });
+        }
         rc6Cb = view.findViewById(R.id.config_rc6);
         autoBackupEdit = view.findViewById(R.id.config_auto_backup);
         geckoCb = view.findViewById(R.id.config_gecko_core);
@@ -572,6 +603,8 @@ public class ConfigFragment extends Fragment {
                     .putBoolean("backup_include_key",
                             backupKeyCb == null || backupKeyCb.isChecked())
                     .putBoolean("lan_mode", lanModeCb.isChecked())
+                    .putBoolean("overlay_stream",
+                            overlayStreamCb != null && overlayStreamCb.isChecked())
                     .putBoolean("use_rc6", rc6Cb.isChecked())
                     .putBoolean("gecko_core", geckoCb != null && geckoCb.isChecked())
                     // 运行时以字符串存，将来加第三种后端不必改存储格式
@@ -633,6 +666,14 @@ public class ConfigFragment extends Fragment {
         lanModeCb.setChecked(requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false));
+        if (overlayStreamCb != null) {
+            // 权限可能被用户在系统设置里撤掉 —— 那时开关也该跟着回到关闭，
+            // 否则界面显示「开着」而实际什么都不显示，又是一次静默失效
+            boolean want = requireContext()
+                    .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .getBoolean("overlay_stream", false);
+            overlayStreamCb.setChecked(want && OverlayController.permitted(requireContext()));
+        }
         if (prorootCb != null) {
             prorootCb.setChecked("proroot".equals(requireContext()
                     .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)

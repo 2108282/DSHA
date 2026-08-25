@@ -1,0 +1,213 @@
+/**
+ * dsh-status-overlay —— 把 agent 正在生成的内容实时送到手机屏幕顶部的悬浮条上，
+ * 像音乐软件的歌词那样流式滚动；工具调用则显示成「正在执行命令」这类人话。
+ *
+ * 数据流：
+ *   session/event → 这里节流合并 → GET 127.0.0.1:3090/app/overlay → App 侧 OverlayController
+ *
+ * 几个刻意的设计：
+ *
+ * 1) **不写模块级 `inject`**。模块级 inject 是硬依赖，缺服务就让 entry 永远 pending，
+ *    dsh 会判定「1 entry did not activate」→ **整棵 plugin tree 加载失败**，Web 起不来。
+ *    内置的 device-shell-guide 0.1.9 栽过这一次，三个用户的 Web 直接打不开。
+ *    这个插件只用 ctx.on，不需要任何服务，那就一个都不声明。
+ *
+ * 2) **发「当前应显示的整行」而不是增量**。悬浮条只有一行、只显示尾部若干字，
+ *    发整行是幂等的：丢一次包下一次就自动对上；发增量则一旦丢包就永久错位。
+ *
+ * 3) **节流 + 冷却**。流式 token 一秒几十个，每个都发一次 HTTP 纯属烧电，
+ *    所以合并到 FLUSH_MS 一次；而用户没开这个功能（DISABLED）或没给悬浮窗权限
+ *    （NO_PERMISSION）时进入长冷却，别对着一个关着的门一直敲。
+ *
+ * 4) **多实例**：dsh 可以同时跑多个会话，各自都在吐字。按 session 分桶、各带一个短标识
+ *    交给 App 侧渲染，否则两路输出会交织成乱码。
+ *
+ * 5) **一个异常都不能冒出去**。这是个「顺带好看」的功能，绝不能影响 agent 干活 ——
+ *    所有 IO 与解析都包在 try/catch 里，失败就静默降级。
+ */
+import { readFileSync } from 'node:fs'
+
+/** 桥地址（App 侧只监听回环，容器与宿主共享网络命名空间，所以直接连得上）。 */
+const BRIDGE = 'http://127.0.0.1:3090/app/overlay'
+const TOKEN_PATH = '/root/.dsh/.bridge_token'
+/** 合并窗口：120ms 一次，肉眼看起来仍是连续流动的。 */
+const FLUSH_MS = 120
+/** 悬浮条只有一行，超出的从左边推掉。与 App 侧的上限保持一致。 */
+const MAX_CHARS = 64
+/** 功能关闭 / 没权限时的冷却时长。 */
+const COOLDOWN_MS = 60_000
+/** 单次请求超时：桥就在本机，1.5 秒都不该等。 */
+const TIMEOUT_MS = 1500
+
+/** 工具名 → 人话。命中越具体的放前面；没命中的兜底成「正在使用 X」。 */
+const TOOL_LABELS = [
+  [/bash|shell|command|exec|terminal/i, '⚙ 正在执行命令'],
+  [/write|create.*file|edit|patch|apply/i, '⚙ 正在修改文件'],
+  [/read|cat|view|open.*file/i, '⚙ 正在读取文件'],
+  [/glob|grep|search|find/i, '⚙ 正在搜索'],
+  [/fetch|web|http|browse|url/i, '⚙ 正在联网查资料'],
+  [/todo|plan/i, '⚙ 正在整理任务清单'],
+  [/task|agent|subagent|dispatch/i, '⚙ 正在派子任务'],
+  [/image|screenshot|vision/i, '⚙ 正在看图'],
+  [/notify|toast|share|clip/i, '⚙ 正在调用手机功能'],
+]
+
+function toolLabel(name) {
+  const n = String(name || '').trim()
+  if (!n) return '⚙ 正在使用工具'
+  for (const [re, label] of TOOL_LABELS) {
+    if (re.test(n)) return label
+  }
+  return '⚙ 正在使用 ' + n
+}
+
+let token
+function bridgeToken() {
+  if (token !== undefined) return token
+  try {
+    token = readFileSync(TOKEN_PATH, 'utf8').trim()
+  } catch {
+    token = ''    // 桥没起来 / 桌面环境：整个功能静默停用
+  }
+  return token
+}
+
+/** sessionKey → { line, timer, dirty } */
+const state = new Map()
+let cooldownUntil = 0
+
+function sessionKey(session) {
+  try {
+    const raw = session?.id ?? session?.sessionId ?? session?.key ?? ''
+    const s = String(raw)
+    return s ? s.slice(-8) : '-'
+  } catch {
+    return '-'
+  }
+}
+
+function tail(s) {
+  const one = String(s || '').replace(/\s+/g, ' ').trim()
+  return one.length <= MAX_CHARS ? one : one.slice(one.length - MAX_CHARS)
+}
+
+async function send(key, kind, text) {
+  const tok = bridgeToken()
+  if (!tok) return
+  if (Date.now() < cooldownUntil) return
+  const url = `${BRIDGE}?kind=${encodeURIComponent(kind)}`
+    + `&session=${encodeURIComponent(key)}`
+    + `&text=${encodeURIComponent(text || '')}`
+  try {
+    const res = await fetch(url, {
+      headers: { 'X-Token': tok },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    })
+    const body = (await res.text()).trim()
+    if (body === 'DISABLED' || body === 'NO_PERMISSION') {
+      // 用户没开这个功能或没授权 —— 进冷却，别一直敲一扇关着的门
+      cooldownUntil = Date.now() + COOLDOWN_MS
+    }
+  } catch {
+    // 桥没起、超时、被拒：这功能不重要，静默降级
+    cooldownUntil = Date.now() + 5000
+  }
+}
+
+function bucket(key) {
+  let b = state.get(key)
+  if (!b) {
+    b = { line: '', timer: undefined, pending: false }
+    state.set(key, b)
+    // 会话数量不该无限涨（异常情况下也就几十个）
+    if (state.size > 16) {
+      const oldest = state.keys().next().value
+      if (oldest !== key) state.delete(oldest)
+    }
+  }
+  return b
+}
+
+/** 合并窗口内只保留最后一次内容，窗口结束时发一次。 */
+function schedule(key, kind) {
+  const b = bucket(key)
+  if (b.timer) {
+    b.pending = true
+    return
+  }
+  b.timer = setTimeout(() => {
+    b.timer = undefined
+    const line = b.line
+    b.pending = false
+    void send(key, kind, line)
+  }, FLUSH_MS)
+  // 让 dsh 能正常退出：这个定时器不该拖住事件循环
+  if (typeof b.timer?.unref === 'function') b.timer.unref()
+}
+
+/** @param {import('@deepseek-ai/cordis').Context} ctx */
+export function apply(ctx) {
+  ctx.on('session/event', (session, event) => {
+    try {
+      if (!bridgeToken()) return
+      const key = sessionKey(session)
+      const type = event?.type
+      const data = event?.data
+
+      if (type === 'assistant/chunk') {
+        const chunk = data?.chunk
+        // 只跟正文走；reasoning-delta 是思考过程，默认不往屏幕上贴
+        if (chunk?.type !== 'text-delta') return
+        const piece = chunk.text
+        if (!piece) return
+        const b = bucket(key)
+        b.line = tail(b.line + piece)
+        schedule(key, 'text')
+        return
+      }
+
+      if (type === 'tool/call') {
+        const b = bucket(key)
+        b.line = toolLabel(data?.name)
+        // 工具状态要立刻可见（它替代整行，且不像正文那样高频）
+        if (b.timer) {
+          clearTimeout(b.timer)
+          b.timer = undefined
+        }
+        void send(key, 'tool', b.line)
+        return
+      }
+
+      if (type === 'turn/start') {
+        const b = bucket(key)
+        b.line = ''
+        return
+      }
+
+      if (type === 'turn/end') {
+        const b = bucket(key)
+        if (b.timer) {
+          clearTimeout(b.timer)
+          b.timer = undefined
+        }
+        // 留着最后一句让它自然淡出（App 侧几秒后自己收起来）
+        void send(key, 'done', b.line)
+        state.delete(key)
+      }
+    } catch {
+      // 事件回调里抛异常会影响 agent 主链路，一律吞掉
+    }
+  })
+
+  ctx.on('dispose', () => {
+    try {
+      for (const [key, b] of state) {
+        if (b.timer) clearTimeout(b.timer)
+        void send(key, 'clear', '')
+      }
+      state.clear()
+    } catch {
+      // 卸载路径上的清理，失败无所谓
+    }
+  })
+}
