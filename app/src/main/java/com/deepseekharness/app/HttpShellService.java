@@ -52,6 +52,15 @@ public final class HttpShellService {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private volatile CountDownLatch pendingLatch;
     private volatile boolean pendingAllow;
+    /** 本轮确认是否已被认领：三条渠道（通知 / 弹窗 / 悬浮条）谁先点谁生效。
+     *
+     *  <p>没有它的时候，「检查 latch 未决 → 写 pendingAllow → countDown」这三步不是原子的：
+     *  两条渠道几乎同时被点（悬浮条点了没反应又去点通知，或纯误触），两个线程都能通过
+     *  {@code getCount() == 0} 的检查，于是后到的那个会把 pendingAllow 覆盖掉 ——
+     *  等待线程读到的是后写入的值。表现是<b>授权语义反转</b>：点「允许」却被拒绝，
+     *  更糟的是点「拒绝」而另一条渠道的「允许」后到，命令照样执行。 */
+    private final java.util.concurrent.atomic.AtomicBoolean confirmResolved =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
     /** 确认进行中标志：并发确认请求直接拒绝（避免 latch 覆盖导致"点了允许却拒绝"）。
      *  用 AtomicBoolean 而非 volatile boolean —— "检查后置位"必须原子，
      *  否则两个请求线程可能同时通过检查、互相覆盖 pendingLatch。（吸收上游 PR#24） */
@@ -64,10 +73,18 @@ public final class HttpShellService {
             new java.util.concurrent.atomic.AtomicLong();
     /** 当前挂起的弹窗：setCancelable(false) 后它自己关不掉，确认完必须主动 dismiss */
     private volatile androidx.appcompat.app.AlertDialog pendingDialog;
-    /** /app/ask 的一次性问答状态（同一时刻只允许一个提问在等待） */
-    private volatile CountDownLatch askLatch;
+    /** /app/ask 的一次性问答状态（同一时刻只允许一个提问在等待）。
+     *  askBusy 用 AtomicBoolean 而不是 volatile boolean —— 与 confirmBusy 同理：
+     *  「检查后置位」不原子的话两个请求会同时通过检查，各自弹一个对话框、
+     *  共写同一个 askAnswer，用户答 A 的值会被 B 那次请求读走。
+     *
+     *  <p>这里刻意<b>没有</b>与 pendingLatch 对应的 askLatch：确认那边需要字段，是因为
+     *  通知与悬浮条的按钮回调要从外部认领同一个 latch；提问只有对话框一条渠道，
+     *  回调直接闭包捕获 latch 就够了。曾经有过一个只写不读的 askLatch 字段，
+     *  它会让人误以为存在外部唤醒路径。 */
     private volatile String askAnswer = "";
-    private volatile boolean askBusy = false;
+    private final java.util.concurrent.atomic.AtomicBoolean askBusy =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     private ServerSocket server;
     /** IPv6 回环监听（兼容脚本用 localhost 解析成 ::1 的场景；绑不上则忽略） */
@@ -366,16 +383,11 @@ public final class HttpShellService {
             String path = parts.length > 1 ? parts[1] : "/";
             String cmd = "";
             if (path.startsWith("/exec") || path.startsWith("/confirm")) {
-                int q = path.indexOf("cmd=");
-                if (q >= 0) {
-                    // 关键：cmd= 值要截断到 &（查询串可能有多个参数，如
-                    // /exec?cmd=ls&token=xxx）。旧实现 substring(q+4) 取到末尾，
-                    // cmd 会变成 "ls&token=xxx" → 执行错命令！
-                    String cv = path.substring(q + 4);
-                    int amp = cv.indexOf('&');
-                    if (amp >= 0) cv = cv.substring(0, amp);
-                    cmd = URLDecoder.decode(cv, "UTF-8");
-                }
+                // 走统一的查询串解析（Query.param）：值要截断到 &，参数名要精确匹配。
+                // 旧实现是 path.indexOf("cmd=") —— 值截断修过了，但参数名边界一直没有，
+                // 于是 ?xcmd=junk&cmd=真命令 会取到 junk。/confirm 的 cmd 是<b>给用户看的
+                // 命令原文</b>，取错就等于让用户批准了一条与实际不符的命令。
+                cmd = getParam(queryOf(path), "cmd", "");
             }
             // 鉴权：token 必须匹配（通过 ?token= 或 X-Token header）
             boolean authed = false;
@@ -973,20 +985,25 @@ public final class HttpShellService {
         String q = getParam(queryOf(path), "q", "");
         String optRaw = getParam(queryOf(path), "options", "");
         if (q.isEmpty()) return "NO_QUESTION";
-        if (askBusy) return "[BUSY] 已有一个提问在等用户回答";
         final MainActivity act = MainActivity.current;
         if (act == null) {
             return "[APP_BACKGROUND] App 不在前台，弹不出提问 —— 可先 /app/notify 提醒用户打开 DSHA";
         }
         String[] parts = optRaw.isEmpty() ? new String[] { "好" } : optRaw.split("\\|");
         final String[] opts = parts.length <= 3 ? parts : new String[] { parts[0], parts[1], parts[2] };
-        askBusy = true;
+        // 检查与置位必须原子（见 askBusy 声明处）。CAS 成功之后立刻进 try，
+        // 保证任何返回路径都会在 finally 里放开它。
+        if (!askBusy.compareAndSet(false, true)) {
+            return "[BUSY] 已有一个提问在等用户回答";
+        }
         try {
             final CountDownLatch latch = new CountDownLatch(1);
-            askLatch = latch;
             askAnswer = "";
             act.runOnUiThread(() -> {
                 try {
+                    // 正在 finishing / 已销毁的 Activity 上 show() 会抛 BadTokenException，
+                    // 而这里是主线程，异常不在 handle() 的 catch 范围内 → 会崩 App
+                    if (act.isFinishing() || act.isDestroyed()) return;
                     androidx.appcompat.app.AlertDialog.Builder b =
                             new androidx.appcompat.app.AlertDialog.Builder(act)
                                     .setTitle("助手提问").setMessage(q);
@@ -1006,8 +1023,13 @@ public final class HttpShellService {
                             latch.countDown();
                         });
                     }
+                    // 只认「用户主动取消」（返回键 / 点框外）。**不要挂 OnDismissListener** ——
+                    // dismiss 在 Activity 重建时也会触发（旋屏、切深色模式、被系统回收），
+                    // 那会让 agent 收到「用户关掉了提问框」这种假答案。确认弹窗那边正是
+                    // 因为拿 dismiss 当拒绝，长期出现「确认框有时莫名被拒」。
+                    // 代价是 Activity 重建时这次提问要等满超时 —— 宁可让 agent 多等，
+                    // 也不要给它一个错的回答。
                     b.setOnCancelListener(d -> latch.countDown());
-                    b.setOnDismissListener(d -> latch.countDown());
                     b.show();
                 } catch (Throwable e) {
                     latch.countDown();
@@ -1019,8 +1041,8 @@ public final class HttpShellService {
         } catch (InterruptedException e) {
             return "[INTERRUPTED]";
         } finally {
-            askBusy = false;
-            askLatch = null;
+            // 顺序与 confirm 一致：先清状态，最后才放开 busy
+            askBusy.set(false);
         }
     }
 
@@ -1055,24 +1077,12 @@ public final class HttpShellService {
 
 /** 从（仅含 query 的）查询串提取参数。调用方务必先截取 '?' 之后的内容。 */
     private static String getParam(String q, String key, String def) {
-        try {
-            int i = q.indexOf(key + "=");
-            if (i < 0) return def;
-            String v = q.substring(i + key.length() + 1);
-            int amp = v.indexOf('&');
-            if (amp >= 0) v = v.substring(0, amp);
-            int frag = v.indexOf('#');
-            if (frag >= 0) v = v.substring(0, frag);
-            return URLDecoder.decode(v, "UTF-8");
-        } catch (Exception e) {
-            return def;
-        }
+        return Query.param(q, key, def);
     }
 
     // 便捷包装：路径中取 query 部分
     private static String queryOf(String path) {
-        int i = path.indexOf('?');
-        return i >= 0 ? path.substring(i + 1) : "";
+        return Query.of(path);
     }
 
     private boolean confirmEnabled() {
@@ -1097,6 +1107,7 @@ public final class HttpShellService {
             // epoch 先递增：上一轮残留的弹窗/通知按钮带的是旧 epoch，会被丢弃
             final long myEpoch = confirmEpoch.incrementAndGet();
             pendingAllow = false;   // 先写标志，再发布 latch
+            confirmResolved.set(false);  // 必须早于发布 latch：latch 一露面就可能有点击进来
             pendingLatch = latch;
 
             // 通知是权威渠道（前后台都在），前台再叠一个弹窗当快捷方式
@@ -1163,15 +1174,17 @@ public final class HttpShellService {
         }
     }
 
-    /** 通知按钮（ConfirmReceiver）与前台弹窗按钮共用的回调。
-     *  epoch 校验 + latch 认领：丢弃迟到的、属于上一个请求的点击。 */
+    /** 通知按钮（ConfirmReceiver）、前台弹窗按钮与悬浮条按钮共用的回调。
+     *  epoch 校验 + 原子认领：丢弃迟到的（属于上一个请求的）点击，以及同一轮里后到的那次。 */
     public void resolveConfirm(boolean allow, long epoch) {
         if (epoch != confirmEpoch.get()) {
             android.util.Log.i("DSHA", "忽略过期的确认点击（epoch " + epoch + "）");
             return;
         }
         CountDownLatch l = pendingLatch;
-        if (l == null || l.getCount() == 0) return; // 已决或无挂起
+        if (l == null || l.getCount() == 0) return; // 已决或无挂起（快速路径）
+        // 真正的认领在这里，且必须原子 —— 上面那个 getCount 检查挡不住两条渠道同时点。
+        if (!confirmResolved.compareAndSet(false, true)) return;
         pendingAllow = allow;
         l.countDown();
         dismissConfirmDialog();

@@ -140,7 +140,7 @@ Rule: **restore as much as possible, never fail the whole archive over one unkno
 | `/app/export?path=&name=` | Copy a file into `Download/DSHA` via MediaStore (accepts guest paths like `/root/x.md`) |
 | `/app/readfile?path=` | Read a text file under `/sdcard` (credential files are refused) |
 
-Rules when adding endpoints: keep them **token-gated**, refuse paths outside `/sdcard` for file access, never expose credential files, and return plain text — `handle()` wraps whatever you return in `{"result":"…"}`, so nested JSON gets double-escaped. Blocking endpoints must have a timeout and a single-flight guard (see `askBusy`).
+Rules when adding endpoints: keep them **token-gated**, refuse paths outside `/sdcard` for file access, never expose credential files, and return plain text — `handle()` wraps whatever you return in `{"result":"…"}`, so nested JSON gets double-escaped. Read parameters **only** through `getParam`/`intParam` (they delegate to `Query`, the single query-string parser in the tree — never hand-roll `indexOf("key=")`, it has no parameter-name boundary and any parameter *ending* with your key hijacks it). Blocking endpoints must have a timeout and a single-flight guard that is an `AtomicBoolean` with `compareAndSet` (see `askBusy` / `confirmBusy`) — a `volatile boolean` plus "check then set" is not atomic, and two requests will trample each other's state. Dialogs that gate a blocking call must not `countDown` from `OnDismiss` (see traps).
 
 ## Upgrade compatibility (old installs must upgrade in place)
 
@@ -227,7 +227,7 @@ single-flight guard, and never lower `SCRIPT_VERSION` — old installs keep thei
 
 ## Known traps (verify before assuming)
 
-- **确认弹窗要和通知一起发，而且别拿 dismiss 当拒绝.** 早期实现是「前台弹窗 / 后台通知」二选一：Activity 一被 pause，用户就再也看不到弹窗，只能干等 60s 超时被拒 —— 这正是「确认框有时不出现」的由来。现在两条都发（通知是权威渠道），弹窗用 `setCancelable(false)` 且**不在** `OnCancel`/`OnDismiss` 里 `countDown`（pause 造成的 dismiss 会被误判成用户拒绝）。在 finishing 的 Activity 上 `show()` 会抛 `BadTokenException`，那是主线程，异常不在 `handle()` 的 catch 范围内，必须自己 try 住。
+- **确认弹窗要和通知一起发，而且别拿 dismiss 当拒绝.** 早期实现是「前台弹窗 / 后台通知」二选一：Activity 一被 pause，用户就再也看不到弹窗，只能干等 60s 超时被拒 —— 这正是「确认框有时不出现」的由来。现在两条都发（通知是权威渠道），弹窗用 `setCancelable(false)` 且**不在** `OnCancel`/`OnDismiss` 里 `countDown`（pause 造成的 dismiss 会被误判成用户拒绝）。在 finishing 的 Activity 上 `show()` 会抛 `BadTokenException`，那是主线程，异常不在 `handle()` 的 catch 范围内，必须自己 try 住。**这套约定对每一个阻塞式对话框都成立** —— `/app/ask` 曾经原样犯了一遍（`OnDismiss` 里 `countDown`，于是旋屏、切深色模式、Activity 被回收都会给 agent 送回一句「用户关掉了提问框」，而用户什么都没做）。修法是只认 `OnCancel`（用户主动取消）、不认 `OnDismiss`；代价是 Activity 重建时那次提问要等满超时，宁可让 agent 多等也不要给它假答案。
 - **确认要带 epoch.** 锁屏残留通知、通知历史、手表转发上的旧「允许」按钮，会把授权决定打到**下一个**请求上（等于一次点击授权了另一条命令）。每次确认递增 `confirmEpoch`，回调校验 epoch 并认领 latch，过期点击直接丢弃。`confirmBusy` 必须是 `AtomicBoolean`：「检查后置位」不原子的话两个请求会互相覆盖 `pendingLatch`。清理顺序也有讲究 —— 先清 latch/弹窗/通知，最后才放开 `confirmBusy`，否则下一个请求抢先发出的通知会被本轮的 `cancelConfirmNotification()`（固定通知 ID）取消掉。
 - **3090 桥要跨实例互斥.** `HarnessService` 与 `DeviceBridgeService` 各 new 一个 `HttpShellService` 都调 `start()`，实例字段 `running` 挡不住跨实例重复启动：第二个实例绑定失败，却会把活着的那个从 `instance` 抹掉，通知按钮全废。用静态 `STARTED` + 实例 `owner`，只有持有者的 `stop()` 才做清理。反过来，`stopWeb` 关掉桥后 ADB 开关仍开着，所以保活探测里要检查 `instance() == null` 并补起来。
 - **App 自己调 `adb-shell.py` 必须带 `DSH_INTERNAL=1`.** 脚本内有 fail-closed 确认关卡，而保活探测每分钟（断线时每 3 秒）跑一次 `id` —— 漏了这个前缀就会不停弹确认框。目前六个内部调用点（保活 3、ADB 自愈 1、配置页状态 1、`pm grant` 1）都带了。

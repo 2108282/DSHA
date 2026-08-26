@@ -90,19 +90,8 @@ final class LanAuth {
      *  {@code ?xtoken=junk&token=真值} 会先命中 {@code xtoken=} 取到 junk 而误拒。
      *  两处各写一套判断正是这个项目反复栽的模式，合并到一份并配上断言。 */
     static String queryTokenFromTarget(String target) {
-        if (target == null) return null;
-        int q = target.indexOf('?');
-        if (q < 0) return null;
-        String query = target.substring(q + 1);
-        int hash = query.indexOf('#');
-        if (hash >= 0) query = query.substring(0, hash);
-        for (String kv : query.split("&")) {
-            int eq = kv.indexOf('=');
-            if (eq > 0 && kv.substring(0, eq).equals("token")) {
-                return kv.substring(eq + 1).trim();
-            }
-        }
-        return null;
+        String v = Query.raw(Query.of(target), "token");
+        return v == null ? null : v.trim();
     }
 
     /**

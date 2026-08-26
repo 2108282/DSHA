@@ -395,6 +395,34 @@ public final class PureLogicTest {
                 "'; rm -rf / #".equals(unquoteSingle(ShellQuote.arg("'; rm -rf / #")))
                         && isSingleShellWord(ShellQuote.arg("'; rm -rf / #")));
 
+        // ===== Query：查询串取参数（3090 桥与局域网桥共用这一份）=====
+        // 核心断言是参数名边界：桥上真实存在 key 与 y 这对「一个是另一个后缀」的参数名，
+        // 旧的 indexOf(key + "=") 会让 ?key=abc&y=200 取 y 拿到 abc。
+        eq("query: 参数名精确匹配，key= 不劫持 y=",
+                "200", Query.param("key=abc&y=200", "y", "def"));
+        eq("query: 前缀参数不劫持（xtext= 不当 text=）",
+                "real", Query.param("xtext=junk&text=real", "text", "def"));
+        eq("query: 值截断到 &",
+                "ls", Query.param("cmd=ls&token=T", "cmd", ""));
+        eq("query: token 在前也取得对",
+                "ls -la", Query.param("token=T&cmd=ls%20-la", "cmd", ""));
+        eq("query: %20 解码", "a b", Query.param("t=a%20b", "t", ""));
+        eq("query: + 按 form 语义还原成空格", "a b", Query.param("t=a+b", "t", ""));
+        eq("query: fragment 不进值", "1", Query.param("a=1#frag", "a", ""));
+        eq("query: 参数不存在给默认值", "D", Query.param("a=1&b=2", "zz", "D"));
+        eq("query: 畸形百分号给默认值而不是半解码串",
+                "D", Query.param("a=%ZZ", "a", "D"));
+        eq("query: 没有 ? 时查询串为空", "", Query.of("/app/device"));
+        eq("query: 切出查询串", "a=1&b=2", Query.of("/p?a=1&b=2"));
+        ok("query: raw 区分「没这个参数」与「值为空」",
+                Query.raw("a=1", "b") == null && "".equals(Query.raw("a=", "a")));
+        ok("query: 裸参数名（没有 =）不算存在",
+                Query.raw("flag&a=1", "flag") == null);
+        eq("query: 同名参数取第一个", "1", Query.param("a=1&a=2", "a", ""));
+        // token 走同一份解析（LanAuth 只在外面补了 trim）
+        eq("query: token 解析与桥参数同源",
+                "T", LanAuth.queryTokenFromTarget("/p?xtoken=junk&token=T"));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"
