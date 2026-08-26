@@ -2,13 +2,23 @@ plugins {
     id 'com.android.application'
 }
 
+// 精简包（构建时加 -Pslim）：不把 300MB 内置环境打进 APK。
+//
+// 为什么要有这个：完整包 391MB，在内存紧张的机器上覆盖安装会被 PackageInstaller
+// 中途掐掉（报 INSTALL_FAILED_INTERNAL_ERROR / Session destroyed，且卸载后反而能装 ——
+// 说明卡在「旧包还在、同时又要 staging 一份 391MB」这一步）。而已经解压过环境的设备
+// 根本不需要再收一遍那 300MB。精简包约 40MB，**只能给装过完整包的设备做更新**，
+// 全新安装仍须用完整包（App 启动时会自己识别并提示，见 ProotBootstrap.hasOfflineBundle）。
+def slim = project.hasProperty('slim')
+
 def offlineGz = file("src/main/assets/offline-rootfs.tar.gz")
 def offlineBin = file("src/main/assets/offline-rootfs.bin")
-if (!offlineGz.exists() && !offlineBin.exists()) {
+if (!slim && !offlineGz.exists() && !offlineBin.exists()) {
     throw new GradleException(
         "缺少内置离线环境包 app/src/main/assets/offline-rootfs.tar.gz ——\n" +
         "它由 GitHub Actions 在 ubuntu-24.04-arm 上 chroot 预装生成。\n" +
-        "本地构建请从 Actions 的 offline-rootfs-bundle 产物拷到该路径。")
+        "本地构建请从 Actions 的 offline-rootfs-bundle 产物拷到该路径。\n" +
+        "（只想出精简更新包的话加 -Pslim，那种包不含内置环境。）")
 }
 
 // aapt 会把 .tar.gz 自动解压成 .tar。打进 APK 前改名为 .bin。
@@ -25,6 +35,24 @@ tasks.register("protectOfflineBundle") {
 tasks.configureEach { t ->
     if (t.name == "preBuild" || t.name == "preDebugBuild") {
         t.dependsOn("protectOfflineBundle")
+    }
+    // 精简包：assets 合并完之后把内置环境与它的版本标记一起剔掉。
+    // 版本标记必须一起删 —— 留着会让 App 拿「内置版本」跟已解压的比，
+    // 判出「有新版可升级」却又找不到包，等于给用户一个死按钮。
+    if (slim && t.name ==~ /(?i)merge.*Assets/) {
+        t.doLast {
+            def dir = t.hasProperty("outputDir") ? t.outputDir.get().asFile : null
+            if (dir != null) {
+                ["offline-rootfs.bin", "offline-rootfs.tar.gz", "offline-rootfs.tar",
+                 "offline-rootfs.version"].each { n ->
+                    def f = new File(dir, n)
+                    if (f.exists()) {
+                        println "slim：从 assets 剔除 ${n}（${f.length()} 字节）"
+                        f.delete()
+                    }
+                }
+            }
+        }
     }
 }
 
