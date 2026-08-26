@@ -453,6 +453,8 @@ public final class HttpShellService {
                 result = appVibrate(path);
             } else if (path.startsWith("/app/ask")) {
                 result = appAsk(path);
+            } else if (path.startsWith("/app/plugins")) {
+                result = appPlugins(path);
             } else if (path.startsWith("/app/overlay")) {
                 result = appOverlay(path);
             } else if (path.startsWith("/app/location")) {
@@ -668,6 +670,52 @@ public final class HttpShellService {
      * {@code NO_PERMISSION}（没给悬浮窗权限）、{@code OK}。插件拿到前两种就该停止推送 ——
      * 流式增量是高频调用，白发一路 HTTP 纯属烧电。
      */
+    /**
+     * {@code /app/plugins}：让 dsh 进程内的插件把<b>真实加载状态</b>报给 App，
+     * 也可以只读回上一次上报。
+     *
+     * <p><b>为什么要走桥，而不是 App 自己读文件</b>：App 只能读 profile 的 package.json
+     * 猜「注册了没有」，而<b>注册了不等于加载成功</b> —— 入口文件缺失、inject 的服务不存在、
+     * patch 里的 name 与目标行对不上，都会让插件静静地不生效，而 package.json 看起来一切正常。
+     * 只有跑在 dsh 进程里的插件能通过 cordis 上下文看到真实状态。这正是「插件装了没反应」
+     * 一直缺的那份证据 —— 缺了它，App 只能猜，用户只能重装。
+     *
+     * <p>约定：
+     * <ul>
+     *   <li>{@code ?loaded=a,b&failed=c}（逗号分隔）→ 上报，存起来给插件页与自检用；</li>
+     *   <li>不带参数 → 只读，返回 {@code LOADED:… / FAILED:… / AT:<毫秒时间戳>}。</li>
+     * </ul>
+     */
+    private String appPlugins(String path) {
+        try {
+            String q = queryOf(path);
+            String loaded = getParam(q, "loaded", null);
+            String failed = getParam(q, "failed", null);
+            android.content.SharedPreferences sp =
+                    ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE);
+            if (loaded == null && failed == null) {
+                return "LOADED:" + sp.getString("plugin_loaded", "")
+                        + "\nFAILED:" + sp.getString("plugin_failed", "")
+                        + "\nAT:" + sp.getLong("plugin_report_ts", 0L);
+            }
+            sp.edit()
+                    .putString("plugin_loaded", loaded == null ? "" : loaded.trim())
+                    .putString("plugin_failed", failed == null ? "" : failed.trim())
+                    .putLong("plugin_report_ts", System.currentTimeMillis())
+                    .apply();
+            // 有加载失败的就写进活动日志 —— 那是用户唯一能看到「插件为什么没反应」的地方
+            if (failed != null && !failed.trim().isEmpty()) {
+                try {
+                    HarnessController.get(ctx).logActivity("插件加载失败：" + failed.trim());
+                } catch (Throwable ignored) {
+                }
+            }
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + e;
+        }
+    }
+
     private String appOverlay(String path) {
         try {
             String q = queryOf(path);
