@@ -1055,6 +1055,22 @@ public class ProotBootstrap {
                             copyFile(eb, envDst);
                         }
                     }
+                    // .bridge_token 是**本机**的 3090 桥凭据，不算用户数据 —— BackupManager
+                    // 备份时就明确排除了它（见那里的注释），而这里却随整个 .dsh 备份还原回来，
+                    // 两处对「什么算用户数据」的判断不一致。后果非常隐蔽：
+                    // HttpShellService.authToken 是静态字段、只在缓存为空时才读文件，于是
+                    // App 校验的是自己内存里那个、插件与 agent skill 拿到的是还原回来的旧的
+                    // → 一律 401。表现出来就是「悬浮窗不显示 + agent 工具调用失败」，而不走
+                    // 3090 的内置 UI 注入、提示词注入全都好着 —— 真机上就是这么报上来的，
+                    // 光看现象根本想不到是 token。
+                    java.io.File bt = new java.io.File(dshDst, ".bridge_token");
+                    if (bt.isFile()) {
+                        //noinspection ResultOfMethodCallIgnored
+                        bt.delete();
+                    }
+                    // 再让 App 侧重新生成并写回，两边对齐（dsh 后端也缓存 token，
+                    // 所以重解压后仍需重启 Web 才彻底生效 —— 解压页本来就会重启）
+                    HttpShellService.resetTokenAfterRestore();
                     android.util.Log.i("DSHA", "重解压已还原用户数据 (.dsh + 工作区 .env)");
                 } catch (Throwable e) {
                     android.util.Log.w("DSHA", "还原用户数据失败: " + e);
