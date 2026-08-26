@@ -275,9 +275,17 @@ public final class PtyTerminalFragment extends Fragment
 
     // ==================== PtySession.Listener ====================
 
+    /** PTY 每来一小段输出就回调一次（几十字节一次很常见），无节流地 post 会把主线程
+     *  队列灌满 —— 「新终端越用越卡」就是这么来的。用一个 pending 标志把连续多次输出
+     *  合并成一次重绘：反正屏幕只需要显示最后的状态。 */
+    private final java.util.concurrent.atomic.AtomicBoolean redrawPending =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
     @Override
     public void onOutput() {
+        if (!redrawPending.compareAndSet(false, true)) return;
         main.post(() -> {
+            redrawPending.set(false);
             if (view != null) view.onScreenUpdated();
         });
     }

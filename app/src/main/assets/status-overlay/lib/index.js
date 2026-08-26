@@ -40,6 +40,8 @@ const MAX_CHARS = 1200
 const KEEP_CHARS = 800
 /** 功能关闭 / 没权限时的冷却时长。 */
 const COOLDOWN_MS = 60_000
+/** 思考过程被 App 拒掉后隔多久再试一次 —— 那个开关随时可能被打开，不能一拒就永久闭嘴。 */
+const REASONING_RETRY_MS = 60_000
 /** 单次请求超时：桥就在本机，1.5 秒都不该等。 */
 const TIMEOUT_MS = 1500
 
@@ -103,8 +105,11 @@ function bridgeToken() {
 /** sessionKey → { line, timer, dirty } */
 const state = new Map()
 let cooldownUntil = 0
-/** App 侧回了 SKIP_REASONING（用户不想看思考过程）→ 本进程内不再发这一类。 */
-let skipReasoning = false
+/** App 侧回了 SKIP_REASONING（用户当时不想看思考过程）→ 暂停这一类到这个时间点。
+ *  **带时效而不是永久**：开关是随时可改的，写成永久的话用户之后在配置页打开
+ *  「显示思考过程」，插件仍然一条都不发，非得重启 dsh 才恢复 —— 真机上报的
+ *  「思考内容无法显示」就是这个。 */
+let skipReasoningUntil = 0
 
 function sessionKey(session) {
   try {
@@ -148,8 +153,8 @@ async function send(key, kind, text) {
       // 用户没开这个功能或没授权 —— 进冷却，别一直敲一扇关着的门
       cooldownUntil = Date.now() + COOLDOWN_MS
     } else if (body === 'SKIP_REASONING') {
-      // 功能开着，只是用户不想看思考过程：别整段冷却，只停这一类
-      skipReasoning = true
+      // 功能开着，只是这会儿不看思考过程：别整段冷却，只停这一类，而且**要带时效**
+      skipReasoningUntil = Date.now() + REASONING_RETRY_MS
     }
   } catch {
     // 桥没起、超时、被拒：这功能不重要，静默降级
@@ -202,7 +207,7 @@ export function apply(ctx) {
         const isText = chunk?.type === 'text-delta'
         const isThink = chunk?.type === 'reasoning-delta'
         if (!isText && !isThink) return
-        if (isThink && skipReasoning) return      // App 侧说过用户不看这个
+        if (isThink && Date.now() < skipReasoningUntil) return   // App 侧刚说过不看这个
         const piece = chunk.text
         if (!piece) return
         const b = bucket(key)

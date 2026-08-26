@@ -79,6 +79,12 @@ final class OverlayController {
     /** sessionKey → 该会话当前显示的文本。 */
     private static final Map<String, String> BUFFERS = new LinkedHashMap<>();
 
+    /** sessionKey → 最后活跃时间。判断「是否真有多路在并发说话」用。
+     *  <b>不能拿 BUFFERS.size() 当判据</b> —— 那里会留着切过的会话、跑完没清的桶，
+     *  于是单开一路也永远带着个 [xx] 前缀（用户报的「最前面莫名其妙一个 [2d]」）。 */
+    private static final Map<String, Long> LAST_SEEN = new LinkedHashMap<>();
+    private static final long MULTI_WINDOW_MS = 15_000;
+
     private static Handler main;
     private static WindowManager wm;
     private static LinearLayout root;
@@ -178,7 +184,6 @@ final class OverlayController {
         if (confirming && !"clear".equals(k)) return;
 
         String line;
-        final int maxLines = lines(ctx);
         synchronized (LOCK) {
             if ("clear".equals(k)) {
                 BUFFERS.remove(key);
@@ -204,15 +209,15 @@ final class OverlayController {
                 BUFFERS.remove(BUFFERS.keySet().iterator().next());
             }
             activeKey = key;
-            // 分行在显示前做：缓冲里存的始终是完整文本，切分只依赖它的前缀，所以已经
-            // 显示出来的行不会因为新内容进来而重排 —— 新内容只在最后一行长，写满换行，
-            // 行数到上限就丢最旧的一行、其余上移（详见 OverlayLines）。
-            String body = OverlayLines.lastLines(next, maxLines, OverlayLines.DEFAULT_WIDTH);
-            // 会话标识贴在**可见的第一行**，不跟着内容滚走 —— 否则多路并发时，
-            // 恰好在需要分辨谁在说话的时候它已经滚没了
-            line = BUFFERS.size() > 1 ? shortTag(key) + " " + body : body;
+            LAST_SEEN.put(key, System.currentTimeMillis());
+            while (LAST_SEEN.size() > MAX_SESSIONS) {
+                LAST_SEEN.remove(LAST_SEEN.keySet().iterator().next());
+            }
+            // 这里存的是**未分行的原文**：分行留给主线程做（见 showStream），
+            // 只有那边拿得到 label 的实测宽度与字号。
+            line = next;
         }
-        show(ctx, line, false);
+        showStream(ctx, key, line);
     }
 
     /** 会话标识压成两三个字符，多路并发时用来分辨谁在说话。 */
@@ -301,6 +306,63 @@ final class OverlayController {
     }
 
     // ================= 窗口 =================
+
+    /**
+     * 流式内容的显示。分行与会话标识都在这里做 —— 只有主线程拿得到控件的实测宽度。
+     *
+     * <p>原先是在 push（后台线程）里按固定 30 半角切好再送过来。那个宽度在不同屏宽、
+     * 不同系统字体缩放下都会错：宽了系统会再折一次，行数超出 maxLines 就被从尾部截掉；
+     * 窄了则白留一截空白。用户报的「换行也很奇怪」就是这个。
+     */
+    private static void showStream(Context ctx, String key, String raw) {
+        mainHandler().post(() -> {
+            try {
+                ensureView(ctx);
+                if (label != null) {
+                    int maxLines = lines(ctx);
+                    label.setMaxLines(maxLines);
+                    String body = OverlayLines.lastLines(raw, maxLines, widthChars());
+                    // 会话标识只在**最近真有多路在说话**时才贴，而且贴在可见的第一行
+                    if (multiActive()) body = shortTag(key) + " " + body;
+                    label.setText(body);
+                }
+                if (root != null) {
+                    applyStyle(ctx);
+                    if (root.getVisibility() != View.VISIBLE) root.setVisibility(View.VISIBLE);
+                }
+                scheduleHide(ctx);
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "悬浮条更新失败: " + e);
+            }
+        });
+    }
+
+    /** 一行能放多少个半角宽度：按 label 的实测宽度与当前字号算，量不到就退回默认值。 */
+    private static int widthChars() {
+        try {
+            if (label == null) return OverlayLines.DEFAULT_WIDTH;
+            int avail = label.getWidth() - label.getPaddingLeft() - label.getPaddingRight();
+            float half = label.getPaint().measureText("0");
+            if (avail > 0 && half > 0.5f) {
+                // 太窄没意义、太宽说明量歪了，两头都夹一下
+                return Math.max(12, Math.min(200, (int) (avail / half)));
+            }
+        } catch (Throwable ignored) {
+        }
+        return OverlayLines.DEFAULT_WIDTH;    // 首帧还没布局，量不到
+    }
+
+    /** 最近 {@link #MULTI_WINDOW_MS} 内是否真有两路以上在说话。 */
+    private static boolean multiActive() {
+        long now = System.currentTimeMillis();
+        int n = 0;
+        synchronized (LOCK) {
+            for (Long t : LAST_SEEN.values()) {
+                if (t != null && now - t <= MULTI_WINDOW_MS) n++;
+            }
+        }
+        return n > 1;
+    }
 
     private static void show(Context ctx, String line, boolean sticky) {
         mainHandler().post(() -> {
