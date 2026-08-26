@@ -111,14 +111,39 @@ skill 丢进去就能用，不需要改目录结构。建议优先做这一条�
 
 ---
 
-## 四、建议的落地顺序
+## 四、先划边界：dsh 本体已经有的，DSHA 一律不做
 
-1. **skills 目录兼容 `.claude/skills/`** —— 半小时，用户当天受益。
-2. **工具权限三档，且「无法审批 = 拒绝」** —— 安全语义比档位本身重要。
-3. **把「什么算用户数据」收成一份可断言的清单** —— 今天的 401 就是它缺失的代价（已在重构待办里）。
-4. **3090 桥 `/exec` 分离「人读输出」与「机器状态」**。
-5. **Automation（定时任务）** —— 与 dsh-task-notifier 合并设计。
-6. **README 的对外表述改写** —— 「完整 Linux 环境」不再是差异点。
+这份笔记第一版写完之后被否掉了一半，原因是踩了这条线。记下来避免再犯：
+
+**DSHA 是 dsh 的宿主与 Android 集成层，不是第二个 agent 内核。**
+
+| 能力 | 归属 | 说明 |
+|---|---|---|
+| 权限档位 | **dsh 本体** | 已有 `danger-full-access` / `workspace-write` / `read-only`，DSHA 只负责把 `DSH_PERMISSION_MODE` 传进去。所谓「照 DeepCode 做权限三档」纯属重复造轮子 |
+| canonical session / resume / 工具调用记录 | **dsh 本体** | |
+| compaction 策略 | **dsh 本体** | |
+| evidence-driven completion（`--test-cmd`） | **dsh 本体** | |
+| skills 机制 | **dsh 本体** | 我们的 `agent-skills/` 已经用标准路径 `~/.agents/skills/`，本来就对齐了 |
+| Automation / 任务调度 | **dsh 本体** | 属于 agent 编排，不是宿主的事 |
+| provider / 模型管理 | **dsh 本体** | |
+
+DSHA 该管的只有这些：环境宿主（proot/proroot、rootfs、解压升级）· Android 集成（悬浮条、
+通知、ADB/Shizuku、无障碍、PTY 终端、3090/3081 桥）· 凭据与配置 · 备份恢复与自愈 ·
+插件市场与内置插件安置 · 更新与签名。
+
+**从 DeepCode 借的东西，必须落在这几项之内才算有效。**
+
+## 五、过滤之后真正可做的
+
+1. **把「什么算用户数据」收成一份可断言的清单** —— 备份与重解压都是 DSHA 独有的逻辑，dsh 没有
+   对应物。今天的 bridge_token 401 就是这份定义分裂的代价。借的是 DeepCode「把规则写成可执行
+   断言」的手法，不是它的 session 设计。
+2. **3090 桥 `/exec` 分离「人读输出」与「机器状态」** —— 桥是 DSHA 自己造的，契约该由我们定清。
+3. **悬浮条缓冲与 PTY transcript 统一成「砍历史不动最近」** —— 都是 DSHA 自己的 UI 缓冲。
+4. **无障碍 snapshot / act 编 ref** —— `DshaAccessibilityService` 是 DSHA 自己的能力，
+   这条来自 HermesApp 而不是这两个项目。
+5. **局域网二维码配对** —— 桥与局域网访问是 DSHA 的职责（RikkaHub 的 provider 二维码是同类交互）。
+6. **README 对外表述改写** —— 「完整 Linux 环境」不再是差异点。
 
 ---
 
