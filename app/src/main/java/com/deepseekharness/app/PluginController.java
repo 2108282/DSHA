@@ -215,6 +215,11 @@ class PluginController {
             set = new java.util.HashSet<>(java.util.Arrays.asList(
                     "@deepseek-ai", "@standard-schema", "persona-settings", "ui-scale"));
         }
+        // DSHA 自己安置进去的内置插件也算「自带」。用户拨这个开关是想「只看自己装的」，
+        // 而 device-shell-guide / mobile-nav / status-overlay / task-notifier 都不是他装的。
+        // 它们不在 dsh 的快照里（那份快照只记 dsh 首次启动时的自带项），必须显式并进来 ——
+        // 否则开关打开后列表里还剩四个他没装过的东西，看着就像开关没生效。
+        set.addAll(java.util.Arrays.asList(BUILTIN_PLUGIN_NAMES));
         return set;
     }
 
@@ -1679,7 +1684,8 @@ class PluginController {
                 dupeNote = "\n\n⚠️ 检测到 @deepseek-ai 重复副本且无法自动处理（版本不一致）——"
                         + "工具调用可能全部失败，建议卸载这个插件。";
             }
-            return r + explainPeerWarnings(r) + dupeNote + "\n\n[已安装到 profile，重启 WebUI 生效]";
+            return r + explainPeerWarnings(r) + dupeNote
+                    + "\n\n[已安装到 profile，重启 WebUI 生效]" + verifyNote(pkg);
         }
         return r == null ? "无输出" : r;
     }

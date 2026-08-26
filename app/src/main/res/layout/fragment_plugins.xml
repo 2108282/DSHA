@@ -118,7 +118,7 @@
         android:layout_height="wrap_content"
         android:layout_marginStart="@dimen/page_pad"
         android:buttonTint="@color/primary"
-        android:text="隐藏 dsh 自带插件（只看自己装的）"
+        android:text="隐藏自带插件（只看自己装的）"
         android:textColor="@color/text_secondary"
         android:textSize="@dimen/text_label"
         android:visibility="gone" />

@@ -869,6 +869,47 @@ public class PluginFragment extends Fragment {
         }, "dsha-install").start();
     }
 
+    /**
+     * 市场条目的安装入口：链接先用 {@link GitHubRef} 正确解析。
+     *
+     * <p>原来这里是 {@code it[6].substring(it[6].lastIndexOf('/') + 1)} —— 拿 URL 的
+     * <b>最后一段</b>当仓库名。对普通条目（{@code github.com/o/r}）没问题，但市场索引里有
+     * 不少 monorepo 条目（{@code github.com/o/r/tree/main/plugins/x}），它们会被解析成
+     * 仓库 {@code o/x} —— 那个仓库根本不存在，于是必然装不上。这是「市场里很多东西装不了」
+     * 的另一半原因。
+     */
+    private void installMarketItem(String[] it) {
+        GitHubRef gr = GitHubRef.parse(it[6]);
+        if (gr == null) {
+            say("这条市场记录的链接解析不了：" + it[6]);
+            Toast.makeText(requireContext(), "链接格式不认识，装不了", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!gr.hasSubdir()) {
+            startAutoInstall(it, gr.owner, gr.repo);
+            return;
+        }
+        // monorepo 子目录：整条链接交给 installFromGithubUrl —— 它认子目录，
+        // 并会在容器里 clone + 装依赖 + 构建（几分钟级，所以先把话说清）
+        say("正在安装 " + it[0] + "（仓库子目录插件，要在容器里构建，请耐心等几分钟）…");
+        final android.content.Context appCtx = requireContext().getApplicationContext();
+        final String url = it[6], display = it[0];
+        new Thread(() -> {
+            String r = c.installFromGithubUrl(url);
+            final String msg = r == null || r.isEmpty() ? "无输出" : r;
+            toastOnMain(appCtx, "安装流程结束：" + display);
+            runOnUiThreadSafely(() -> {
+                say(msg.replace('\n', ' '));
+                showInstalled();
+                new android.app.AlertDialog.Builder(requireContext())
+                        .setTitle("安装结果：" + display)
+                        .setMessage(msg)
+                        .setPositiveButton("知道了", null)
+                        .show();
+            });
+        }).start();
+    }
+
     private void startAutoInstall(String[] it, String owner, String repo) {
         final String display = it[0];
         say("正在预检 " + display + " …");
@@ -997,7 +1038,7 @@ public class PluginFragment extends Fragment {
                 h.installBtn.setText("安装");
                 h.switchView.setVisibility(View.GONE);
                 h.itemView.setOnClickListener(v -> showDetail(it));
-                h.installBtn.setOnClickListener(v -> startAutoInstall(it, it[2], it[6].substring(it[6].lastIndexOf('/') + 1)));
+                h.installBtn.setOnClickListener(v -> installMarketItem(it));
             } else {
                 h.name.setText(it[0]);
                 h.desc.setText("");
