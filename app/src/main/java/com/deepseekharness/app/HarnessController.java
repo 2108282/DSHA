@@ -4235,13 +4235,38 @@ public class HarnessController {
             if (!proot.isInstalled()) return;
             String r = proot.execAndRead(
                     "cat /root/.dsh/builtin-assets.version 2>/dev/null || echo NONE");
-            if (r != null && r.trim().equals(BUILTIN_ASSET_VERSION)) return;
+            boolean sameVersion = r != null && r.trim().equals(BUILTIN_ASSET_VERSION);
+            // 只看版本标记会漏一整类情况：**标记和实体住在会被分别重置的两个地方**。
+            // 版本标记在 /root/.dsh 里，插件实体在 /root 下 —— 而「重新解压内置环境」
+            // 把整个 rootfs 换掉（实体与 marker 全没），却会备份还原 .dsh（标记留下来了）。
+            // 于是 App 认为「资产已是最新」直接早退，内置插件（悬浮条 / 移动端适配 /
+            // 设备 shell 指南）全部静默消失，用户看到的是「悬浮窗怎么突然不显示了」
+            // 这种毫无线索的症状。真机上真的发生了，所以判据必须带上「实体还在吗」。
+            String missing = missingBuiltinEntities();
+            if (sameVersion && missing.isEmpty()) return;
             proot.execAndRead(
                     "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
                     + "echo refreshed");
-            android.util.Log.i("DSHA", "内置插件资产版本变化 → 已删 marker，本次⑥将重注入新资产");
+            android.util.Log.i("DSHA", "内置插件资产要重注入（版本"
+                    + (sameVersion ? "一致" : "变化：" + (r == null ? "?" : r.trim()))
+                    + (missing.isEmpty() ? "" : "；实体缺失 " + missing) + "）");
         } catch (Throwable ignored) {
         }
+    }
+
+    /** 哪些内置插件的实体目录不见了（逗号分隔，都在则返回空串）。
+     *  只查有 {@code -installed} marker 的那几个 —— 与上面删 marker 的范围保持一致，
+     *  免得又出现「一处检查、另一处漏掉」。 */
+    private String missingBuiltinEntities() {
+        String[] dirs = {"dsha-mobile-nav", "dsha-device-shell-guide", "dsha-status-overlay"};
+        StringBuilder sb = new StringBuilder();
+        for (String d : dirs) {
+            if (!new java.io.File(proot.getRootfsDir(), "root/" + d).isDirectory()) {
+                if (sb.length() > 0) sb.append(',');
+                sb.append(d);
+            }
+        }
+        return sb.toString();
     }
 
     /** 确保 rootfs 内危险命令确认包装器已部署（版本不匹配则强制重装，幂等） */
