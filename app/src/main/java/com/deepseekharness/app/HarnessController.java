@@ -4347,6 +4347,12 @@ public class HarnessController {
         boolean ovOn = OverlayController.enabled(appContext);
         boolean ovPerm = OverlayController.permitted(appContext);
         sb.append(ovOn ? "OK   悬浮条开关：已开\n" : "SKIP 悬浮条开关：关着（配置页可开）\n");
+        if (ovOn) {
+            sb.append(OverlayController.showReasoning(appContext)
+                    ? "OK   思考过程：已开（reasoning 会显示）\n"
+                    : "SKIP 思考过程：关着 —— 这就是「看不到思考内容」的原因，"
+                            + "配置页勾「显示思考过程」，勾完重启一次 WebUI（插件那侧有一分钟冷却）\n");
+        }
         if (ovOn && !ovPerm) {
             sb.append("FAIL 悬浮窗权限没给 —— 开关开着也不会显示。"
                     + "去「配置」页重新勾一次会跳到系统授权页\n");

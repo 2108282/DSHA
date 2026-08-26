@@ -404,6 +404,8 @@ public class ConfigFragment extends Fragment {
                 sp.getInt(OverlayController.K_ALPHA, OverlayController.DEF_ALPHA), "%");
         final android.widget.SeekBar lines = slider(box, "最多显示几行（写满后丢最旧一行）", 1, 8,
                 sp.getInt(OverlayController.K_LINES, OverlayController.DEF_LINES), " 行");
+        final android.widget.SeekBar wide = slider(box, "每行字数（0 = 自动按屏宽算；一个汉字算 2）",
+                0, 80, sp.getInt(OverlayController.K_WIDTH, 0), " 半角");
         final android.widget.SeekBar hold = slider(box, "无新内容后停留", 2, 60,
                 sp.getInt(OverlayController.K_HOLD, OverlayController.DEF_HOLD), " 秒");
 
@@ -430,6 +432,7 @@ public class ConfigFragment extends Fragment {
                 .putInt(OverlayController.K_BG, pickedBg[0])
                 .putInt(OverlayController.K_ALPHA, Math.max(20, alpha.getProgress()))
                 .putInt(OverlayController.K_LINES, Math.max(1, lines.getProgress()))
+                .putInt(OverlayController.K_WIDTH, wide.getProgress())
                 .putInt(OverlayController.K_HOLD, Math.max(2, hold.getProgress()))
                 .putBoolean(OverlayController.K_REASONING, think.isChecked())
                 .putBoolean(OverlayController.K_COMMAND, cmd.isChecked())
