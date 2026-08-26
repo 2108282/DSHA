@@ -240,6 +240,20 @@
                 android:paddingEnd="@dimen/gap_tight"
                 android:text="悬浮条外观与行为 ▸ 底色 / 透明度 / 行数 / 停留时间 / 思考过程 / 就地批准" />
 
+            <TextView
+                android:id="@+id/config_translate"
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/touch_min"
+                android:background="@drawable/bg_chip_clickable"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:paddingStart="@dimen/gap_tight"
+                android:paddingEnd="@dimen/gap_tight"
+                android:text="插件市场自动翻译 ▸ 开关 / 接口地址 / 模型 / Key" />
+
             <CheckBox
                 android:id="@+id/config_cap_sensors"
                 style="@style/DshaText.Body"

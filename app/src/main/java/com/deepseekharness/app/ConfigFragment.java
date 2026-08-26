@@ -54,6 +54,8 @@ public class ConfigFragment extends Fragment {
         lanModeCb = view.findViewById(R.id.config_lan_mode);
         View overlayStyle = view.findViewById(R.id.config_overlay_style);
         if (overlayStyle != null) overlayStyle.setOnClickListener(v -> showOverlayStyleDialog());
+        View trans = view.findViewById(R.id.config_translate);
+        if (trans != null) trans.setOnClickListener(v -> showTranslateDialog());
         overlayStreamCb = view.findViewById(R.id.config_overlay_stream);
         if (overlayStreamCb != null) {
             // 勾上时才要权限：没授权就直接引导过去，别让用户勾了个不生效的开关
@@ -361,6 +363,80 @@ public class ConfigFragment extends Fragment {
 
     /** 悬浮条的外观与行为。做成独立对话框而不是往配置页里塞七个控件：
      *  这些项只有开了悬浮条的人才关心，摊在主页面上是给所有人添噪声。 */
+    /**
+     * 插件市场自动翻译的设置。
+     *
+     * <p>做成对话框而不是在配置页铺开五六行 —— 这些参数一年填一次，常驻只会占地方。
+     * 翻译的触发点在插件详情弹窗打开时（见 {@link PluginFragment#showDetail}），
+     * 不在列表里整页翻：那样一次要几十个请求，慢且费钱。
+     */
+    private void showTranslateDialog() {
+        final android.content.SharedPreferences sp = requireContext()
+                .getSharedPreferences(Constants.PREFS, android.content.Context.MODE_PRIVATE);
+        final android.widget.LinearLayout box = new android.widget.LinearLayout(requireContext());
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        final int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad, pad, pad, pad);
+
+        final CheckBox on = new CheckBox(requireContext());
+        on.setText("点开插件详情时自动翻译描述");
+        on.setChecked(sp.getBoolean(Translator.K_ENABLED, false));
+        box.addView(on);
+
+        final android.widget.EditText base = labeledInput(box,
+                "接口地址（留空 = " + Translator.DEF_BASE + "）", sp.getString(Translator.K_BASE, ""));
+        final android.widget.EditText model = labeledInput(box,
+                "模型（留空 = " + Translator.DEF_MODEL + "）", sp.getString(Translator.K_MODEL, ""));
+        final android.widget.EditText key = labeledInput(box,
+                "API Key（留空 = 用主界面填的那把）", sp.getString(Translator.K_KEY, ""));
+        key.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+
+        final android.widget.TextView note = new android.widget.TextView(requireContext());
+        note.setTextSize(12f);
+        note.setPadding(0, pad, 0, 0);
+        note.setText("· 只翻描述那一段，按内容哈希缓存 —— 同一个插件反复点开只花一次钱。\n"
+                + "· 默认走不带思考的模型：翻译用不上思考链，开了只是更慢更贵。\n"
+                + "· 填了自定义接口地址的话，Key 会发到那个地址去，请确认它可信。\n"
+                + "· 翻不出来时保持原文显示，不会挡住内容。");
+        box.addView(note);
+
+        final android.widget.ScrollView scroll = new android.widget.ScrollView(requireContext());
+        scroll.addView(box);
+
+        new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                .setTitle("插件市场自动翻译")
+                .setView(scroll)
+                .setPositiveButton("保存", (d, w) -> {
+                    sp.edit()
+                            .putBoolean(Translator.K_ENABLED, on.isChecked())
+                            .putString(Translator.K_BASE, base.getText().toString().trim())
+                            .putString(Translator.K_MODEL, model.getText().toString().trim())
+                            .putString(Translator.K_KEY, key.getText().toString().trim())
+                            .apply();
+                    Toast.makeText(requireContext(),
+                            on.isChecked() ? "已开启 —— 下次点开插件详情就会翻译" : "已关闭自动翻译",
+                            Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 带一行说明的输入框（翻译设置里要用三个）。 */
+    private android.widget.EditText labeledInput(android.widget.LinearLayout parent,
+                                                 String label, String value) {
+        android.widget.TextView t = new android.widget.TextView(requireContext());
+        t.setText(label);
+        t.setTextSize(12f);
+        t.setPadding(0, (int) (10 * getResources().getDisplayMetrics().density), 0, 0);
+        parent.addView(t);
+        android.widget.EditText e = new android.widget.EditText(requireContext());
+        e.setSingleLine(true);
+        e.setText(value == null ? "" : value);
+        parent.addView(e);
+        return e;
+    }
+
     private void showOverlayStyleDialog() {
         final android.content.Context app = requireContext().getApplicationContext();
         final android.content.SharedPreferences sp = requireContext()
