@@ -854,15 +854,6 @@ public class HarnessController {
         return getWorkdir();
     }
 
-    private boolean workdirExists(String wd) {
-        try {
-            return new java.io.File(proot.getRootfsDir(), "root/" + wd + "/apps/cli/lib/bin.js").isFile()
-                    || new java.io.File(proot.getRootfsDir(), "root/" + wd + "/lib/bin.js").isFile();
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
     public String effectiveApiKey() {
         return getApiKey();
     }
@@ -1754,7 +1745,6 @@ public class HarnessController {
                 ensureDeviceShellGuide();
                 ensureTaskNotifier();
                 ensureStatusOverlay();
-            ensureStatusOverlay();
                 ensureBuiltinBundles();
                 if (!guideRegistered("dsh-device-shell-guide")) {
                     boolean disabled = new java.io.File(proot.getRootfsDir(),
@@ -3570,6 +3560,46 @@ public class HarnessController {
      *  反过来「按需安装」要等重启 Web 才生效，体验更差。
      *
      *  <p>幂等：marker 存在且语法正常则跳过；失败不影响安装。 */
+    /** 把一个内置插件注册进 web profile 的 package.json。
+     *
+     *  <p><b>dependencies 与 dsh.profile.bundles 必须同时写</b>：dsh 的 reconcile 会把
+     *  「bundles 里列了、dependencies 里解析不到」的条目当成无效项剪掉，于是下一次启动
+     *  又要补、又被剪 —— 用户看到的现象是插件装了但永远不生效。历史上补过一轮只写
+     *  bundles 的版本，就是这么进死循环的。
+     *
+     *  <p>这段逻辑原先在 ensureStatusOverlay / ensureTaskNotifier /
+     *  ensureDeviceShellGuide 里各有一份逐字拷贝。三份意味着「修一处漏两处」，而内置
+     *  插件安置正是本项目返工次数最多的地方，所以收成一处：<b>要改注册规则，只有这里。</b>
+     *
+     *  <p>profile 还没生成时（dsh 首次启动才建）直接跳过 —— 调用方都是幂等的
+     *  ensureXxx，下一轮会再来。异常抛给调用方，它们统一 catch 成「可选功能失败不影响启动」。
+     *
+     *  @param name 插件包名（写进 bundles 与 dependencies 的键）
+     *  @param real 插件实体在 rootfs 内的绝对路径（写成 {@code link:<real>}）
+     */
+    private void registerBuiltinInProfile(String name, String real) throws Exception {
+        java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+        if (!pf.isFile()) return;
+        String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
+        org.json.JSONObject root = new org.json.JSONObject(txt);
+        org.json.JSONObject deps = root.optJSONObject("dependencies");
+        if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
+        if (!deps.has(name)) deps.put(name, "link:" + real);
+        // 空安全：dsh/profile 可能不存在（全新 profile，或被 reconcile 清空）→ 逐层创建
+        org.json.JSONObject dshObj = root.optJSONObject("dsh");
+        if (dshObj == null) { dshObj = new org.json.JSONObject(); root.put("dsh", dshObj); }
+        org.json.JSONObject profile = dshObj.optJSONObject("profile");
+        if (profile == null) { profile = new org.json.JSONObject(); dshObj.put("profile", profile); }
+        org.json.JSONArray bundles = profile.optJSONArray("bundles");
+        if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
+        boolean found = false;
+        for (int i = 0; i < bundles.length(); i++) {
+            if (name.equals(bundles.optString(i, ""))) { found = true; break; }
+        }
+        if (!found) bundles.put(name);
+        java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
+    }
+
     private void ensureStatusOverlay() {
         try {
             final String NAME = "dsh-status-overlay";
@@ -3615,26 +3645,7 @@ public class HarnessController {
                     if (nmDir != null) linkPlugin(NAME, REAL, nmDir);
                 }
             }
-            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
-            if (pf.isFile()) {
-                String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
-                org.json.JSONObject root = new org.json.JSONObject(txt);
-                org.json.JSONObject deps = root.optJSONObject("dependencies");
-                if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
-                if (!deps.has(NAME)) deps.put(NAME, "link:" + REAL);
-                org.json.JSONObject dshObj = root.optJSONObject("dsh");
-                if (dshObj == null) { dshObj = new org.json.JSONObject(); root.put("dsh", dshObj); }
-                org.json.JSONObject profile = dshObj.optJSONObject("profile");
-                if (profile == null) { profile = new org.json.JSONObject(); dshObj.put("profile", profile); }
-                org.json.JSONArray bundles = profile.optJSONArray("bundles");
-                if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
-                boolean found = false;
-                for (int i = 0; i < bundles.length(); i++) {
-                    if (NAME.equals(bundles.optString(i, ""))) { found = true; break; }
-                }
-                if (!found) bundles.put(NAME);
-                java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
-            }
+            registerBuiltinInProfile(NAME, REAL);
             java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
             android.util.Log.i("DSHA", "流式悬浮条插件已注册");
         } catch (Throwable ignored) {
@@ -3679,26 +3690,7 @@ public class HarnessController {
                         java.nio.file.Paths.get(REAL));
             }
             // 3) 注册 profile（dependencies + bundles）
-            java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
-            if (pf.isFile()) {
-                String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
-                org.json.JSONObject root = new org.json.JSONObject(txt);
-                org.json.JSONObject deps = root.optJSONObject("dependencies");
-                if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
-                if (!deps.has(NAME)) deps.put(NAME, "link:" + REAL);
-                org.json.JSONObject dshObj = root.optJSONObject("dsh");
-                if (dshObj == null) { dshObj = new org.json.JSONObject(); root.put("dsh", dshObj); }
-                org.json.JSONObject profile = dshObj.optJSONObject("profile");
-                if (profile == null) { profile = new org.json.JSONObject(); dshObj.put("profile", profile); }
-                org.json.JSONArray bundles = profile.optJSONArray("bundles");
-                if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
-                boolean found = false;
-                for (int i = 0; i < bundles.length(); i++) {
-                    if (NAME.equals(bundles.optString(i, ""))) { found = true; break; }
-                }
-                if (!found) bundles.put(NAME);
-                java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
-            }
+            registerBuiltinInProfile(NAME, REAL);
             java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
             android.util.Log.i("DSHA", "任务通知插件已注册");
         } catch (Throwable ignored) {
@@ -3923,27 +3915,7 @@ public class HarnessController {
             //    避免重装破坏 profile node_modules 导致其他插件异常；配合启动前
             //    fix-stale-bundles.sh 自愈兜底）
             {
-                java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
-                if (pf.isFile()) {
-                    String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
-                    org.json.JSONObject root = new org.json.JSONObject(txt);
-                    org.json.JSONObject deps = root.optJSONObject("dependencies");
-                    if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
-                    if (!deps.has(NAME)) deps.put(NAME, "link:" + REAL);
-                    // 空安全：dsh/profile 可能不存在（全新 profile 或被 reconcile 清空）→ 需创建
-                    org.json.JSONObject dshObj = root.optJSONObject("dsh");
-                    if (dshObj == null) { dshObj = new org.json.JSONObject(); root.put("dsh", dshObj); }
-                    org.json.JSONObject profile = dshObj.optJSONObject("profile");
-                    if (profile == null) { profile = new org.json.JSONObject(); dshObj.put("profile", profile); }
-                    org.json.JSONArray bundles = profile.optJSONArray("bundles");
-                    if (bundles == null) { bundles = new org.json.JSONArray(); profile.put("bundles", bundles); }
-                    boolean found = false;
-                    for (int i = 0; i < bundles.length(); i++) {
-                        if (NAME.equals(bundles.optString(i, ""))) { found = true; break; }
-                    }
-                    if (!found) bundles.put(NAME);
-                    java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
-                }
+                registerBuiltinInProfile(NAME, REAL);
                 // 确保 node_modules 有可解析链接（link: 语义 = 符号链接）
                 if (!nmLink.exists()) {
                     try {
@@ -4904,13 +4876,20 @@ public class HarnessController {
      *  2) heal-sessions.py（Python os.walk + 流式 zstd 解码）无门槛全量扫描修复。
      *  幂等：正常文件秒过。 */
     /** 会话自愈的结果要让用户看见 —— 它会改写历史记录，静默进行最不合适。 */
+    /** 会话自愈的结果留痕。
+     *
+     *  <p>两条都要写：logcat 给开发者看，<b>活动日志给用户看</b>。自愈会移动、甚至隔离
+     *  用户的会话文件（原件留 .pre-fix / corrupt-backup），这属于「App 动了你的数据」，
+     *  只写 logcat 等于用户永远不知道发生过什么 —— 而且 logcat 重启即丢，用户来报
+     *  「我的会话不见了」时无据可查。
+     *
+     *  <p>这个方法曾经存在但没人调用（调用点只剩一行 Log.w），等于活动日志里一直缺这一类。 */
     private void logHealResult(String out) {
-        if (out == null) return;
-        if (out.contains("SESSION_HEALED")) {
-            int i = out.indexOf("SESSION_HEALED");
-            logActivity("会话自愈：" + out.substring(i, Math.min(out.length(), i + 60)).trim()
-                    + "（原文件留 .pre-fix 备份）");
-        }
+        if (out == null || !out.contains("SESSION_HEALED")) return;
+        android.util.Log.w("DSHA", "会话损坏自愈：已修复/隔离损坏会话（详情见 heal 输出）");
+        int i = out.indexOf("SESSION_HEALED");
+        logActivity("会话自愈：" + out.substring(i, Math.min(out.length(), i + 60)).trim()
+                + "（原文件留 .pre-fix 备份）");
     }
 
     private void doHealSessionCorruption() {
@@ -4951,9 +4930,7 @@ public class HarnessController {
             } catch (Throwable ignored) {
             }
             String r = proot.execAndRead("bash /root/dsha-heal-session.sh; rm -f /root/dsha-heal-session.sh");
-            if (r != null && r.contains("SESSION_HEALED")) {
-                android.util.Log.w("DSHA", "会话损坏自愈：已修复/隔离损坏会话（详情见 heal 输出）");
-            }
+            logHealResult(r);
         } catch (Throwable ignored) {
         } finally {
             healingSession = false;

@@ -24,8 +24,6 @@ import java.util.List;
  * + 已装插件管理（启用/禁用/导入/导出）
  */
 public class PluginFragment extends Fragment {
-    private final android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
-
     /** 市场缓存年龄提示（" · 缓存于 N 分钟前"）；无缓存返回空串 */
     private String cacheHint() {
         long age = c.getMarketCacheAgeMs();

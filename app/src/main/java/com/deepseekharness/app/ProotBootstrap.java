@@ -414,14 +414,6 @@ public class ProotBootstrap {
         }
     }
 
-    private void writeFile(File dest, byte[] bytes) {
-        if (dest.getParentFile() != null) dest.getParentFile().mkdirs();
-        try (FileOutputStream out = new FileOutputStream(dest)) {
-            out.write(bytes);
-        } catch (IOException ignored) {
-        }
-    }
-
     private void copyExec(File src, File dst) {
         if (src.isFile() && !dst.exists()) {
             try (InputStream in = new FileInputStream(src);
@@ -454,18 +446,6 @@ public class ProotBootstrap {
             copyExec(findNativeLib("libtalloc.so"), new File(libDir, "libtalloc.so.2"));
             // libandroid-shmem.so（旧版 proot 的 NEEDED）
             copyExec(findNativeLib("libandroidshmem.so"), new File(libDir, "libandroid-shmem.so"));
-        }
-    }
-
-    private byte[] readAsset(String name) {
-        try (InputStream in = ctx.getAssets().open(name)) {
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            byte[] buf = new byte[16384];
-            int n;
-            while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
-            return bos.toByteArray();
-        } catch (IOException e) {
-            return null;
         }
     }
     /** 在 rootfs 内执行 bash 命令 */

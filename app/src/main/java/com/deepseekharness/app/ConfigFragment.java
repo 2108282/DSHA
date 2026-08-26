@@ -174,7 +174,6 @@ public class ConfigFragment extends Fragment {
                 }
             });
         }
-        refreshAdbStatus();
         startAdbStatusPolling(); // 设置页在前台时每秒检测 ADB 运行状态
     }
 
@@ -782,10 +781,6 @@ public class ConfigFragment extends Fragment {
         stopAdbStatusPolling();
     }
 
-    private void refreshAdbStatus() {
-        // 已由 pollAdbStatus 每秒轮询替代（保留空方法避免调用点改动）
-    }
-
     /** root shell 授权标记：授权 → 写 /root/.dsh/allow-root-shell（adb-shell.py 检查）；
      *  取消 → 删标记。rootfs 未就绪时静默。 */
     private void applyRootShellMark() {
@@ -924,7 +919,6 @@ public class ConfigFragment extends Fragment {
             applyRootShellMark();
             applyConfirmShellMark();
             DeviceBridgeService.apply(requireContext());
-            refreshAdbStatus();
             Toast.makeText(requireContext(),
                     (adbCb != null && adbCb.isChecked()) ? "配置已保存（ADB 已开）" : "配置已保存（ADB 已关）",
                     Toast.LENGTH_SHORT).show();
