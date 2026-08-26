@@ -1567,11 +1567,36 @@ class PluginController {
                 spec = real;
                 registryOnly = registryOnlyWhy != null;
             } else if (registryOnlyWhy != null) {
-                // 只能用 npm，却在 registry 上找不到 —— 直接说清楚，别浪费用户几分钟
+                // 只能用 npm、而 registry 上又没有 —— 但这**不等于装不了**。
+                // pnpm 拒绝执行 git 依赖的 prepare 脚本，不代表我们不能自己 clone 下来跑构建：
+                // 容器里就是完整的 Node 24 + pnpm 工具链，这正是该用它的时候。
+                // 生态里大量插件都是「TS 源码 + 只有 build 脚本 + 产物不进仓库 + 没发 npm」，
+                // 之前在这里一律劝退，就是「市场里大部分东西都装不了」的主要来源。
+                GitHubRef gr = GitHubRef.parse(fallbackSpec);
+                String srcName = "", srcMain = "", srcBuild = "";
+                if (pkgJson != null) {
+                    try {
+                        org.json.JSONObject o = new org.json.JSONObject(pkgJson);
+                        srcName = o.optString("name", "").trim();
+                        srcMain = o.optString("main", "").trim();
+                        org.json.JSONObject sc = o.optJSONObject("scripts");
+                        if (sc != null) srcBuild = sc.optString("build", "").trim();
+                    } catch (Throwable ignored) {
+                    }
+                }
+                if (gr != null && !srcName.isEmpty() && !srcBuild.isEmpty()) {
+                    host.logActivity("插件 npm 上没有，改走容器内 clone+构建：" + fallbackSpec);
+                    return "这个插件没有 npm 发布版（" + registryOnlyWhy + "），"
+                            + "改为在容器里 clone 源码自己构建 —— 这一步要几分钟。\n\n"
+                            + installSubdirFromSource(gr, srcName, srcMain, srcBuild);
+                }
+                // 连包名或构建脚本都没有，才真的没办法
                 host.logActivity("插件只能从 npm 装但 registry 上没有：" + fallbackSpec);
                 return "无法安装：" + fallbackSpec + "\n\n"
                         + "这个插件**只能从 npm registry 安装**（" + registryOnlyWhy + "），"
-                        + "但 npm 上找不到它的发布版。\n\n"
+                        + "但 npm 上找不到它的发布版"
+                        + (srcBuild.isEmpty() ? "，而它的 package.json 里也没有 build 脚本"
+                                             : "") + "。\n\n"
                         + "从 git 源装必然失败，所以就不白等了。\n"
                         + "建议去仓库 README 找「registry 包名」那一行，"
                         + "或者等作者发布到 npm。";
@@ -1759,7 +1784,9 @@ class PluginController {
     private String installSubdirFromSource(GitHubRef ref, String name, String main, String buildScript) {
         final String branch = ref.branch.isEmpty() ? "main" : ref.branch;
         final String repoDir = "/root/plugin-src/" + ref.repo;
-        final String sub = repoDir + "/" + ref.subdir;
+        // subdir 为空 = 整个仓库就是插件（普通单包仓库），此时构建与安装都指向仓库根
+        final String sub = ref.subdir.isEmpty() ? repoDir : repoDir + "/" + ref.subdir;
+        final String where = ref.subdir.isEmpty() ? "" : " 子目录 " + ref.subdir;
         final String repoUrl = "https://github.com/" + ref.slug() + ".git";
 
         // 1) 浅克隆（先走加速代理，再直连兜底）
@@ -1773,7 +1800,8 @@ class PluginController {
             return "克隆 " + ref.slug() + "（分支 " + branch + "）失败：\n" + lastLines(r, 12);
         }
         java.io.File subHost = new java.io.File(proot.getRootfsDir(),
-                "root/plugin-src/" + ref.repo + "/" + ref.subdir);
+                ref.subdir.isEmpty() ? "root/plugin-src/" + ref.repo
+                        : "root/plugin-src/" + ref.repo + "/" + ref.subdir);
         if (!subHost.isDirectory()) {
             return "克隆成功，但 " + branch + " 分支上没有 " + ref.subdir + " 这个目录。";
         }
@@ -1809,7 +1837,7 @@ class PluginController {
         // 4) 按本地路径安装：file: 让 pnpm 直接链这个目录，等价于作者说的
         //    dsh plugin --profile web add ./plugins/xxx
         String out = installPlugin(name, "file:" + sub);
-        return "已从源码构建并安装 " + name + "\n仓库 " + ref.slug() + " 子目录 " + ref.subdir
+        return "已从源码构建并安装 " + name + "\n仓库 " + ref.slug() + where
                 + "\n源码保留在 " + sub + "（备份时会随包内联）\n\n" + out + verifyNote(name);
     }
 
