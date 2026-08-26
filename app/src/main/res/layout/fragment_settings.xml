@@ -167,55 +167,6 @@
                 android:background="@color/line" />
 
             <LinearLayout
-                android:id="@+id/settings_prepare_update"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="?attr/selectableItemBackground"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:padding="@dimen/card_pad">
-
-                <TextView
-                    android:layout_width="36dp"
-                    android:layout_height="36dp"
-                    android:background="@drawable/bg_chip"
-                    android:gravity="center"
-                    android:text="⏸"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="@dimen/text_title" />
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="@dimen/gap_control"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="装新包前先停一下"
-                        android:textColor="@color/text"
-                        android:textSize="@dimen/text_body"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="停掉服务与容器进程，免得覆盖安装被系统掐断"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="@dimen/text_body" />
-                </LinearLayout>
-            </LinearLayout>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/stroke"
-                android:background="@color/line" />
-
-            <LinearLayout
                 android:id="@+id/settings_reextract"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

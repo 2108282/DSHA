@@ -84,6 +84,14 @@ public class HarnessService extends Service {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             c.stopWeb();
             stopKeepAlive();
+            // 设备桥（127.0.0.1:3090）也一起停 —— 它是独立的后台服务，不跟着前台服务走。
+            // 「停止」在用户眼里就是全停：留个监听端口在那儿既费电，也会让覆盖安装时系统
+            // 多一个要终止的目标（装 391MB 包时那正是 Session destroyed 的诱因之一，
+            // 所以装新包前点一下通知栏这个「停止」就够，不必再去设置页找入口）。
+            try {
+                stopService(new Intent(this, DeviceBridgeService.class));
+            } catch (Throwable ignored) {
+            }
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;

@@ -65,62 +65,6 @@ public class SettingsFragment extends Fragment {
         if (selfTest != null) selfTest.setOnClickListener(v -> runSelfTest());
         View reextract = view.findViewById(R.id.settings_reextract);
         if (reextract != null) reextract.setOnClickListener(v -> confirmReextract());
-        View prep = view.findViewById(R.id.settings_prepare_update);
-        if (prep != null) prep.setOnClickListener(v -> prepareForUpdate());
-    }
-
-    /**
-     * 装新包之前先把运行中的东西全停掉。
-     *
-     * <p>为什么需要这一步：覆盖安装时系统要先终止旧进程，而我们的前台服务是 START_STICKY、
-     * 容器里还有一串 node/proot 在跑 —— 服务刚被杀就自己起来，跟安装会话互相抢，
-     * PackageInstaller 干脆把会话销毁，报 {@code INSTALL_FAILED_INTERNAL_ERROR /
-     * Session destroyed}。真机上的表现很能说明问题：覆盖装不上，卸载之后一次就成功
-     * （因为卸载把服务彻底停了）。而卸载会把 rootfs 连对话记录一起带走，代价太大。
-     */
-    private void prepareForUpdate() {
-        new AlertDialog.Builder(requireContext())
-                .setTitle("装新包之前先停一下")
-                .setMessage("会停掉 WebUI、容器进程、前台服务和设备桥，然后你就能安装新 APK 了。\n\n"
-                        + "为什么要这一步：覆盖安装时系统得先终止旧进程，"
-                        + "而前台服务被杀会立刻自己起来，跟安装会话抢 —— 系统就把会话销毁了，"
-                        + "报的就是 INSTALL_FAILED_INTERNAL_ERROR / Session destroyed。\n\n"
-                        + "装完打开 App 会自己恢复，数据一点不动。")
-                .setPositiveButton("停止并准备", (d, w) -> {
-                    Toast.makeText(requireContext(), "正在停止，约 5 秒…", Toast.LENGTH_SHORT).show();
-                    final android.content.Context app = requireContext().getApplicationContext();
-                    new Thread(() -> {
-                        try {
-                            HarnessController.get(app).stopWebAndWait();
-                        } catch (Throwable ignored) {
-                        }
-                        try {
-                            app.stopService(new android.content.Intent(app, DeviceBridgeService.class));
-                        } catch (Throwable ignored) {
-                        }
-                        // 前台服务放最后停：它一停，进程随时可能被回收
-                        try {
-                            app.startService(new android.content.Intent(app, HarnessService.class)
-                                    .setAction(HarnessService.ACTION_STOP));
-                        } catch (Throwable ignored) {
-                        }
-                        android.app.Activity act = getActivity();
-                        if (act == null) return;
-                        act.runOnUiThread(() -> {
-                            if (!isAdded()) return;
-                            new AlertDialog.Builder(requireContext())
-                                    .setTitle("已停止，可以装了")
-                                    .setMessage("现在去安装新 APK。\n\n"
-                                            + "要是还装不上，再补两步：把 DSHA 从最近任务里划掉；"
-                                            + "用系统文件管理器点 APK，别用浏览器或聊天软件里的安装入口"
-                                            + "（那些安装器的会话更容易被系统掐断）。")
-                                    .setPositiveButton("好", null)
-                                    .show();
-                        });
-                    }, "dsha-prepare-update").start();
-                })
-                .setNegativeButton("取消", null)
-                .show();
     }
 
     /** 重新解压内置环境：容器被弄坏之后的自助修复入口。
