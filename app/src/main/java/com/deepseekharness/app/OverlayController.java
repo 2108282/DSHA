@@ -44,10 +44,9 @@ final class OverlayController {
     // ---------- 配置项（都在「配置」页的「悬浮条外观」里，这里只给默认值） ----------
     static final String K_ENABLED = "overlay_stream";
     static final String K_LINES = "overlay_lines";              // 1..6 行
-    /** 每行放多少个半角宽度；0 = 自动（按悬浮条宽度与字号算）。
-     *  给手动挡是因为自动挡踩过坑：拿 label.getWidth() 当依据时，那是「上一次内容的
-     *  宽度」，内容少→宽度小→切得更碎→内容更少，一路收敛到每行六个字。 */
-    static final String K_WIDTH = "overlay_width";
+    /** 悬浮条字号（sp）。允许调得很小 —— 一行能塞多少字全看这个。 */
+    static final String K_TEXT_SP = "overlay_text_sp";
+    static final int DEF_TEXT_SP = 12;
     static final String K_HOLD = "overlay_hold_sec";            // 2..60 秒
     static final String K_ALPHA = "overlay_alpha";              // 20..100 %
     static final String K_BG = "overlay_bg";                    // 预设底色索引
@@ -325,7 +324,7 @@ final class OverlayController {
                 if (label != null) {
                     int maxLines = lines(ctx);
                     label.setMaxLines(maxLines);
-                    String body = OverlayLines.lastLines(raw, maxLines, widthChars(ctx));
+                    CharSequence body = tailLines(ctx, label, raw, maxLines);
                     // 会话标识只在**最近真有多路在说话**时才贴，而且贴在可见的第一行
                     if (multiActive()) body = shortTag(key) + " " + body;
                     label.setText(body);
@@ -352,30 +351,38 @@ final class OverlayController {
         return dp(ctx, 320);
     }
 
+    /** 当前字号（sp）。 */
+    private static int textSp(Context ctx) {
+        int v = prefs(ctx).getInt(K_TEXT_SP, DEF_TEXT_SP);
+        return Math.max(6, Math.min(28, v));
+    }
+
     /**
-     * 一行能放多少个半角宽度。
+     * 按**真实渲染宽度**取末尾若干行。
      *
-     * <p>优先用配置页里设的值（0 = 自动）。自动挡按**悬浮条的固定宽度**与当前字号算，
-     * <b>不能用 {@code label.getWidth()}</b> —— 那是「上一次内容的宽度」，而 label 和
-     * 悬浮窗原先都是 WRAP_CONTENT：内容少 → 宽度小 → 算出的容量小 → 切得更碎 →
-     * 内容更少，一路收敛到每行六个字。用户实测报的就是这个。
+     * <p>不再自己数格子。比例字体里 i 和 W 差一倍多，emoji 又是另一套宽度，
+     * 「半角算 1 格、CJK 算 2 格」只是个粗略近似 —— 用户实测的说法「有的字符大有的字符
+     * 小」完全对。StaticLayout 就是 TextView 内部用的那个排版器，让它来断行，结果必然
+     * 与实际显示一致；我们只负责把前面多出来的行切掉。字号也自动跟着算，因为宽度是从
+     * {@code tv.getPaint()} 量的，那份 paint 里就带着当前字号。
      */
-    private static int widthChars(Context ctx) {
-        int manual = prefs(ctx).getInt(K_WIDTH, 0);
-        if (manual >= 8) return Math.min(200, manual);
+    private static CharSequence tailLines(Context ctx, TextView tv, String raw, int maxLines) {
+        if (raw == null || raw.isEmpty()) return "";
         try {
-            if (label != null) {
-                float half = label.getPaint().measureText("0");
-                int avail = overlayWidthPx(ctx)
-                        - label.getPaddingLeft() - label.getPaddingRight()
-                        - dp(ctx, 24);          // 容器自己的左右 padding
-                if (avail > 0 && half > 0.5f) {
-                    return Math.max(12, Math.min(200, (int) (avail / half)));
-                }
-            }
-        } catch (Throwable ignored) {
+            int width = overlayWidthPx(ctx) - tv.getPaddingLeft() - tv.getPaddingRight()
+                    - dp(ctx, 24);                       // 容器自己的左右 padding
+            if (width < dp(ctx, 40)) width = dp(ctx, 40);
+            android.text.StaticLayout sl = android.text.StaticLayout.Builder
+                    .obtain(raw, 0, raw.length(), tv.getPaint(), width)
+                    .setIncludePad(false)
+                    .build();
+            int n = sl.getLineCount();
+            if (n <= maxLines) return raw;
+            return raw.substring(sl.getLineStart(n - maxLines));
+        } catch (Throwable e) {
+            // 兜底：老的格数估算。不精确，但总比整段不显示好
+            return OverlayLines.lastLines(raw, maxLines, OverlayLines.DEFAULT_WIDTH);
         }
-        return OverlayLines.DEFAULT_WIDTH;
     }
 
     /** 最近 {@link #MULTI_WINDOW_MS} 内是否真有两路以上在说话。 */
@@ -464,6 +471,9 @@ final class OverlayController {
         bg.setCornerRadius(dp(ctx, 16));
         bg.setColor(bgColor(ctx));
         root.setBackground(bg);
+        // 字号每次显示都重新应用：用户在配置页拉完滑块，下一条内容就是新字号，
+        // 不必重启 App。断行宽度是从 paint 量的，所以它跟着自动变。
+        if (label != null) label.setTextSize(textSp(ctx));
     }
 
     private static Handler mainHandler() {
@@ -485,7 +495,7 @@ final class OverlayController {
 
         TextView tv = new TextView(app);
         tv.setTextColor(Color.WHITE);
-        tv.setTextSize(13f);
+        tv.setTextSize(textSp(app));
         tv.setMaxLines(DEF_LINES);
         // 不设 ellipsize：分行由我们自己按宽度算好（见 OverlayLines），文本不会超宽。
         // 原先设的是 TruncateAt.START —— 那是单行时代「新字始终在右边可见」的做法，
