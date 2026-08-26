@@ -1746,6 +1746,10 @@ public class HarnessController {
                 ensureTaskNotifier();
                 ensureStatusOverlay();
                 ensureBuiltinBundles();
+                // 自己在容器里手写的插件同样要注册：放进 node_modules 不等于注册，
+                // dsh 只加载 bundles 里列出且 dependencies 解析得到的包。不补的话
+                // 插件会出现在列表里却完全不生效 —— 看着就像「插件坏了」。
+                autoRegisterLocalPlugins();
                 if (!guideRegistered("dsh-device-shell-guide")) {
                     boolean disabled = new java.io.File(proot.getRootfsDir(),
                             "root/.dsh/profiles/web/node_modules/dsh-device-shell-guide.disabled").exists();
@@ -6157,6 +6161,8 @@ public class HarnessController {
     /** 导入插件归档（自动识别 tar.gz / tar / zip 与单插件 / 多插件布局）。
      *  返回 {status, message}，status = "OK" | "ERR"。 */
     public String[] importArchive(java.io.File archive) { return plugins.importArchive(archive); }
+    /** 自动注册「本地已存在但没注册进 profile」的插件（自己在容器里手写的插件走这条）。 */
+    public java.util.List<String> autoRegisterLocalPlugins() { return plugins.autoRegisterLocalPlugins(); }
     public String fetchMarketIndex() { return plugins.fetchMarketIndex(); }
     public long getMarketCacheAgeMs() { return plugins.getMarketCacheAgeMs(); }
     public void refreshMarketIndex() { plugins.refreshMarketIndex(); }

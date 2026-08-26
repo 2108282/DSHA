@@ -65,7 +65,7 @@ class PluginController {
             java.util.Set<String> names = new java.util.LinkedHashSet<>();
             names.addAll(readBundles());            // manifest dsh.profile.bundles（系统插件层）
             names.addAll(scanDshDeclaredPlugins()); // package.json 带 dsh 字段的包（用户实装）
-            if (hideBuiltin) names.removeAll(builtin);
+            if (hideBuiltin) names.removeIf(n -> isBuiltinName(n, builtin));
             names.removeIf(n -> n == null || n.startsWith("."));
             if (names.isEmpty()) return new String[0][];
             java.util.List<String[]> list = new java.util.ArrayList<>();
@@ -221,6 +221,26 @@ class PluginController {
         // 否则开关打开后列表里还剩四个他没装过的东西，看着就像开关没生效。
         set.addAll(java.util.Arrays.asList(BUILTIN_PLUGIN_NAMES));
         return set;
+    }
+
+    /**
+     * 这个插件名算不算「自带」。
+     *
+     * <p><b>名单里不带斜杠的条目按 scope 前缀处理</b>：dsh 的自带快照里记的是
+     * {@code @deepseek-ai} 这样的 scope，而真实包名是 {@code @deepseek-ai/dsh-web-app}、
+     * {@code @deepseek-ai/dsh-base}。原来这里是 {@code names.removeAll(builtin)} ——
+     * 纯精确匹配，scope 条目永远对不上任何一个包，于是 dsh 原生的那批包一个都没被隐藏，
+     * 用户打开「隐藏自带插件」还是看见它们。
+     */
+    private static boolean isBuiltinName(String name, java.util.Set<String> builtin) {
+        if (name == null || name.isEmpty() || builtin == null) return false;
+        if (builtin.contains(name)) return true;
+        if (name.startsWith("@")) {
+            int slash = name.indexOf('/');
+            // @scope/包名 → 看名单里有没有整个 @scope
+            if (slash > 0 && builtin.contains(name.substring(0, slash))) return true;
+        }
+        return false;
     }
 
     /** 校验可进入 shell 的插件 spec：npm 名 / github: / link: / file: 路径。 */
@@ -679,6 +699,20 @@ class PluginController {
      *  幂等：已在 bundles 则跳过。与 registerMobileNavBundle 思路一致（不跑 pnpm，
      *  避免破坏 profile node_modules）。 */
     private void registerImportedPlugin(String name) {
+        registerImportedPlugin(name, null);
+    }
+
+    /**
+     * 把插件写进 web profile 的 {@code dependencies} + {@code dsh.profile.bundles}。
+     *
+     * <p>两者必须同时写：dsh 的 reconcile 会把「bundles 里列了、dependencies 解析不到」
+     * 的条目剪掉，于是补一次剪一次，用户看到的是插件装了却永远不生效。
+     *
+     * @param spec dependencies 里写的来源。{@code null} 表示实体已经在 node_modules 里
+     *             （导入插件那条路），用 {@code file:./node_modules/<name>}；
+     *             从源码构建的插件传 {@code link:<源码绝对路径>}，那才是它真实的来源。
+     */
+    private void registerImportedPlugin(String name, String spec) {
         try {
             java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
             if (!pf.isFile()) return;
@@ -687,8 +721,10 @@ class PluginController {
             org.json.JSONObject deps = root.optJSONObject("dependencies");
             if (deps == null) { deps = new org.json.JSONObject(); root.put("dependencies", deps); }
             if (!deps.has(name)) {
-                // 实体已在 node_modules，用本地引用（零网络）；scoped 包名原样保留
-                deps.put(name, "file:./node_modules/" + name);
+                // 实体已在 node_modules，用本地引用（零网络）；scoped 包名原样保留。
+                // 从源码构建来的插件传 link:<源码目录>，指回它真正的来源。
+                deps.put(name, spec != null && !spec.isEmpty()
+                        ? spec : "file:./node_modules/" + name);
             }
             // dsh.profile.bundles 追加
             org.json.JSONObject dsh = root.optJSONObject("dsh");
@@ -1843,8 +1879,18 @@ class PluginController {
         // 4) 按本地路径安装：file: 让 pnpm 直接链这个目录，等价于作者说的
         //    dsh plugin --profile web add ./plugins/xxx
         String out = installPlugin(name, "file:" + sub);
+        // 自动注册：pnpm 只负责把包放进 node_modules，写 dependencies + dsh.profile.bundles
+        // 才叫「注册」。不写的话插件页看不到、dsh 也不会加载它 ——
+        // 这就是「装成功却什么都没发生」的最后一环。
+        String reg = "";
+        if (!isInProfileManifest(name)) {
+            registerImportedPlugin(name, "link:" + sub);
+            reg = isInProfileManifest(name)
+                    ? "\n[已自动注册进 web profile（link: 指向上面那份源码）]"
+                    : "\n⚠ 自动注册没成功 —— web profile 可能还没生成，先启动一次 WebUI 再装。";
+        }
         return "已从源码构建并安装 " + name + "\n仓库 " + ref.slug() + where
-                + "\n源码保留在 " + sub + "（备份时会随包内联）\n\n" + out + verifyNote(name);
+                + "\n源码保留在 " + sub + "（备份时会随包内联）\n\n" + out + reg + verifyNote(name);
     }
 
     /** 取输出的最后 n 行 —— 命令失败时真正有用的信息都在尾部。 */
@@ -1861,6 +1907,104 @@ class PluginController {
     }
 
     /**
+     * <b>真正的</b>「已注册」：web profile 的 {@code dependencies} 与
+     * {@code dsh.profile.bundles} 里都有它。
+     *
+     * <p>两者缺一都不算：dsh 的 reconcile 会把「bundles 里列了、dependencies 解析不到」
+     * 的条目剪掉，而只在 dependencies 里、没进 bundles 的包 dsh 压根不加载。
+     * {@link #isRegisteredNow} 那个判据（在 bundles 里 <b>或</b> 声明了 dsh 字段）
+     * 回答的是「算不算已装」，比这里宽 —— 别混用。
+     */
+    private boolean isInProfileManifest(String name) {
+        try {
+            java.io.File pf = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/package.json");
+            if (!pf.isFile() || name == null || name.isEmpty()) return false;
+            org.json.JSONObject root = new org.json.JSONObject(new String(
+                    java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8));
+            org.json.JSONObject deps = root.optJSONObject("dependencies");
+            if (deps == null || !deps.has(name)) return false;
+            org.json.JSONObject dsh = root.optJSONObject("dsh");
+            org.json.JSONObject prof = dsh == null ? null : dsh.optJSONObject("profile");
+            org.json.JSONArray b = prof == null ? null : prof.optJSONArray("bundles");
+            if (b == null) return false;
+            for (int i = 0; i < b.length(); i++) {
+                if (name.equals(b.optString(i, ""))) return true;
+            }
+            return false;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * package.json 里有没有 {@code dsh.bundle} 声明。
+     *
+     * <p><b>只有声明了 bundle 的包才该进 {@code dsh.profile.bundles}</b>。官方文档写得很明确：
+     * 没有 {@code dsh.bundle} 的包仍然可以安装，但只作为普通依赖、不激活任何层 ——
+     * 那是「给插件 import 的库包」这种格式。把库包写进 bundles，dsh 只会打警告，
+     * 等于往 profile 里塞垃圾。
+     *
+     * <p>所以自动注册不能只看「有没有 dsh 字段」（{@link #hasDshField}）：
+     * 一个只声明 {@code dsh.client} 的包也有 dsh 字段，但它不是 bundle。
+     */
+    private boolean hasDshBundle(java.io.File pkgDir) {
+        try {
+            java.io.File pj = new java.io.File(pkgDir, "package.json");
+            if (!pj.isFile() || pj.length() > 4L * 1024 * 1024) return false;
+            org.json.JSONObject o = new org.json.JSONObject(new String(
+                    java.nio.file.Files.readAllBytes(pj.toPath()), StandardCharsets.UTF_8));
+            org.json.JSONObject dsh = o.optJSONObject("dsh");
+            return dsh != null && dsh.optJSONObject("bundle") != null;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 自动注册「本地已经存在、但没注册进 profile」的插件。
+     *
+     * <p><b>为什么需要它</b>：DSHA 里可以自己做插件 —— 进内置终端、或者让 agent 在容器里
+     * 直接写一个插件目录（{@code node_modules/<name>/package.json} + 入口文件），
+     * 在完整 Linux 环境里这是最自然的做法，也是 DSHA 相对纯 App 壳的意义所在。
+     *
+     * <p>但<b>放进目录不等于注册</b>：dsh 只加载 {@code dsh.profile.bundles} 里列出、
+     * 且 {@code dependencies} 解析得到的包。手写的插件会出现在插件列表里
+     * （{@link #scanDshDeclaredPlugins} 认 package.json 的 dsh 字段），却完全不生效 ——
+     * 看起来就是「插件坏了」，而且没有任何地方会说出真正的原因。
+     *
+     * <p>用户手动禁用过的（{@code <name>.disabled}）一律不动 —— 那是用户的决定，
+     * 自动注册不该把它复活。
+     *
+     * @return 这一轮补注册了哪些插件名
+     */
+    public java.util.List<String> autoRegisterLocalPlugins() {
+        java.util.List<String> done = new java.util.ArrayList<>();
+        try {
+            java.util.Set<String> declared = scanDshDeclaredPlugins();
+            if (declared.isEmpty()) return done;
+            for (String n : declared) {
+                if (n == null || n.isEmpty() || n.startsWith(".")) continue;
+                if (isInProfileManifest(n)) continue;      // 已经注册好了
+                if (isPluginDisabled(n)) continue;         // 用户手动禁用过的不要复活
+                // 只有 dsh.bundle 包才进 bundles —— 库包（只给别人 import 的）不算插件
+                java.io.File entity = new java.io.File(proot.getRootfsDir(),
+                        HarnessController.PLUGIN_DIRS[0].substring(1) + "/" + n);
+                if (!hasDshBundle(entity)) continue;
+                registerImportedPlugin(n);                 // 实体在 node_modules → file:./node_modules/<n>
+                if (isInProfileManifest(n)) done.add(n);
+            }
+            if (!done.isEmpty()) {
+                host.logActivity("自动注册本地插件 " + done.size() + " 个："
+                        + String.join(", ", done) + "（重启 WebUI 生效）");
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("DSHA", "自动注册本地插件失败: " + t);
+        }
+        return done;
+    }
+
+    /**
      * 装完<b>眼见为实</b>：命令退出 0 不等于插件真的注册上了。
      *
      * <p>「提示安装成功，插件管理页空无一物」就是只看退出码的后果。没注册上就把实话
@@ -1868,7 +2012,7 @@ class PluginController {
      */
     private String verifyNote(String name) {
         try {
-            if (isRegisteredNow(name)) return "";
+            if (isInProfileManifest(name)) return "";
         } catch (Throwable t) {
             return "";      // 查不了就别冤枉安装结果
         }
