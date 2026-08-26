@@ -917,6 +917,41 @@ public class HarnessController {
         return prefs.getBoolean("keepalive_paused", false);
     }
 
+    /**
+     * 「现在该不该<b>自动</b>把 Web 拉起来」—— 所有自动拉起路径的唯一判据。
+     *
+     * <p>用户主动点「启动」不走这里：那是明确意图，直接 {@link #startWeb()}。
+     *
+     * <p><b>为什么要收口</b>：这套判据原先散在五个地方，而且各查各的 —— 保活循环查
+     * 「手动停止 + 会话自愈」，预启动查「手动停止 + 90 秒冷却」，看门狗安装和「服务被
+     * START_STICKY 重建」这两处压根没查。于是用户按下停止之后，看门狗 1.5 秒后被预热线程
+     * 写回、失联 3 次再把 WebUI 拽回来，表现出来就是「停止根本没用、后台不停拉活」。
+     *
+     * <p>收口之后，新增拉起路径时问题从「记不记得查」变成「调不调这个方法」；日志里带上
+     * caller，真机上一眼就能看出是谁拉起的 —— 以前这个信息完全缺失，只能靠猜。
+     *
+     * @param caller 调用方标识，只用于日志
+     */
+    public boolean shouldAutoStartWeb(String caller) {
+        if (isKeepAlivePaused()) {
+            android.util.Log.i("DSHA", "[自动拉起/" + caller + "] 跳过：用户手动停止过");
+            return false;
+        }
+        if (isHealingSession()) {
+            android.util.Log.i("DSHA", "[自动拉起/" + caller + "] 跳过：会话自愈进行中（防边修边写）");
+            return false;
+        }
+        long lastStop = prefs.getLong("last_web_stop", 0);
+        long since = System.currentTimeMillis() - lastStop;
+        if (lastStop > 0 && since < PREWARM_STOP_GUARD_MS) {
+            android.util.Log.i("DSHA", "[自动拉起/" + caller + "] 跳过："
+                    + (since / 1000) + " 秒前刚手动停过（守护期 "
+                    + (PREWARM_STOP_GUARD_MS / 1000) + " 秒）");
+            return false;
+        }
+        return true;
+    }
+
     /** 预启动阈值：距上次手动停止小于该值则尊重用户、不自动拉起（ms） */
     private static final long PREWARM_STOP_GUARD_MS = 90_000;
 
@@ -1798,11 +1833,9 @@ public class HarnessController {
         try {
             if (!proot.isInstalled() || !isHarnessInstalled()) return; // 环境/harness 未装
             if (webProcess != null && webProcess.isAlive()) return;    // 已在运行
-            // 用户主动停止过（keepalive_paused=true）→ 不自动拉起，尊重用户（除非再次点启动）
-            if (isKeepAlivePaused()) return;
-            // 尊重用户：90s 内手动停止过 → 不自动拉起
-            long lastStop = prefs.getLong("last_web_stop", 0);
-            if (System.currentTimeMillis() - lastStop < PREWARM_STOP_GUARD_MS) return;
+            // 手动停止 / 会话自愈 / 90 秒冷却，统一走 shouldAutoStartWeb —— 这几个判据
+            // 以前在这里各写一遍，别处又漏写，正是「停止按不动」的来源
+            if (!shouldAutoStartWeb("预启动")) return;
             android.util.Log.i("DSHA", "[预启动] 后台预热 Web UI…");
             startWeb();
         } catch (Throwable ignored) {
@@ -3166,11 +3199,7 @@ public class HarnessController {
         // 用户主动停过就别再装看门狗。否则「停止」按下去之后，只要还停在启动页，
         // 1.5 秒后 LaunchFragment 的预热线程又把看门狗写回并拉起，它失联 3 次（约 90 秒）
         // 就把 WebUI 拽回来 —— 真机反馈的「启动页的停止没有用、后台不停拉活」正是这条路。
-        // maybePrewarmWeb() 早就查了这个标记，偏偏隔壁这行漏了：又一次「同一个判断散落两处」。
-        if (isKeepAlivePaused()) {
-            android.util.Log.i("DSHA", "[看门狗] 用户此前手动停止过，跳过安装与启动");
-            return;
-        }
+        if (!shouldAutoStartWeb("看门狗安装")) return;
         boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false);
         // 与 startWebCommand 一致：只有补丁真的打上（lanReady=true）才用 0.0.0.0，
@@ -4509,6 +4538,14 @@ public class HarnessController {
     }
 
     public void startWeb() {
+        // Web 又要跑起来了 —— 那么「上次手动停止」的两个约束就到此为止：
+        //   keepalive_paused  暂停自动拉起（原先只有 LaunchFragment 的启动按钮会清它，
+        //                     从通知栏「重启」等其它入口进来就清不掉）
+        //   last_web_stop     90 秒冷却期
+        // 不清的话会留下一个隐蔽的坑：停止后立刻手动启动，Web 万一崩了，
+        // 90 秒内不会自动重试 —— 而这个冷却期本来是为了「尊重用户不想让它跑」，
+        // 用户都亲手把它拉起来了，它就没有存在意义了。
+        prefs.edit().putBoolean("keepalive_paused", false).remove("last_web_stop").apply();
         // ===== 会话自愈必跑点：无论 web 是否已经在运行，都先提交一次自愈（幂等，秒级）。
         // 若把 heal 放在 IO 启动任务里，web 已存活时 startWeb 提前 return 会导致修复永不执行。
         maybeHealSessionCorruption();
@@ -4565,8 +4602,8 @@ public class HarnessController {
                 synchronized (webStartLock) {
                     webProcess = p;
                 }
-                // web 已由用户/预启动成功拉起 → 解除 keepAlive 暂停（恢复崩溃自愈）
-                prefs.edit().putBoolean("keepalive_paused", false).apply();
+                // 「解除 keepAlive 暂停」已经由 startWeb() 开头统一做掉，这里不再重复写一遍 ——
+                // 同一个标记在多处置位，就是这次「停止按不动」的病根。
                 bumpWebEpoch(); // 新 web 进程已起：通知预览端刷新
                 // 关键：Web 启动中 busy=true 会让安装/重装按钮全灰。
                 // 端口就绪即视为启动完成 → 释放 busy（不能等 drainOutput 阻塞返回，
@@ -4576,8 +4613,10 @@ public class HarnessController {
                 Thread drainer = new Thread(() -> {
                     try {
                         String out = proot.drainOutput(p);
-                        // 进程退出：非用户主动停止 → 交给 keepAlive/自动重试
-                        if (!isKeepAlivePaused()) {
+                        // 进程退出：非用户主动停止 → 交给 keepAlive/自动重试。
+                        // 判据统一走 shouldAutoStartWeb —— 用户停过、自愈中、刚停过的冷却期内
+                        // 都不该自动重试，这几条以前在别处各写一遍。
+                        if (shouldAutoStartWeb("Web 意外退出重试")) {
                             String low = out == null ? "" : out.toLowerCase();
                             boolean configErr = low.contains("invalid api key") || low.contains("validationerror")
                                     || low.contains("api key") && low.contains("missing");

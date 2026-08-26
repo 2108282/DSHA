@@ -127,9 +127,9 @@ public class LaunchFragment extends Fragment {
         }, "dsha-prewarm").start(), 1500);
 
         startBtn.setOnClickListener(v -> {
-            // 用户主动启动：清除"手动停止"标记（否则 keepAlive/预启动会一直不拉起）
-            requireContext().getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
-                    .edit().putBoolean("keepalive_paused", false).apply();
+            // 「手动停止」标记不在这里清 —— HarnessController.startWeb() 开头统一清掉，
+            // 这样通知栏「重启」等别的入口也一样解除，不必每个入口自己记得（漏一个就又
+            // 出现「启动了但保活仍不拉起」这类怪状态）。
             if (webReady) {
                 openWeb();
                 return;

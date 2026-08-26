@@ -102,11 +102,10 @@ public class HarnessService extends Service {
             startKeepAlive();
             return START_STICKY;
         }
-        // intent 为 null = 系统因 START_STICKY 把服务重启了。这时若用户此前明确点过
-        // 「停止」，就不该再拉起 Web —— 否则他永远停不掉，只剩「强制停止」这一条路。
+        // intent 为 null = 系统因 START_STICKY 把服务重建了。这时若用户此前明确停过，
+        // 就不该再拉起 Web —— 否则他永远停不掉，只剩「强制停止」这一条路。
         // 前台服务壳留着（保持通知与后续可点启动），但不碰 Web 与保活。
-        if (intent == null && c.isKeepAlivePaused()) {
-            android.util.Log.i("DSHA", "[服务] 系统重启了服务，但用户此前手动停止过 —— 不自动拉起 Web");
+        if (intent == null && !c.shouldAutoStartWeb("服务被系统重建")) {
             return START_STICKY;
         }
         startWeb();
@@ -149,10 +148,8 @@ public class HarnessService extends Service {
                 if (fail < KEEPALIVE_MAX_FAIL) continue;
                 fail = 0;
                 long now = System.currentTimeMillis();
-                if (c.isKeepAlivePaused() || HarnessController.isHealingSession()) {
-                    // 用户手动停止过、或会话自愈进行中：不自动拉起（防止边修边写）
-                    continue;
-                }
+                // 手动停止 / 会话自愈 / 刚停过的冷却期，统一判据在 shouldAutoStartWeb
+                if (!c.shouldAutoStartWeb("保活")) continue;
                 if (now - lastRestartAt.get() < RESTART_COOLDOWN_MS) continue; // 冷却期，等它自己缓过来
                 lastRestartAt.set(now);
                 if (restarting.compareAndSet(false, true)) {
