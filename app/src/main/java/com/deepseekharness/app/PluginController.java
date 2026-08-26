@@ -1721,26 +1721,14 @@ class PluginController {
                         if (probe != null) break;
                     }
                     if (probe == null) {
-                        return "装不了：" + name + " 的入口文件 " + main + " 不在仓库里。\n\n"
-                                + "这个插件的源码需要先编译"
-                                + (buildScript.isEmpty() ? "" : "（作者的构建命令：" + buildScript + "）")
-                                + "，而作者既没把编译产物提交进仓库、也没发布到 npm。\n"
-                                + "手机上没有它的构建工具链，硬装进去只会是个跑不起来的空壳 ——"
-                                + "所以这里直接停下，不报那个假的「安装成功」。\n\n"
-                                + "可以做的：向作者提 issue 请他发布 npm 或提交构建产物；"
-                                + "或者在电脑上 clone 后跑构建，把整个插件目录打成 zip/tar.gz，"
-                                + "再用「导入插件」装进来。";
+                        // 入口不在仓库里 = 得先构建。容器里就是完整的 Node 24 + pnpm 工具链，
+                        // 所以不劝退，直接 clone → 装依赖 → 构建 —— 这条路只有 DSHA 走得通。
+                        return installSubdirFromSource(ref, name, main, buildScript);
                     }
                 }
-                // 入口确实在仓库里：子目录源码安装的支持随 pnpm/dsh 版本而异，
-                // 自动装很容易变成「装上了却不生效」，所以给可复制的命令而不是赌一把
-                return "识别到 monorepo 子目录插件：" + name + "\n仓库 " + ref.slug()
-                        + " 子目录 " + ref.subdir + "\n\n"
-                        + "它没有发布到 npm，而从仓库子目录装包的支持随 dsh/pnpm 版本而异，"
-                        + "自动装容易「装上了却不生效」。建议其中一种：\n"
-                        + "· 用「导入插件」：把 " + ref.subdir + " 这个目录打包成 zip/tar.gz 后导入；\n"
-                        + "· 或在内置终端里手动试：dsh plugin --profile web add "
-                        + "\"git+https://github.com/" + ref.slug() + ".git#path:/" + ref.subdir + "\"";
+                // 入口确实在仓库里：也走同一条路，用本地路径装那个子目录
+                // （作者 README 写的就是 dsh plugin --profile web add ./plugins/xxx）
+                return installSubdirFromSource(ref, name, main, buildScript);
             }
             // ===== 普通整仓库 =====
             String npmName = fetchNpmName(ref.owner, ref.repo);
@@ -1753,6 +1741,89 @@ class PluginController {
         } catch (Throwable e) {
             return "安装失败: " + e.getMessage();
         }
+    }
+
+    /**
+     * monorepo 子目录插件：在容器里 <b>clone → 装依赖 → 构建 → 按本地路径安装</b>。
+     *
+     * <p>为什么值得做而不是劝退：这类插件（一个仓库放多个包、源码是 TypeScript、构建产物
+     * 不进仓库、也没发 npm）在 dsh 生态里很常见，作者 README 写的安装方式就是
+     * {@code pnpm build} 之后 {@code dsh plugin --profile web add ./plugins/xxx}。
+     * 而 DSHA 的 rootfs 里就是完整的 Node 24 + pnpm —— Termux 派和纯 App 壳做不到这一步，
+     * 我们能。这正是「完整 glibc 环境」该兑现的地方。
+     *
+     * <p>耗时以分钟计（clone + 装 monorepo 依赖 + tsc），所以每一步都把失败原因带回去，
+     * 不让它塌成一句笼统的「安装失败」。源码落在 {@code /root/plugin-src/<repo>}，
+     * 与 {@code link:} 类插件的源码同一处 —— 备份时会被内联进包里。
+     */
+    private String installSubdirFromSource(GitHubRef ref, String name, String main, String buildScript) {
+        final String branch = ref.branch.isEmpty() ? "main" : ref.branch;
+        final String repoDir = "/root/plugin-src/" + ref.repo;
+        final String sub = repoDir + "/" + ref.subdir;
+        final String repoUrl = "https://github.com/" + ref.slug() + ".git";
+
+        // 1) 浅克隆（先走加速代理，再直连兜底）
+        String r = proot.execAndRead("mkdir -p /root/plugin-src && rm -rf " + ShellQuote.arg(repoDir)
+                + " && ( git clone --depth 1 -b " + ShellQuote.arg(branch) + " "
+                + ShellQuote.arg(HarnessController.gitHubProxy(repoUrl)) + " " + ShellQuote.arg(repoDir)
+                + " || git clone --depth 1 -b " + ShellQuote.arg(branch) + " "
+                + ShellQuote.arg(repoUrl) + " " + ShellQuote.arg(repoDir)
+                + " ) 2>&1; echo STEP_EXIT=$?", 420_000);
+        if (r == null || !r.contains("STEP_EXIT=0")) {
+            return "克隆 " + ref.slug() + "（分支 " + branch + "）失败：\n" + lastLines(r, 12);
+        }
+        java.io.File subHost = new java.io.File(proot.getRootfsDir(),
+                "root/plugin-src/" + ref.repo + "/" + ref.subdir);
+        if (!subHost.isDirectory()) {
+            return "克隆成功，但 " + branch + " 分支上没有 " + ref.subdir + " 这个目录。";
+        }
+        boolean mainReady = !main.isEmpty() && new java.io.File(subHost, main).isFile();
+
+        if (!mainReady) {
+            // 2) 装依赖。pnpm workspace 必须在**仓库根**装 —— 子目录单独装会缺 workspace
+            // 内部依赖，tsc 一跑就是一屏 Cannot find module @deepseek-ai/…
+            r = proot.execAndRead("cd " + ShellQuote.arg(repoDir)
+                    + " && pnpm install --prefer-offline 2>&1; echo STEP_EXIT=$?", 900_000);
+            if (r == null || !r.contains("STEP_EXIT=0")) {
+                return "装依赖失败（在 " + ref.repo + " 仓库根跑 pnpm install）：\n" + lastLines(r, 20)
+                        + "\n\n这一步要联网拉 monorepo 的全部依赖，网络不稳时容易断，可以重试。";
+            }
+            // 3) 构建。先按 workspace 包名过滤（作者 README 的写法），失败再退到子目录里直接 build
+            r = proot.execAndRead("cd " + ShellQuote.arg(repoDir)
+                    + " && ( pnpm --filter " + ShellQuote.arg(name) + " build 2>&1"
+                    + " || ( cd " + ShellQuote.arg(sub) + " && pnpm build 2>&1 ) )"
+                    + "; echo STEP_EXIT=$?", 900_000);
+            boolean built = r != null && r.contains("STEP_EXIT=0");
+            mainReady = main.isEmpty() || new java.io.File(subHost, main).isFile();
+            if (!built && !mainReady) {
+                return "构建失败" + (buildScript.isEmpty() ? "" : "（作者的构建命令：" + buildScript + "）")
+                        + "：\n" + lastLines(r, 20)
+                        + "\n\n源码已经留在容器里的 " + sub + "，可以进内置终端手动接着试。";
+            }
+            if (!mainReady) {
+                return "构建命令跑完了，但入口文件 " + main + " 还是没生成。\n"
+                        + "源码在 " + sub + "，进内置终端能看 pnpm build 的完整输出。";
+            }
+        }
+
+        // 4) 按本地路径安装：file: 让 pnpm 直接链这个目录，等价于作者说的
+        //    dsh plugin --profile web add ./plugins/xxx
+        String out = installPlugin(name, "file:" + sub);
+        return "已从源码构建并安装 " + name + "\n仓库 " + ref.slug() + " 子目录 " + ref.subdir
+                + "\n源码保留在 " + sub + "（备份时会随包内联）\n\n" + out + verifyNote(name);
+    }
+
+    /** 取输出的最后 n 行 —— 命令失败时真正有用的信息都在尾部。 */
+    private static String lastLines(String s, int n) {
+        if (s == null || s.isEmpty()) return "（没有输出）";
+        String[] lines = s.trim().split("\n");
+        int from = Math.max(0, lines.length - n);
+        StringBuilder sb = new StringBuilder();
+        for (int i = from; i < lines.length; i++) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(lines[i]);
+        }
+        return sb.toString();
     }
 
     /**
