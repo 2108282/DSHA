@@ -435,31 +435,24 @@ public final class BackupManager {
         }
     }
 
-    /** Android 10+：MediaStore Downloads 集合，无需存储权限。overwrite=true 时先删同名旧条目。 */    private static String writeViaMediaStore(Context ctx, File src, String name, boolean overwrite) throws Exception {
+    /** Android 10+：MediaStore Downloads 集合，无需存储权限。overwrite=true 时先删同名旧条目。 */
+    private static String writeViaMediaStore(Context ctx, File src, String name, boolean overwrite) throws Exception {
+        final String base = Environment.DIRECTORY_DOWNLOADS;
         if (overwrite) {
-            // 删除同名的旧自动备份（MediaStore 同名会新建条目，必须先清旧的）
-            try {
-                Uri collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
-                String sel = MediaStore.MediaColumns.DISPLAY_NAME + "=? AND "
-                        + MediaStore.MediaColumns.RELATIVE_PATH + "=?";
-                String[] args = {name, Environment.DIRECTORY_DOWNLOADS + "/DSHA/"};
-                android.database.Cursor cur = ctx.getContentResolver().query(collection,
-                        new String[]{MediaStore.MediaColumns._ID}, sel, args, null);
-                if (cur != null) {
-                    while (cur.moveToNext()) {
-                        long id = cur.getLong(0);
-                        ctx.getContentResolver().delete(
-                                android.content.ContentUris.withAppendedId(collection, id), null, null);
-                    }
-                    cur.close();
-                }
-            } catch (Throwable ignored) {
+            // 删除同名的旧自动备份（MediaStore 同名会新建条目，必须先清旧的）。
+            // **新老两个目录都要清**：老版本的自动备份落在 DSHA/ 根下，只清新目录的话
+            // 那一份会永远留着 —— 用户看到两个同名备份，还以为自动备份有两套。
+            for (String sub : PublicDirs.archiveSubdirs()) {
+                deleteSameName(ctx, name, PublicDirs.relativeSlash(base, sub));
+                deleteSameName(ctx, name, PublicDirs.relative(base, sub));
             }
         }
         ContentValues values = new ContentValues();
         values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
         values.put(MediaStore.MediaColumns.MIME_TYPE, "application/gzip");
-        values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/DSHA");
+        // 写入只用新目录（存档）；读取仍然兼容老目录，见 PublicDirs.archiveSubdirs()
+        values.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                PublicDirs.relative(base, PublicDirs.ARCHIVES));
         Uri uri = ctx.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
         if (uri == null) return null;
         try (InputStream in = new FileInputStream(src);
@@ -469,14 +462,36 @@ public final class BackupManager {
             int n;
             while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
         }
-        return Environment.getExternalStorageDirectory() + "/Download/DSHA/" + name;
+        return PublicDirs.display(Environment.getExternalStorageDirectory().getAbsolutePath(),
+                base, PublicDirs.ARCHIVES) + "/" + name;
+    }
+
+    /** 删掉某个相对目录下的同名条目（MediaStore 允许同名共存，不先删就会堆两份）。 */
+    private static void deleteSameName(Context ctx, String name, String relPath) {
+        try {
+            Uri collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+            String sel = MediaStore.MediaColumns.DISPLAY_NAME + "=? AND "
+                    + MediaStore.MediaColumns.RELATIVE_PATH + "=?";
+            String[] args = {name, relPath};
+            try (android.database.Cursor cur = ctx.getContentResolver().query(collection,
+                    new String[]{MediaStore.MediaColumns._ID}, sel, args, null)) {
+                if (cur == null) return;
+                while (cur.moveToNext()) {
+                    ctx.getContentResolver().delete(
+                            android.content.ContentUris.withAppendedId(collection, cur.getLong(0)),
+                            null, null);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     /** Android 9-：直接写公共下载目录（需要 WRITE_EXTERNAL_STORAGE 权限） */
     @SuppressWarnings("deprecation")
     private static String writeDirect(File src, String name) throws Exception {
         File dir = new File(Environment.getExternalStoragePublicDirectory(
-                Environment.DIRECTORY_DOWNLOADS), "DSHA");
+                Environment.DIRECTORY_DOWNLOADS),
+                PublicDirs.ROOT + "/" + PublicDirs.ARCHIVES);
         if (!dir.exists() && !dir.mkdirs()) return null;
         File dst = new File(dir, name);
         try (FileInputStream in = new FileInputStream(src);
@@ -505,7 +520,8 @@ public final class BackupManager {
                         new String[]{MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME,
                                 MediaStore.MediaColumns.DATE_MODIFIED},
                         MediaStore.MediaColumns.RELATIVE_PATH + "=?",
-                        new String[]{Environment.DIRECTORY_DOWNLOADS + "/DSHA/"}, null)) {
+                        new String[]{PublicDirs.relativeSlash(
+                                Environment.DIRECTORY_DOWNLOADS, PublicDirs.ARCHIVES)}, null)) {
                     if (cur != null) {
                         while (cur.moveToNext()) {
                             String dn = cur.getString(1);
@@ -517,7 +533,8 @@ public final class BackupManager {
                 }
             } else {
                 File dir = new File(Environment.getExternalStoragePublicDirectory(
-                        Environment.DIRECTORY_DOWNLOADS), "DSHA");
+                        Environment.DIRECTORY_DOWNLOADS),
+                PublicDirs.ROOT + "/" + PublicDirs.ARCHIVES);
                 File[] fs = dir.listFiles((d, n) -> n.startsWith(prefix) && n.endsWith(".tar.gz")
                         && !isAutoName(n));
                 if (fs != null) {
@@ -536,7 +553,8 @@ public final class BackupManager {
                         MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                         new String[]{MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATE_MODIFIED},
                         MediaStore.MediaColumns.RELATIVE_PATH + "=?",
-                        new String[]{Environment.DIRECTORY_DOWNLOADS + "/DSHA/"}, null)) {
+                        new String[]{PublicDirs.relativeSlash(
+                                Environment.DIRECTORY_DOWNLOADS, PublicDirs.ARCHIVES)}, null)) {
                     if (cur != null) {
                         java.util.Map<Long, Long> id2t = new java.util.HashMap<>();
                         while (cur.moveToNext()) {

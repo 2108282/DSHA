@@ -492,6 +492,34 @@ public final class PureLogicTest {
                 BackupScope.snapshotEntries(BackupScope.SESSIONS).length == 1
                         && "sessions".equals(BackupScope.snapshotEntries(BackupScope.SESSIONS)[0]));
 
+        // ===== PublicDirs：公开 Download 目录布局 =====
+        eq("dirs: 存档子目录", "Download/DSHA/存档", PublicDirs.relative("Download", PublicDirs.ARCHIVES));
+        eq("dirs: 插件子目录", "Download/DSHA/插件", PublicDirs.relative("Download", PublicDirs.PLUGINS));
+        eq("dirs: 下载子目录", "Download/DSHA/下载", PublicDirs.relative("Download", PublicDirs.DOWNLOADS));
+        eq("dirs: 老位置就是 DSHA 根（不带子目录）",
+                "Download/DSHA", PublicDirs.relative("Download", PublicDirs.LEGACY));
+        eq("dirs: null 子目录等同老位置", "Download/DSHA", PublicDirs.relative("Download", null));
+        eq("dirs: 带尾斜杠形态", "Download/DSHA/存档/",
+                PublicDirs.relativeSlash("Download", PublicDirs.ARCHIVES));
+        eq("dirs: 展示用绝对路径", "/storage/emulated/0/Download/DSHA/存档",
+                PublicDirs.display("/storage/emulated/0", "Download", PublicDirs.ARCHIVES));
+        eq("dirs: 展示路径不因外部根带尾斜杠而多一道", "/storage/emulated/0/Download/DSHA/插件",
+                PublicDirs.display("/storage/emulated/0/", "Download", PublicDirs.PLUGINS));
+        // 扫描顺序：新目录在前、老目录必须在列（用户手机上已有的备份都在根下，
+        // 漏了它恢复列表会突然空掉）
+        String[] scan = PublicDirs.archiveSubdirs();
+        eqi("dirs: 存档扫描两个位置", 2, scan.length);
+        eq("dirs: 新目录排在前", PublicDirs.ARCHIVES, scan[0]);
+        eq("dirs: 老目录兜底在后", PublicDirs.LEGACY, scan[1]);
+        // 插件名当文件名：scope 里的斜杠会被当路径分隔符
+        eq("dirs: scoped 插件名去掉 @ 并把 / 换成 -",
+                "dsh-external-dsh-mobile-nav",
+                PublicDirs.safeFileName("@dsh-external/dsh-mobile-nav"));
+        eq("dirs: 普通插件名原样", "dsh-status-overlay",
+                PublicDirs.safeFileName("dsh-status-overlay"));
+        eq("dirs: 非法文件名字符被替换", "a-b-c", PublicDirs.safeFileName("a:b?c"));
+        eq("dirs: 空名字有兜底", "plugin", PublicDirs.safeFileName(""));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

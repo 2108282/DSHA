@@ -5310,24 +5310,26 @@ public class HarnessController {
      *  返回最新可读的那个 + 不可读计数。 */
     public BackupScan scanExternalBackups() {
         final File dshaDir = new File(android.os.Environment.getExternalStoragePublicDirectory(
-                android.os.Environment.DIRECTORY_DOWNLOADS), "DSHA");
+                android.os.Environment.DIRECTORY_DOWNLOADS), PublicDirs.ROOT);
         java.util.LinkedHashMap<String, BackupCandidate> found = new java.util.LinkedHashMap<>();
         // 1) MediaStore（Android 10+，不需要任何存储权限）
         if (android.os.Build.VERSION.SDK_INT >= 29) {
             try {
                 android.net.Uri col = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI;
                 String base = android.os.Environment.DIRECTORY_DOWNLOADS; // "Download"
-                // RELATIVE_PATH 存的是否带尾斜杠因设备/版本而异（写入用的是 "Download/DSHA"），
-                // 两种都查，兜住。
-                String sel = android.provider.MediaStore.MediaColumns.RELATIVE_PATH + "=? OR "
-                        + android.provider.MediaStore.MediaColumns.RELATIVE_PATH + "=?";
-                String[] selArgs = new String[]{base + "/DSHA/", base + "/DSHA"};
+                // 用 LIKE 一次覆盖 DSHA 及其所有子目录：备份现在写在 DSHA/存档/，
+                // 而用户手机上已有的老备份在 DSHA/ 根下 —— 两处都得能找到，否则升级
+                // 之后恢复列表会突然空掉。文件名判据（looksLikeBackupName）会把
+                // 插件/下载子目录里的东西挡在外面。
+                String sel = android.provider.MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?";
+                String[] selArgs = new String[]{base + "/" + PublicDirs.ROOT + "%"};
                 try (android.database.Cursor cur = appContext.getContentResolver().query(
                         col,
                         new String[]{android.provider.MediaStore.MediaColumns._ID,
                                 android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
                                 android.provider.MediaStore.MediaColumns.DATE_MODIFIED,
-                                android.provider.MediaStore.MediaColumns.SIZE},
+                                android.provider.MediaStore.MediaColumns.SIZE,
+                                android.provider.MediaStore.MediaColumns.RELATIVE_PATH},
                         sel, selArgs, null)) {
                     if (cur != null) {
                         while (cur.moveToNext()) {
@@ -5335,7 +5337,15 @@ public class HarnessController {
                             if (!looksLikeBackupName(dn)) continue;
                             android.net.Uri u = android.content.ContentUris.withAppendedId(
                                     col, cur.getLong(0));
-                            found.put(dn, new BackupCandidate(dn, u, new File(dshaDir, dn),
+                            // File 路径要按条目自己的 RELATIVE_PATH 拼，不能一律当成 DSHA 根 ——
+                            // 存档子目录里的备份会被拼成不存在的路径，content:// 还能读，
+                            // File 兜底那条路就断了。
+                            String rel = cur.isNull(4) ? null : cur.getString(4);
+                            File f = rel == null || rel.isEmpty()
+                                    ? new File(dshaDir, dn)
+                                    : new File(android.os.Environment.getExternalStorageDirectory(),
+                                            rel + (rel.endsWith("/") ? "" : "/") + dn);
+                            found.put(dn, new BackupCandidate(dn, u, f,
                                     cur.getLong(2) * 1000L, // DATE_MODIFIED 是秒
                                     cur.isNull(3) ? 0L : cur.getLong(3)));
                         }
@@ -5344,17 +5354,19 @@ public class HarnessController {
             } catch (Throwable ignored) {
             }
         }
-        // 2) 直接列目录（Android 9-，或已授予「所有文件访问」的设备）
-        try {
-            File[] fs = dshaDir.listFiles();
-            if (fs != null) {
+        // 2) 直接列目录（Android 9-，或已授予「所有文件访问」的设备）：新目录 + 老目录
+        for (String sub : PublicDirs.archiveSubdirs()) {
+            try {
+                File dir = sub.isEmpty() ? dshaDir : new File(dshaDir, sub);
+                File[] fs = dir.listFiles();
+                if (fs == null) continue;
                 for (File f : fs) {
                     String n = f.getName();
                     if (!looksLikeBackupName(n) || found.containsKey(n)) continue;
                     found.put(n, new BackupCandidate(n, null, f, f.lastModified(), f.length()));
                 }
+            } catch (Throwable ignored) {
             }
-        } catch (Throwable ignored) {
         }
         // 3) 逐个试开：可读的参与「挑最新」，读不到的只计数
         BackupCandidate best = null;
@@ -6139,6 +6151,8 @@ public class HarnessController {
     public String getLastToggleError() { return plugins.getLastToggleError(); }
     public boolean togglePlugin(String name, boolean enable) { return plugins.togglePlugin(name, enable); }
     public String exportPlugins() { return plugins.exportPlugins(); }
+    /** 导出单个插件到 Download/DSHA/插件/（单文件）。 */
+    public String exportOnePlugin(String name) { return plugins.exportOnePlugin(name); }
     public boolean importPlugins(java.io.File tarGz) { return plugins.importPlugins(tarGz); }
     public String fetchMarketIndex() { return plugins.fetchMarketIndex(); }
     public long getMarketCacheAgeMs() { return plugins.getMarketCacheAgeMs(); }

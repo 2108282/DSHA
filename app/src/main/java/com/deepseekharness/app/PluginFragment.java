@@ -536,6 +536,28 @@ public class PluginFragment extends Fragment {
         }).start();
     }
 
+    /** 导出单个插件到 Download/DSHA/插件/（单文件）。
+     *  结论 Toast + 状态行双报：导出路径是用户接下来要用的信息，不能因为切走页面就丢。 */
+    private void exportOne(String name) {
+        say("正在导出 " + name + " …");
+        final android.content.Context appCtx = requireContext().getApplicationContext();
+        new Thread(() -> {
+            String r = c.exportOnePlugin(name);
+            final String msg;
+            if ("BAD_NAME".equals(r)) {
+                msg = "插件名不合法，没法当文件名用";
+            } else if ("NOT_FOUND".equals(r)) {
+                msg = "没找到 " + name + " 的实体（可能已被卸载）";
+            } else if (r == null) {
+                msg = "导出失败：打包或写出出错";
+            } else {
+                msg = "已导出到 " + r;
+            }
+            toastOnMain(appCtx, msg);
+            runOnUiThreadSafely(() -> say(msg));
+        }).start();
+    }
+
     private void importPlugins() {
         android.content.Intent intent = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(android.content.Intent.CATEGORY_OPENABLE);
@@ -952,6 +974,7 @@ public class PluginFragment extends Fragment {
                 h.desc.setText(it[5]);
                 h.status.setText("⭐ " + it[1] + " · 👤 " + (it[2].isEmpty() ? "?" : it[2]) + " · " + it[3] + " · " + it[4]);
                 h.installBtn.setVisibility(View.VISIBLE);
+                h.installBtn.setText("安装");
                 h.switchView.setVisibility(View.GONE);
                 h.itemView.setOnClickListener(v -> showDetail(it));
                 h.installBtn.setOnClickListener(v -> startAutoInstall(it, it[2], it[6].substring(it[6].lastIndexOf('/') + 1)));
@@ -960,7 +983,11 @@ public class PluginFragment extends Fragment {
                 h.desc.setText("");
                 boolean enabled = "启用".equals(it[1]);
                 h.status.setText(enabled ? "已启用" : "已禁用");
-                h.installBtn.setVisibility(View.GONE);
+                // 已装卡片复用同一个按钮做「导出」——不额外加控件，卡片布局一行未改。
+                // 导出的是单个插件、单个文件，落在 Download/DSHA/插件/。
+                h.installBtn.setVisibility(View.VISIBLE);
+                h.installBtn.setText("导出");
+                h.installBtn.setOnClickListener(v -> exportOne(it[0]));
                 h.switchView.setVisibility(View.VISIBLE);
                 h.itemView.setOnClickListener(null); // 防止 RecyclerView 复用到市场的点击监听
                 // 长按卸载（问题插件一键移除）

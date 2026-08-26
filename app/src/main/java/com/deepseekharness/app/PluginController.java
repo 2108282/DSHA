@@ -406,8 +406,8 @@ class PluginController {
                         "cd '" + d + "' && " +
                         "tar -czhf '" + OUT_GUEST + "' $(ls | grep -v disabled) 2>&1; echo TAR_EXIT=$?");
                 if (r == null || !r.contains("TAR_EXIT=0") || !outHost.isFile()) continue;
-                String name = "DSHA-plugins-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(new java.util.Date()) + ".tar.gz";
-                String path = copyToDownloads(outHost, name);
+                String name = "DSHA-plugins-all-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(new java.util.Date()) + ".tar.gz";
+                String path = copyToDownloads(outHost, name, PublicDirs.PLUGINS);
                 if (path != null) return path;
             }
             return "NO_PLUGINS";
@@ -1629,12 +1629,19 @@ class PluginController {
 
 
     private String copyToDownloads(java.io.File src, String name) {
+        return copyToDownloads(src, name, PublicDirs.PLUGINS);
+    }
+
+    /** 拷到公开 Download 目录的指定子目录（子目录定义见 {@link PublicDirs}）。 */
+    private String copyToDownloads(java.io.File src, String name, String sub) {
+        final String base = android.os.Environment.DIRECTORY_DOWNLOADS;
         // 方案1：MediaStore（Android 10+ 免权限）
         try {
             android.content.ContentValues cv = new android.content.ContentValues();
             cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name);
             cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/gzip");
-            cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/DSHA");
+            cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                    PublicDirs.relative(base, sub));
             android.net.Uri uri = appContext.getContentResolver().insert(
                     android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
             if (uri != null) {
@@ -1645,8 +1652,8 @@ class PluginController {
                         while ((n = fis.read(buf)) != -1) os.write(buf, 0, n);
                     }
                 }
-                return android.os.Environment.getExternalStoragePublicDirectory(
-                        android.os.Environment.DIRECTORY_DOWNLOADS) + "/DSHA/" + name;
+                return PublicDirs.display(android.os.Environment
+                        .getExternalStorageDirectory().getAbsolutePath(), base, sub) + "/" + name;
             }
         } catch (Exception ignored) {
         }
@@ -1654,7 +1661,8 @@ class PluginController {
         try {
             if (android.os.Build.VERSION.SDK_INT >= 30 && android.os.Environment.isExternalStorageManager()) {
                 java.io.File dir = new java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
-                        android.os.Environment.DIRECTORY_DOWNLOADS), "DSHA");
+                        base), sub == null || sub.isEmpty()
+                        ? PublicDirs.ROOT : PublicDirs.ROOT + "/" + sub);
                 if (dir.isDirectory() || dir.mkdirs()) {
                     java.io.File dst = new java.io.File(dir, name);
                     host.copyFile(src, dst);
@@ -1664,5 +1672,50 @@ class PluginController {
         } catch (Exception ignored) {
         }
         return null;
+    }
+
+    /**
+     * 导出**单个**插件到 {@code Download/DSHA/插件/<名字>-<时间>.tar.gz}，一个插件一个文件。
+     *
+     * <p>用 {@code tar -czhf}（带 -h 解引用）：已装插件在 node_modules 里多半只是一根指向
+     * {@code /root/dsha-*} 或 {@code /root/plugin-src/*} 的符号链接，不解引用导出来的就是
+     * 一根链接，拿到别的设备上什么都没有。备份那边刚因为同一个原因丢过对话。
+     *
+     * @return 用户可见的完整路径；{@code BAD_NAME} 名字不合法；{@code NOT_FOUND} 没装这个插件；
+     *         {@code null} 打包或写出失败
+     */
+    public String exportOnePlugin(String name) {
+        if (name == null || name.trim().isEmpty()) return "BAD_NAME";
+        final String n = name.trim();
+        if (!isValidPluginSpec(n)) return "BAD_NAME";
+        final String OUT_GUEST = "/root/.dsha-plugin-one.tar.gz";
+        java.io.File outHost = new java.io.File(proot.getRootfsDir(), "root/.dsha-plugin-one.tar.gz");
+        try {
+            for (String d : HarnessController.PLUGIN_DIRS) {
+                java.io.File entity = new java.io.File(proot.getRootfsDir(),
+                        d.substring(1) + "/" + n);
+                if (!existsOrBrokenLink(entity)) continue;
+                String r = proot.execAndRead("rm -f " + ShellQuote.arg(OUT_GUEST)
+                        + "; cd " + ShellQuote.arg(d)
+                        + " && tar -czhf " + ShellQuote.arg(OUT_GUEST) + " " + ShellQuote.arg(n)
+                        + " 2>&1; echo TAR_EXIT=$?");
+                if (r == null || !r.contains("TAR_EXIT=0") || !outHost.isFile()) continue;
+                String file = PublicDirs.safeFileName(n) + "-"
+                        + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                        .format(new java.util.Date()) + ".tar.gz";
+                String path = copyToDownloads(outHost, file, PublicDirs.PLUGINS);
+                if (path != null) {
+                    host.logActivity("已导出插件 " + n + " → " + path);
+                    return path;
+                }
+            }
+            return "NOT_FOUND";
+        } catch (Exception e) {
+            android.util.Log.w("DSHA", "导出单个插件失败 " + n + ": " + e);
+            return null;
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            outHost.delete();
+        }
     }
 }
