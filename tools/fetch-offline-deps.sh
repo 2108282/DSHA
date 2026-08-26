@@ -54,7 +54,12 @@ echo "==> Termux 终端库（真 PTY 终端用，Apache 2.0）"
 fetch "$JITPACK" "com/termux/termux-app" "terminal-view" "0.118.0" aar pom
 fetch "$JITPACK" "com/termux/termux-app" "terminal-emulator" "0.118.0" aar pom
 
-echo "==> guava 占位包（少了它会 Duplicate class ListenableFuture）"
+echo "==> guava 占位包（**目前用不到，留着以防将来引 termux-shared**）"
+# 只有引入 termux-shared 时才需要它：termux-shared 依赖完整版 guava，会和
+# listenablefuture:1.0 撞 Duplicate class，这个空包正好顶掉后者。
+# 只用 terminal-view 的话千万别往 build.gradle 里加 —— 项目里没有 guava，加了等于把
+# 真正的 ListenableFuture 接口换成空的，androidx 的 concurrent-futures 失去父接口，
+# App 一启动 ProfileInstaller 就 NoClassDefFoundError（真机崩过，见 app/build.gradle 注释）。
 fetch "$CENTRAL" "com/google/guava" \
       "listenablefuture" "9999.0-empty-to-avoid-conflict-with-guava" jar pom
 

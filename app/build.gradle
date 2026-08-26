@@ -154,8 +154,16 @@ dependencies {
     //   curl https://jitpack.io/api/builds/com.termux/termux-app/0.118.0
     //   → modules: [terminal-emulator, terminal-view, termux-shared]
     implementation 'com.termux.termux-app:terminal-view:0.118.0'
-    // 少了这个占位包会报 Duplicate class com.google.common.util.concurrent.ListenableFuture
-    implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
+    // **这里不要加 com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava。**
+    // Termux Wiki 让加它，前提是你引了 termux-shared —— 那个依赖完整版 guava，会和
+    // listenablefuture:1.0 撞 Duplicate class，用空占位包顶掉后者正好。
+    // 我们只用 terminal-view，项目里根本没有 guava：加空包等于把真正的 ListenableFuture
+    // 接口换成了空的，androidx 的 concurrent-futures 因此失去父接口，App 一启动
+    // ProfileInstaller 就崩 ——
+    //   NoClassDefFoundError: Failed resolution of: Landroidx/concurrent/futures/AbstractResolvableFuture;
+    // 真机上崩过（v1.1.9-rc1 那个带 PTY 的本地包）。依赖树可自证：
+    //   gradle :app:dependencies --configuration debugRuntimeClasspath | grep -i guava
+    //   → 只有 listenablefuture，没有 com.google.guava:guava，所以压根不存在要解决的冲突。
     debugImplementation 'com.github.L-JINBIN:MTDataFilesProvider:v1.0.0'
 }
 
