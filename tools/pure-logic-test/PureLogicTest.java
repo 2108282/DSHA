@@ -569,6 +569,37 @@ public final class PureLogicTest {
                         && !ArchiveProbe.safeEntryName("C:/x")
                         && ArchiveProbe.safeEntryName("a/b/c.txt"));
 
+        // ===== GitHubRef：链接解析必须保留 monorepo 子目录 =====
+        // 主人报的 bug 就出在这：/tree/main/plugins/turn-guard 被截成 owner/repo，
+        // 装的是 monorepo 仓库根（那个 package.json 不是插件）→ 命令报成功、插件页空无一物。
+        GitHubRef r1 = GitHubRef.parse("https://github.com/xiaoxiao44443/dfy-dsh-plugins/tree/main/plugins/turn-guard");
+        ok("ghref: tree 链接解析出仓库与子目录", r1 != null
+                && "xiaoxiao44443/dfy-dsh-plugins".equals(r1.slug())
+                && "main".equals(r1.branch) && "plugins/turn-guard".equals(r1.subdir)
+                && r1.hasSubdir());
+        GitHubRef r2 = GitHubRef.parse("https://github.com/o/r/blob/dev/plugins/x/package.json");
+        ok("ghref: blob 指到文件时子目录取父目录", r2 != null
+                && "plugins/x".equals(r2.subdir) && "dev".equals(r2.branch));
+        GitHubRef r3 = GitHubRef.parse("https://github.com/o/r.git");
+        ok("ghref: .git 后缀与无子目录", r3 != null && "o/r".equals(r3.slug()) && !r3.hasSubdir());
+        GitHubRef r4 = GitHubRef.parse("o/r");
+        ok("ghref: 裸 owner/repo", r4 != null && "o/r".equals(r4.slug()));
+        GitHubRef r5 = GitHubRef.parse("github:o/r");
+        ok("ghref: github: 前缀", r5 != null && "o/r".equals(r5.slug()));
+        GitHubRef r6 = GitHubRef.parse("https://github.com/o/r/tree/main/a/b/c?tab=readme#x");
+        ok("ghref: 查询串与锚点不进子目录", r6 != null && "a/b/c".equals(r6.subdir));
+        ok("ghref: 认不出的返回 null",
+                GitHubRef.parse("https://example.com/") == null
+                        && GitHubRef.parse("onlyowner") == null
+                        && GitHubRef.parse("") == null
+                        && GitHubRef.parse(null) == null);
+        eq("ghref: raw 前缀带上分支与子目录",
+                "https://raw.githubusercontent.com/o/r/dev/plugins/x",
+                GitHubRef.parse("https://github.com/o/r/tree/dev/plugins/x").rawPrefix("main"));
+        eq("ghref: 分支未写时用调用方给的默认分支",
+                "https://raw.githubusercontent.com/o/r/main",
+                GitHubRef.parse("o/r").rawPrefix("main"));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

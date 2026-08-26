@@ -1663,27 +1663,12 @@ class PluginController {
      *  返回 String[3] {npm名, owner/repo, 仓库URL}；无法解析返回 null。
      *  链接格式：https://github.com/owner/repo、owner/repo、带 .git 后缀等。 */
     public String[] parseGithubUrl(String url) {
-        try {
-            String u = url == null ? "" : url.trim();
-            if (u.isEmpty()) return null;
-            String core = u;
-            int g = core.indexOf("github.com/");
-            if (g >= 0) core = core.substring(g + "github.com/".length());
-            int q = core.indexOf('?'); if (q >= 0) core = core.substring(0, q);
-            int h = core.indexOf('#'); if (h >= 0) core = core.substring(0, h);
-            while (core.endsWith("/")) core = core.substring(0, core.length() - 1);
-            core = core.replaceFirst("\\.git$", "");
-            int slash = core.indexOf('/');
-            if (slash <= 0) return null;
-            String owner = core.substring(0, slash).trim();
-            String repo = core.substring(slash + 1).trim();
-            int r2 = repo.indexOf('/');
-            if (r2 >= 0) repo = repo.substring(0, r2);
-            if (owner.isEmpty() || repo.isEmpty()) return null;
-            return new String[]{null, owner + "/" + repo, "https://github.com/" + owner + "/" + repo};
-        } catch (Throwable e) {
-            return null;
-        }
+        // 与 installFromGithubUrl 共用同一份解析（GitHubRef）——两处各写一套截断逻辑
+        // 正是本项目反复栽的模式。这里保持历史返回形状 {null, "owner/repo", 仓库首页}，
+        // 子目录的处理在 installFromGithubUrl 里。
+        GitHubRef ref = GitHubRef.parse(url);
+        if (ref == null) return null;
+        return new String[]{null, ref.slug(), "https://github.com/" + ref.slug()};
     }
 
     /** 从 GitHub 仓库链接安装插件（插件市场顶部入口）：
@@ -1691,35 +1676,115 @@ class PluginController {
      *  返回执行输出。链接格式支持：https://github.com/owner/repo、owner/repo、带 .git 后缀等。 */
     public String installFromGithubUrl(String url) {
         try {
-            String u = url == null ? "" : url.trim();
-            String core = u;
-            int g = core.indexOf("github.com/");
-            if (g >= 0) core = core.substring(g + "github.com/".length());
-            // 去掉 git 后缀 / 尾部斜杠 / 多余路径 / 查询参数 / 锚点（先去尾部斜杠再 .git）
-            int q = core.indexOf('?'); if (q >= 0) core = core.substring(0, q);
-            int h = core.indexOf('#'); if (h >= 0) core = core.substring(0, h);
-            while (core.endsWith("/")) core = core.substring(0, core.length() - 1);
-            core = core.replaceFirst("\\\\.git$", "");
-            int slash = core.indexOf('/');
-            if (slash <= 0) return "无法解析仓库链接：" + url + "\n格式应为 https://github.com/owner/repo";
-            String owner = core.substring(0, slash).trim();
-            String repo = core.substring(slash + 1).trim();
-            // 去掉 repo 后的路径（如 /tree/main）
-            int r2 = repo.indexOf('/');
-            if (r2 >= 0) repo = repo.substring(0, r2);
-            if (owner.isEmpty() || repo.isEmpty()) return "无法解析仓库链接：" + url;
-            // 拉 npm 包名
-            String npmName = fetchNpmName(owner, repo);
+            GitHubRef ref = GitHubRef.parse(url);
+            if (ref == null) {
+                return "无法解析仓库链接：" + url + "\n格式应为 https://github.com/owner/repo";
+            }
+            // ===== monorepo 子目录：链接指向仓库里的某个包，绝不能按整仓库装 =====
+            // 原来这里把 /tree/main/plugins/x 直接截掉，装的是仓库根 —— 根那个
+            // package.json 通常是 monorepo 的管理包，不是插件，于是「命令报成功、
+            // 插件管理页空无一物」。
+            if (ref.hasSubdir()) {
+                final String br1 = ref.branch.isEmpty() ? "main" : ref.branch;
+                String pkgJson = null;
+                for (String br : new String[]{br1, "master"}) {
+                    String t = httpGetText(HarnessController.gitHubProxy(
+                            ref.rawPrefix(br) + "/package.json"), 8000, 20000);
+                    if (t != null && t.contains("\"name\"")) { pkgJson = t; break; }
+                }
+                if (pkgJson == null) {
+                    return "这个链接指向仓库子目录 " + ref.subdir + "，但那里没有 package.json"
+                            + " —— 不像插件目录。\n请把链接换成插件目录本身（里面应该有 package.json）。";
+                }
+                String name = "", main = "", buildScript = "";
+                try {
+                    org.json.JSONObject o = new org.json.JSONObject(pkgJson);
+                    name = o.optString("name", "").trim();
+                    main = o.optString("main", "").trim();
+                    org.json.JSONObject sc = o.optJSONObject("scripts");
+                    if (sc != null) buildScript = sc.optString("build", "").trim();
+                } catch (Throwable ignored) {
+                }
+                if (name.isEmpty()) {
+                    return "子目录 " + ref.subdir + " 的 package.json 里没有 name，装不了。";
+                }
+                // npm 上有发布版是最稳的一条路（发布版带构建产物）
+                if (npmRegistryHas(name, null)) {
+                    return installPlugin(name) + verifyNote(name);
+                }
+                // 没发布 npm：入口文件必须真的在仓库里，否则源码装进去也是空壳
+                if (!main.isEmpty()) {
+                    String probe = null;
+                    for (String br : new String[]{br1, "master"}) {
+                        probe = httpGetText(HarnessController.gitHubProxy(
+                                ref.rawPrefix(br) + "/" + main), 8000, 20000);
+                        if (probe != null) break;
+                    }
+                    if (probe == null) {
+                        return "装不了：" + name + " 的入口文件 " + main + " 不在仓库里。\n\n"
+                                + "这个插件的源码需要先编译"
+                                + (buildScript.isEmpty() ? "" : "（作者的构建命令：" + buildScript + "）")
+                                + "，而作者既没把编译产物提交进仓库、也没发布到 npm。\n"
+                                + "手机上没有它的构建工具链，硬装进去只会是个跑不起来的空壳 ——"
+                                + "所以这里直接停下，不报那个假的「安装成功」。\n\n"
+                                + "可以做的：向作者提 issue 请他发布 npm 或提交构建产物；"
+                                + "或者在电脑上 clone 后跑构建，把整个插件目录打成 zip/tar.gz，"
+                                + "再用「导入插件」装进来。";
+                    }
+                }
+                // 入口确实在仓库里：子目录源码安装的支持随 pnpm/dsh 版本而异，
+                // 自动装很容易变成「装上了却不生效」，所以给可复制的命令而不是赌一把
+                return "识别到 monorepo 子目录插件：" + name + "\n仓库 " + ref.slug()
+                        + " 子目录 " + ref.subdir + "\n\n"
+                        + "它没有发布到 npm，而从仓库子目录装包的支持随 dsh/pnpm 版本而异，"
+                        + "自动装容易「装上了却不生效」。建议其中一种：\n"
+                        + "· 用「导入插件」：把 " + ref.subdir + " 这个目录打包成 zip/tar.gz 后导入；\n"
+                        + "· 或在内置终端里手动试：dsh plugin --profile web add "
+                        + "\"git+https://github.com/" + ref.slug() + ".git#path:/" + ref.subdir + "\"";
+            }
+            // ===== 普通整仓库 =====
+            String npmName = fetchNpmName(ref.owner, ref.repo);
             if (npmName == null) {
                 return "未在该仓库找到 package.json / npm 包名，可能未发布 npm。\n"
-                        + "仓库：" + owner + "/" + repo + "\n"
-                        + "只能源码安装：dsh plugin --profile web add github:" + owner + "/" + repo;
+                        + "仓库：" + ref.slug() + "\n"
+                        + "只能源码安装：dsh plugin --profile web add github:" + ref.slug();
             }
-            // 安装（npm 名 + github 兜底）
-            return installPlugin(npmName, "github:" + owner + "/" + repo);
+            return installPlugin(npmName, "github:" + ref.slug()) + verifyNote(npmName);
         } catch (Throwable e) {
             return "安装失败: " + e.getMessage();
         }
+    }
+
+    /**
+     * 装完<b>眼见为实</b>：命令退出 0 不等于插件真的注册上了。
+     *
+     * <p>「提示安装成功，插件管理页空无一物」就是只看退出码的后果。没注册上就把实话
+     * 追加在结果后面 —— 用户至少知道该往哪查，而不是以为装好了在等它生效。
+     */
+    private String verifyNote(String name) {
+        try {
+            if (isRegisteredNow(name)) return "";
+        } catch (Throwable t) {
+            return "";      // 查不了就别冤枉安装结果
+        }
+        return "\n\n⚠ 但它没有出现在已装列表里 —— 命令报了成功，实际没注册上。\n"
+                + "常见原因：装到的不是插件本体（比如 monorepo 的仓库根）、入口文件缺失"
+                + "（源码需要先编译）、或者包名与实际注册名不一致。";
+    }
+
+    /** 这个名字现在是否真的算「已装」（在 bundles 里，或包里声明了 dsh 字段）。 */
+    private boolean isRegisteredNow(String name) {
+        if (name == null || name.isEmpty()) return false;
+        java.util.Set<String> all = new java.util.LinkedHashSet<>();
+        try {
+            all.addAll(readBundles());
+        } catch (Throwable ignored) {
+        }
+        try {
+            all.addAll(scanDshDeclaredPlugins());
+        } catch (Throwable ignored) {
+        }
+        return all.contains(name);
     }
 
     /** 判定安装输出是否为"包在 registry 找不到"（npm 404 类） */
