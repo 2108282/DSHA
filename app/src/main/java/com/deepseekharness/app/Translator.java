@@ -37,7 +37,8 @@ final class Translator {
     static final String K_KEY = "translate_api_key";
 
     static final String DEF_BASE = "https://api.deepseek.com";
-    static final String DEF_MODEL = "deepseek-chat";
+    /** 默认模型。deepseek-v4-flash：翻译这种活要的是快和便宜，不需要思考链。 */
+    static final String DEF_MODEL = "deepseek-v4-flash";
 
     /** 缓存单独一个文件，别和主偏好混在一起 —— 它会长到几百条，也不该进备份。 */
     private static final String CACHE_PREFS = "dsha_translate_cache";

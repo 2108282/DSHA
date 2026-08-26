@@ -581,28 +581,41 @@ public class PluginFragment extends Fragment {
         }
     }
 
-    /** 详情弹窗：star/作者/更新日期 + 安装按钮。开了自动翻译的话，描述会异步换成中文。 */
+    /** 详情弹窗：star/作者/更新日期 + 完整描述 + README + 安装按钮。 */
     private void showDetail(String[] it) {
         String owner = it[2];
         String repo = it[6].endsWith("/") ? "" : it[6].substring(it[6].lastIndexOf('/') + 1);
 
-        // 有两路异步都会回来改这个弹窗（仓库信息、描述翻译），所以正文统一由 detailMessage
-        // 组装、各自只改自己那一格 —— 否则谁后回来谁把对方的成果覆盖掉。
+        // 三路异步都会回来改这个弹窗（仓库信息、描述翻译、README），所以正文统一由
+        // detailMessage 组装、各自只改自己那一格 —— 否则谁后回来谁把对方的成果覆盖掉。
         final String[] star = {it[1]};
         final String[] who = {owner};
         final String[] date = {""};
         final String[] zh = {Translator.cached(requireContext(), it[5])};  // 缓存命中就不显示「翻译中」
+        final String[] readme = {null};
         final android.app.AlertDialog[] holder = new android.app.AlertDialog[1];
+
+        // 正文自己放进 ScrollView，不用 setMessage —— 那个在长文本下会把按钮挤出屏幕、
+        // 内容也看不全（用户反馈「详情显示不完整」）。现在描述之后还要接 README，更得能滑。
+        final TextView body = new TextView(requireContext());
+        final int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        body.setPadding(pad, pad, pad, pad);
+        body.setTextIsSelectable(true);          // 长按可选可复制
+        body.setLineSpacing(0, 1.15f);
+        final android.widget.ScrollView scroll = new android.widget.ScrollView(requireContext());
+        scroll.addView(body);
+        body.setText(detailMessage(it, star[0], who[0], date[0], zh[0], readme[0]));
+
         final Runnable render = () -> {
             android.app.AlertDialog d = holder[0];
             if (d != null && d.isShowing()) {
-                d.setMessage(detailMessage(it, star[0], who[0], date[0], zh[0]));
+                body.setText(detailMessage(it, star[0], who[0], date[0], zh[0], readme[0]));
             }
         };
 
         holder[0] = new android.app.AlertDialog.Builder(requireContext())
                 .setTitle(it[0])
-                .setMessage(detailMessage(it, star[0], who[0], date[0], zh[0]))
+                .setView(scroll)
                 .setPositiveButton("安装", (d, w) -> startAutoInstall(it, owner, repo))
                 .setNeutralButton("复制仓库链接", (d, w) -> {
                     android.content.ClipboardManager cm = (android.content.ClipboardManager)
@@ -627,13 +640,25 @@ public class PluginFragment extends Fragment {
             }).start();
         }
 
-        // 异步翻译描述。只在详情打开时翻这一条 —— 列表整页翻要几十次请求，又慢又费钱
+        // 异步拉 README：市场索引里只有一句话描述，真正想知道「这插件怎么用」得看它
+        if (!owner.isEmpty() && !repo.isEmpty()) {
+            new Thread(() -> {
+                String md = fetchReadme(owner, repo);
+                if (md == null) return;
+                runOnUiThreadSafely(() -> {
+                    readme[0] = md;
+                    render.run();
+                });
+            }, "dsha-readme").start();
+        }
+
+        // 异步翻译描述。只在详情打开时翻这一条 —— 列表整页翻要几十个请求，又慢又费钱
         if (zh[0] == null && Translator.enabled(requireContext())
                 && it[5] != null && !it[5].trim().isEmpty()) {
             final android.content.Context app = requireContext().getApplicationContext();
             new Thread(() -> {
                 String out = Translator.translate(app, it[5]);
-                if (out == null) return;    // 失败就保持原文，不弹错误打扰人
+                if (out == null) return;    // 失败就保持原文，不弹错误框打扰人
                 runOnUiThreadSafely(() -> {
                     zh[0] = out;
                     render.run();
@@ -642,8 +667,54 @@ public class PluginFragment extends Fragment {
         }
     }
 
-    /** 详情弹窗的正文。两路异步共用一处组装，避免各自 setMessage 相互覆盖。 */
-    private String detailMessage(String[] it, String star, String owner, String date, String zh) {
+    /** README 最多显示这么多字符：再长弹窗里也读不完，还白占内存。 */
+    private static final int README_MAX = 8000;
+
+    /** 拉仓库 README。先试 raw（不限流），大小写两种常见写法都试一遍。 */
+    private static String fetchReadme(String owner, String repo) {
+        // HEAD 指向默认分支，不必猜 main 还是 master
+        String[] candidates = {
+                "https://raw.githubusercontent.com/" + owner + "/" + repo + "/HEAD/README.md",
+                "https://raw.githubusercontent.com/" + owner + "/" + repo + "/HEAD/readme.md",
+                "https://raw.githubusercontent.com/" + owner + "/" + repo + "/HEAD/README.MD",
+        };
+        for (String u : candidates) {
+            String s = httpGetText(u, README_MAX);
+            if (s != null && !s.trim().isEmpty()) return s;
+        }
+        return null;
+    }
+
+    private static String httpGetText(String url, int maxChars) {
+        java.net.HttpURLConnection conn = null;
+        try {
+            conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(12000);
+            conn.setRequestProperty("User-Agent", "DSHA");
+            if (conn.getResponseCode() != 200) return null;
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            try (java.io.InputStream in = conn.getInputStream()) {
+                byte[] buf = new byte[8192];
+                int n;
+                // 按字节上限收：README 里中文多，maxChars*3 足够覆盖，也不会无限吃内存
+                while ((n = in.read(buf)) > 0 && bos.size() < maxChars * 3) {
+                    bos.write(buf, 0, n);
+                }
+            }
+            String s = new String(bos.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+            return s.length() > maxChars ? s.substring(0, maxChars) + "\n\n…（README 太长，"
+                    + "余下内容见仓库）" : s;
+        } catch (Throwable e) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    /** 详情弹窗的正文。三路异步共用一处组装，避免各自 setText 相互覆盖。 */
+    private String detailMessage(String[] it, String star, String owner, String date,
+                                String zh, String readme) {
         StringBuilder sb = new StringBuilder();
         sb.append("⭐ ").append(star).append(" · 👤 ").append(owner.isEmpty() ? "?" : owner)
                 .append("\n兼容性：").append(it[3])
@@ -658,6 +729,12 @@ public class PluginFragment extends Fragment {
         sb.append("\n\n🔗 ").append(it[6])
                 .append("\n\n📅 最近更新：")
                 .append(date == null || date.isEmpty() ? "查询中…" : date);
+        sb.append("\n\n──────────\n");
+        if (readme == null) {
+            sb.append("README 加载中…");
+        } else {
+            sb.append(readme);
+        }
         return sb.toString();
     }
 
