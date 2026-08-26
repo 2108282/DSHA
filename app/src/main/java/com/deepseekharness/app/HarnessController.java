@@ -4286,6 +4286,9 @@ public class HarnessController {
     public String selfCheckBridgeChain() {
         StringBuilder sb = new StringBuilder("\n===== 桥与悬浮条链路（App 侧）=====\n");
         int fixed = 0;
+        // 桥可能压根没启动过，那时 HttpShellService 取不到 Context、token 也就写不进去。
+        // 先把 Context 交给它，免得下面「修 token」修了个空还报成功。
+        HttpShellService.bindTokenContext(appContext);
 
         // 1) 服务在不在。3090 桥是 DeviceBridgeService 起的，而它以前只看 ADB 开关
         boolean running = DeviceBridgeService.isRunning();
@@ -4320,17 +4323,26 @@ public class HarnessController {
             }
         } catch (Throwable ignored) {
         }
-        if (memTok.isEmpty()) {
-            sb.append("WARN App 侧还没有桥 token（桥可能没起来过）\n");
+        if (!running && !need) {
+            sb.append("SKIP token：桥没启动、也没功能需要它 —— token 是桥启动时才生成的。"
+                    + "下面容器侧 selftest 里那条「❌ 缺 .bridge_token」是这条的连带，不用管\n");
         } else if (fileTok.isEmpty()) {
+            boolean ok = false;
             try {
                 HttpShellService.resetTokenAfterRestore();
-                fixed++;
-                sb.append("修复 rootfs 里没有 token 文件 → 已重新写入\n");
-            } catch (Throwable e) {
-                sb.append("FAIL rootfs 里没有 token 文件，重写失败：").append(describe(e)).append('\n');
+                java.io.File after = rootfsFile("root/.dsh/.bridge_token");
+                ok = after.isFile() && after.length() > 0;   // 必须核实，不能光看没抛异常
+            } catch (Throwable ignored) {
             }
-        } else if (!fileTok.equals(memTok)) {
+            if (ok) {
+                fixed++;
+                sb.append("修复 rootfs 里没有 token 文件 → 已写入\n");
+            } else {
+                sb.append("FAIL rootfs 里没有 token 文件，这次也没写进去 —— 桥还没真正启动过，"
+                        + "token 的落盘路径要等桥拿到 rootfs 才算得出来。"
+                        + "去「配置」页把「设备桥」或「悬浮条」开一次，桥起来就会生成\n");
+            }
+        } else if (!memTok.isEmpty() && !fileTok.equals(memTok)) {
             try {
                 HttpShellService.resetTokenAfterRestore();
                 fixed++;
@@ -4385,6 +4397,11 @@ public class HarnessController {
         }
 
         sb.append(fixed > 0 ? "本节自动修复 " + fixed + " 处\n" : "本节无需修复\n");
+        if (!ovOn) {
+            sb.append("提示 悬浮条现在是关着的 —— 这就是它不显示的原因，不是故障。要用的话：\n"
+                    + "     配置页勾「悬浮条」→ 按提示授权悬浮窗 → 想看思考过程再勾那一项 → 重启 WebUI。\n"
+                    + "     卸载重装会把所有开关恢复默认（全关），桥和 token 也就跟着不启动了。\n");
+        }
         return sb.toString();
     }
 

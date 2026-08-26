@@ -89,9 +89,29 @@ public final class HttpShellService {
         return instance;
     }
 
+    /** 桥还没启动过时的兜底 Context。
+     *
+     *  <p>{@link #tokenFileIfPossible()} 原先只从 {@code instance().ctx} 取 Context，
+     *  于是桥没启动过时（比如用户把「设备桥」和「悬浮条」都关着）它返回 null，
+     *  {@link #ensureToken()} 只改内存、**静默不写文件**。自检因此谎报「已重新写入」，
+     *  而容器侧 selftest 同时报「缺 .bridge_token」—— 两份报告自相矛盾，真机上出现过。 */
+    private static volatile Context tokenCtx;
+
+    /** 自检、恢复备份这类在桥启动前就要对齐 token 的场合，先把 Context 交给它。 */
+    static void bindTokenContext(Context ctx) {
+        if (ctx != null) tokenCtx = ctx.getApplicationContext();
+    }
+
     private static java.io.File tokenFileIfPossible() {
+        Context c = null;
         try {
-            HarnessController hc = HarnessController.get(instance().ctx);
+            c = instance().ctx;
+        } catch (Throwable ignored) {
+        }
+        if (c == null) c = tokenCtx;
+        if (c == null) return null;
+        try {
+            HarnessController hc = HarnessController.get(c);
             if (hc != null && hc.getProot() != null && hc.getProot().getRootfsDir() != null) {
                 return new java.io.File(hc.getProot().getRootfsDir(), "root/.dsh/.bridge_token");
             }
