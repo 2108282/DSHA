@@ -219,8 +219,15 @@ s7_name() {
   local out="deepseekharness-arm64-v${VERSION_NAME}.apk"
   cp -f "$apk" "$out"
   sha256sum "$out" | tee "$out.sha256"
-  ls -la "$out"
-  echo "产物：$ROOT/$out"
+  # 再出一份名字里带内容指纹的副本：同一个版本号本地会打很多次包，文件名一模一样，
+  # 手机上很容易点到之前下载的那一份，然后以为「新改的东西没生效」。真机上刚发生过。
+  local sha6
+  sha6="$(cut -c1-6 < "$out.sha256")"
+  local tagged="deepseekharness-arm64-v${VERSION_NAME}-${sha6}.apk"
+  rm -f "deepseekharness-arm64-v${VERSION_NAME}-"??????".apk"
+  ln -f "$out" "$tagged" 2>/dev/null || cp -f "$out" "$tagged"
+  ls -la "$out" "$tagged"
+  echo "产物：$ROOT/$tagged（内容同 $out，名字带指纹便于区分）"
   echo OK
 }
 
