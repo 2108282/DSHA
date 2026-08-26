@@ -4269,6 +4269,146 @@ public class HarnessController {
         return sb.toString();
     }
 
+    /**
+     * 桥与悬浮条链路自检，能自动修的当场修。
+     *
+     * <p><b>为什么必须在 App 侧做</b>：这几轮的真机故障全出在这条链上，而它跨了三层 ——
+     * App 侧的服务与权限、rootfs 里的 token 文件、dsh 插件发出的 HTTP 请求。
+     * selftest.py 跑在容器里，看不到 App 的服务状态和悬浮窗权限；容器里的 ss / netstat
+     * 也看不到 host 侧的监听 socket（用户实测「没监听」其实是误报 —— 同一时刻 curl
+     * 拿到的是 HTTP 200）。所以这段只能由 App 自己查，而且要**端到端真发一次请求**，
+     * 光看配置项是查不出错位的。
+     *
+     * <p>覆盖的历史故障：3090 桥挂在 ADB 开关上导致压根没监听 · 重解压把旧
+     * .bridge_token 还原回来导致一律 401 · 重解压后内置插件实体丢失而版本标记还在
+     * 导致永不重装 · 悬浮条开关或悬浮窗权限没开却毫无提示。
+     */
+    public String selfCheckBridgeChain() {
+        StringBuilder sb = new StringBuilder("\n===== 桥与悬浮条链路（App 侧）=====\n");
+        int fixed = 0;
+
+        // 1) 服务在不在。3090 桥是 DeviceBridgeService 起的，而它以前只看 ADB 开关
+        boolean running = DeviceBridgeService.isRunning();
+        boolean need = DeviceBridgeService.needed(appContext);
+        if (running) {
+            sb.append("OK   桥服务在跑\n");
+        } else if (need) {
+            try {
+                DeviceBridgeService.apply(appContext);
+                fixed++;
+                sb.append("修复 桥服务没在跑（有功能需要它）→ 已拉起，等几秒重试\n");
+            } catch (Throwable e) {
+                sb.append("FAIL 桥服务没在跑，拉起失败：").append(describe(e)).append('\n');
+            }
+        } else {
+            sb.append("SKIP 桥服务未启动，但也没有功能需要它（ADB 与悬浮条都关着）\n");
+        }
+
+        // 2) token 一致性。文件在 rootfs 里，内存那份是静态字段 —— 重解压/恢复会让两边错位
+        String memTok = "";
+        try {
+            // 只读内存快照，不触发生成 —— 自检本身不该有副作用
+            memTok = HttpShellService.tokenSnapshot();
+        } catch (Throwable ignored) {
+        }
+        java.io.File tf = rootfsFile("root/.dsh/.bridge_token");
+        String fileTok = "";
+        try {
+            if (tf.isFile()) {
+                fileTok = new String(java.nio.file.Files.readAllBytes(tf.toPath()),
+                        StandardCharsets.UTF_8).trim();
+            }
+        } catch (Throwable ignored) {
+        }
+        if (memTok.isEmpty()) {
+            sb.append("WARN App 侧还没有桥 token（桥可能没起来过）\n");
+        } else if (fileTok.isEmpty()) {
+            try {
+                HttpShellService.resetTokenAfterRestore();
+                fixed++;
+                sb.append("修复 rootfs 里没有 token 文件 → 已重新写入\n");
+            } catch (Throwable e) {
+                sb.append("FAIL rootfs 里没有 token 文件，重写失败：").append(describe(e)).append('\n');
+            }
+        } else if (!fileTok.equals(memTok)) {
+            try {
+                HttpShellService.resetTokenAfterRestore();
+                fixed++;
+                sb.append("修复 token 错位（插件读到的和 App 校验的不是同一个）→ 已重置，"
+                        + "**要重启 WebUI 才彻底生效**（dsh 后端也缓存 token）\n");
+            } catch (Throwable e) {
+                sb.append("FAIL token 错位，重置失败：").append(describe(e)).append('\n');
+            }
+        } else {
+            sb.append("OK   token 两侧一致\n");
+        }
+
+        // 3) 悬浮条的开关与权限（只有 App 能查；权限没法代授，只能说清楚）
+        boolean ovOn = OverlayController.enabled(appContext);
+        boolean ovPerm = OverlayController.permitted(appContext);
+        sb.append(ovOn ? "OK   悬浮条开关：已开\n" : "SKIP 悬浮条开关：关着（配置页可开）\n");
+        if (ovOn && !ovPerm) {
+            sb.append("FAIL 悬浮窗权限没给 —— 开关开着也不会显示。"
+                    + "去「配置」页重新勾一次会跳到系统授权页\n");
+        } else if (ovOn) {
+            sb.append("OK   悬浮窗权限：已授予\n");
+        }
+
+        // 4) 端到端实测：真发一次请求，配置项看着对也可能是错位的
+        String tok = memTok.isEmpty() ? fileTok : memTok;
+        sb.append("探针 /app/overlay → ")
+                .append(httpLocalGet("/app/overlay?kind=text&text=selftest-probe", tok))
+                .append('\n');
+        sb.append("     返回 OK=链路通 · DISABLED=开关关 · NO_PERMISSION=没授权 · "
+                + "HTTP 401=token 错位 · 连不上=桥没监听\n");
+
+        // 5) 内置插件实体（重解压会把它们清掉，而版本标记留在 .dsh 里活着）
+        String missing = missingBuiltinEntities();
+        if (missing.isEmpty()) {
+            sb.append("OK   内置插件实体齐全\n");
+        } else {
+            try {
+                proot.execAndRead("rm -f /root/.dsh/builtin-assets.version /root/dsha-*-installed; echo cleared");
+                fixed++;
+                sb.append("修复 内置插件实体缺失（").append(missing)
+                        .append("）→ 已清版本标记，**重启 App 后会自动重装**\n");
+            } catch (Throwable e) {
+                sb.append("FAIL 内置插件实体缺失（").append(missing)
+                        .append("），清标记失败：").append(describe(e)).append('\n');
+            }
+        }
+
+        sb.append(fixed > 0 ? "本节自动修复 " + fixed + " 处\n" : "本节无需修复\n");
+        return sb.toString();
+    }
+
+    /** 往本机 3090 桥发一个 GET，返回「HTTP 码 + 响应首段」或连不上的原因。 */
+    private String httpLocalGet(String pathAndQuery, String token) {
+        java.net.HttpURLConnection conn = null;
+        try {
+            java.net.URL u = new java.net.URL(
+                    "http://127.0.0.1:" + HttpShellService.PORT + pathAndQuery);
+            conn = (java.net.HttpURLConnection) u.openConnection();
+            conn.setConnectTimeout(2000);
+            conn.setReadTimeout(3000);
+            if (token != null && !token.isEmpty()) conn.setRequestProperty("X-Token", token);
+            int code = conn.getResponseCode();
+            String body = "";
+            try (java.io.InputStream in = code >= 400 ? conn.getErrorStream() : conn.getInputStream()) {
+                if (in != null) {
+                    byte[] buf = new byte[256];
+                    int n = in.read(buf);
+                    if (n > 0) body = new String(buf, 0, n, StandardCharsets.UTF_8).trim();
+                }
+            }
+            return "HTTP " + code + (body.isEmpty() ? "" : " " + body);
+        } catch (Throwable e) {
+            return "连不上（" + describe(e) + "）";
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
     /** 确保 rootfs 内危险命令确认包装器已部署（版本不匹配则强制重装，幂等） */
     public void ensureDangerGuard() {
         try {

@@ -299,6 +299,13 @@ public final class HttpShellService {
         }
     }
 
+    /** 自检用：当前内存里的桥 token 快照（空串 = 桥还没起来过）。
+     *  故意不触发生成 —— 自检本身不该有副作用，写文件那是
+     *  {@link #resetTokenAfterRestore()} 的活儿。 */
+    static String tokenSnapshot() {
+        return authToken == null ? "" : authToken;
+    }
+
     /** 恢复备份后重新对齐 3090 桥的 token。
      *
      *  <p>老备份包里带着**备份那台机器**的 {@code .dsh/.bridge_token}（新版备份已经把它
