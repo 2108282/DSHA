@@ -24,6 +24,24 @@ public class ExtractActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_extract);
 
+        // 解压 300MB 要好几分钟，而这期间屏幕一灭，本 Activity 就进 stopped、进程优先级
+        // 掉下去 —— 内存紧张时被 LMK 回收，用户看到的就是「装了新版特别容易闪退」。
+        // 亮屏标志让用户盯着进度时不熄屏；PARTIAL_WAKE_LOCK 兜住万一真熄了屏的情况，
+        // 保证 CPU 不休眠、解压能跑完。acquire 带 20 分钟超时，不必手动 release，
+        // 免得漏在某条异常路径上（解压最慢的机型实测也远小于这个数）。
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null) {
+                android.os.PowerManager.WakeLock wl =
+                        pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "dsha:extract");
+                wl.setReferenceCounted(false);
+                wl.acquire(20 * 60 * 1000L);
+            }
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "解压期间拿不到 WakeLock: " + e);
+        }
+
         statusText = findViewById(R.id.extract_status);
         errorText = findViewById(R.id.extract_error);
         detailText = findViewById(R.id.extract_detail);

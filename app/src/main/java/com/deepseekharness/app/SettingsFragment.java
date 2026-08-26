@@ -112,12 +112,15 @@ public class SettingsFragment extends Fragment {
             // 命中就当场切回 proot，再跑常规自检（这时它已经能起来了）。
             final HarnessController hc = HarnessController.get(app);
             final String health = hc.checkRuntimeHealthAndHeal();
+            // 崩溃记录放最前面：有人报「闪退」时这是唯一能自证的东西。没有记录也是信息 ——
+            // 说明不是 Java 层异常，而是内存不足被杀 / native 崩溃 / ANR 强杀。
+            final String crash = DshaApp.recentCrashSummary(app, 3);
             // 桥与悬浮条这条链只有 App 侧查得到（服务状态、悬浮窗权限、token 两侧对比），
             // 而且必须端到端真发一次请求 —— selftest.py 跑在容器里，既看不到 host 侧的
             // 监听 socket（用户实测 ss「没监听」其实是误报），也读不到 App 的偏好与权限。
             // 放在常规自检前面：后面不少项都依赖桥能通。
             final String bridge = hc.selfCheckBridgeChain();
-            final String report = health + bridge + hc.runSelfTest();
+            final String report = crash + health + bridge + hc.runSelfTest();
             // 自检要 10~30 秒，回来时用户很可能已经离开设置页。getActivity() 判空
             // 之后再调 requireActivity() 等于白判 —— 两次调用之间就是那个窗口，
             // 而它抛的 IllegalStateException 落在这个后台线程上就是整进程崩。

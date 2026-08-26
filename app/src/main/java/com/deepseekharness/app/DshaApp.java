@@ -88,6 +88,55 @@ public class DshaApp extends Application {
         }
     }
 
+    /**
+     * 给自检用：crash.log 尾部的摘要。
+     *
+     * <p>「没有记录」本身也是一条结论：说明闪退不是 Java 层的未捕获异常，而是内存不足被
+     * 系统杀（解压 300MB 内置环境时最容易碰上）、native 崩溃（proot / node / 终端的
+     * libtermux）或 ANR 后强杀 —— 这三种都不留 Java 堆栈，排查方向完全不同。
+     */
+    public static String recentCrashSummary(Context ctx, int maxEntries) {
+        StringBuilder sb = new StringBuilder("\n===== 崩溃记录 =====\n");
+        java.io.File f = new java.io.File(ctx.getFilesDir(), "crash.log");
+        if (!f.isFile() || f.length() == 0) {
+            sb.append("OK   crash.log 空的 —— 没发生过 Java 层未捕获异常。\n");
+            sb.append("     若确实闪退过，方向在别处：①内存不足被系统杀（解压内置环境时最常见）"
+                    + "②native 崩溃（proot / node / 终端的 libtermux）③ANR 后强杀。"
+                    + "这三种都不留 Java 堆栈。\n");
+            return sb.toString();
+        }
+        try {
+            // 只读尾部：这文件是追加写的，可能接近 1MB
+            int tail = (int) Math.min(f.length(), 32 * 1024);
+            byte[] buf = new byte[tail];
+            try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(f, "r")) {
+                raf.seek(f.length() - tail);
+                raf.readFully(buf);
+            }
+            String text = new String(buf, java.nio.charset.StandardCharsets.UTF_8);
+            String[] parts = text.split("\n===== ");
+            int from = Math.max(1, parts.length - maxEntries);   // parts[0] 可能是被截断的半段
+            sb.append("WARN crash.log 有内容（").append(f.length() >> 10).append("KB），最近 ")
+                    .append(parts.length - from).append(" 段：\n");
+            for (int i = from; i < parts.length; i++) {
+                String[] lines = parts[i].split("\n");
+                int shown = 0;
+                for (String ln : lines) {
+                    if (ln.trim().isEmpty()) continue;
+                    sb.append("  ").append(ln.trim()).append('\n');
+                    // 时间行 + 异常类型 + 前两个栈帧，够定位到文件行号
+                    if (++shown >= 4) break;
+                }
+                sb.append('\n');
+            }
+        } catch (Throwable e) {
+            sb.append("WARN crash.log 存在但读不出来：").append(e).append('\n');
+        }
+        sb.append("     完整日志：/sdcard/Documents/dshdata/crash.log"
+                + "（文件管理器可直接打开、分享给我）\n");
+        return sb.toString();
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
