@@ -31,7 +31,8 @@ The APK ships the Termux `proot` binary (in `jniLibs/arm64-v8a`, shipped as `lib
 
 ```
 native UI (Activities/Fragments)
-   → HarnessController      business core: install steps, config, start/stop Web, plugins, downloads
+   → HarnessController      business core: install steps, config, start/stop Web, backup/restore, downloads
+     → PluginController     plugins + plugin market (split out; reached through forwarding methods on the host)
    → ProotBootstrap         proot exec, rootfs download/extract, offline-bundle handling
    → libproot.so + Ubuntu rootfs → Node 24 + pnpm + @deepseek-ai/dsh
 ```
@@ -41,7 +42,9 @@ Key files under `app/src/main/java/com/deepseekharness/app/`:
 | File | Responsibility |
 |---|---|
 | `MainActivity.java` | Shell, startup gates, crash log, update check, backup reminder, upgrade/migration guards |
-| `HarnessController.java` | ~4500-line business core. Read before editing; make minimal patches |
+| `HarnessController.java` | ~6200-line business core (install steps, config, Web lifecycle, backup/restore, device bridge). Read before editing; make minimal patches |
+| `PluginController.java` | Plugins + plugin market, split out of the controller in 2026-08 (1668 lines). Coupling to the host is deliberately narrow: `Context`, `ProotBootstrap`, and seven host methods — see its javadoc before widening it. UI callers go through the forwarding block on `HarnessController` |
+| `ShellQuote.java` | POSIX single-quote escaping — the **only** shell-quoting implementation in the tree. Values from the plugin market reach `bash -c` through it, so it carries round-trip assertions in `tools/pure-logic-test.sh` |
 | `ProotBootstrap.java` | proot/env exec, offline extraction, multi-mirror downloads |
 | `ExtractActivity.java` | First-run offline extraction screen |
 | `BackupManager.java` | Manual + migration backups to `Download/DSHA`, restore |
