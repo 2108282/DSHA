@@ -3163,6 +3163,14 @@ public class HarnessController {
 
     /** 用当前配置刷新看门狗文件（启动页可见时调用，确保旧坏命令被覆盖） */
     public void ensureWatchdogFiles() {
+        // 用户主动停过就别再装看门狗。否则「停止」按下去之后，只要还停在启动页，
+        // 1.5 秒后 LaunchFragment 的预热线程又把看门狗写回并拉起，它失联 3 次（约 90 秒）
+        // 就把 WebUI 拽回来 —— 真机反馈的「启动页的停止没有用、后台不停拉活」正是这条路。
+        // maybePrewarmWeb() 早就查了这个标记，偏偏隔壁这行漏了：又一次「同一个判断散落两处」。
+        if (isKeepAlivePaused()) {
+            android.util.Log.i("DSHA", "[看门狗] 用户此前手动停止过，跳过安装与启动");
+            return;
+        }
         boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false);
         // 与 startWebCommand 一致：只有补丁真的打上（lanReady=true）才用 0.0.0.0，

@@ -102,6 +102,13 @@ public class HarnessService extends Service {
             startKeepAlive();
             return START_STICKY;
         }
+        // intent 为 null = 系统因 START_STICKY 把服务重启了。这时若用户此前明确点过
+        // 「停止」，就不该再拉起 Web —— 否则他永远停不掉，只剩「强制停止」这一条路。
+        // 前台服务壳留着（保持通知与后续可点启动），但不碰 Web 与保活。
+        if (intent == null && c.isKeepAlivePaused()) {
+            android.util.Log.i("DSHA", "[服务] 系统重启了服务，但用户此前手动停止过 —— 不自动拉起 Web");
+            return START_STICKY;
+        }
         startWeb();
         startKeepAlive();
         return START_STICKY;
