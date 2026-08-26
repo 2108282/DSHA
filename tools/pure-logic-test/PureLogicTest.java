@@ -520,6 +520,55 @@ public final class PureLogicTest {
         eq("dirs: 非法文件名字符被替换", "a-b-c", PublicDirs.safeFileName("a:b?c"));
         eq("dirs: 空名字有兜底", "plugin", PublicDirs.safeFileName(""));
 
+        // ===== ArchiveProbe：导入插件时的格式与布局识别 =====
+        eqi("archive: gzip magic", ArchiveProbe.GZIP,
+                ArchiveProbe.kindOf(new byte[]{(byte) 0x1f, (byte) 0x8b, 0, 0}));
+        eqi("archive: zip magic", ArchiveProbe.ZIP,
+                ArchiveProbe.kindOf(new byte[]{'P', 'K', 3, 4}));
+        eqi("archive: xz 认得出但解不了", ArchiveProbe.OTHER_COMPRESSED,
+                ArchiveProbe.kindOf(new byte[]{(byte) 0xfd, '7', 'z', 'X', 'Z', 0}));
+        eqi("archive: 认不出的当 UNKNOWN", ArchiveProbe.UNKNOWN,
+                ArchiveProbe.kindOf(new byte[]{'h', 'e', 'l', 'l', 'o'}));
+        byte[] tarHead = new byte[300];
+        byte[] ustar = "ustar".getBytes();
+        System.arraycopy(ustar, 0, tarHead, 257, ustar.length);
+        eqi("archive: 未压缩 tar 看 offset 257 的 ustar", ArchiveProbe.TAR,
+                ArchiveProbe.kindOf(tarHead));
+        ok("archive: 只有 gzip/zip/tar 能解",
+                ArchiveProbe.canExtract(ArchiveProbe.GZIP)
+                        && ArchiveProbe.canExtract(ArchiveProbe.ZIP)
+                        && ArchiveProbe.canExtract(ArchiveProbe.TAR)
+                        && !ArchiveProbe.canExtract(ArchiveProbe.OTHER_COMPRESSED)
+                        && !ArchiveProbe.canExtract(ArchiveProbe.UNKNOWN));
+        // 布局：三种都要认（旧实现只认第二种，单插件包会被拆成一堆垃圾条目）
+        ok("archive: 根有 package.json = 单插件包",
+                ArchiveProbe.isSinglePlugin(ArchiveProbe.pluginRoots(
+                        new String[]{"package.json", "lib/index.js", "README.md"})));
+        eqi("archive: 两个子目录各有 package.json = 两个插件", 2,
+                ArchiveProbe.pluginRoots(new String[]{
+                        "a/package.json", "a/lib/i.js", "b/package.json"}).length);
+        String[] wrapped = ArchiveProbe.pluginRoots(new String[]{
+                "repo-main/a/package.json", "repo-main/b/package.json"});
+        eqi("archive: GitHub zip 那样多包一层也认", 2, wrapped.length);
+        eq("archive: 多包一层时插件根带上外层路径", "repo-main/a", wrapped[0]);
+        ok("archive: 插件自己的依赖树不算插件（node_modules 里全是 package.json）",
+                ArchiveProbe.isSinglePlugin(ArchiveProbe.pluginRoots(new String[]{
+                        "package.json", "node_modules/x/package.json",
+                        "node_modules/y/package.json"})));
+        eqi("archive: 只取最浅那一层（插件内部子包不算）", 1,
+                ArchiveProbe.pluginRoots(new String[]{
+                        "a/package.json", "a/vendor/sub/package.json"}).length);
+        eqi("archive: 没有 package.json 就不是插件包", 0,
+                ArchiveProbe.pluginRoots(new String[]{"a.txt", "b/c.js"}).length);
+        eq("archive: ./ 前缀不影响判定（tar 常带）", "",
+                ArchiveProbe.pluginRoots(new String[]{"./package.json"})[0]);
+        ok("archive: zip slip 被挡下（.. 与绝对路径）",
+                !ArchiveProbe.safeEntryName("../evil.sh")
+                        && !ArchiveProbe.safeEntryName("a/../../evil")
+                        && !ArchiveProbe.safeEntryName("/etc/passwd")
+                        && !ArchiveProbe.safeEntryName("C:/x")
+                        && ArchiveProbe.safeEntryName("a/b/c.txt"));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

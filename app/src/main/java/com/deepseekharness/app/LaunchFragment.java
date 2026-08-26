@@ -310,6 +310,7 @@ public class LaunchFragment extends Fragment {
                     gs.open(GeckoRuntime.getDefault(requireContext()));
                     gv.setSession(gs);
                 }
+                attachGeckoDownload(gs);
                 gs.loadUri(uiUrl());
                 return; // GeckoView 加载，不走 WebView
             } catch (Throwable e) {
@@ -342,6 +343,22 @@ public class LaunchFragment extends Fragment {
                         + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
             }
             webView.setWebViewClient(new WebViewClient());
+            // 系统 WebView 的下载：DownloadListener 只给 URL，得自己再发一次请求。
+            // 产物与 GeckoView 那条路落同一个目录（Download/DSHA/下载/）。
+            webView.setDownloadListener((url, ua, cd, mime, len) -> {
+                final android.content.Context appCtx = requireContext().getApplicationContext();
+                android.widget.Toast.makeText(appCtx, "开始下载…",
+                        android.widget.Toast.LENGTH_SHORT).show();
+                new Thread(() -> {
+                    String name = DownloadSink.guessName(url, cd, "download");
+                    String path = DownloadSink.download(appCtx, url, name, mime);
+                    final String msg = path == null
+                            ? "下载失败：" + name : "已保存到 " + path;
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                            android.widget.Toast.makeText(appCtx, msg,
+                                    android.widget.Toast.LENGTH_LONG).show());
+                }).start();
+            });
             webView.setWebChromeClient(new WebChromeClient() {
                 @Override
                 public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> cb,
@@ -401,6 +418,53 @@ public class LaunchFragment extends Fragment {
             base = base.isEmpty() ? tip : base + "\n" + tip;
         }
         return base;
+    }
+
+    /**
+     * 给 GeckoSession 接上下载。
+     *
+     * <p>GeckoView 对「不能内联显示的响应」默认直接丢弃 —— 从来没设过 ContentDelegate
+     * 的后果就是：WebUI 里点导出/下载什么反应都没有，既不报错也不落文件。产物统一放
+     * {@code Download/DSHA/下载/}。
+     *
+     * <p>响应体必须在后台线程读（主线程读会卡住 UI，大文件直接 ANR）。
+     */
+    private void attachGeckoDownload(GeckoSession gs) {
+        final android.content.Context appCtx = requireContext().getApplicationContext();
+        gs.setContentDelegate(new GeckoSession.ContentDelegate() {
+            @Override
+            public void onExternalResponse(@NonNull GeckoSession session,
+                                           @NonNull org.mozilla.geckoview.WebResponse response) {
+                new Thread(() -> {
+                    String cd = headerOf(response.headers, "Content-Disposition");
+                    String mime = headerOf(response.headers, "Content-Type");
+                    String name = DownloadSink.guessName(response.uri, cd, "download");
+                    String path = null;
+                    try {
+                        if (response.body != null) {
+                            path = DownloadSink.save(appCtx, response.body, name, mime);
+                        }
+                    } catch (Throwable t) {
+                        android.util.Log.w("DSHA", "GeckoView 下载失败: " + t);
+                    }
+                    final String msg = path == null ? "下载失败：" + name : "已保存到 " + path;
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                            android.widget.Toast.makeText(appCtx, msg,
+                                    android.widget.Toast.LENGTH_LONG).show());
+                }).start();
+            }
+        });
+    }
+
+    /** HTTP 头名大小写不敏感取值（GeckoView 给的 map 不保证大小写）。 */
+    private static String headerOf(java.util.Map<String, String> headers, String key) {
+        if (headers == null || key == null) return null;
+        String v = headers.get(key);
+        if (v != null) return v;
+        for (java.util.Map.Entry<String, String> e : headers.entrySet()) {
+            if (e.getKey() != null && e.getKey().equalsIgnoreCase(key)) return e.getValue();
+        }
+        return null;
     }
 
     private String uiUrl() {

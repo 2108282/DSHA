@@ -418,6 +418,186 @@ class PluginController {
 
     /** 导入插件包：先安全解压到 staging（拒绝路径穿越/符号链接/硬链接），再原子移入插件目录。
      *  只解压不注册会导致插件「列表可见但不生效」，因此解压成功后统一注册。 */
+    /**
+     * 导入插件归档：<b>自动识别格式与布局</b>。
+     *
+     * <p>格式按文件头判（tar.gz / tar / zip），不看扩展名 —— 用户挑的文件叫什么都有可能。
+     * 布局交给 {@link ArchiveProbe#pluginRoots}：单插件（根有 package.json）、多插件
+     * （每个子目录一个）、多包一层（GitHub zip 的 {@code repo-main/插件/}）三种都认。
+     *
+     * <p>安置目录名用 <b>package.json 里的 {@code name}</b>，不是压缩包里的目录名 ——
+     * dsh 按包名解析 {@code node_modules}，目录名对不上等于没装。
+     *
+     * @return {@code {status, message}}，status 为 {@code "OK"} 或 {@code "ERR"}；
+     *         message 是可以直接给用户看的人话
+     */
+    public String[] importArchive(java.io.File archive) {
+        if (archive == null || !archive.isFile() || archive.length() == 0) {
+            return new String[]{"ERR", "文件读不到或者是空的"};
+        }
+        int kind;
+        try (java.io.InputStream in = new java.io.FileInputStream(archive)) {
+            byte[] head = new byte[512];
+            int n = in.read(head);
+            kind = ArchiveProbe.kindOf(n <= 0 ? new byte[0] : java.util.Arrays.copyOf(head, n));
+        } catch (Exception e) {
+            return new String[]{"ERR", "读文件失败：" + e.getMessage()};
+        }
+        if (!ArchiveProbe.canExtract(kind)) {
+            return new String[]{"ERR", "不支持的格式（按文件头识别为 "
+                    + ArchiveProbe.kindName(kind) + "）。请用 tar.gz、tar 或 zip"};
+        }
+        java.io.File staging = new java.io.File(appContext.getCacheDir(),
+                "plugin-import-" + System.currentTimeMillis());
+        try {
+            //noinspection ResultOfMethodCallIgnored
+            staging.mkdirs();
+            if (kind == ArchiveProbe.ZIP) {
+                String err = unzipSafe(archive, staging);
+                if (err != null) return new String[]{"ERR", err};
+            } else {
+                // 解压器自己 sniff gzip magic，tar 与 tar.gz 走同一条路；
+                // extractSafe 拒绝绝对路径 / .. / 链接类条目（防逃逸）
+                TarGzipExtractor.extractSafe(archive, staging);
+            }
+            java.util.List<String> rels = new java.util.ArrayList<>();
+            collectRelative(staging, "", rels, 0);
+            String[] roots = ArchiveProbe.pluginRoots(rels.toArray(new String[0]));
+            if (roots.length == 0) {
+                return new String[]{"ERR", "包里没找到 package.json —— 这不像插件包。"
+                        + "插件包应该是「插件目录里有 package.json」，或者若干个这样的目录"};
+            }
+            java.io.File dir = new java.io.File(proot.getRootfsDir(),
+                    HarnessController.PLUGIN_DIRS[0].substring(1));
+            if (!dir.isDirectory() && !dir.mkdirs()) {
+                return new String[]{"ERR", "插件目录不可写，环境可能还没装好"};
+            }
+            java.util.List<String> done = new java.util.ArrayList<>();
+            java.util.List<String> skipped = new java.util.ArrayList<>();
+            for (String root : roots) {
+                java.io.File src = root.isEmpty() ? staging : new java.io.File(staging, root);
+                String name = readPkgName(new java.io.File(src, "package.json"));
+                String label = root.isEmpty() ? archive.getName() : root;
+                if (name == null || name.isEmpty()) {
+                    skipped.add(label + "（package.json 里没有 name）");
+                    continue;
+                }
+                if (!isValidPluginSpec(name)) {
+                    skipped.add(label + "（包名 " + name + " 不合法）");
+                    continue;
+                }
+                java.io.File target = new java.io.File(dir, name);
+                if (target.getParentFile() != null) {
+                    //noinspection ResultOfMethodCallIgnored
+                    target.getParentFile().mkdirs();   // @scope/name 是两级目录
+                }
+                host.deleteRecursively(target);        // 只删目标里的同名旧条目
+                boolean ok = src.renameTo(target);
+                if (!ok && src.isDirectory()) ok = copyRecursivelySafe(src, target);
+                if (ok) {
+                    registerImportedPlugin(name);
+                    done.add(name);
+                } else {
+                    skipped.add(name + "（写入插件目录失败）");
+                }
+            }
+            if (done.isEmpty()) {
+                return new String[]{"ERR", "一个都没装上：" + String.join("；", skipped)};
+            }
+            host.logActivity("导入插件 " + done.size() + " 个：" + String.join(", ", done));
+            StringBuilder msg = new StringBuilder();
+            msg.append(ArchiveProbe.isSinglePlugin(roots) ? "已导入插件 " : "已导入 ")
+               .append(done.size() > 1 ? done.size() + " 个插件：" : "")
+               .append(String.join(", ", done));
+            if (!skipped.isEmpty()) msg.append("\n跳过：").append(String.join("；", skipped));
+            msg.append("\n重启 WebUI 生效");
+            return new String[]{"OK", msg.toString()};
+        } catch (Exception e) {
+            return new String[]{"ERR", "导入失败：" + HarnessController.describe(e)};
+        } finally {
+            host.deleteRecursively(staging);
+        }
+    }
+
+    /** 解 zip 到目标目录。返回 null 表示成功，否则是人话错误原因。 */
+    private String unzipSafe(java.io.File zip, java.io.File dst) {
+        int files = 0;
+        long total = 0;
+        try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
+                new java.io.BufferedInputStream(new java.io.FileInputStream(zip)))) {
+            java.util.zip.ZipEntry e;
+            while ((e = zis.getNextEntry()) != null) {
+                String nm = e.getName();
+                // zip slip：条目名带 .. 或绝对路径就能写到目标目录外面去。
+                // 插件包是用户从网上下的，不能假设它善良。
+                if (!ArchiveProbe.safeEntryName(nm)) {
+                    android.util.Log.w("DSHA", "zip 里跳过可疑条目: " + nm);
+                    continue;
+                }
+                java.io.File out = new java.io.File(dst, nm);
+                // 再校验一次真实路径落在 dst 内（symlink/规范化后的兜底）
+                if (!out.getCanonicalPath().startsWith(dst.getCanonicalPath() + java.io.File.separator)) {
+                    continue;
+                }
+                if (e.isDirectory()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    out.mkdirs();
+                    continue;
+                }
+                if (out.getParentFile() != null) {
+                    //noinspection ResultOfMethodCallIgnored
+                    out.getParentFile().mkdirs();
+                }
+                try (java.io.OutputStream os = new java.io.FileOutputStream(out)) {
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = zis.read(buf)) != -1) {
+                        os.write(buf, 0, n);
+                        total += n;
+                        // 解压炸弹兜底：插件包没有正常理由超过 512MB
+                        if (total > 512L * 1024 * 1024) {
+                            return "解包超过 512MB，已中止（这不像插件包）";
+                        }
+                    }
+                }
+                files++;
+                if (files > 200000) return "包内文件数异常（超过 20 万），已中止";
+            }
+        } catch (Exception ex) {
+            return "解压 zip 失败：" + ex.getMessage();
+        }
+        return files == 0 ? "zip 里没有任何文件" : null;
+    }
+
+    /** 递归收集相对路径（只收文件，深度设上限防病态目录树）。 */
+    private void collectRelative(java.io.File dir, String prefix,
+                                 java.util.List<String> out, int depth) {
+        if (depth > 12 || out.size() > 50000) return;
+        java.io.File[] cs = dir.listFiles();
+        if (cs == null) return;
+        for (java.io.File c : cs) {
+            String rel = prefix.isEmpty() ? c.getName() : prefix + "/" + c.getName();
+            if (c.isDirectory()) {
+                collectRelative(c, rel, out, depth + 1);
+            } else {
+                out.add(rel);
+            }
+        }
+    }
+
+    /** 读 package.json 的 name 字段；读不出返回 null。 */
+    private String readPkgName(java.io.File pkgJson) {
+        try {
+            if (!pkgJson.isFile() || pkgJson.length() > 4L * 1024 * 1024) return null;
+            String txt = new String(java.nio.file.Files.readAllBytes(pkgJson.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            String n = new org.json.JSONObject(txt).optString("name", "").trim();
+            return n.isEmpty() ? null : n;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public boolean importPlugins(java.io.File tarGz) {
         try {
             java.io.File staging = new java.io.File(proot.getRootfsDir(),

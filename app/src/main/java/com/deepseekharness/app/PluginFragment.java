@@ -561,7 +561,15 @@ public class PluginFragment extends Fragment {
     private void importPlugins() {
         android.content.Intent intent = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(android.content.Intent.CATEGORY_OPENABLE);
-        intent.setType("application/gzip");
+        // 类型放开：格式由文件头判定（见 ArchiveProbe），选择器的作用只是别把文件挡住。
+        // 原来写死 application/gzip —— zip、未压缩 tar、以及被各种转存工具改过 MIME 的
+        // 文件在选择器里全是灰的，用户根本选不中，看起来像「导入按钮没反应」。
+        intent.setType("*/*");
+        intent.putExtra(android.content.Intent.EXTRA_MIME_TYPES, new String[]{
+                "application/gzip", "application/x-gzip", "application/x-tar",
+                "application/x-compressed-tar", "application/zip",
+                "application/x-zip-compressed", "application/octet-stream",
+        });
         startActivityForResult(intent, 1001);
     }
 
@@ -571,32 +579,44 @@ public class PluginFragment extends Fragment {
         if (requestCode == 1001 && resultCode == android.app.Activity.RESULT_OK && data != null) {
             android.net.Uri uri = data.getData();
             if (uri == null) return;
-            say("正在导入插件…");
+            say("正在读取并识别插件包…");
             // 拷贝 + 解包可能要几十秒，用户很容易在这期间离开插件页。原来后台线程里
             // 直接用 requireContext()：detach 后抛 IllegalStateException，被外层
-            // catch (Exception) 吞掉，然后 catch 分支又走 runOnUiThreadSafely ——
-            // 那时 isAdded() 已是 false，直接 return。结果是导入既没做成、
-            // 也没有任何提示。先在 UI 线程取好 application context。
+            // catch (Exception) 吞掉，结果是导入既没做成、也没有任何提示。
+            // 先在 UI 线程取好 application context。
             final android.content.Context appCtx = requireContext().getApplicationContext();
             new Thread(() -> {
+                java.io.File tmp = new File(appCtx.getCacheDir(), "plugin-import-upload.bin");
+                String[] r;
                 try {
-                    File tmp = new File(appCtx.getCacheDir(), "plugin-import.tar.gz");
                     try (java.io.InputStream in = appCtx.getContentResolver().openInputStream(uri);
                          java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
                         byte[] buf = new byte[65536];
                         int n;
                         while (in != null && (n = in.read(buf)) != -1) out.write(buf, 0, n);
                     }
-                    boolean ok = c.importPlugins(tmp);
-                    // Toast 走 application context + 主 Looper：结论不该因为
-                    // 用户切走页面就消失（这是「静默失败」的老毛病）
-                    toastOnMain(appCtx, ok ? "导入成功，重启 WebUI 生效" : "导入失败");
-                    runOnUiThreadSafely(() -> {
-                        if (ok) showInstalled();
-                    });
+                    r = c.importArchive(tmp);
                 } catch (Exception e) {
-                    toastOnMain(appCtx, "导入失败：" + e.getMessage());
+                    r = new String[]{"ERR", "读取所选文件失败：" + e.getMessage()};
+                } finally {
+                    //noinspection ResultOfMethodCallIgnored
+                    tmp.delete();
                 }
+                final boolean ok = "OK".equals(r[0]);
+                final String msg = r[1] == null ? "（无结果）" : r[1];
+                // Toast 先发（走 application context + 主 Looper，一定送达）：
+                // 结论不该因为用户切走页面就消失，这是「静默失败」的老毛病
+                toastOnMain(appCtx, ok ? "导入完成" : "导入失败");
+                runOnUiThreadSafely(() -> {
+                    say(msg.replace('\n', ' '));
+                    if (ok) showInstalled();
+                    // 结果信息量大（装了哪些、跳过哪些、为什么），Toast 会截断 → 用对话框
+                    new android.app.AlertDialog.Builder(requireContext())
+                            .setTitle(ok ? "导入完成" : "导入失败")
+                            .setMessage(msg)
+                            .setPositiveButton("知道了", null)
+                            .show();
+                });
             }).start();
         }
     }

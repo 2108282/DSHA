@@ -6154,6 +6154,9 @@ public class HarnessController {
     /** 导出单个插件到 Download/DSHA/插件/（单文件）。 */
     public String exportOnePlugin(String name) { return plugins.exportOnePlugin(name); }
     public boolean importPlugins(java.io.File tarGz) { return plugins.importPlugins(tarGz); }
+    /** 导入插件归档（自动识别 tar.gz / tar / zip 与单插件 / 多插件布局）。
+     *  返回 {status, message}，status = "OK" | "ERR"。 */
+    public String[] importArchive(java.io.File archive) { return plugins.importArchive(archive); }
     public String fetchMarketIndex() { return plugins.fetchMarketIndex(); }
     public long getMarketCacheAgeMs() { return plugins.getMarketCacheAgeMs(); }
     public void refreshMarketIndex() { plugins.refreshMarketIndex(); }
