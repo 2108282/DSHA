@@ -107,6 +107,11 @@ def write_readme(manifest, extra):
 
     文件名用 ASCII（中文名在某些解压工具里会乱码），内容用中文。
     """
+    scope_desc = {
+        "full": "全量（配置 + 对话 + 插件）",
+        "sessions": "只对话（恢复时只覆盖对话，配置与插件不动）",
+        "plugins": "只插件（恢复时只覆盖插件，对话不动）",
+    }.get(manifest.get("scope", "full"), manifest.get("scope", "full"))
     lines = [
         "DSHA 备份说明",
         "=" * 40,
@@ -117,9 +122,14 @@ def write_readme(manifest, extra):
             manifest.get("dshVersion", "?")),
         "工作目录：%s" % manifest.get("workdir", "?"),
         "格式版本：%s" % manifest.get("formatVersion", "?"),
+        "备份范围：%s" % scope_desc,
         "",
         "里面有什么",
         "-" * 40,
+        ".dsha-pub/           对话等热数据的真实副本。这些目录在手机上是指向",
+        "                     内部存储 Documents/dshdata 的符号链接，直接打包只会",
+        "                     存一个链接、换设备后就是空的，所以额外复制了一份。",
+        "                     恢复时它优先于 .dsh/ 下的同名链接。",
         ".dsh/sessions/       对话记录。一个会话一个文件，JSONL 纯文本，",
         "                     用任何文本编辑器都能直接看，不需要 DSHA。",
         ".dsh/storages/       插件与工具的数据",
@@ -171,6 +181,11 @@ def main():
         "appVersionCode": arg("app-code", "0"),
         "dshVersion": read_dsh_version(),
         "workdir": arg("workdir", "deepseek-harness"),
+        # 备份范围：full / sessions / plugins（BackupScope.id 写进来的）。
+        # 恢复端靠它决定「整目录替换」还是「只合并某个子树」——部分备份要是被当成
+        # 全量恢复，用户的配置与插件会被一个只含对话的包整个换掉。
+        # 老备份没有这个字段，缺省 full 正是它们的真实语义。
+        "scope": arg("scope", "full"),
         "profiles": {},
         "inlinedPlugins": [],
         "notes": "恢复端见 restore-merge.py：无此文件也能恢复（会走启发式推断）",

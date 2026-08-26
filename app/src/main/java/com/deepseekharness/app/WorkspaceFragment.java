@@ -91,35 +91,7 @@ public class WorkspaceFragment extends Fragment {
             Toast.makeText(requireContext(), "已清除环境", Toast.LENGTH_SHORT).show();
         });
 
-        backupBtn.setOnClickListener(v -> {
-            // Web UI 正在运行时会实时写对话文件，直接 tar 可能拿到半截数据。
-            // 有运行就先提示用户（选择继续备份则由 tar 容忍；推荐先停止）
-            if (c.isWebRunning()) {
-                new AlertDialog.Builder(requireContext())
-                        .setTitle("Web UI 正在运行")
-                        .setMessage("对话记录可能正在写入。建议先停止 Web UI 再备份，避免备份到半截文件。\n\n仍要继续备份吗？")
-                        .setPositiveButton("停止后备份", (d, w) -> {
-                            // 用同步深停（等端口关透）再备份，避免异步 stopWeb 期间 tar 到写入中的文件
-                            Toast.makeText(requireContext(), "正在停止 Web 并备份…", Toast.LENGTH_SHORT).show();
-                            new Thread(() -> {
-                                try {
-                                    c.stopWebAndWait();
-                                } catch (Throwable ignored) {
-                                }
-                                doBackup();
-                            }).start();
-                        })
-                        .setNegativeButton("直接备份", (d, w) -> {
-                            Toast.makeText(requireContext(), "正在备份（可能含写入中的会话）…", Toast.LENGTH_SHORT).show();
-                            new Thread(() -> doBackup()).start();
-                        })
-                        .setNeutralButton("取消", null)
-                        .show();
-            } else {
-                Toast.makeText(requireContext(), "正在备份，请稍候…", Toast.LENGTH_SHORT).show();
-                new Thread(() -> doBackup()).start();
-            }
-        });
+        backupBtn.setOnClickListener(v -> promptBackupScope());
 
         resetBtn.setOnClickListener(v -> new AlertDialog.Builder(requireContext())
                 .setTitle("重置配置？")
@@ -162,9 +134,56 @@ public class WorkspaceFragment extends Fragment {
         }
     }
 
+    /** 备份入口：先选范围（全量 / 只对话 / 只插件），再走「Web 在跑要不要先停」那一步。
+     *
+     *  <p>刻意做成弹一次选择而不是在页面上摆三个按钮 —— 备份一年用几次，不该占常驻位置。
+     *  范围的定义、文案、文件名前缀全在 {@link BackupScope} 一处。 */
+    private void promptBackupScope() {
+        final int[] scopes = BackupScope.ALL;
+        String[] items = new String[scopes.length];
+        for (int i = 0; i < scopes.length; i++) {
+            items[i] = BackupScope.label(scopes[i]) + "\n" + BackupScope.describe(scopes[i]);
+        }
+        new AlertDialog.Builder(requireContext())
+                .setTitle("备份范围")
+                .setItems(items, (d, w) -> confirmAndBackup(scopes[w]))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** Web UI 正在运行时会实时写对话文件，直接 tar 可能拿到半截数据，所以先问一句。
+     *  只备份插件时不问 —— 插件声明不会被会话写入影响，多一次确认纯属打扰。 */
+    private void confirmAndBackup(int scope) {
+        if (c.isWebRunning() && scope != BackupScope.PLUGINS) {
+            new AlertDialog.Builder(requireContext())
+                    .setTitle("Web UI 正在运行")
+                    .setMessage("对话记录可能正在写入。建议先停止 Web UI 再备份，避免备份到半截文件。\n\n仍要继续备份吗？")
+                    .setPositiveButton("停止后备份", (d, w) -> {
+                        // 用同步深停（等端口关透）再备份，避免异步 stopWeb 期间 tar 到写入中的文件
+                        Toast.makeText(requireContext(), "正在停止 Web 并备份…", Toast.LENGTH_SHORT).show();
+                        new Thread(() -> {
+                            try {
+                                c.stopWebAndWait();
+                            } catch (Throwable ignored) {
+                            }
+                            doBackup(scope);
+                        }).start();
+                    })
+                    .setNegativeButton("直接备份", (d, w) -> {
+                        Toast.makeText(requireContext(), "正在备份（可能含写入中的会话）…", Toast.LENGTH_SHORT).show();
+                        new Thread(() -> doBackup(scope)).start();
+                    })
+                    .setNeutralButton("取消", null)
+                    .show();
+        } else {
+            Toast.makeText(requireContext(), "正在备份，请稍候…", Toast.LENGTH_SHORT).show();
+            new Thread(() -> doBackup(scope)).start();
+        }
+    }
+
     /** 执行备份并展示结果（独立方法，供直接备份/停止后备份复用） */
-    private void doBackup() {
-        String path = BackupManager.backupToExternal(requireContext(), c);
+    private void doBackup(int scope) {
+        String path = BackupManager.backupToExternal(requireContext(), c, scope);
         if (!isAdded() || getActivity() == null) return;
         getActivity().runOnUiThread(() -> {
             // 弹窗必须用 Activity context，而这一刻 Fragment 可能已经 detach ——
@@ -181,7 +200,7 @@ public class WorkspaceFragment extends Fragment {
             }
             new AlertDialog.Builder(requireContext())
                     .setTitle("备份完成")
-                    .setMessage("已导出到：\n" + path)
+                    .setMessage(BackupScope.label(scope) + " 已导出到：\n" + path)
                     .setPositiveButton("复制路径", (d, w) -> {
                         ClipboardManager cm = (ClipboardManager) requireContext()
                                 .getSystemService(Context.CLIPBOARD_SERVICE);

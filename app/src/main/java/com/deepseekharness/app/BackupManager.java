@@ -41,9 +41,14 @@ public final class BackupManager {
     /** 手动备份最多保留份数（超出删最旧，防 Download/DSHA 无限膨胀） */
     private static final int MAX_MANUAL_KEEP = 10;
 
-    /** 执行备份并导出，返回外部存储中的完整路径；失败返回 null */
+    /** 执行全量备份并导出，返回外部存储中的完整路径；失败返回 null */
     public static String backupToExternal(Context ctx, HarnessController c) {
-        return backup(ctx, c, null);
+        return backup(ctx, c, null, BackupScope.FULL);
+    }
+
+    /** 按范围备份（全量 / 只对话 / 只插件），见 {@link BackupScope}。 */
+    public static String backupToExternal(Context ctx, HarnessController c, int scope) {
+        return backup(ctx, c, null, scope);
     }
 
     /** 自动备份：两个固定名**交替**使用，永远留着上一次那份完整的。
@@ -59,7 +64,8 @@ public final class BackupManager {
         android.content.SharedPreferences sp =
                 ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE);
         boolean useSlot2 = !sp.getBoolean("auto_backup_slot2", false);
-        String path = backup(ctx, c, useSlot2 ? AUTO_BACKUP_NAME_2 : AUTO_BACKUP_NAME);
+        String path = backup(ctx, c, useSlot2 ? AUTO_BACKUP_NAME_2 : AUTO_BACKUP_NAME,
+                BackupScope.FULL);
         // 只有成功才翻转：失败时下次仍写这一槽，不会白白牺牲掉另一槽里的好备份
         if (path != null) {
             sp.edit().putBoolean("auto_backup_slot2", useSlot2).apply();
@@ -97,7 +103,7 @@ public final class BackupManager {
         }
     }
 
-    private static String backup(Context ctx, HarnessController c, String fixedName) {
+    private static String backup(Context ctx, HarnessController c, String fixedName, int scope) {
         synchronized (BACKUP_LOCK) { // 串行备份（防中转文件互相覆盖）
         try {
             lastError = "";
@@ -113,7 +119,16 @@ public final class BackupManager {
             // 目的：换设备/换版本恢复时不再因「link:/root/plugin-src/x 不存在」起不来。
             // 顺序要紧：先把 .l2s 链摊平（不然下面的 tar 直接失败），再生成清单
             runFlattenL2s(c);
-            runBackupPrepare(c, wd);
+            boolean prepared = runBackupPrepare(c, wd, scope);
+            // 部分备份**必须**带清单：恢复端靠清单里的 scope 决定「只合并某个子树」还是
+            // 「整个 .dsh 挪走再替换」。清单缺了就会被当成全量恢复 —— 一个只含对话的包
+            // 会把用户的配置与插件整个换掉。这种包宁可不生成。
+            if (scope != BackupScope.FULL && !prepared) {
+                lastError = "备份清单没生成，" + BackupScope.label(scope)
+                        + "无法安全恢复（会被当成全量），已中止。请改用全量备份";
+                recordError(c, lastError);
+                return null;
+            }
             // issue #22：离线包安装的用户从来不会有 <workdir>/.env —— .env 只在「在线安装
             // harness」的最后一步写入，离线包路径不执行那步；启动 Web 时 key 由 export
             // DEEPSEEK_API_KEY 直接注入进程，不落盘。而 key 本体存在 App 的 SharedPreferences，
@@ -167,29 +182,79 @@ public final class BackupManager {
             // 那样 ARGS 里的引号不会被二次解析，tar 收到的是字面量 '工作目录'/.env，
             // 结果 Cannot stat → TAR_FAIL → 备份整个失败（还被报成「环境可能未安装」）。
             // 工作目录名通过 WD 变量传，赋值语境里只需一次单引号转义。
-            String script = "cd /root || exit 1\n"
-                    + "rm -f .dsha-backup.tar.gz\n"
-                    + "[ -d .dsh ] || { echo NO_DSH_DIR; exit 1; }\n"
-                    + "WD='" + dshEsc + "'\n"
-                    + "set -- .dsh\n"
-                    + "[ -f \"$WD/.env\" ] && set -- \"$@\" \"$WD/.env\"\n"
-                    + "[ -f dsh-web.log ] && set -- \"$@\" dsh-web.log\n"
-                    // 清单与内联插件源码（存在才带，名字固定，不拼接外部输入）
-                    + "[ -f .dsha-backup-manifest.json ] && set -- \"$@\" .dsha-backup-manifest.json\n"
-                    + "[ -d .dsha-plugin-src ] && set -- \"$@\" .dsha-plugin-src\n"
-                    + "echo \"打包: $*\"\n"
-                    // 不再 2>/dev/null：tar 的报错正是排查依据（execChecked 会带回输出）
-                    // --ignore-failed-read：万一还有漏网的坏符号链接，只跳过它，
-                    // 别让整包备份失败（数据本身已丢，留着也恢复不了）
-                    // 排除项来自 UserDataPolicy —— 「什么算用户数据」只有那一份定义。
-                    //   以前这里硬编码 --exclude='.dsh/.bridge_token'，而重解压那条路自己
-                    //   维护另一份判断，两边定义一分裂就出过桥 token 401（现象是悬浮窗不显示
-                    //   + agent 工具调用失败，完全看不出是 token）。详见 UserDataPolicy 类注释。
-                    + "tar -czf .dsha-backup.tar.gz --ignore-failed-read "
-                    + UserDataPolicy.tarExcludeArgs() + "\"$@\" "
-                    + "|| { echo TAR_FAIL; exit 1; }\n"
-                    + "test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n"
-                    + "echo OK\n";
+            //
+            // 清单内容按备份范围来，范围定义只有 BackupScope 一份（见那个类的注释）。
+            final String PUB = BackupScope.PUB_SNAPSHOT_DIR;
+            String[] snapEntries = BackupScope.snapshotEntries(scope);
+            StringBuilder sb = new StringBuilder();
+            sb.append("cd /root || exit 1\n")
+              .append("rm -f .dsha-backup.tar.gz\n")
+              // 上一次备份若在 tar 阶段失败会残留快照目录，开头先清干净
+              .append("rm -rf ").append(ShellQuote.arg(PUB)).append("\n")
+              .append("[ -d .dsh ] || { echo NO_DSH_DIR; exit 1; }\n")
+              .append("WD='").append(dshEsc).append("'\n");
+            // 公开热数据解引用快照：.dsh/sessions 等迁移后是指向 /sdcard/Documents/dshdata
+            // 的软链，而 tar 默认只存链接本身（实测包里只有一行 lrwxrwxrwx，对话一条没进）。
+            // 同机恢复看不出问题（链接指回公开目录），换设备恢复就是悬空链接、对话全空。
+            // 不能给 tar 加 -h：那是全局的，node_modules 里每个 link: 插件都会被展开一遍。
+            if (snapEntries.length > 0) {
+                sb.append("for name in");
+                for (String e : snapEntries) sb.append(' ').append(ShellQuote.arg(e));
+                sb.append("; do\n")
+                  .append("  [ -L \".dsh/$name\" ] || continue\n")
+                  .append("  [ -e \".dsh/$name\" ] || continue\n")
+                  .append("  mkdir -p ").append(ShellQuote.arg(PUB)).append("\n")
+                  .append("  cp -rL \".dsh/$name\" \"").append(PUB).append("/$name\" 2>/dev/null")
+                  .append(" || echo PUB_SNAP_FAIL_$name\n")
+                  .append("done\n");
+            }
+            sb.append("set --\n");
+            String[] dshPaths = BackupScope.dshPaths(scope);
+            if (dshPaths.length == 0) {
+                sb.append("set -- .dsh\n");     // 全量：整个 .dsh
+            } else {
+                for (String p : dshPaths) {
+                    String base = p.startsWith(".dsh/") ? p.substring(".dsh/".length()) : p;
+                    // 软链且快照成功 → 跳过链接本身（快照里才是真数据）；
+                    // 快照失败或本来就是真目录 → 照旧打进去（有总比没有好）
+                    sb.append("if [ -L ").append(ShellQuote.arg(p)).append(" ] && [ -e ")
+                      .append(ShellQuote.arg(PUB + "/" + base)).append(" ]; then :; ")
+                      .append("elif [ -e ").append(ShellQuote.arg(p)).append(" ]; then set -- \"$@\" ")
+                      .append(ShellQuote.arg(p)).append("; fi\n");
+                }
+            }
+            if (BackupScope.includesWorkdirFiles(scope)) {
+                sb.append("[ -f \"$WD/.env\" ] && set -- \"$@\" \"$WD/.env\"\n")
+                  .append("[ -f dsh-web.log ] && set -- \"$@\" dsh-web.log\n");
+            }
+            // 清单与内联插件源码（存在才带，名字固定，不拼接外部输入）
+            sb.append("[ -f .dsha-backup-manifest.json ] && set -- \"$@\" .dsha-backup-manifest.json\n");
+            if (BackupScope.includesPluginSrc(scope)) {
+                sb.append("[ -d .dsha-plugin-src ] && set -- \"$@\" .dsha-plugin-src\n");
+            }
+            if (snapEntries.length > 0) {
+                sb.append("[ -d ").append(ShellQuote.arg(PUB)).append(" ] && set -- \"$@\" ")
+                  .append(ShellQuote.arg(PUB)).append("\n");
+            }
+            // 部分备份可能什么都没匹配上（比如没有任何对话）——空包对用户毫无意义，
+            // 明确失败比给一个 200 字节的壳子好
+            sb.append("[ $# -gt 0 ] || { echo NOTHING_TO_PACK; exit 1; }\n")
+              .append("echo \"打包: $*\"\n")
+              // 不再 2>/dev/null：tar 的报错正是排查依据（execChecked 会带回输出）
+              // --ignore-failed-read：万一还有漏网的坏符号链接，只跳过它，
+              // 别让整包备份失败（数据本身已丢，留着也恢复不了）
+              // 排除项来自 UserDataPolicy —— 「什么算用户数据」只有那一份定义。
+              //   以前这里硬编码 --exclude='.dsh/.bridge_token'，而重解压那条路自己
+              //   维护另一份判断，两边定义一分裂就出过桥 token 401（现象是悬浮窗不显示
+              //   + agent 工具调用失败，完全看不出是 token）。详见 UserDataPolicy 类注释。
+              .append("tar -czf .dsha-backup.tar.gz --ignore-failed-read ")
+              .append(UserDataPolicy.tarExcludeArgs()).append("\"$@\" ")
+              .append("|| { echo TAR_FAIL; exit 1; }\n")
+              .append("test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n")
+              // 快照只是打包中转，别留在 rootfs 里占一份对话的空间
+              .append("rm -rf ").append(ShellQuote.arg(PUB)).append("\n")
+              .append("echo OK\n");
+            String script = sb.toString();
             // 公开热数据软链自修复（迁移后 .dsh/sessions 等是指向
             // /sdcard/Documents/dshdata 的软链；用户若删了 Documents 目录，
             // 链接悬空，tar 会因 Cannot stat 失败）。先检查并重建：
@@ -205,7 +270,8 @@ public final class BackupManager {
 
             String name = fixedName != null
                     ? fixedName
-                    : "DSHA-backup-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+                    : BackupScope.fileNamePrefix(scope)
+                            + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
                             .format(new Date()) + ".tar.gz";
             String path = null;
             try {
@@ -221,8 +287,9 @@ public final class BackupManager {
                 recordError(c, lastError);
                 return null; // 导出失败：不残留 half 备份
             }
-            // 手动备份保留最近 MAX_MANUAL_KEEP 份，删最旧（防无限膨胀）
-            if (fixedName == null) pruneOldManual(ctx, name);
+            // 手动备份保留最近 MAX_MANUAL_KEEP 份，删最旧（防无限膨胀）。
+            // 按前缀各自轮换：对话备份不该挤掉全量备份的配额，反之同理。
+            if (fixedName == null) pruneOldManual(ctx, name, BackupScope.fileNamePrefix(scope));
             recordError(c, null); // 成功：清掉历史错误
             return path;
         } catch (Exception e) {
@@ -234,6 +301,8 @@ public final class BackupManager {
                 lastError = "rootfs 内打包失败：" + tail(msg, 300);
             } else if (msg.contains("EMPTY")) {
                 lastError = "打包产物为空（磁盘可能已满）";
+            } else if (msg.contains("NOTHING_TO_PACK")) {
+                lastError = "这个范围里没有可备份的内容（比如还没有任何对话），没有生成空包";
             } else {
                 lastError = tail(msg, 300);
             }
@@ -329,10 +398,12 @@ public final class BackupManager {
         }
     }
 
-    private static void runBackupPrepare(HarnessController c, String workdir) {
+    /** 备份前置整理。返回清单（.dsha-backup-manifest.json）是否真的落地 ——
+     *  部分备份靠它标记范围，没有清单就不能出包（见调用点）。 */
+    private static boolean runBackupPrepare(HarnessController c, String workdir, int scope) {
         try {
             String script = c.readAsset("backup-prepare.py");
-            if (script == null || script.isEmpty()) return;
+            if (script == null || script.isEmpty()) return false;
             File dst = new File(c.getProot().getRootfsDir(), "root/.dsha-backup-prepare.py");
             if (dst.getParentFile() != null) dst.getParentFile().mkdirs();
             java.nio.file.Files.write(dst.toPath(),
@@ -341,7 +412,9 @@ public final class BackupManager {
             String verEsc = c.getVersionNameForUa().replace("'", "");
             String out = c.getProot().execAndRead(
                     "python3 /root/.dsha-backup-prepare.py --app-version '" + verEsc
-                            + "' --workdir '" + wdEsc + "' 2>&1; rm -f /root/.dsha-backup-prepare.py",
+                            + "' --workdir '" + wdEsc + "'"
+                            + " --scope " + BackupScope.id(scope)
+                            + " 2>&1; rm -f /root/.dsha-backup-prepare.py",
                     120_000);
             android.util.Log.i("DSHA", "备份前置整理: " + (out == null ? "无输出" : out.trim()));
             // 验证清单是否真的落地。这一步以前只写 logcat，清单没生成也照样打包，
@@ -353,9 +426,12 @@ public final class BackupManager {
                 android.util.Log.w("DSHA", "备份清单未生成 —— 这次备份会是老格式"
                         + "（能恢复，但跨设备可能缺插件）。前置整理输出："
                         + (out == null ? "无" : out.trim()));
+                return false;
             }
+            return true;
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "备份前置整理失败（不影响备份）: " + e);
+            android.util.Log.w("DSHA", "备份前置整理失败（不影响全量备份）: " + e);
+            return false;
         }
     }
 
@@ -413,7 +489,13 @@ public final class BackupManager {
     }
 
     /** 清理旧手动备份：保留最近 MAX_MANUAL_KEEP 份（不含自动备份文件），删最旧。 */
-    private static void pruneOldManual(Context ctx, String justCreated) {
+    /** 手动备份轮换：只在<b>同前缀</b>内部轮换（全量 / 对话 / 插件各留 10 份，互不挤占）。
+     *
+     *  <p>prefix 过滤原先只加在第一段收集上，第二段（MediaStore 按时间排序删旧）
+     *  只排除了自动备份名 —— 也就是说 Download/DSHA 下**任何**别的文件都会被算进
+     *  这轮删除，包括 3090 桥 {@code /app/export} 导出的 agent 报告和 {@code .sha256}
+     *  校验文件。现在两段用同一个前缀判据。 */
+    private static void pruneOldManual(Context ctx, String justCreated, String prefix) {
         try {
             java.util.List<android.net.Uri> all = new java.util.ArrayList<>();
             // 查 MediaStore（Android 10+）或直接列目录（Android 9-）
@@ -427,7 +509,7 @@ public final class BackupManager {
                     if (cur != null) {
                         while (cur.moveToNext()) {
                             String dn = cur.getString(1);
-                            if (dn == null || !dn.startsWith("DSHA-backup-") || !dn.endsWith(".tar.gz")) continue;
+                            if (dn == null || !dn.startsWith(prefix) || !dn.endsWith(".tar.gz")) continue;
                             if (isAutoName(dn)) continue; // 自动备份的两个槽都不动
                             all.add(android.content.ContentUris.withAppendedId(collection, cur.getLong(0)));
                         }
@@ -436,7 +518,7 @@ public final class BackupManager {
             } else {
                 File dir = new File(Environment.getExternalStoragePublicDirectory(
                         Environment.DIRECTORY_DOWNLOADS), "DSHA");
-                File[] fs = dir.listFiles((d, n) -> n.startsWith("DSHA-backup-") && n.endsWith(".tar.gz")
+                File[] fs = dir.listFiles((d, n) -> n.startsWith(prefix) && n.endsWith(".tar.gz")
                         && !isAutoName(n));
                 if (fs != null) {
                     java.util.Arrays.sort(fs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
@@ -467,6 +549,7 @@ public final class BackupManager {
                             } catch (Throwable ignored) {
                             }
                             if (dn == null || isAutoName(dn)) continue;
+                            if (!dn.startsWith(prefix) || !dn.endsWith(".tar.gz")) continue;
                             id2t.put(id, cur.getLong(1));
                         }
                         java.util.List<java.util.Map.Entry<Long, Long>> sorted = new java.util.ArrayList<>(id2t.entrySet());

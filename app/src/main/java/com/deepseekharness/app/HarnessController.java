@@ -5482,6 +5482,10 @@ public class HarnessController {
                 out = proot.execAndRead("python3 /root/.dsha-restore-merge.py"
                         + " --stage /root/.dsha-restore-stage --root /root --workdir "
                         + ShellQuote.arg(getWorkdir())
+                        // 范围兜底：脚本优先信包内清单，这里传的是从文件名推断的值，
+                        // 只有「清单没生成」的包才用得上（调用方有时已把包改名成
+                        // .dsha-restore.tar.gz，那时推断结果就是 full —— 与老行为一致）
+                        + " --scope " + BackupScope.id(BackupScope.fromFileName(backup.getName()))
                         + " 2>&1; rm -f /root/.dsha-restore-merge.py", 240_000);
             }
             boolean ok = out != null && out.contains("RESTORE_OK");

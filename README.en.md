@@ -134,7 +134,7 @@ DSHA isn't just "it boots". Everything below is implemented and shipping.
 | 15 self-healing &amp; patch scripts | pnpm shell restoration, bundle resolution repair, profile boot repair, `.l2s` chain flattening, session repair, dependency repair, filesystem write patches… |
 | Signed incremental updates | Key scripts update from GitHub with **offline signature verification** (public key embedded; a bad signature rejects the whole batch), so fixes don't wait for a new APK |
 | Failures written to disk | Backup, install and boot failures record their reason to a file that the self-check reads — "nothing happened" never stays unexplainable |
-| CI gatekeepers | Every push runs Fast checks: manifest consistency, offline signature verification, 124 pure-logic assertions, and real compilation of every asset script. Releases abort outright on a certificate fingerprint mismatch |
+| CI gatekeepers | Every push runs Fast checks: manifest consistency, offline signature verification, 153 pure-logic assertions, and real compilation of every asset script. Releases abort outright on a certificate fingerprint mismatch |
 
 </details>
 
@@ -172,7 +172,7 @@ DSHA isn't just "it boots". Everything below is implemented and shipping.
 |---|---|
 | [AGENTS.md](AGENTS.md) | Entry document for AI and new contributors: structure, contracts, known traps — skip the full-repo scan |
 | Agent skills | [`agent-skills/`](agent-skills/) ships `device-shell` (ADB / Shizuku bridge) and `screen-ocr-operator` (OCR + batched screen actions) |
-| Pure-logic test suite | 124 assertions with no Android dependency; `bash tools/pure-logic-test.sh` finishes in seconds |
+| Pure-logic test suite | 153 assertions with no Android dependency; `bash tools/pure-logic-test.sh` finishes in seconds |
 | Activity log | Key actions and failure reasons are recorded, so bug reports have something to stand on |
 | Build entirely in CI | No computer needed: push a tag and a signed APK comes out, with an arm64 runner building the rootfs |
 
@@ -288,7 +288,7 @@ Pushing to `main` also runs a debug build plus Fast checks.
 
 ```bash
 ./build.sh                      # needs app/src/main/assets/offline-rootfs.tar.gz first
-bash tools/pure-logic-test.sh   # 124 pure-logic assertions, no device needed
+bash tools/pure-logic-test.sh   # 153 pure-logic assertions, no device needed
 ```
 
 ---

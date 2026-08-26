@@ -423,6 +423,75 @@ public final class PureLogicTest {
         eq("query: token 解析与桥参数同源",
                 "T", LanAuth.queryTokenFromTarget("/p?xtoken=junk&token=T"));
 
+        // ===== BackupScope：备份范围的唯一定义 =====
+        // 两条关键断言：① 部分备份的文件名前缀绝不能是 DSHA-backup-（老版本按这个前缀
+        // 扫描并且会「整个 .dsh 挪走再替换」，把只含对话的包当全量恢复 = 配置与插件全丢）；
+        // ② 备份打了哪些子树、恢复就合并哪些子树，两份清单必须一一对应。
+        ok("scope: 只有全量用 DSHA-backup- 前缀（老版本只看得见它）",
+                BackupScope.visibleToLegacyScan(BackupScope.FULL)
+                        && !BackupScope.visibleToLegacyScan(BackupScope.SESSIONS)
+                        && !BackupScope.visibleToLegacyScan(BackupScope.PLUGINS));
+        boolean prefixDistinct = true;
+        for (int a : BackupScope.ALL) {
+            for (int b : BackupScope.ALL) {
+                if (a == b) continue;
+                if (BackupScope.fileNamePrefix(a).equals(BackupScope.fileNamePrefix(b))) prefixDistinct = false;
+                // 前缀之间不能互为前缀，否则按名字分类与轮换都会串
+                if (BackupScope.fileNamePrefix(a).startsWith(BackupScope.fileNamePrefix(b))) prefixDistinct = false;
+            }
+        }
+        ok("scope: 三个文件名前缀互不相同、也互不为前缀", prefixDistinct);
+        boolean roundTripScope = true, nameRoundTrip = true, pathsPaired = true;
+        for (int s : BackupScope.ALL) {
+            if (BackupScope.fromId(BackupScope.id(s)) != s) roundTripScope = false;
+            String name = BackupScope.fileNamePrefix(s) + "20260826-120000.tar.gz";
+            if (BackupScope.fromFileName(name) != s) nameRoundTrip = false;
+            String[] packed = BackupScope.dshPaths(s);
+            String[] merged = BackupScope.mergeSubdirs(s);
+            if (packed.length != merged.length) {
+                pathsPaired = false;
+            } else {
+                for (int i = 0; i < packed.length; i++) {
+                    if (!packed[i].equals(".dsh/" + merged[i])) pathsPaired = false;
+                }
+            }
+        }
+        ok("scope: id ↔ 常量往返一致", roundTripScope);
+        ok("scope: 文件名 ↔ 范围往返一致", nameRoundTrip);
+        ok("scope: 打包子树与恢复子树逐项同源（备份了什么就恢复什么）", pathsPaired);
+        eqi("scope: 全量的子树清单为空（= 整个 .dsh）", 0, BackupScope.dshPaths(BackupScope.FULL).length);
+        eqi("scope: 全量的合并清单也为空（整目录替换）", 0, BackupScope.mergeSubdirs(BackupScope.FULL).length);
+        eqi("scope: 未知 id 与 null 都当全量（老备份没有这个字段）",
+                BackupScope.FULL, BackupScope.fromId(null) + BackupScope.fromId("what"));
+        eqi("scope: 认不出的文件名当全量", BackupScope.FULL, BackupScope.fromFileName("random.tar.gz"));
+        ok("scope: 只有全量带工作区 .env 与日志",
+                BackupScope.includesWorkdirFiles(BackupScope.FULL)
+                        && !BackupScope.includesWorkdirFiles(BackupScope.SESSIONS)
+                        && !BackupScope.includesWorkdirFiles(BackupScope.PLUGINS));
+        ok("scope: 全量与插件备份都带内联插件源码",
+                BackupScope.includesPluginSrc(BackupScope.FULL)
+                        && BackupScope.includesPluginSrc(BackupScope.PLUGINS)
+                        && !BackupScope.includesPluginSrc(BackupScope.SESSIONS));
+        // 快照条目必须来自那份公开热数据名单，且插件备份不需要快照
+        boolean snapSubset = true;
+        for (int s : BackupScope.ALL) {
+            for (String e : BackupScope.snapshotEntries(s)) {
+                boolean found = false;
+                for (String p : BackupScope.PUBLIC_HOT_ENTRIES) if (p.equals(e)) found = true;
+                if (!found) snapSubset = false;
+            }
+        }
+        ok("scope: 快照条目都出自 PUBLIC_HOT_ENTRIES 名单", snapSubset);
+        ok("scope: 需要快照的范围与快照条目非空一致",
+                BackupScope.needsPublicDataSnapshot(BackupScope.FULL)
+                        && BackupScope.needsPublicDataSnapshot(BackupScope.SESSIONS)
+                        && !BackupScope.needsPublicDataSnapshot(BackupScope.PLUGINS)
+                        && BackupScope.snapshotEntries(BackupScope.PLUGINS).length == 0
+                        && BackupScope.snapshotEntries(BackupScope.SESSIONS).length > 0);
+        ok("scope: 对话备份只快照 sessions（不必把 storages/attachments 也拖进来）",
+                BackupScope.snapshotEntries(BackupScope.SESSIONS).length == 1
+                        && "sessions".equals(BackupScope.snapshotEntries(BackupScope.SESSIONS)[0]));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

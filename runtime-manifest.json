@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-26T13:00:06Z",
+  "generated": "2026-08-26T16:24:08Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -39,8 +39,8 @@
     {
       "path": "app/src/main/assets/backup-prepare.py",
       "asset": "backup-prepare.py",
-      "size": 11198,
-      "sha256": "fbc3f2f03c11565b13c9fd89afea24ca855c57824ebb96509a90a3cf09f6cbbf",
+      "size": 12366,
+      "sha256": "20fd6fd44fd6bfcc91217f8a1fc2a611bcf5513731ef749531ededa45fa95d80",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/backup-prepare.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/backup-prepare.py",
@@ -215,8 +215,8 @@
     {
       "path": "app/src/main/assets/restore-merge.py",
       "asset": "restore-merge.py",
-      "size": 16911,
-      "sha256": "dca3fe52b39ca1a32ffbb91c8b5ff73e70539770e8b161e0536246a8d15fa959",
+      "size": 22296,
+      "sha256": "529ba543a9664dc8a238a12c674fef693ff0d4ed92792f4d4cd6a3acc4cff390",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/restore-merge.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/restore-merge.py",

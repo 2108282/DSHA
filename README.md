@@ -96,6 +96,8 @@ DSHA 不只是「能跑起来」。下面每一项都是实装的功能。
 | 数据不随卸载消失 | 会话 / 设置 / 附件放 `内部存储/Documents/dshdata`，原位留私有软链 |
 | API key 加密存储 | Android Keystore（AES/CBC），密钥不出 Keystore；备份里那份也加密 |
 | 全量备份 | 手动备份保留 10 份轮换，自动备份**双槽交替**（永远留着上一份完整的） |
+| 分范围备份 | 备份时可选**全量 / 只对话 / 只插件**。部分备份恢复时只覆盖对应内容 —— 拿只含对话的包恢复，配置与插件保持现状 |
+| 换机不丢对话 | 对话等热数据在手机上是指向公开目录的符号链接，`tar` 默认只存链接、换设备恢复就是空的；备份会额外把它们解引用快照一份 |
 | 备份自带说明 | 包里放 `DSHA-README.txt`：里面有什么、怎么手动取数据、哪些东西换设备后用不了 |
 | 恢复前体检 | 只读走一遍整个包，靠 gzip 的 CRC 发现截断与损坏，并预览「多少会话 / 多大 / 来自哪个版本」 |
 | 恢复极宽容 | 老备份一律放行；缺失插件后台自动补装；跨设备的 `link:` 路径自动重写；本机路径插件的源码随包内联 |
@@ -130,7 +132,7 @@ DSHA 不只是「能跑起来」。下面每一项都是实装的功能。
 | 15 个自愈与补丁脚本 | pnpm 空壳还原、bundle 解析修复、profile 引导修复、`.l2s` 链摊平、会话修复、依赖修复、写文件补丁… |
 | 脚本增量热更新 | 关键脚本可从 GitHub 增量更新并**离线验签**（公钥内置，签名不符整批拒绝），不必等新 APK |
 | 失败原因落盘 | 备份、安装、启动的失败原因写进文件，自检直接读 —— 不让「没反应」变成无从排查 |
-| CI 守门人 | 每次推送跑 Fast checks：清单一致性 + 离线验签 + 124 条纯逻辑断言 + assets 脚本真编译；发布时证书指纹不符直接中止 |
+| CI 守门人 | 每次推送跑 Fast checks：清单一致性 + 离线验签 + 153 条纯逻辑断言 + assets 脚本真编译；发布时证书指纹不符直接中止 |
 
 </details>
 
@@ -168,7 +170,7 @@ DSHA 不只是「能跑起来」。下面每一项都是实装的功能。
 |---|---|
 | [AGENTS.md](AGENTS.md) | 给 AI 与新贡献者的入口文档：结构、契约、踩过的坑，省掉全库扫描 |
 | Agent Skills | [`agent-skills/`](agent-skills/) 提供 `device-shell`（ADB / Shizuku 桥）与 `screen-ocr-operator`（OCR + 批量操作屏幕） |
-| 纯逻辑测试集 | 124 条断言，不依赖 Android API，`bash tools/pure-logic-test.sh` 秒级跑完 |
+| 纯逻辑测试集 | 153 条断言，不依赖 Android API，`bash tools/pure-logic-test.sh` 秒级跑完 |
 | 活动日志 | 关键动作与失败原因留痕，用户报问题时有据可查 |
 | 全 CI 构建 | 不需要电脑：推 tag 即出签名 APK，arm64 runner 现场造 rootfs |
 
@@ -270,7 +272,7 @@ git tag v1.2.3 && git push origin v1.2.3   # 触发 release 流水线，自动�
 
 ```bash
 ./build.sh                      # 需要先有 app/src/main/assets/offline-rootfs.tar.gz
-bash tools/pure-logic-test.sh   # 124 条纯逻辑断言，不需要设备
+bash tools/pure-logic-test.sh   # 153 条纯逻辑断言，不需要设备
 ```
 
 ---

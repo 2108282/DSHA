@@ -189,6 +189,117 @@ def restore_dsh(stage, root):
     return True
 
 
+def _link_target_or_self(path):
+    """目标是有效软链时给出它指向的真实路径。
+
+    数据要落在公开目录里，保持「主体在 Documents/dshdata、私有目录只留链接」这个
+    迁移后的布局 —— 直接把链接换成目录，卸载 App 时数据就又跟着私有目录一起没了。
+    """
+    if os.path.islink(path) and os.path.exists(path):
+        try:
+            return os.path.realpath(path)
+        except Exception:
+            return path
+    return path
+
+
+def _land(src, dst):
+    """把 src 落到 dst，原数据先挪成 .pre-restore-<ts>（恢复的安全网）。"""
+    bak = move_aside(dst)
+    parent = os.path.dirname(dst)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    try:
+        shutil.move(src, dst)
+    except Exception:
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, dst)
+    return bak
+
+
+def find_stage_dir(stage, name):
+    """在 stage 里找名为 name 的目录（最浅优先）；找不到返回 None。"""
+    best, best_depth = None, 10 ** 6
+    for root, dirs, _files in os.walk(stage):
+        dirs[:] = [d for d in dirs if d != "node_modules"]
+        if name in dirs:
+            p = os.path.join(root, name)
+            depth = p.count(os.sep)
+            if depth < best_depth:
+                best, best_depth = p, depth
+    return best
+
+
+def restore_pub_snapshot(stage, root, only=None):
+    """把包里的 .dsha-pub/<name> 写回真实位置。
+
+    sessions / storages / attachments / settings.yaml 在设备上通常是指向内部存储
+    Documents/dshdata 的**符号链接**，而 tar 默认只存链接本身（实测包里只有一行
+    lrwxrwxrwx，对话一条都没进去）。同机恢复看不出问题 —— 链接指回公开目录，数据
+    还在那儿；换设备恢复就是悬空链接、对话全空。备份端因此额外做了一份解引用快照，
+    这里把它落回去，且优先于 .dsh/ 下的同名链接。
+    """
+    global partial
+    src_dir = find_stage_dir(stage, ".dsha-pub")
+    if not src_dir:
+        return False
+    done = []
+    try:
+        names = sorted(os.listdir(src_dir))
+    except OSError:
+        return False
+    for name in names:
+        if only and name not in only:
+            continue
+        src = os.path.join(src_dir, name)
+        dst = _link_target_or_self(os.path.join(root, ".dsh", name))
+        try:
+            bak = _land(src, dst)
+            done.append(name + ("（原数据留存 %s）" % os.path.basename(bak) if bak else ""))
+        except Exception as e:
+            partial = True
+            say("· 从快照恢复 %s 失败：%s" % (name, e))
+    if done:
+        say("· 已从快照恢复热数据：%s" % "、".join(done))
+        return True
+    return False
+
+
+def restore_dsh_subtree(stage, root, subdirs):
+    """部分备份：只把指定子树合并进现有 .dsh，其余内容一律不动。
+
+    **绝不能走 restore_dsh** —— 那是「整个 .dsh 挪走再替换」。拿一个只含对话的包
+    那么做，等于把用户的配置和插件全换掉；原数据虽然留在 .pre-restore-*，但用户
+    看到 RESTORE_OK 就不会去找，等发现时已经分不清该回退哪个目录。
+    """
+    global partial
+    src_dsh = find_dsh_dir(stage)
+    if src_dsh is None:
+        return False
+    dst_dsh = os.path.join(root, ".dsh")
+    try:
+        os.makedirs(dst_dsh, exist_ok=True)
+    except OSError:
+        pass
+    done = 0
+    for sub in subdirs:
+        src = os.path.join(src_dsh, sub)
+        if not os.path.exists(src):
+            continue
+        dst = _link_target_or_self(os.path.join(dst_dsh, sub))
+        try:
+            bak = _land(src, dst)
+            say("· 已恢复 .dsh/%s%s"
+                % (sub, "，原数据留存在 " + os.path.basename(bak) if bak else ""))
+            done += 1
+        except Exception as e:
+            partial = True
+            say("· 恢复 .dsh/%s 失败：%s" % (sub, e))
+    return done > 0
+
+
 def restore_env(stage, root, workdir):
     global partial
     src = find_env_file(stage, workdir)
@@ -407,15 +518,35 @@ def main():
         print("RESTORE_EMPTY")
         return 1
     man = read_manifest(stage)
+    # 备份范围的判定顺序：清单里的 scope 最权威（备份时写下的事实）→ App 从文件名
+    # 推断出来的 --scope 兜底（老包没有清单，或用户重命名过文件）→ 最后缺省 full
+    # （老备份的语义就是全量）。反过来让 --scope 覆盖清单是不对的：文件名可以被改，
+    # 清单不会。
+    scope = ((man.get("scope") if man else "") or arg("scope", "") or "full").strip() or "full"
     if man:
         say("· 备份来自 App %s / dsh %s（格式 v%s）"
             % (man.get("appVersion", "?"), man.get("dshVersion", "?"), man.get("formatVersion", "?")))
     else:
         say("· 老备份（无清单文件），按内容自动识别恢复")
-    ok_dsh = restore_dsh(stage, root)
-    restore_env(stage, root, workdir)
-    landed = restore_inlined_plugins(stage, root)
-    fix_profiles(root, landed)
+
+    if scope == "sessions":
+        say("· 这是「只对话」备份：只覆盖对话记录，配置与插件保持现状")
+        ok_dsh = restore_dsh_subtree(stage, root, ["sessions"])
+        # 快照后跑：它才是真数据（.dsh/sessions 在设备上多半只是个软链）
+        ok_dsh = restore_pub_snapshot(stage, root, only=["sessions"]) or ok_dsh
+    elif scope == "plugins":
+        say("· 这是「只插件」备份：只覆盖插件，对话与配置保持现状")
+        ok_dsh = restore_dsh_subtree(stage, root, ["profiles"])
+        landed = restore_inlined_plugins(stage, root)
+        fix_profiles(root, landed)
+        ok_dsh = ok_dsh or bool(landed)
+    else:
+        ok_dsh = restore_dsh(stage, root)
+        restore_env(stage, root, workdir)
+        landed = restore_inlined_plugins(stage, root)
+        fix_profiles(root, landed)
+        # 全量也要落快照：.dsh 里的 sessions 等可能只是软链
+        restore_pub_snapshot(stage, root)
     try:
         shutil.rmtree(stage, ignore_errors=True)
     except Exception:

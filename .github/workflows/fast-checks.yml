@@ -108,4 +108,10 @@ jobs:
         # 变成「插件一跑就炸」，必须有断言兜着。
         run: python3 tools/selftest-heal-test.py
 
+      - name: 分范围恢复断言（部分备份绝不能被当成全量恢复）
+        # 全量恢复的做法是「整个 .dsh 挪走再换上包里的」。拿一个只含对话的包那么干
+        # 就会把配置、凭据、插件声明一起换掉 —— 原数据虽在 .pre-restore-* 里，但用户
+        # 看到 RESTORE_OK 不会去找。这条直接跑 restore-merge.py，不需要设备。
+        run: bash tools/restore-scope-test.sh
+
 

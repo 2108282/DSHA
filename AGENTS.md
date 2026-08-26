@@ -103,6 +103,42 @@ Injected into the rootfs on demand and run through proot; all are idempotent and
 
 Rule: **restore as much as possible, never fail the whole archive over one unknown entry, and tell the user what was skipped.**
 
+### Backup scope — `full` / `sessions` / `plugins`
+
+`BackupScope` is the **single** definition of "how much does one backup cover": it owns the tar
+path list, the sub-trees the restore side merges, the file-name prefix and the UI labels. Two
+invariants are asserted in `tools/pure-logic-test.sh`:
+
+- **Only a full backup is named `DSHA-backup-*`.** Partial backups are `DSHA-sessions-*` /
+  `DSHA-plugins-*` on purpose: older builds (and `looksLikeBackupName`, which drives the
+  automatic restore prompt) only scan the `DSHA-backup-` prefix, and a full restore *moves the
+  whole `.dsh` aside and replaces it*. Letting an old build treat a sessions-only archive as a
+  full backup would wipe the user's config and plugins.
+- **What gets packed and what gets merged must line up item by item** (`dshPaths` vs
+  `mergeSubdirs`).
+
+The scope is written into the manifest (`"scope": "full"|"sessions"|"plugins"`).
+`restore-merge.py` trusts the manifest first, the `--scope` argument second (App infers it from
+the file name; a name can be renamed, the manifest cannot), and falls back to `full` — which is
+exactly what a manifest-less legacy archive means. A partial backup **refuses to be created**
+when the manifest fails to generate: without the scope marker it would restore as a full archive.
+
+### `.dsha-pub/` — the dereferenced snapshot of hot data
+
+After the public-data migration, `.dsh/sessions`, `storages`, `attachments` and `settings.yaml`
+are **symlinks** into `/sdcard/Documents/dshdata`, and `tar` stores the link, not the target
+(verified: the archive contains a single `lrwxrwxrwx .dsh/sessions -> …` line and not one
+conversation). Restoring on the same device hides the problem — the link still points at the
+public dir where the data lives — but **restoring on another device yields a dangling link and
+zero conversations**, which is exactly the case the feature is advertised for.
+
+`tar -h` is not an option: it is global and would expand every `link:` plugin under
+`node_modules` as well. So backup copies just those four entries, dereferenced, into
+`.dsha-pub/` inside the archive; restore lands them **after** `.dsh`, and writes into the
+symlink target when the destination is still a valid link (keeping the "data lives in the public
+dir" layout, so an uninstall doesn't take it away). Old builds ignore the directory and behave
+exactly as before — the change is purely additive.
+
 - Archive holds `.dsh`, `<workdir>/.env`, `dsh-web.log`, plus (v2) `.dsha-backup-manifest.json` and `.dsha-plugin-src/`.
 - Restore stages into `/root/.dsha-restore-stage`, then `restore-merge.py` merges: `.dsh` at any nesting depth, `.env` remapped onto the *current* workdir name, inlined plugins landed in `/root/plugin-src/<name>` with `link:` rewritten and `node_modules/<name>` symlinked.
 - Bundles that still cannot resolve are removed from `dsh.profile.bundles` (dsh must be able to boot) and reported; those with a registry spec are printed as `MISSING_PLUGINS:` and reinstalled **silently in the background** by `autoInstallPluginsSilently`.
