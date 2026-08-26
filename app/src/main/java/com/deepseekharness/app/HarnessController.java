@@ -867,13 +867,6 @@ public class HarnessController {
         return getApiKey();
     }
 
-    /** shell 单引号转义：API key 等用户输入嵌入 shell 命令时防注入/防破坏
-     *  （key 含 ' 时未转义会导致启动命令断裂，Web 起不来） */
-    private static String escShell(String s) {
-        if (s == null) return "";
-        return s.replace("'", "'\\''");
-    }
-
     /** 写入 .env 时清理非法字符（换行/控制符会破坏 env 文件解析） */
     private static String cleanEnvValue(String s) {
         if (s == null) return "";
@@ -3038,19 +3031,19 @@ public class HarnessController {
             return "printf '%s\\n' "
                     + "'# DEEPSEEK_API_KEY 未配置：可在 WebUI 的设置里配置官方或第三方 API' > .env";
         }
-        return "printf 'DEEPSEEK_API_KEY=%s\\n' '" + escShell(k) + "' > .env";
+        return "printf 'DEEPSEEK_API_KEY=%s\\n' " + ShellQuote.arg(k) + " > .env";
     }
 
     /** 启动命令里的 key 导出片段（含尾部 " && "）；未配置则返回空串，不导出空值 */
     private String apiKeyExportChain() {
         String k = effectiveApiKey();
-        return k.isEmpty() ? "" : "export DEEPSEEK_API_KEY='" + escShell(k) + "' && ";
+        return k.isEmpty() ? "" : "export DEEPSEEK_API_KEY=" + ShellQuote.arg(k) + " && ";
     }
 
     /** 重启脚本里的 key 导出行（含换行）；未配置则返回空串 */
     private String apiKeyExportLine() {
         String k = effectiveApiKey();
-        return k.isEmpty() ? "" : "export DEEPSEEK_API_KEY='" + escShell(k) + "'\n";
+        return k.isEmpty() ? "" : "export DEEPSEEK_API_KEY=" + ShellQuote.arg(k) + "\n";
     }
 
 
