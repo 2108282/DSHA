@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-26T16:24:08Z",
+  "generated": "2026-08-26T18:46:39Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -293,7 +293,7 @@
       "path": "app/src/main/assets/status-overlay/package.json",
       "asset": "status-overlay/package.json",
       "size": 539,
-      "sha256": "e2b667e1e04fda127cdf2a00f891b529999d0f1878cf134ad19b78aa8d8a605c",
+      "sha256": "c5ccc0a6959f3ce7eebcac0564cc58478d6df406af8352997a051272a47ba689",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/package.json",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/status-overlay/package.json",
@@ -303,8 +303,8 @@
     {
       "path": "app/src/main/assets/status-overlay/lib/index.js",
       "asset": "status-overlay/lib/index.js",
-      "size": 10930,
-      "sha256": "148939026a3dab1a633a9ccb61b20e5be254e92dd9f5cec4c2192089ede17942",
+      "size": 13892,
+      "sha256": "5a44140e9a447decd936f2ad5d5cebf10da41c00488d1d762f6afc7129a49b88",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/status-overlay/lib/index.js",

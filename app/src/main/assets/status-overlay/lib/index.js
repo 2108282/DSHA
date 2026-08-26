@@ -195,6 +195,8 @@ function schedule(key, kind, getter) {
 
 /** @param {import('@deepseek-ai/cordis').Context} ctx */
 export function apply(ctx) {
+  // 顺带把插件真实加载状态报给 App（见 reportPluginStates 的注释）
+  reportPluginStates(ctx)
   ctx.on('session/event', (session, event) => {
     try {
       if (!bridgeToken()) return
@@ -272,4 +274,78 @@ export function apply(ctx) {
       // 卸载路径上的清理，失败无所谓
     }
   })
+}
+
+
+/**
+ * 把「插件真实加载状态」报给 App 的 3090 桥。
+ *
+ * 为什么需要它：**注册进 profile 不等于加载成功**。cordis 的 PENDING 是最隐蔽的一种状态 ——
+ * 插件 inject 的服务没有提供者时它就停在那儿，而且**不报错**（那是合法状态，服务可能稍后
+ * 才挂载），于是插件静静地什么都不做。官方教程把「插件什么都没干也没报错 → 去看 fiber
+ * 状态」当作标准诊断法，而 App 侧只能读 profile 的 package.json，永远看不到这一层。
+ * 「插件装了没反应」缺的就是这份证据。
+ *
+ * 全程宽容：registry 的形状随 cordis 版本可能变，取不到就少报一点，绝不影响悬浮条本身。
+ */
+function collectPluginStates(ctx) {
+  const loaded = []
+  const failed = []
+  try {
+    const reg = ctx && ctx.registry
+    const iter = reg && typeof reg.entries === 'function' ? reg.entries() : reg
+    for (const entry of iter || []) {
+      const runtime = Array.isArray(entry) ? entry[1] : entry
+      if (!runtime) continue
+      const nm = runtime.name || (runtime.callback && runtime.callback.name)
+      if (!nm) continue
+      let fibers = []
+      try {
+        fibers = runtime.fibers ? Array.from(runtime.fibers) : []
+      } catch (e) {
+        fibers = []
+      }
+      if (!fibers.length) {
+        failed.push(nm + ':无活动实例')
+        continue
+      }
+      let ok = false
+      let why = ''
+      for (const f of fibers) {
+        const raw = f && f.state !== undefined ? f.state : ''
+        const st = String(raw).toLowerCase()
+        // 状态可能是字符串也可能是枚举数字，两种都认；认不出的一律当"没起来"上报，
+        // 宁可多报一条让用户去查，也不要漏掉真正卡住的插件
+        if (st === 'active' || st === '2' || st === '3') {
+          ok = true
+          break
+        }
+        why = st || '未知'
+      }
+      if (ok) loaded.push(nm)
+      else failed.push(nm + ':' + why)
+    }
+  } catch (e) {
+    // registry 结构对不上就别报了：少一份诊断信息可以接受，插件本身出问题不行
+  }
+  return { loaded, failed }
+}
+
+function reportPluginStates(ctx) {
+  const T = bridgeToken()
+  if (!T) return
+  // 延后再报：apply 阶段别的插件可能还在 LOADING，太早报会把它们全算成没加载起来
+  setTimeout(() => {
+    try {
+      const st = collectPluginStates(ctx)
+      if (!st.loaded.length && !st.failed.length) return
+      const url = 'http://127.0.0.1:3090/app/plugins'
+        + '?loaded=' + encodeURIComponent(st.loaded.join(','))
+        + '&failed=' + encodeURIComponent(st.failed.join(','))
+        + '&token=' + encodeURIComponent(T)
+      fetch(url).catch(() => {})
+    } catch (e) {
+      // 上报失败不影响任何既有功能
+    }
+  }, 8000)
 }
