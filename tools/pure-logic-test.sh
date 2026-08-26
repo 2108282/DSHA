@@ -8,6 +8,9 @@
 #   UserDataPolicy —— 「什么算用户数据」的唯一定义。断言重点不是单个路径对不对，而是
 #                     同一份定义派生出的两个列表（tar 排除项 / 还原后清理项）必须一一对应 ——
 #                     这两处判断分裂过两次，各造成一次静默故障
+#   ShellQuote   —— 拼进 bash -c 之前的 shell 转义。插件名与仓库地址有一部分来自插件市场
+#                   索引（外部数据），转义写错一次就等于让市场条目能在容器里跑任意命令。
+#                   断言做 round-trip（按单引号规则反解回来对比），不比字符串长相
 #
 # 为什么单独一个脚本而不是接进 gradle：这些类刻意不碰 Android API，用 javac 编几个
 # 文件就能跑完，秒级、离线、不占 SDK 与 gradle 缓存。手机上的工作区跑一次完整 gradle
@@ -18,7 +21,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JAVA_DIR="$REPO_ROOT/app/src/main/java/com/deepseekharness/app"
-SRCS=("$JAVA_DIR/LanAuth.java" "$JAVA_DIR/AssetPath.java" "$JAVA_DIR/BackupInspector.java" "$JAVA_DIR/PluginErrorHint.java" "$JAVA_DIR/RuntimeHealth.java" "$JAVA_DIR/OfflineVersion.java" "$JAVA_DIR/OverlayLines.java" "$JAVA_DIR/UserDataPolicy.java")
+SRCS=("$JAVA_DIR/LanAuth.java" "$JAVA_DIR/AssetPath.java" "$JAVA_DIR/BackupInspector.java" "$JAVA_DIR/PluginErrorHint.java" "$JAVA_DIR/RuntimeHealth.java" "$JAVA_DIR/OfflineVersion.java" "$JAVA_DIR/OverlayLines.java" "$JAVA_DIR/UserDataPolicy.java" "$JAVA_DIR/ShellQuote.java")
 TEST="$REPO_ROOT/tools/pure-logic-test/PureLogicTest.java"
 
 for f in "${SRCS[@]}" "$TEST"; do

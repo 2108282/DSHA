@@ -369,11 +369,81 @@ public final class PureLogicTest {
         ok("policy: 清单不为空（清空它等于悄悄关掉这层保护）",
                 UserDataPolicy.MACHINE_LOCAL_PATHS.length >= 2);
 
+        // ===== ShellQuote：拼进 bash -c 之前的转义 =====
+        // 断言方式刻意不比字符串长相，而是做 round-trip：把转义结果按 POSIX 单引号规则
+        // 反解一遍，看 shell 最终会拿到什么。长相对不对不重要，语义对不对才重要。
+        String[] nasty = {
+                "plain", "with space", "a'b", "''", "'", "a'''b",
+                "$(rm -rf /)", "`id`", "a; rm -rf /", "a && b", "a|b", "a\nb",
+                "*", "?", "~", "$HOME", "\\", "--flag=va'lue", "中文名",
+                "'; rm -rf / #", "$IFS", "a\tb",
+        };
+        boolean roundTrip = true, singleWord = true;
+        String badRt = "", badSw = "";
+        for (String s : nasty) {
+            String q = ShellQuote.arg(s);
+            if (!s.equals(unquoteSingle(q))) { roundTrip = false; badRt = s; }
+            if (!isSingleShellWord(q)) { singleWord = false; badSw = s; }
+        }
+        ok("shellquote: 转义后按单引号规则反解 == 原值（22 个样本）", roundTrip, badRt);
+        ok("shellquote: 输出始终是「一个」shell 词，引号外只有 \\' 转义", singleWord, badSw);
+        eq("shellquote: 内含单引号拆成 '\\'' ", "'a'\\''b'", ShellQuote.arg("a'b"));
+        eq("shellquote: null 给空参数而不是抛异常", "''", ShellQuote.arg(null));
+        eq("shellquote: 空串给空参数", "''", ShellQuote.arg(""));
+        // 典型注入 payload：转义后 shell 只看见一个字面量参数，命令边界闭不上
+        ok("shellquote: 注入 payload 不产生新的命令边界",
+                "'; rm -rf / #".equals(unquoteSingle(ShellQuote.arg("'; rm -rf / #")))
+                        && isSingleShellWord(ShellQuote.arg("'; rm -rf / #")));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"
                 : "失败 " + fail + " 条（通过 " + pass + "）");
         System.exit(fail == 0 ? 0 : 1);
+    }
+
+    /** 极简 POSIX 单引号反解：把 {@link ShellQuote#arg} 的输出还原成 shell 实际看到的值。
+     *  单引号内一切字面量，引号外只处理反斜杠转义 —— 这就是 sh 对这两种结构的全部规则。 */
+    private static String unquoteSingle(String s) {
+        StringBuilder out = new StringBuilder();
+        boolean inQuote = false;
+        int i = 0;
+        while (i < s.length()) {
+            char c = s.charAt(i);
+            if (c == '\'') {
+                inQuote = !inQuote;
+                i++;
+            } else if (!inQuote && c == '\\' && i + 1 < s.length()) {
+                out.append(s.charAt(i + 1));
+                i += 2;
+            } else {
+                out.append(c);
+                i++;
+            }
+        }
+        return out.toString();
+    }
+
+    /** 转义结果是否只构成「一个」shell 词：引号外不许出现空白或元字符，
+     *  唯一允许的引号外字符是 {@code \} 加一个字符的转义序列。
+     *  这条不成立就意味着能拼出新的参数或新的命令 —— 也就是注入。 */
+    private static boolean isSingleShellWord(String s) {
+        boolean inQuote = false;
+        int i = 0;
+        while (i < s.length()) {
+            char c = s.charAt(i);
+            if (c == '\'') {
+                inQuote = !inQuote;
+                i++;
+            } else if (inQuote) {
+                i++;                       // 引号内一切字面量
+            } else if (c == '\\' && i + 1 < s.length()) {
+                i += 2;                    // 引号外唯一合法形态
+            } else {
+                return false;              // 引号外的裸字符：空格、; 、| 、$ 都算越界
+            }
+        }
+        return !inQuote;                   // 引号必须闭合
     }
 
     /** 造一个最小可用的 tar.gz：只用到 name/size/typeflag 三个头字段 + 校验和。 */
