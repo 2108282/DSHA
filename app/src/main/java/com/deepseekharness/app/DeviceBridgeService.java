@@ -47,11 +47,32 @@ public class DeviceBridgeService extends Service {
                 .getBoolean(PREF_ADB, false);
     }
 
-    /** 按开关启停。默认关：不想用 ADB 的人不会被后台扫描/通知拖慢。 */
+    /**
+     * 这个服务是否需要在跑。
+     *
+     * <p>它不只管 ADB：{@code HttpShellService}（127.0.0.1:3090 那座桥）也挂在它身上，
+     * 而悬浮条插件与 agent 的设备能力（位置 / 传感器 / 手电 / 剪贴板 / 通知）全都要走那座桥。
+     * 原先判据只看 ADB 开关（默认关），于是「只开了悬浮条、没开设备桥」的用户那里，
+     * 桥根本没监听 —— 插件连不上，而它是静默失败的，用户只看到「悬浮窗不显示」，
+     * 没有任何线索。功能之间的这种隐性依赖必须在判据里写明。
+     *
+     * <p>注意：放宽的只是「桥要不要起」，<b>不是权限</b>。Shizuku 绑定与 shell 执行仍然
+     * 只在 ADB 开关打开时才做（见 onCreate）。
+     */
+    public static boolean needed(Context ctx) {
+        if (isAdbEnabled(ctx)) return true;
+        try {
+            return OverlayController.enabled(ctx);
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /** 按需启停。默认都关：不想用这些功能的人不会被后台服务拖慢。 */
     public static void apply(Context ctx) {
         Context app = ctx.getApplicationContext();
         Intent i = new Intent(app, DeviceBridgeService.class);
-        if (isAdbEnabled(app)) {
+        if (needed(app)) {
             try {
                 app.startService(i);
             } catch (Throwable ignored) {
@@ -80,7 +101,7 @@ public class DeviceBridgeService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        if (!isAdbEnabled(this)) {
+        if (!needed(this)) {
             stopSelf();
             return;
         }
@@ -89,6 +110,11 @@ public class DeviceBridgeService extends Service {
         try {
             new HttpShellService(this).start();
         } catch (Throwable ignored) {
+        }
+        // Shizuku 只在 ADB 开关打开时绑定：3090 桥本身还要给悬浮条与设备能力用，
+        // 但 shell 执行权限不该因为「顺手开了悬浮条」就一起给出去
+        if (!isAdbEnabled(this)) {
+            return;
         }
         try {
             ShizukuShell.ensureBound(this);
