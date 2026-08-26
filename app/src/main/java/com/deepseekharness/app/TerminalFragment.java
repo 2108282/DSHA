@@ -74,6 +74,8 @@ public class TerminalFragment extends Fragment {
             buffer.setLength(0);
             outputText.setText("Ubuntu 24.04 · 回车执行 · 中止 · exit 退出\n");
         });
+        View ptyBtn = view.findViewById(R.id.term_pty);
+        if (ptyBtn != null) ptyBtn.setOnClickListener(v -> switchToPty());
         inputEdit.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_SEND
                     || actionId == EditorInfo.IME_ACTION_GO
@@ -93,6 +95,23 @@ public class TerminalFragment extends Fragment {
         // 环境检查 + 起 shell 全部丢后台线程：isHarnessInstalled() / ensureDangerGuard()
         // 都可能起 proot 子进程（1~3 秒），在 UI 线程同步跑会卡住页面打开
         startShell();
+    }
+
+    /** 切回真 PTY 终端 —— 这一页是兜底的简易版，vim / htop / tmux 得用那一套。 */
+    private void switchToPty() {
+        requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean(PtyTerminalFragment.KEY_PTY, true).apply();
+        try {
+            // 容器 id 动态取，不把 MainActivity 的布局细节写死在这里
+            int containerId = ((ViewGroup) requireView().getParent()).getId();
+            getParentFragmentManager().beginTransaction()
+                    .replace(containerId, new PtyTerminalFragment())
+                    .commit();
+        } catch (Throwable e) {
+            android.widget.Toast.makeText(requireContext(),
+                    "请退出终端页再进来", android.widget.Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void startShell() {

@@ -38,6 +38,11 @@ PUBLISH_KEYSTORE="${DSHA_PUBLISH_KEYSTORE:-/workspace/DSHA-ACTUAL-PUBLISH-KEY-de
 GRADLE_JVM="-Xmx1280m -Dfile.encoding=UTF-8"
 export GRADLE_OPTS="$GRADLE_JVM"
 GRADLE_ARGS=(--no-daemon --no-parallel "-Dorg.gradle.jvmargs=$GRADLE_JVM")
+# 默认离线解析依赖。这台机器的网络时通时不通 —— 实测同一分钟内 curl 拿得到 HTTP 200、
+# gradle 却报 "Temporary failure in name resolution"，而失败一次要白跑七分半。所有依赖
+# 都已经在 gradle cache 或 mavenLocal 里（见 tools/fetch-offline-deps.sh）。
+# 新加了依赖、确实需要联网解析时：PACK_ONLINE=1 bash tools/pack-local.sh
+[ -n "${PACK_ONLINE:-}" ] || GRADLE_ARGS+=(--offline)
 
 VERSION_NAME="$(sed -n 's/.*versionName "\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
 VERSION_CODE="$(sed -n 's/.*versionCode \([0-9]\+\).*/\1/p' app/build.gradle | head -1)"

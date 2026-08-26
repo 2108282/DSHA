@@ -52,6 +52,17 @@
             android:text="清理"
             android:textColor="@color/text_muted"
             android:textSize="@dimen/text_caption" />
+
+        <!-- 切回真 PTY 终端（vim / htop / tmux 要用那一套） -->
+        <TextView
+            android:id="@+id/term_pty"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/gap_tight"
+            android:padding="6dp"
+            android:text="PTY"
+            android:textColor="@color/text_muted"
+            android:textSize="@dimen/text_caption" />
     </LinearLayout>
 
     <LinearLayout

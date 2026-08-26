@@ -144,7 +144,11 @@ public class MainActivity extends AppCompatActivity {
                 f = new LaunchFragment();
                 setAppTitle("启动");
             } else if (id == R.id.nav_terminal) {
-                f = new TerminalFragment();
+                // 两套终端并存：默认 PTY 那套（跑得了 vim / htop / tmux），页内点「简易」
+                // 可以退回旧的 TextView 版本 —— 新终端万一在某些机型上出问题，
+                // 用户不至于连命令行都没了。选择记在 PtyTerminalFragment.KEY_PTY。
+                f = PtyTerminalFragment.preferred(this)
+                        ? new PtyTerminalFragment() : new TerminalFragment();
                 setAppTitle("终端");
             } else if (id == R.id.nav_plugins) {
                 f = new PluginFragment();
@@ -364,6 +368,7 @@ public class MainActivity extends AppCompatActivity {
         // 旋转屏幕/配置变化触发 onDestroy 时 isFinishing()=false，保留会话（否则转屏即丢终端）
         if (isFinishing()) {
             TerminalFragment.shutdownShell();
+            PtyTerminalFragment.shutdown();
         }
     }
 
