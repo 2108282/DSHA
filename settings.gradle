@@ -8,6 +8,12 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        // 本地 ~/.m2 放最前：开发这个项目的机器是手机上的 proot 容器，网络时通时不通
+        // （同一分钟内 curl 能 200、gradle 却报 Temporary failure in name resolution），
+        // 而 gradle 解析失败一次就要白跑七分钟。Termux 那两个终端库已经手动放进
+        // mavenLocal，用 tools/fetch-offline-deps.sh 可以重放。
+        // CI 上没有 .m2，这一条直接跳过、照旧从 JitPack 拉 —— 线上行为不变。
+        mavenLocal()
         google()
         mavenCentral()
         maven { url 'https://jitpack.io' }

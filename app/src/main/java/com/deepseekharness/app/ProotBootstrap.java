@@ -264,6 +264,48 @@ public class ProotBootstrap {
     private java.util.List<String> baseProotArgv() {
         return runtime().baseArgv(rootfsDir, hardlinkSupported());
     }
+
+    /**
+     * PTY 会话的启动参数：{@code argv[0]} 是容器运行时的可执行文件，末尾接 guest 侧要跑的命令。
+     *
+     * <p>为什么单独开一个方法而不复用 {@link #execRootfs}：JNI 的 {@code createSubprocess}
+     * 要的是 {@code (cmd, argv[], env[])} 三件套，而 execRootfs 是把同样的东西塞进
+     * ProcessBuilder。两条路必须共用同一份 argv/env 构造逻辑 —— 各写一份的话，PTY 里的
+     * shell 就会跑在和普通命令不一样的环境里，而这个项目已经在「同一份判断散落两处」上
+     * 栽过四次。
+     *
+     * <p>argv[0] 保留成可执行文件自身的路径：查过 termux.c，它把 Java 数组原样转成
+     * {@code argv} 后直接 {@code execvp(cmd, argv)}，没有任何加工 —— 和 ProcessBuilder 一致。
+     */
+    public String[] ptyArgv(String... guestCmd) {
+        java.util.List<String> argv = baseProotArgv();
+        if (guestCmd == null || guestCmd.length == 0) {
+            argv.add("/bin/bash");
+            argv.add("-l");
+        } else {
+            java.util.Collections.addAll(argv, guestCmd);
+        }
+        return argv.toArray(new String[0]);
+    }
+
+    /**
+     * PTY 会话的环境变量（{@code KEY=VALUE} 形式）。
+     *
+     * <p>借一个临时 ProcessBuilder 来收集：环境变量的构造分散在 {@link #applyProotEnv}
+     * 与 {@link ContainerRuntime#applyEnv} 两处，还随运行时（proot / proroot）分叉。
+     * 重抄一份必然漏，而漏掉 PROOT_LOADER 这种就是直接启动失败。
+     */
+    public String[] ptyEnv() {
+        ProcessBuilder probe = new ProcessBuilder("/system/bin/true");
+        applyProotEnv(probe);
+        java.util.Map<String, String> m = probe.environment();
+        java.util.List<String> out = new java.util.ArrayList<>(m.size());
+        for (java.util.Map.Entry<String, String> e : m.entrySet()) {
+            if (e.getKey() == null || e.getValue() == null) continue;
+            out.add(e.getKey() + "=" + e.getValue());
+        }
+        return out.toArray(new String[0]);
+    }
     public boolean isInstalled() {
         return hasBash();
     }

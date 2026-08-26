@@ -142,6 +142,20 @@ dependencies {
     implementation 'dev.rikka.shizuku:api:13.1.5'
     implementation 'dev.rikka.shizuku:provider:13.1.5'
     implementation 'org.mozilla.geckoview:geckoview-arm64-v8a:126.0.20240526221752'
+    // 真 PTY 终端（阶段 1，见 docs/ROADMAP.md）：Termux 官方把终端拆成了独立库，
+    // terminal-view 与 terminal-emulator 这两个子模块是 Apache 2.0（termux-app 整体
+    // GPLv3，但这两个不是），与本项目的 MIT 兼容。terminal-emulator 会作为
+    // terminal-view 的传递依赖自动带进来，它自带 JNI 的 PTY 层（openpty + fork/exec）。
+    //
+    // **坐标别照 Termux Wiki 抄**：Wiki 上写的是 com.termux:terminal-view:0.118.0，
+    // 那个 groupId 在 JitPack 上返回 401（它会把 com/termux/terminal-view 当成 GitHub
+    // 仓库 termux/terminal-view 去找，那个仓库不存在）。JitPack 多模块的真实坐标是
+    // groupId = 域名 + 仓库名，即 com.termux.termux-app；查证方式：
+    //   curl https://jitpack.io/api/builds/com.termux/termux-app/0.118.0
+    //   → modules: [terminal-emulator, terminal-view, termux-shared]
+    implementation 'com.termux.termux-app:terminal-view:0.118.0'
+    // 少了这个占位包会报 Duplicate class com.google.common.util.concurrent.ListenableFuture
+    implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
     debugImplementation 'com.github.L-JINBIN:MTDataFilesProvider:v1.0.0'
 }
 
