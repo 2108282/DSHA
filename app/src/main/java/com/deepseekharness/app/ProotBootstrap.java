@@ -1063,13 +1063,21 @@ public class ProotBootstrap {
                     // → 一律 401。表现出来就是「悬浮窗不显示 + agent 工具调用失败」，而不走
                     // 3090 的内置 UI 注入、提示词注入全都好着 —— 真机上就是这么报上来的，
                     // 光看现象根本想不到是 token。
-                    java.io.File bt = new java.io.File(dshDst, ".bridge_token");
-                    if (bt.isFile()) {
-                        //noinspection ResultOfMethodCallIgnored
-                        bt.delete();
+                    // 清掉本机专属的东西：清单来自 UserDataPolicy，与备份的 --exclude 同源。
+                    // 数据保护是把 .dsh 整目录复制回来的，所以必须再清一遍 —— 否则旧的桥
+                    // token 和内置插件版本标记会活过这次重解压，而它们描述的对象（App 内存里
+                    // 的 token、/root/dsha-* 插件实体）已经随 rootfs 一起换掉了。
+                    // 这个形状真机上出过两次故障，详见 UserDataPolicy 的类注释。
+                    for (String rel : UserDataPolicy.purgeAfterRestore()) {
+                        java.io.File stale = new java.io.File(rootfsDir, rel);
+                        if (stale.isFile()) {
+                            //noinspection ResultOfMethodCallIgnored
+                            stale.delete();
+                            android.util.Log.i("DSHA", "重解压后清掉本机专属文件: " + rel);
+                        }
                     }
-                    // 再让 App 侧重新生成并写回，两边对齐（dsh 后端也缓存 token，
-                    // 所以重解压后仍需重启 Web 才彻底生效 —— 解压页本来就会重启）
+                    // 再让 App 侧重新生成桥 token 并写回，两边对齐（dsh 后端自己也缓存 token，
+                    // 所以仍需重启 Web 才彻底生效 —— 解压页本来就会重启）
                     HttpShellService.resetTokenAfterRestore();
                     android.util.Log.i("DSHA", "重解压已还原用户数据 (.dsh + 工作区 .env)");
                 } catch (Throwable e) {

@@ -181,13 +181,12 @@ public final class BackupManager {
                     // 不再 2>/dev/null：tar 的报错正是排查依据（execChecked 会带回输出）
                     // --ignore-failed-read：万一还有漏网的坏符号链接，只跳过它，
                     // 别让整包备份失败（数据本身已丢，留着也恢复不了）
-                    // --exclude .bridge_token：那是**本机**的 3090 桥凭据，不是用户数据。
-                    //   带进备份有两个坏处：① 备份落在公共 Download 目录，任何有存储权限的
-                    //   App 都能读到这台机器的桥 token；② 恢复到另一台机器（或本机重装）后，
-                    //   rootfs 里是旧 token 而 App 内存里是新的，WebUI 直接提示
-                    //   「需要 token，请在 DSHA 应用内打开」——已经有用户这样中招。
+                    // 排除项来自 UserDataPolicy —— 「什么算用户数据」只有那一份定义。
+                    //   以前这里硬编码 --exclude='.dsh/.bridge_token'，而重解压那条路自己
+                    //   维护另一份判断，两边定义一分裂就出过桥 token 401（现象是悬浮窗不显示
+                    //   + agent 工具调用失败，完全看不出是 token）。详见 UserDataPolicy 类注释。
                     + "tar -czf .dsha-backup.tar.gz --ignore-failed-read "
-                    + "--exclude='.dsh/.bridge_token' \"$@\" "
+                    + UserDataPolicy.tarExcludeArgs() + "\"$@\" "
                     + "|| { echo TAR_FAIL; exit 1; }\n"
                     + "test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n"
                     + "echo OK\n";

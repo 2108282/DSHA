@@ -330,6 +330,45 @@ public final class PureLogicTest {
                         && OverlayLines.lastLines(null, 3, 20).isEmpty()
                         && OverlayLines.firstLines("", 3, 20).isEmpty());
 
+        // ---------- UserDataPolicy ----------
+        // 这一组的重点不是「某个路径判得对不对」，而是**同一份定义派生出的两个列表必须
+        // 一一对应**。真机上这两处判断分裂过两次，各造成一次静默故障：
+        //   · 桥 token 被还原回来 → 一律 401（现象却是「悬浮窗不显示 + agent 工具调用失败」）
+        //   · 内置插件版本标记活过重解压 → 实体随 rootfs 没了却判定「已最新」→ 永不重装
+        ok("policy: 桥 token 属本机专属",
+                UserDataPolicy.isMachineLocal("root/.dsh/.bridge_token"));
+        ok("policy: 内置插件版本标记属本机专属",
+                UserDataPolicy.isMachineLocal("root/.dsh/builtin-assets.version"));
+        ok("policy: 前导斜杠与 ./ 都认",
+                UserDataPolicy.isMachineLocal("/root/.dsh/.bridge_token")
+                        && UserDataPolicy.isMachineLocal("./root/.dsh/.bridge_token"));
+        ok("policy: 会话是用户数据",
+                !UserDataPolicy.isMachineLocal("root/.dsh/sessions/a.json"));
+        ok("policy: 配置是用户数据",
+                !UserDataPolicy.isMachineLocal("root/.dsh/settings.yaml"));
+        ok("policy: 工作区 .env 是用户数据",
+                !UserDataPolicy.isMachineLocal("root/deepseek-harness/.env"));
+        ok("policy: null 与空串不误判",
+                !UserDataPolicy.isMachineLocal(null) && !UserDataPolicy.isMachineLocal(""));
+        // 派生列表必须等长且逐项同源 —— tar 用的模式就是去掉 root/ 前缀的同一个路径
+        eqi("policy: 两个派生列表等长",
+                UserDataPolicy.purgeAfterRestore().length,
+                UserDataPolicy.tarExcludePatterns().length);
+        String[] purge = UserDataPolicy.purgeAfterRestore();
+        String[] pats = UserDataPolicy.tarExcludePatterns();
+        boolean paired = purge.length == pats.length;
+        for (int i = 0; paired && i < purge.length; i++) {
+            if (!purge[i].equals("root/" + pats[i])) paired = false;
+        }
+        ok("policy: 排除项与清理项逐项同源（定义不可分裂）", paired);
+        String tarArgs = UserDataPolicy.tarExcludeArgs();
+        ok("policy: tar 参数带引号且以空格结尾（直接拼进命令不粘连）",
+                tarArgs.contains("--exclude='.dsh/.bridge_token' ") && tarArgs.endsWith(" "));
+        eqi("policy: tar 参数覆盖全部条目",
+                pats.length, tarArgs.split("--exclude=", -1).length - 1);
+        ok("policy: 清单不为空（清空它等于悄悄关掉这层保护）",
+                UserDataPolicy.MACHINE_LOCAL_PATHS.length >= 2);
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"
