@@ -402,7 +402,7 @@ public class ConfigFragment extends Fragment {
 
         final android.widget.SeekBar alpha = slider(box, "底色不透明度", 20, 100,
                 sp.getInt(OverlayController.K_ALPHA, OverlayController.DEF_ALPHA), "%");
-        final android.widget.SeekBar lines = slider(box, "最多显示几行", 1, 6,
+        final android.widget.SeekBar lines = slider(box, "最多显示几行（写满后丢最旧一行）", 1, 8,
                 sp.getInt(OverlayController.K_LINES, OverlayController.DEF_LINES), " 行");
         final android.widget.SeekBar hold = slider(box, "无新内容后停留", 2, 60,
                 sp.getInt(OverlayController.K_HOLD, OverlayController.DEF_HOLD), " 秒");

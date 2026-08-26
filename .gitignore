@@ -41,3 +41,7 @@ __pycache__/
 
 # 别的 App 的备份包会被误存到仓库根目录（一份 62MB 的 rikkahub 备份差点被 git add）
 *_backup_*.zip
+
+# proot 的硬链接替身：--link2symlink 在工作区里建硬链接时会留下 .l2s.<名字>NNNN
+# 这种文件（比如打包脚本给 APK 建带指纹副本的时候）。容器实现细节，不该进仓库。
+.l2s.*

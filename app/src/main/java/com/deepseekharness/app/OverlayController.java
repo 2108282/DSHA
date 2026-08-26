@@ -51,7 +51,9 @@ final class OverlayController {
     static final String K_COMMAND = "overlay_show_command";      // 工具调用带上命令原文
     static final String K_CONFIRM = "overlay_confirm";           // 危险命令就地批准
 
-    static final int DEF_LINES = 1;
+    // 默认 3 行：1 行永远只看得到最后半句，流式内容根本读不了 —— 这个功能的用处
+    // 就是扫一眼 agent 在说什么，太窄等于没有。
+    static final int DEF_LINES = 3;
     static final int DEF_HOLD = 6;
     static final int DEF_ALPHA = 85;
 
@@ -66,7 +68,11 @@ final class OverlayController {
     static final String[] BG_NAMES = {"深灰蓝", "纯黑", "深海蓝", "深墨绿", "深紫"};
 
     /** 每行按多少字符估算。宽度由系统折行决定，这里只用来决定「留多少尾部内容」。 */
-    private static final int CHARS_PER_LINE = 30;
+    /** 每行的显示宽度见 {@link OverlayLines#DEFAULT_WIDTH}。下面两个是缓冲上限：
+     *  超过 RAW_CAP 就一次砍到 RAW_KEEP —— 绝不能每来一个字砍一个字，那样分行的
+     *  起点每次都挪一格、前面的行跟着重排，就又变回「文字不停往左滚」了。 */
+    private static final int RAW_CAP = 1200;
+    private static final int RAW_KEEP = 800;
     private static final int MAX_SESSIONS = 8;
 
     private static final Object LOCK = new Object();
@@ -172,7 +178,7 @@ final class OverlayController {
         if (confirming && !"clear".equals(k)) return;
 
         String line;
-        int cap = lines(ctx) * CHARS_PER_LINE;
+        final int maxLines = lines(ctx);
         synchronized (LOCK) {
             if ("clear".equals(k)) {
                 BUFFERS.remove(key);
@@ -192,13 +198,19 @@ final class OverlayController {
             } else {
                 next = text == null ? "" : text;   // text / tool
             }
-            next = tail(collapse(next), cap);
+            next = capRaw(collapse(next));
             BUFFERS.put(key, next);
             while (BUFFERS.size() > MAX_SESSIONS) {
                 BUFFERS.remove(BUFFERS.keySet().iterator().next());
             }
             activeKey = key;
-            line = BUFFERS.size() > 1 ? shortTag(key) + " " + next : next;
+            // 分行在显示前做：缓冲里存的始终是完整文本，切分只依赖它的前缀，所以已经
+            // 显示出来的行不会因为新内容进来而重排 —— 新内容只在最后一行长，写满换行，
+            // 行数到上限就丢最旧的一行、其余上移（详见 OverlayLines）。
+            String body = OverlayLines.lastLines(next, maxLines, OverlayLines.DEFAULT_WIDTH);
+            // 会话标识贴在**可见的第一行**，不跟着内容滚走 —— 否则多路并发时，
+            // 恰好在需要分辨谁在说话的时候它已经滚没了
+            line = BUFFERS.size() > 1 ? shortTag(key) + " " + body : body;
         }
         show(ctx, line, false);
     }
@@ -215,9 +227,15 @@ final class OverlayController {
         return s == null ? "" : s.replaceAll("\\s+", " ").trim();
     }
 
-    private static String tail(String s, int cap) {
+    /** 缓冲上限：超过 RAW_CAP 就一次砍到 RAW_KEEP，并尽量从词边界开始。
+     *  为什么不逐字砍 —— 分行起点每挪一格，前面所有行就重排一次，那正是要修的毛病。 */
+    private static String capRaw(String s) {
         if (s == null) return "";
-        return s.length() <= cap ? s : s.substring(s.length() - cap);
+        if (s.length() <= RAW_CAP) return s;
+        int from = s.length() - RAW_KEEP;
+        int sp = s.indexOf(' ', from);
+        if (sp > 0 && sp - from < 40) from = sp + 1;
+        return s.substring(from);
     }
 
     // ================= 危险命令就地批准 =================
@@ -236,9 +254,13 @@ final class OverlayController {
             try {
                 ensureView(ctx);
                 if (label == null || confirmRow == null) return;
-                // 命令可能很长，确认时多给几行看清楚（比配置的行数多，但不超过 6）
-                label.setMaxLines(Math.max(3, Math.min(6, lines(ctx) + 2)));
-                label.setText(text);
+                // 命令可能很长，确认时多给几行看清楚（比配置的行数多，但不超过 8）
+                int cmdLines = Math.max(3, Math.min(8, lines(ctx) + 2));
+                label.setMaxLines(cmdLines);
+                // 命令按宽度切好再显示，而且取**开头**几行：交给系统折行会被 maxLines
+                // 从尾部截掉，而用户正要判断「这条命令能不能跑」——rm -rf 这种关键部分
+                // 恰好在最前面
+                label.setText(OverlayLines.firstLines(text, cmdLines, OverlayLines.DEFAULT_WIDTH));
                 confirmRow.setVisibility(View.VISIBLE);
                 if (confirmHint != null) confirmHint.setVisibility(View.VISIBLE);
                 root.setVisibility(View.VISIBLE);

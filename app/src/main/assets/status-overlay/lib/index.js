@@ -32,9 +32,12 @@ const BRIDGE = 'http://127.0.0.1:3090/app/overlay'
 const TOKEN_PATH = '/root/.dsh/.bridge_token'
 /** 合并窗口：120ms 一次，肉眼看起来仍是连续流动的。 */
 const FLUSH_MS = 120
-/** 插件侧只做粗截断（防 URL 编码后过长），真正的行数/长度由 App 侧按用户配置决定 ——
- *  插件不知道用户把「最多显示几行」调成了几。 */
-const MAX_CHARS = 200
+/** 插件侧只做粗截断（防 URL 编码后过长），真正的行数由 App 侧按用户配置决定 ——
+ *  插件不知道用户把「最多显示几行」调成了几。上限给得比显示所需大得多是故意的：
+ *  App 那边按显示宽度切行，切分点只取决于文本开头，开头一变所有行就重排。 */
+const MAX_CHARS = 1200
+/** 超限时一次砍到这个长度，而不是逐字砍 —— 见 tail() 的注释。 */
+const KEEP_CHARS = 800
 /** 功能关闭 / 没权限时的冷却时长。 */
 const COOLDOWN_MS = 60_000
 /** 单次请求超时：桥就在本机，1.5 秒都不该等。 */
@@ -113,9 +116,19 @@ function sessionKey(session) {
   }
 }
 
+/** 压成单行并限长。
+ *
+ *  **不能逐字截**：App 侧按显示宽度把这段文本切成固定的行、再取最后几行，切分点只取决于
+ *  文本开头。每来一个字就把开头砍掉一个字的话，所有行都会重排 —— 那正是用户报的
+ *  「最前端文字不停滚走、可读性很差」。所以超限时一次砍到 KEEP_CHARS，并尽量从词边界
+ *  开始，把重排频率从「每个字一次」降到「几百个字一次」。 */
 function tail(s) {
   const one = String(s || '').replace(/\s+/g, ' ').trim()
-  return one.length <= MAX_CHARS ? one : one.slice(one.length - MAX_CHARS)
+  if (one.length <= MAX_CHARS) return one
+  let from = one.length - KEEP_CHARS
+  const sp = one.indexOf(' ', from)
+  if (sp > 0 && sp - from < 40) from = sp + 1
+  return one.slice(from)
 }
 
 async function send(key, kind, text) {

@@ -298,6 +298,38 @@ public final class PureLogicTest {
         ok("offline: 10 比 9 新（整数不走字典序）",
                 OfflineVersion.isNewer("10", "9"));
 
+        // ---------- OverlayLines（悬浮条分行与滚动） ----------
+        // 用户报的毛病：悬浮条「最前端文字会不停滚走，可读性很差」。旧实现是拿整段文本
+        // 取最后 N 个字符、再交给系统折行 —— 尾部窗口每来一个字就右移一格，折行点跟着变，
+        // 于是每一行的内容都在变。下面第一条就是这个类存在的理由。
+        {
+            String a = "abcdefghij klmnopqrst uvwxyz0123 456789";
+            String b = a + " tail more";
+            java.util.List<String> la = OverlayLines.wrap(a, 20);
+            java.util.List<String> lb = OverlayLines.wrap(b, 20);
+            boolean stable = la.size() <= lb.size();
+            for (int i = 0; stable && i < la.size() - 1; i++) {   // 最后一行还在长，不算
+                if (!la.get(i).equals(lb.get(i))) stable = false;
+            }
+            ok("overlay: 末尾追加内容不会动到前面的行", stable);
+        }
+        eqi("overlay: 汉字算两格", 4, OverlayLines.width("中文"));
+        eqi("overlay: ASCII 算一格", 4, OverlayLines.width("abcd"));
+        ok("overlay: 中文按显示宽度切，30 格 = 15 字一行",
+                OverlayLines.wrap("一二三四五六七八九十一二三四五六七八九十", 30).size() == 2);
+        eq("overlay: 行数没满就全给", "aaa", OverlayLines.lastLines("aaa", 3, 20));
+        // 「已有行数 >= 最大行数时清掉第一行、下面的上移补位」——用户要的就是这句
+        eq("overlay: 满了丢最旧一行、其余上移", "cccc\ndddd",
+                OverlayLines.lastLines("aaaa bbbb cccc dddd", 2, 4));
+        eq("overlay: 命令确认取开头并标省略号", "aaaa …",
+                OverlayLines.firstLines("aaaa bbbb cccc", 1, 4));
+        eqi("overlay: 长串无空格也不空转（500 字符 / 10 格 = 50 行）", 50,
+                OverlayLines.wrap("x".repeat(500), 10).size());
+        ok("overlay: 空输入不炸",
+                OverlayLines.wrap(null, 20).isEmpty()
+                        && OverlayLines.lastLines(null, 3, 20).isEmpty()
+                        && OverlayLines.firstLines("", 3, 20).isEmpty());
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"
