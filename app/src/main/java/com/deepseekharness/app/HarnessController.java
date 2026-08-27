@@ -2480,7 +2480,7 @@ public class HarnessController {
         setProgress("安装 deepseek-harness 最新 RC（npm 全局）", 91);
         runStep("RC 安装环境准备", 92,
                 // 先写 registry 再追加 allow-scripts：顺序反了会把前者 printf 覆盖掉
-                "printf 'registry=https://registry.npmmirror.com\\n' > /root/.npmrc; " +
+                "echo 'registry=https://registry.npmmirror.com' > /root/.npmrc; " +
                 "npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user 2>/dev/null; " +
                 "echo '--- /root/.npmrc ---'; cat /root/.npmrc");
         runStep("安装 @deepseek-ai/dsh 最新 RC", 95,

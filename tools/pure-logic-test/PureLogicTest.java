@@ -697,6 +697,22 @@ public final class PureLogicTest {
                 && PatchToggle.insertedIds(null).isEmpty()
                 && PatchToggle.stripBlock(null).isEmpty());
 
+        // allowBuilds：dsh 在错误消息里明确给出的修法（prepare 脚本被 pnpm 挡住时）
+        eq("patch: 空文件写出 allowBuilds", "allowBuilds:\n  dsh-x: true\n",
+                PatchToggle.withAllowBuild("", "dsh-x"));
+        String ws1 = PatchToggle.withAllowBuild("packages:\n  - 'a/*'\n", "dsh-x");
+        ok("patch: pnpm-workspace 里已有的配置不动",
+                ws1.contains("packages:") && ws1.contains("- 'a/*'"));
+        ok("patch: 追加了 allowBuilds 段",
+                ws1.contains("allowBuilds:") && ws1.contains("dsh-x: true"));
+        eq("patch: 授权幂等（重试逻辑会反复调它）", ws1, PatchToggle.withAllowBuild(ws1, "dsh-x"));
+        String ws2 = PatchToggle.withAllowBuild(ws1, "@s/y");
+        ok("patch: 第二个包插进已有的 allowBuilds 段（不再新建一段）",
+                ws2.contains("dsh-x: true") && ws2.contains("'@s/y': true")
+                        && ws2.indexOf("allowBuilds:") == ws2.lastIndexOf("allowBuilds:"));
+        ok("patch: scoped 包名当键要加引号",
+                PatchToggle.withAllowBuild("", "@s/y").contains("'@s/y': true"));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

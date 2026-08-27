@@ -282,6 +282,45 @@ class PluginController {
         return lastToggleError == null ? "" : lastToggleError;
     }
 
+    /**
+     * pnpm 因为 {@code prepare} 脚本被挡而失败时，按 <b>dsh 自己给出的修法</b>授权该包再重试。
+     *
+     * <p>dsh 的错误消息原话：<i>git-hosted plugins build on install via their prepare
+     * script, which pnpm blocks until allowed — add the exact key pnpm printed above under
+     * allowBuilds in …/pnpm-workspace.yaml, then re-run</i>。这条路比我们自己 clone + 构建
+     * 轻得多（pnpm 直接跑插件自己的 prepare），所以排在那之前。
+     */
+    private String allowBuildsAndRetry(String pkg, String spec, String firstOut) {
+        try {
+            java.io.File ws = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/pnpm-workspace.yaml");
+            if (ws.getParentFile() == null || !ws.getParentFile().isDirectory()) return "";
+            String key = extractAllowBuildKey(firstOut);
+            if (key.isEmpty()) key = pkg;                 // 抠不到就用包名（最常见的形态）
+            if (key == null || key.trim().isEmpty()) return "";
+            String before = readTextFile(ws);
+            String after = PatchToggle.withAllowBuild(before, key.trim());
+            if (after.equals(before)) return "";          // 已经授权过还失败 → 别空转
+            if (!writeTextAtomic(ws, after)) {
+                return "\n\n[想按 dsh 的提示授权构建脚本，但写 pnpm-workspace.yaml 失败]";
+            }
+            host.logActivity("授权构建脚本 allowBuilds: " + key + "，重试安装 " + pkg);
+            String again = runPluginInstall(spec == null || spec.isEmpty() ? pkg : spec);
+            return "\n\n[按 dsh 的提示把 " + key.trim() + " 加进 allowBuilds 后重试…]\n" + again;
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** 从 pnpm/dsh 的输出里抠出它要求授权的那个确切键。 */
+    private static String extractAllowBuildKey(String out) {
+        if (out == null || out.isEmpty()) return "";
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(?:[Ii]gnored build scripts?|allowBuilds)[:\\s]+([A-Za-z0-9@._/+-]+)")
+                .matcher(out);
+        return m.find() ? m.group(1).trim() : "";
+    }
+
     /** 读文本文件（读不到给空串）。 */
     private String readTextFile(java.io.File f) {
         try {
@@ -1876,6 +1915,14 @@ class PluginController {
                 r = "\n[自动回退 GitHub 仓库方式安装…]\n" + runPluginInstall(fallbackSpec);
             }
         }
+        // ── 第 2.5 级：prepare 脚本被 pnpm 挡住 → 按 dsh 给的修法写 allowBuilds 再重试 ──
+        // 这条比自己 clone+构建 轻得多（pnpm 直接跑插件的 prepare），所以排在它前面。
+        if (r != null && !r.contains("INSTALL_EXIT=0")
+                && (r.contains("allowBuilds") || r.contains("prepare script"))) {
+            tried.append("· prepare 脚本被 pnpm 挡住，按 dsh 的提示授权后重试\n");
+            String retry = allowBuildsAndRetry(pkg, fallbackSpec != null ? fallbackSpec : spec, r);
+            if (!retry.isEmpty()) r = r + retry;
+        }
         // ── 第 3 级：仍然是 git-hosted 的 prepare/ENOENT → 自己 clone、构建、link ──
         // 这条路完全不经过 pnpm 的 store/tmp 与 prepare，所以能绕开那个上游 bug。
         // 慢（要装 devDeps 并构建），所以放最后。
@@ -2204,6 +2251,11 @@ class PluginController {
                 java.io.File entity = new java.io.File(proot.getRootfsDir(),
                         HarnessController.PLUGIN_DIRS[0].substring(1) + "/" + n);
                 if (!hasDshBundle(entity)) continue;
+                // 入口文件不在 = 注册了也加载不起来，只会在插件列表里造出一个幽灵条目。
+                // 用户报过「显示安装失败，却注册进插件管理了」—— 就是装到一半的残留
+                // 被这里当成「本地已有插件」补注册了。
+                String mainRel = readPkgField(entity, "main");
+                if (!mainRel.isEmpty() && !new java.io.File(entity, mainRel).isFile()) continue;
                 registerImportedPlugin(n);                 // 实体在 node_modules → file:./node_modules/<n>
                 if (isInProfileManifest(n)) done.add(n);
             }
@@ -2471,7 +2523,13 @@ class PluginController {
                 String arg = ShellQuote.arg(pkg);
                 return proot.execAndRead(
                         "if [ -d /root/" + wd + " ]; then cd /root/" + wd + "; " + host.depsSelfHeal() +
-                        "printf 'registry=https://registry.npmmirror.com\\\\n' > /root/.npmrc; " +
+                        // 用 echo 而不是 printf：原来写的是 printf 'registry=…\\\\n'，
+                        // 经 Java 与 shell 两层转义后 printf 收到的是字面反斜杠，
+                        // 写进 .npmrc 的 registry 值末尾就带上了 \n（甚至 \\n）。
+                        // npm 规范化后变成 https://registry.npmmirror.com/n —— 于是每次
+                        // 真正要查 registry 的安装都是 404（报错里那个诡异的 /n/ 就是它）。
+                        // 之前没暴露，是因为包已在 pnpm store 里时 reused、不查 registry。
+                        "echo 'registry=https://registry.npmmirror.com' > /root/.npmrc; " +
                         // 先判断源码仓库的 CLI 入口在不在。直接 node 一个不存在的文件会吐
                         // 一整段 MODULE_NOT_FOUND 堆栈（requireStack: []），它把 dsh 自己那句
                         // 关键警告从 tail 里挤了出去 —— 用户看到一屏 Node 堆栈，却看不到
@@ -2479,7 +2537,13 @@ class PluginController {
                         "( if [ -f apps/cli/lib/bin.js ]; then node apps/cli/lib/bin.js plugin --profile web add "
                                 + arg + " 2>&1; else dsh plugin --profile web add " + arg + " 2>&1; fi ); " +
                         "else echo '[DSHA] 无源码目录，回退全局 dsh'; " +
-                        "printf 'registry=https://registry.npmmirror.com\\\\n' > /root/.npmrc; " +
+                        // 用 echo 而不是 printf：原来写的是 printf 'registry=…\\\\n'，
+                        // 经 Java 与 shell 两层转义后 printf 收到的是字面反斜杠，
+                        // 写进 .npmrc 的 registry 值末尾就带上了 \n（甚至 \\n）。
+                        // npm 规范化后变成 https://registry.npmmirror.com/n —— 于是每次
+                        // 真正要查 registry 的安装都是 404（报错里那个诡异的 /n/ 就是它）。
+                        // 之前没暴露，是因为包已在 pnpm store 里时 reused、不查 registry。
+                        "echo 'registry=https://registry.npmmirror.com' > /root/.npmrc; " +
                         "dsh plugin --profile web add " + arg + " 2>&1; fi | tail -40; echo INSTALL_EXIT=${PIPESTATUS[0]}");
             } catch (Exception e) {
                 return "安装失败: " + e.getMessage();

@@ -149,6 +149,53 @@ final class PatchToggle {
         return out;
     }
 
+    /**
+     * 往 {@code pnpm-workspace.yaml} 的 {@code allowBuilds} 里授权一个包（幂等）。
+     *
+     * <p>这是 dsh 自己在错误消息里给出的修法：git 装来的插件靠 {@code prepare} 脚本在安装时
+     * 构建，而 pnpm ≥10 在得到显式允许前拒绝执行它，第一次 {@code add} 因此必然失败 ——
+     *
+     * <pre>
+     *   allowBuilds:
+     *     dsh-hello-plugin: true
+     * </pre>
+     *
+     * <p>比我们自己 clone + 构建轻得多，所以该排在那条路前面。
+     *
+     * <p>同样只做追加、不重排用户已有的内容：这个文件还管着 workspace 的其它配置。
+     */
+    static String withAllowBuild(String yaml, String pkgKey) {
+        String key = pkgKey == null ? "" : pkgKey.trim();
+        if (key.isEmpty()) return yaml == null ? "" : yaml;
+        String text = yaml == null ? "" : yaml;
+        String quoted = key.matches("[A-Za-z0-9._-]+") ? key : "'" + key.replace("'", "''") + "'";
+        // 已经授权过就别再写一遍（这个方法会被重试逻辑反复调）
+        for (String raw : text.split("\n", -1)) {
+            String t = raw.trim();
+            if ((t.startsWith(key + ":") || t.startsWith(quoted + ":")) && t.endsWith("true")) {
+                return text;
+            }
+        }
+        String[] lines = text.split("\n", -1);
+        StringBuilder sb = new StringBuilder();
+        boolean inserted = false;
+        for (int i = 0; i < lines.length; i++) {
+            sb.append(lines[i]);
+            if (i < lines.length - 1) sb.append('\n');
+            if (!inserted && lines[i].trim().equals("allowBuilds:")) {
+                sb.append("  ").append(quoted).append(": true\n");
+                inserted = true;
+            }
+        }
+        String out = sb.toString();
+        if (!inserted) {
+            while (out.endsWith("\n")) out = out.substring(0, out.length() - 1);
+            if (!out.isEmpty()) out += "\n";
+            out += "allowBuilds:\n  " + quoted + ": true\n";
+        }
+        return out;
+    }
+
     private static String unquote(String v) {
         String s = v == null ? "" : v.trim();
         if (s.length() >= 2 && ((s.startsWith("\"") && s.endsWith("\""))
