@@ -276,6 +276,25 @@ class PluginController {
      *  注意：禁用/启用状态由链接条目决定（含悬空链接）——实体缺失时 File.exists()
      *  返回 false 会导致「操作失败」，必须用 existsOrBrokenLink 判断。 */
     /** 上一次 togglePlugin 失败的原因（供 UI 展示；成功时清空） */
+    /**
+     * 插件安装的 single-flight。并发 {@code pnpm install} 同一个 profile 会撞 pnpm 的
+     * lockfile 与 store，profile 可能被弄坏 —— 而这几轮新增了不少安装入口（市场卡片、
+     * 直接 spec、装完自救、allowBuilds 重试、源码构建），并发面比以前大得多。
+     *
+     * <p>用 ReentrantLock 而不是 AtomicBoolean：{@code installSubdirFromSource} 构建完
+     * 会回头调 {@code installPlugin}，用一次性标志会<b>自己把自己锁死</b>。
+     * confirmBusy / askBusy 早就是 CAS 了，安装这条一直没跟上。
+     */
+    private final java.util.concurrent.locks.ReentrantLock installLock =
+            new java.util.concurrent.locks.ReentrantLock();
+
+    /**
+     * profile 的 {@code cordis.patch.yml} 读改写必须串行。
+     * togglePlugin 现在跑在后台线程，用户连点两个开关就是两个线程同时「读 → 改 → 写回」
+     * 同一个文件 —— 后写的把前一个的结果整段盖掉。
+     */
+    private final Object patchLock = new Object();
+
     private volatile String lastToggleError = "";
 
     public String getLastToggleError() {
@@ -332,27 +351,28 @@ class PluginController {
         }
     }
 
-    /** 先写同目录临时文件再改名 —— 中途失败不会留下半个 patch 文件（那会让 loader 整个起不来）。 */
+    /**
+     * 原子写：同目录临时文件 + {@code ATOMIC_MOVE}。
+     *
+     * <p>原来是「先 {@code delete()} 目标、再 {@code renameTo()}」—— 那两步之间失败，
+     * 用户手写的整个 patch 文件就<b>没了</b>。rename(2) 本身允许覆盖已存在的文件，
+     * 根本不需要先删，所以那个 delete 是净风险。
+     */
     private boolean writeTextAtomic(java.io.File f, String text) {
+        java.io.File tmp = new java.io.File(f.getParentFile(), f.getName() + ".dsha-tmp");
         try {
-            java.io.File tmp = new java.io.File(f.getParentFile(), f.getName() + ".dsha-tmp");
             try (java.io.OutputStream os = new java.io.FileOutputStream(tmp)) {
                 os.write(text.getBytes(StandardCharsets.UTF_8));
                 os.flush();
             }
-            if (f.exists() && !f.delete()) {
-                //noinspection ResultOfMethodCallIgnored
-                tmp.delete();
-                return false;
-            }
-            if (!tmp.renameTo(f)) {
-                //noinspection ResultOfMethodCallIgnored
-                tmp.delete();
-                return false;
-            }
+            java.nio.file.Files.move(tmp.toPath(), f.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
             return true;
         } catch (Throwable t) {
-            android.util.Log.w("DSHA", "写 patch 失败 " + f + ": " + t);
+            android.util.Log.w("DSHA", "写 " + f.getName() + " 失败: " + t);
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
             return false;
         }
     }
@@ -404,13 +424,18 @@ class PluginController {
             if (patch.getParentFile() == null || !patch.getParentFile().isDirectory()) return null;
             java.util.List<String> ids = readPluginPatchIds(name);
             if (ids.isEmpty()) return null;      // 写了也不生效，不如让老路去搬文件
-            String yaml = readTextFile(patch);
-            java.util.Set<String> off = new java.util.LinkedHashSet<>(PatchToggle.disabledIds(yaml));
-            if (enable) off.removeAll(ids);
-            else off.addAll(ids);
-            if (!writeTextAtomic(patch, PatchToggle.withDisabled(yaml, off))) {
-                lastToggleError = "写 profile 的 cordis.patch.yml 失败";
-                return null;
+            // 读 → 改 → 写回必须串行：连点两个开关就是两个后台线程同时干这件事，
+            // 后写的会把前一个的结果整段盖掉
+            synchronized (patchLock) {
+                String yaml = readTextFile(patch);
+                java.util.Set<String> off =
+                        new java.util.LinkedHashSet<>(PatchToggle.disabledIds(yaml));
+                if (enable) off.removeAll(ids);
+                else off.addAll(ids);
+                if (!writeTextAtomic(patch, PatchToggle.withDisabled(yaml, off))) {
+                    lastToggleError = "写 profile 的 cordis.patch.yml 失败";
+                    return null;
+                }
             }
             // 老状态兼容：以前用改目录名禁用过的，启用时得把目录名改回来，
             // 否则 patch 里写着「启用」而包根本不在 node_modules 里
@@ -1796,6 +1821,21 @@ class PluginController {
      * 自动用 github:owner/repo 重试一次（市场条目多为仅 GitHub 发布的仓库插件）。
      */
     public String installPlugin(String pkg, String fallbackSpec) {
+        // single-flight：并发装同一个 profile 会撞 pnpm 的 lockfile 与 store。
+        // tryLock 对已持有锁的线程直接成功，所以 installSubdirFromSource 构建完
+        // 回头调这里不会自锁。
+        if (!installLock.tryLock()) {
+            return "已经有一个插件在安装了。并发装同一个 profile 会撞 pnpm 的锁、"
+                    + "可能把 profile 弄坏 —— 等那个装完再点。";
+        }
+        try {
+            return installPluginLocked(pkg, fallbackSpec);
+        } finally {
+            installLock.unlock();
+        }
+    }
+
+    private String installPluginLocked(String pkg, String fallbackSpec) {
         if (!isValidPluginSpec(pkg)) {
             return "安装失败：非法插件名/来源：" + (pkg == null ? "null" : pkg);
         }
@@ -2298,7 +2338,11 @@ class PluginController {
         for (String api : new String[]{
                 "https://api.github.com/repos/" + ref.slug() + "/releases/latest",
                 "https://api.github.com/repos/" + ref.slug() + "/releases?per_page=5"}) {
-            String body = httpGetText(HarnessController.gitHubProxy(api), 8000, 20000);
+            // release 列表带每个版本的发布说明全文，很容易超过默认的 512KB 上限；
+            // 截断之后 JSON 解析失败 → 静默返回 null → 悄悄退回最慢的源码构建。
+            // 这是「同一份教训只应用到一处」的又一例：市场索引那边刚放开，这里没跟上。
+            String body = httpGetText(HarnessController.gitHubProxy(api), 8000, 20000,
+                    4 * 1024 * 1024);
             if (body == null || body.isEmpty()) continue;
             try {
                 org.json.JSONArray releases;

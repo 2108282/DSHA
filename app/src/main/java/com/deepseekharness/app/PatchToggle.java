@@ -111,9 +111,12 @@ final class PatchToggle {
             if (inBlock) continue;
             sb.append(raw).append('\n');
         }
-        // split(-1) 会在末尾多出一个空串，上面因此多加了一个换行，去掉它
+        // 末尾规范化成「恰好一个换行」。原来写的是 if (endsWith("\n\n")) 去掉一个 ——
+        // 只够抵消 split(-1) 末尾那个空串带来的换行，抵不掉 withDisabled 为分隔区块
+        // 而加的那个空行。结果每装一次区块再去掉，文件末尾就攒下一个空行：
+        // 实测反复开关 10 轮，文件比原文多一个 \n（33 → 34 字节）。
         String out = sb.toString();
-        if (out.endsWith("\n\n")) out = out.substring(0, out.length() - 1);
+        while (out.endsWith("\n\n")) out = out.substring(0, out.length() - 1);
         return out;
     }
 

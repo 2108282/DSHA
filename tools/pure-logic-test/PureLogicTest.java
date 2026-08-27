@@ -680,6 +680,16 @@ public final class PureLogicTest {
                 out2.contains("- id: my-own-row") && out2.contains("port: 8080"));
         eqi("patch: 去掉区块后禁用集合为空", 0, PatchToggle.disabledIds(out2).size());
         eq("patch: 反复开关不会越写越长（往返回到原样）", out2, PatchToggle.stripBlock(out1));
+        // 上面那条比的是两个都过了 stripBlock 的结果，看不出与**原文**的漂移。
+        // 实测反复开关 10 轮会在末尾攒下一个空行，所以这条直接跟原文比。
+        String ptRound = userYaml;
+        for (int i = 0; i < 10; i++) {
+            java.util.Set<String> one = new java.util.LinkedHashSet<>();
+            one.add("x");
+            ptRound = PatchToggle.withDisabled(ptRound, one);
+            ptRound = PatchToggle.withDisabled(ptRound, new java.util.LinkedHashSet<>());
+        }
+        eq("patch: 开关 10 轮之后与原文逐字节一致", userYaml, ptRound);
         java.util.Set<String> off3 = new java.util.LinkedHashSet<>();
         off3.add("@scope/name");
         ok("patch: 带 @ / 的 id 要加引号（否则 YAML 解析出错，整个 loader 起不来）",
