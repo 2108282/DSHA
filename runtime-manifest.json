@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-26T18:46:39Z",
+  "generated": "2026-08-27T17:03:54Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -314,8 +314,8 @@
     {
       "path": "app/src/main/assets/device-shell-guide/package.json",
       "asset": "device-shell-guide/package.json",
-      "size": 540,
-      "sha256": "4824b6fb0351963a412af8cfbab79079590dfb5c0ade1862f9757367818500df",
+      "size": 539,
+      "sha256": "d1308892dd0f76b4c6db902b3804ed8f8dac72b2479b42380b295f23d640a73d",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/device-shell-guide/package.json",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/device-shell-guide/package.json",
@@ -325,8 +325,8 @@
     {
       "path": "app/src/main/assets/device-shell-guide/lib/index.js",
       "asset": "device-shell-guide/lib/index.js",
-      "size": 12124,
-      "sha256": "8c4d351de9a5dccc2a8b620dceff0b6e60e1a39822af56447082998503cafd03",
+      "size": 7415,
+      "sha256": "0d52cd1b6c8b500e7e5648c0a3e978caa21929f8a11dc0effc3f1b05f84a561c",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/device-shell-guide/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/device-shell-guide/lib/index.js",
