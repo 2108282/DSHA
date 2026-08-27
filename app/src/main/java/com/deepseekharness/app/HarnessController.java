@@ -6149,6 +6149,36 @@ public class HarnessController {
     // 两个作用：① PluginFragment / BackupManager 这些调用方一行都不用改；
     // ② 把「插件对外的公开面到底有多大」摆在一处看得见 —— 想加新入口的人
     //    会先看见这份清单，而不是往 6000 行里再塞一个方法。
+    /**
+     * 插件真实加载状态里「没加载起来」的那批：插件名 → 原因（fiber 状态）。
+     *
+     * <p>数据来自 3090 桥的 {@code /app/plugins} —— dsh 进程内的 status-overlay 插件遍历
+     * cordis registry 报上来的。App 自己读 profile 的 package.json 只知道「注册了」，
+     * 看不到「加载起来了没有」；而 PENDING（inject 的服务没有提供者）<b>不报错</b>、
+     * 插件静静地什么都不做，正是「插件装了没反应」最常见的形态。
+     *
+     * <p><b>只认本次 Web 运行期间的上报</b>（时间戳晚于 {@link #webEpoch}）：上一次运行
+     * 留下的旧报告可能早就不成立了，拿它给用户打标记只会误导。
+     */
+    public java.util.Map<String, String> pluginLoadFailures() {
+        java.util.LinkedHashMap<String, String> out = new java.util.LinkedHashMap<>();
+        try {
+            long ts = prefs.getLong("plugin_report_ts", 0L);
+            if (ts <= 0 || ts < webEpoch) return out;   // 没报告，或报告比本次启动还早
+            String failed = prefs.getString("plugin_failed", "");
+            if (failed == null || failed.trim().isEmpty()) return out;
+            for (String item : failed.split(",")) {
+                String s = item.trim();
+                if (s.isEmpty()) continue;
+                int c = s.indexOf(':');   // 格式是 name:原因，包名里不会有冒号
+                if (c > 0) out.put(s.substring(0, c), s.substring(c + 1));
+                else out.put(s, "未知");
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
     public String[][] listPlugins() { return plugins.listPlugins(); }
     public String[][] listPlugins(boolean hideBuiltin) { return plugins.listPlugins(hideBuiltin); }
     public String getVersionNameForUa() { return plugins.getVersionNameForUa(); }

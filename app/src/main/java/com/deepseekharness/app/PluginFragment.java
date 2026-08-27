@@ -482,11 +482,17 @@ public class PluginFragment extends Fragment {
         }).start();
     }
 
+    /** 「注册了但没加载起来」的插件 → 原因。来自 3090 桥的 /app/plugins 上报
+     *  （dsh 进程内的插件遍历 cordis registry 报的），只在本次 Web 运行期间有效。
+     *  这是 App 侧唯一能拿到的「真的生效了吗」的证据 —— package.json 只说明注册了。 */
+    private final java.util.Map<String, String> loadFailures = new java.util.HashMap<>();
+
     private void showInstalled() {
         final boolean hide = requireContext().getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("hide_builtin", false);
         new Thread(() -> {
             String[][] pl = c.listPlugins(hide);
+            final java.util.Map<String, String> fails = c.pluginLoadFailures();
             // 记下已装插件名，供市场页「隐藏已安装」比对。
             // 放在这里是因为这是唯一真实拿到已装列表的地方 ——
             // 单独再查一次会和这里的结果漂移。
@@ -497,6 +503,8 @@ public class PluginFragment extends Fragment {
                 }
             }
             runOnUiThreadSafely(() -> {
+                loadFailures.clear();
+                loadFailures.putAll(fails);
                 installed.clear();
                 if (pl == null || pl.length == 0) {
                     say("未发现已装插件（目录 " + String.join("/", HarnessController.PLUGIN_DIRS) + "）");
@@ -1043,7 +1051,14 @@ public class PluginFragment extends Fragment {
                 h.name.setText(it[0]);
                 h.desc.setText("");
                 boolean enabled = "启用".equals(it[1]);
-                h.status.setText(enabled ? "已启用" : "已禁用");
+                // 注册了不等于加载成功：PENDING（inject 的服务没提供者）不报错，插件就静静地
+                // 什么都不做。这一行是用户唯一能看到真实原因的地方，别让它退化成"已启用"。
+                String fail = loadFailures.get(it[0]);
+                if (enabled && fail != null && !fail.isEmpty()) {
+                    h.status.setText("⚠ 已启用但没加载起来（" + fail + "）");
+                } else {
+                    h.status.setText(enabled ? "已启用" : "已禁用");
+                }
                 // 已装卡片复用同一个按钮做「导出」——不额外加控件，卡片布局一行未改。
                 // 导出的是单个插件、单个文件，落在 Download/DSHA/插件/。
                 h.installBtn.setVisibility(View.VISIBLE);
