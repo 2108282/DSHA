@@ -92,7 +92,23 @@ final class ArchiveProbe {
      * </ul>
      */
     static String[] pluginRoots(String[] relPaths) {
-        if (relPaths == null) return new String[0];
+        java.util.List<String[]> layers = pluginRootsByDepth(relPaths);
+        return layers.isEmpty() ? new String[0] : layers.get(0);
+    }
+
+    /**
+     * 同 {@link #pluginRoots}，但把<b>每一层</b>候选都返回（浅的在前），让调用方在
+     * 最浅那层不是真插件时能往下找。
+     *
+     * <p><b>为什么需要往下找</b>：GitHub 下载的 monorepo zip 长这样 ——
+     * {@code repo-main/package.json} 是仓库的管理包（{@code private: true}、
+     * 带 {@code workspaces}，不是插件），真插件在 {@code repo-main/plugins/*}。
+     * 只取最浅一层的话，装进去的是那个管理包，真插件一个都没装上 ——
+     * 而且它还会「装成功」，因为管理包本身是个合法的 npm 包。
+     */
+    static java.util.List<String[]> pluginRootsByDepth(String[] relPaths) {
+        java.util.List<String[]> out = new java.util.ArrayList<>();
+        if (relPaths == null) return out;
         java.util.TreeMap<Integer, java.util.LinkedHashSet<String>> byDepth = new java.util.TreeMap<>();
         for (String raw : relPaths) {
             if (raw == null) continue;
@@ -107,9 +123,10 @@ final class ArchiveProbe {
             int depth = dir.isEmpty() ? 0 : dir.split("/").length;
             byDepth.computeIfAbsent(depth, k -> new java.util.LinkedHashSet<>()).add(dir);
         }
-        if (byDepth.isEmpty()) return new String[0];
-        java.util.LinkedHashSet<String> shallowest = byDepth.get(byDepth.firstKey());
-        return shallowest.toArray(new String[0]);
+        for (java.util.Map.Entry<Integer, java.util.LinkedHashSet<String>> e : byDepth.entrySet()) {
+            out.add(e.getValue().toArray(new String[0]));
+        }
+        return out;
     }
 
     /** 归档根本身就是一个插件（根有 package.json）。 */

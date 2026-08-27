@@ -723,6 +723,20 @@ public final class PureLogicTest {
         ok("patch: scoped 包名当键要加引号",
                 PatchToggle.withAllowBuild("", "@s/y").contains("'@s/y': true"));
 
+        // 分层候选：GitHub monorepo zip 的最浅一层是仓库管理包，真插件在下一层。
+        // 只取最浅一层会把管理包装进去、真插件一个都不装 —— 而且它还会「装成功」，
+        // 因为管理包本身是个合法 npm 包。真实归档的端到端验证见 tools/archive-e2e-test.sh。
+        java.util.List<String[]> ghLayers = ArchiveProbe.pluginRootsByDepth(new String[]{
+                "repo-main/package.json", "repo-main/plugins/x/package.json",
+                "repo-main/plugins/y/package.json"});
+        eqi("archive: 候选按深度分两层", 2, ghLayers.size());
+        eq("archive: 最浅一层是仓库根", "[repo-main]",
+                java.util.Arrays.toString(ghLayers.get(0)));
+        eqi("archive: 下一层是两个真插件", 2, ghLayers.get(1).length);
+        eq("archive: pluginRoots 仍返回最浅那层（向后兼容）", "[repo-main]",
+                java.util.Arrays.toString(ArchiveProbe.pluginRoots(new String[]{
+                        "repo-main/package.json", "repo-main/plugins/x/package.json"})));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

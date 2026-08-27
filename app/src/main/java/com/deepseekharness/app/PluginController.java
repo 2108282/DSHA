@@ -682,10 +682,28 @@ class PluginController {
             }
             java.util.List<String> rels = new java.util.ArrayList<>();
             collectRelative(staging, "", rels, 0);
-            String[] roots = ArchiveProbe.pluginRoots(rels.toArray(new String[0]));
+            // 逐层往下找第一层「真插件」。只取最浅一层是不够的：GitHub 下载的 monorepo zip
+            // 里 repo-main/package.json 是仓库的管理包（private + workspaces，不是插件），
+            // 真插件在 repo-main/plugins/*。装管理包还会「成功」——它本身是个合法 npm 包，
+            // 于是用户得到一个什么都没发生的「安装成功」。
+            java.util.List<String[]> layers =
+                    ArchiveProbe.pluginRootsByDepth(rels.toArray(new String[0]));
+            String[] roots = new String[0];
+            for (String[] layer : layers) {
+                java.util.List<String> real = new java.util.ArrayList<>();
+                for (String root : layer) {
+                    java.io.File dir = root.isEmpty() ? staging : new java.io.File(staging, root);
+                    if (looksLikePluginPkg(new java.io.File(dir, "package.json"))) real.add(root);
+                }
+                if (!real.isEmpty()) {
+                    roots = real.toArray(new String[0]);
+                    break;
+                }
+            }
             if (roots.length == 0) {
-                return new String[]{"ERR", "包里没找到 package.json —— 这不像插件包。"
-                        + "插件包应该是「插件目录里有 package.json」，或者若干个这样的目录"};
+                return new String[]{"ERR", "包里没找到插件。有 package.json 的目录都像是"
+                        + "仓库管理包（private / workspaces），不是插件本体 —— "
+                        + "如果这是 monorepo，请把里面**某个插件目录**单独打包再导入。"};
             }
             java.io.File dir = new java.io.File(proot.getRootfsDir(),
                     HarnessController.PLUGIN_DIRS[0].substring(1));
@@ -802,6 +820,27 @@ class PluginController {
             } else {
                 out.add(rel);
             }
+        }
+    }
+
+    /**
+     * 这个 package.json 像不像<b>插件本体</b>，而不是 monorepo 的管理包。
+     *
+     * <p>判据从宽到严：有 {@code dsh} 字段 = 确定是插件；{@code private} 或带
+     * {@code workspaces} = 确定是管理包（GitHub monorepo 的根就是这样）；
+     * 其余给一次机会 —— 有些插件的 bundle 声明只写在 patch 文件里。
+     */
+    private boolean looksLikePluginPkg(java.io.File pkgJson) {
+        try {
+            if (pkgJson == null || !pkgJson.isFile()) return false;
+            org.json.JSONObject o = new org.json.JSONObject(readTextFile(pkgJson));
+            if (o.optString("name", "").trim().isEmpty()) return false;
+            if (o.has("dsh")) return true;
+            if (o.optBoolean("private", false)) return false;
+            if (o.has("workspaces")) return false;
+            return true;
+        } catch (Throwable t) {
+            return false;
         }
     }
 
