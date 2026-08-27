@@ -4227,7 +4227,20 @@ public class HarnessController {
             + "elif command -v netstat >/dev/null 2>&1; then "
             +   "echo STOP_PORT=$(netstat -ltn 2>/dev/null | grep -c ':3080'); "
             + "else echo STOP_PORT=unknown; fi; "
-            + "echo stopped";
+            + "echo stopped; "
+            // ── 诊断：把「所有含 node 或 dsh 的进程」连 cmdline 一起列出来 ──
+            // 停止已经改过一版还是不行，就不该再猜模式了：把设备上的地面真相打出来，
+            // 用户点一次停止就能把这段发回来，一眼看出该匹配什么。
+            // 只列前 100 字符 × 最多 20 条，避免灌满日志。
+            + "echo STOP_DIAG_BEGIN; "
+            + "for d in /proc/[0-9]*; do "
+            +   "c=$(tr '\\0' ' ' < $d/cmdline 2>/dev/null) || continue; "
+            +   "case \"$c\" in *pids_dsh*) continue ;; esac; "
+            +   "case \"$c\" in *node*|*dsh*) "
+            +     "echo \"${d#/proc/} | $(printf '%s' \"$c\" | cut -c1-100)\" ;; "
+            +   "esac; "
+            + "done | head -20; "
+            + "echo STOP_DIAG_END";
     }
 
     /** 从 {@code KEY=数字} 形式的输出里取值；取不到（含 {@code unknown}）给 -1。 */
@@ -4236,6 +4249,16 @@ public class HarnessController {
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile(java.util.regex.Pattern.quote(key) + "=(\\d+)").matcher(out);
         return m.find() ? Integer.parseInt(m.group(1)) : -1;
+    }
+
+    /** 取两个标记之间的内容（诊断段用）；找不到返回 null。 */
+    private static String sliceBetween(String out, String begin, String end) {
+        if (out == null) return null;
+        int i = out.indexOf(begin);
+        if (i < 0) return null;
+        int j = out.indexOf(end, i + begin.length());
+        return j < 0 ? out.substring(i + begin.length())
+                : out.substring(i + begin.length(), j);
     }
 
     private String statusCommand() {
@@ -4797,6 +4820,13 @@ public class HarnessController {
                 // 端口还占着，用户却以为停了 —— 这正是「停止用不了」的体验来源。
                 int left = parseKvInt(out, "STOP_LEFT");
                 int port = parseKvInt(out, "STOP_PORT");
+                // 诊断段一律进活动日志：停止这条路已经改过一版还没好，光有「还剩 N 个」
+                // 不够定位 —— 得知道设备上那些进程的 cmdline 到底长什么样。
+                // 用户能在设置页把活动日志复制出来发回来。
+                String diag = sliceBetween(out, "STOP_DIAG_BEGIN", "STOP_DIAG_END");
+                if (diag != null && !diag.trim().isEmpty()) {
+                    logActivity("停止诊断（含 node/dsh 的进程）：\n" + diag.trim());
+                }
                 if (left > 0 || port > 0) {
                     String why = "停止没干净：" + (left > 0 ? "还有 " + left + " 个 dsh 进程" : "")
                             + (left > 0 && port > 0 ? "，" : "")
