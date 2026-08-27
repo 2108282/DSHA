@@ -1141,7 +1141,12 @@ class PluginController {
             String body = httpGetText(u, 15000, 60000, 8 * 1024 * 1024);
             if (body == null || body.length() < 200) continue;
             try {
-                org.json.JSONArray arr = new org.json.JSONObject(body).optJSONArray("plugins");
+                org.json.JSONObject root = new org.json.JSONObject(body);
+                org.json.JSONArray arr = root.optJSONArray("plugins");
+                // 索引自带分类的中英文名（categories.<key>.zh），直接用它 ——
+                // 筛选菜单是按 it[4] 的实际值动态列的，所以这里换成中文，
+                // 筛选项就跟着变中文，不用在 UI 里硬编码一张对照表
+                org.json.JSONObject catMap = root.optJSONObject("categories");
                 if (arr == null || arr.length() == 0) continue;
                 java.util.List<String[]> out = new java.util.ArrayList<>(arr.length());
                 for (int i = 0; i < arr.length(); i++) {
@@ -1165,7 +1170,7 @@ class PluginController {
                     }
                     out.add(new String[]{name, String.valueOf(o.optInt("stars", 0)), owner,
                             o.optString("added", ""),
-                            o.optString("category", ""), desc, url,
+                            categoryLabel(catMap, o.optString("category", "")), desc, url,
                             npm});   // 第 8 列是 npm 包名（Markdown 那条路没有这一列）
                 }
                 if (!out.isEmpty()) {
@@ -1178,6 +1183,18 @@ class PluginController {
         // 退回老路：Markdown 表格（没有 npm 映射，安装时还得自己去猜包名）
         java.util.List<String[]> rows = parseMarketTable(fetchMarketIndex());
         return rows == null ? new java.util.ArrayList<>() : rows;
+    }
+
+    /** 分类 key → 中文名（索引里带 categories 映射；取不到就原样返回 key）。 */
+    private static String categoryLabel(org.json.JSONObject catMap, String key) {
+        String k = key == null ? "" : key.trim();
+        if (k.isEmpty() || catMap == null) return k;
+        org.json.JSONObject c = catMap.optJSONObject(k);
+        if (c == null) return k;
+        String zh = c.optString("zh", "").trim();
+        if (!zh.isEmpty()) return zh;
+        String en = c.optString("en", "").trim();
+        return en.isEmpty() ? k : en;
     }
 
     public String fetchMarketIndex() {

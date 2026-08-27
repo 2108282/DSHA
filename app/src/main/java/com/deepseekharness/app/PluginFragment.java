@@ -770,11 +770,7 @@ public class PluginFragment extends Fragment {
                     say(msg.replace('\n', ' '));
                     if (ok) showInstalled();
                     // 结果信息量大（装了哪些、跳过哪些、为什么），Toast 会截断 → 用对话框
-                    new android.app.AlertDialog.Builder(requireContext())
-                            .setTitle(ok ? "导入完成" : "导入失败")
-                            .setMessage(msg)
-                            .setPositiveButton("知道了", null)
-                            .show();
+                    showCopyableResult(ok ? "导入完成" : "导入失败", msg);
                 });
             }).start();
         }
@@ -1066,11 +1062,7 @@ public class PluginFragment extends Fragment {
             runOnUiThreadSafely(() -> {
                 say(msg.replace('\n', ' '));
                 showInstalled();
-                new android.app.AlertDialog.Builder(requireContext())
-                        .setTitle("安装结果：" + display)
-                        .setMessage(msg)
-                        .setPositiveButton("知道了", null)
-                        .show();
+                showCopyableResult("安装结果：" + display, msg);
             });
         }).start();
     }
@@ -1086,11 +1078,7 @@ public class PluginFragment extends Fragment {
             runOnUiThreadSafely(() -> {
                 say(msg.replace('\n', ' '));
                 showInstalled();
-                new android.app.AlertDialog.Builder(requireContext())
-                        .setTitle("安装结果：" + display)
-                        .setMessage(msg)
-                        .setPositiveButton("知道了", null)
-                        .show();
+                showCopyableResult("安装结果：" + display, msg);
             });
         }).start();
     }
@@ -1172,12 +1160,57 @@ public class PluginFragment extends Fragment {
     }
 
     /** 安装结果（成功/失败）弹窗 + 重启 WebUI 按钮 */
+    /**
+     * 可滚动 + 可选中的消息视图。
+     *
+     * <p>{@code setMessage} 的文本既不能滚动也不能选中 —— 而安装失败的输出动辄几十行
+     * pnpm 堆栈，用户看不全，更没法复制去提 issue。那份输出是他手上唯一的线索。
+     */
+    private View buildSelectableMessage(String text) {
+        int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        TextView tv = new TextView(requireContext());
+        tv.setText(text == null ? "无输出" : text);
+        tv.setTextIsSelectable(true);
+        tv.setTextSize(12);
+        tv.setPadding(pad, pad / 2, pad, pad / 2);
+        android.widget.ScrollView sv = new android.widget.ScrollView(requireContext());
+        sv.addView(tv);
+        return sv;
+    }
+
+    /** 把文本放进剪贴板。 */
+    private void copyToClipboard(String text, String what) {
+        try {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                    requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            if (cm == null) return;
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("DSHA", text == null ? "" : text));
+            Toast.makeText(requireContext(), "已复制" + (what == null ? "" : what),
+                    Toast.LENGTH_SHORT).show();
+        } catch (Throwable t) {
+            Toast.makeText(requireContext(), "复制失败：" + t, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** 结果对话框：内容可滚动、可选中，还带一个「复制」按钮。 */
+    private void showCopyableResult(String title, String msg) {
+        final String text = msg == null || msg.isEmpty() ? "无输出" : msg;
+        new android.app.AlertDialog.Builder(requireContext())
+                .setTitle(title)
+                .setView(buildSelectableMessage(text))
+                .setPositiveButton("知道了", null)
+                .setNeutralButton("复制", (d, w) -> copyToClipboard(text, "全部输出"))
+                .show();
+    }
+
     private void showInstallResult(String pkg, String display, String out) {
         boolean ok = out != null && out.contains("INSTALL_EXIT=0");
-        say((ok ? "✅ 安装成功 " : "❌ 安装失败 ") + display + (ok ? "，刷新页面即可生效（多数插件热加载）" : ""));
+        say((ok ? "✅ 安装成功 " : "❌ 安装失败 ") + display + (ok ? "，刷新页面即可生效" : ""));
+        final String text = out == null ? "无输出" : out;
         new android.app.AlertDialog.Builder(requireContext())
                 .setTitle((ok ? "✅ 安装成功：" : "❌ 安装失败：") + display)
-                .setMessage(out == null ? "无输出" : out)
+                // 失败时那几十行输出是用户唯一的线索：要能滚动、能选中、能一键复制
+                .setView(buildSelectableMessage(text))
                 .setPositiveButton("重启 WebUI", (d, w) -> {
                     // 1.5s 延迟回调期间用户可能已离开本页：全程用 applicationContext，
                     // 不能在回调里再 requireContext()（fragment detach 后必抛异常闪退）
@@ -1195,6 +1228,7 @@ public class PluginFragment extends Fragment {
                         if (isAdded()) say("WebUI 已重启");
                     }, 1500);
                 })
+                .setNeutralButton("复制", (d, w) -> copyToClipboard(text, "安装输出"))
                 .setNegativeButton("关闭", null)
                 .show();
     }
