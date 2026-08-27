@@ -1078,6 +1078,136 @@ class PluginController {
      *             从源码构建的插件传 {@code link:<源码绝对路径>}，那才是它真实的来源。
      */
     /**
+     * 自愈自指依赖 —— 让已经中招的设备恢复安装能力。
+     *
+     * <p>历史上注册插件写的是 {@code file:./node_modules/<name>}，那个路径就是安装目标自己，
+     * pnpm 会建出指向自身的符号链接，之后每次 {@code pnpm install} 都 ELOOP、
+     * <b>所有插件都装不上</b>（用户看到的却是「装 A 失败」，坏的是 B）。根因已在
+     * {@link #registerImportedPlugin} 掐掉，这里负责把已经写进 profile 的那些修回来。
+     *
+     * <p>分两种处置：
+     * <ul>
+     *   <li><b>实体还读得出来</b>：挪到 {@code /root/plugin-src/} 再 {@code link:} 回去，
+     *       插件继续可用；</li>
+     *   <li><b>实体已经 ELOOP</b>：摘出 dependencies 与 bundles，实体<b>移进隔离目录</b>
+     *       而不是 {@code rm -rf}。主人授权了自动处理，但「自动」不该等于「不可逆」——
+     *       坏条目本身只是个软链，留一份几乎不占地方，万一判错了还能捞回来。</li>
+     * </ul>
+     *
+     * <p><b>probe 做两次</b>：判据是「能不能读出 package.json」，而这个环境的 proot
+     * 会偶发抖动（本项目里 shell 调用返回空、输出被截断都实测过）。一次失败就删用户的插件
+     * 太草率，连续两次读不出来才认。
+     *
+     * @return 给用户看的处理结果；没有要修的返回空串
+     */
+    public String healSelfRefDeps() {
+        try {
+            java.io.File pf = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/package.json");
+            if (!pf.isFile()) return "";
+            org.json.JSONObject root = new org.json.JSONObject(readTextFile(pf));
+            org.json.JSONObject deps = root.optJSONObject("dependencies");
+            if (deps == null) return "";
+            java.util.List<String> selfRef = new java.util.ArrayList<>();
+            for (java.util.Iterator<String> k = deps.keys(); k.hasNext(); ) {
+                String name = k.next();
+                String v = deps.optString(name, "");
+                if (v.startsWith("file:./node_modules/") || v.startsWith("file:node_modules/")) {
+                    selfRef.add(name);
+                }
+            }
+            if (selfRef.isEmpty()) return "";
+            java.util.List<String> fixed = new java.util.ArrayList<>();
+            java.util.List<String> quarantined = new java.util.ArrayList<>();
+            for (String name : selfRef) {
+                if (probeReadable(name) || probeReadable(name)) {   // 两次机会，抗抖动
+                    String link = moveOutOfNodeModules(name);
+                    if (link != null) {
+                        deps.put(name, link);
+                        fixed.add(name);
+                        continue;
+                    }
+                }
+                if (quarantineEntry(name)) {
+                    deps.remove(name);
+                    removeFromBundles(root, name);
+                    quarantined.add(name);
+                }
+            }
+            if (fixed.isEmpty() && quarantined.isEmpty()) return "";
+            if (!writeTextAtomic(pf, root.toString(2))) {
+                return "发现自指依赖，但写回 profile 失败 —— 安装可能仍会 ELOOP";
+            }
+            StringBuilder msg = new StringBuilder();
+            if (!fixed.isEmpty()) {
+                msg.append("修好 ").append(fixed.size()).append(" 个自指依赖：")
+                   .append(String.join("、", fixed))
+                   .append("（它们会让每次装插件都 ELOOP）");
+            }
+            if (!quarantined.isEmpty()) {
+                if (msg.length() > 0) msg.append('\n');
+                msg.append("这些插件的实体已经坏掉，已移入隔离目录并摘出 profile，需要重装：")
+                   .append(String.join("、", quarantined))
+                   .append("\n（隔离目录 /root/.dsha-quarantine/，确认不需要可自行删）");
+            }
+            host.logActivity("自愈自指依赖：修 " + fixed.size()
+                    + " 个、隔离 " + quarantined.size() + " 个");
+            return msg.toString();
+        } catch (Throwable t) {
+            android.util.Log.w("DSHA", "自愈自指依赖失败: " + t);
+            return "";
+        }
+    }
+
+    /** 能不能读出这个插件的 package.json（ELOOP / 悬空链接都会失败）。 */
+    private boolean probeReadable(String name) {
+        try {
+            String r = proot.execAndRead("cd /root/.dsh/profiles/web && "
+                    + "cat node_modules/" + ShellQuote.arg(name) + "/package.json >/dev/null 2>&1 "
+                    + "&& echo READABLE || echo BROKEN", 30_000);
+            return r != null && r.contains("READABLE");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 把坏条目移进隔离目录（不 rm -rf：自动处理不等于不可逆）。 */
+    private boolean quarantineEntry(String name) {
+        try {
+            final String nm = ShellQuote.arg(name);
+            String stamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                    .format(new java.util.Date());
+            String dest = "/root/.dsha-quarantine/" + stamp;
+            String r = proot.execAndRead("cd /root/.dsh/profiles/web && "
+                    + "mkdir -p \"$(dirname " + ShellQuote.arg(dest + "/" + name) + ")\" && "
+                    // 坏链接不能 cp（一 cp 就又 ELOOP），只能整条 mv 走
+                    + "mv node_modules/" + nm + " " + ShellQuote.arg(dest + "/" + name)
+                    + " 2>&1; rm -rf node_modules/" + nm + " 2>/dev/null; echo QUARANTINED",
+                    60_000);
+            return r != null && r.contains("QUARANTINED");
+        } catch (Throwable t) {
+            android.util.Log.w("DSHA", "隔离 " + name + " 失败: " + t);
+            return false;
+        }
+    }
+
+    /** 从 dsh.profile.bundles 里摘掉一个条目。 */
+    private void removeFromBundles(org.json.JSONObject root, String name) {
+        try {
+            org.json.JSONObject dsh = root.optJSONObject("dsh");
+            org.json.JSONObject prof = dsh == null ? null : dsh.optJSONObject("profile");
+            org.json.JSONArray b = prof == null ? null : prof.optJSONArray("bundles");
+            if (b == null) return;
+            org.json.JSONArray out = new org.json.JSONArray();
+            for (int i = 0; i < b.length(); i++) {
+                if (!name.equals(b.optString(i, ""))) out.put(b.opt(i));
+            }
+            prof.put("bundles", out);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
      * 把插件实体从 profile 的 {@code node_modules} 挪到 {@code /root/plugin-src}，
      * 返回可以写进 dependencies 的 {@code link:} spec；挪不动返回 {@code null}。
      *

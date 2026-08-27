@@ -1746,6 +1746,10 @@ public class HarnessController {
                 ensureTaskNotifier();
                 ensureStatusOverlay();
                 ensureBuiltinBundles();
+                // 先修自指依赖，再注册新的：坏条目会让 pnpm 一扫就 ELOOP，
+                // 那时候注册什么都是白搭（下一次 install 照样撞在那条坏链上）
+                String healed = healSelfRefDeps();
+                if (healed != null && !healed.isEmpty()) logActivity(healed);
                 // 自己在容器里手写的插件同样要注册：放进 node_modules 不等于注册，
                 // dsh 只加载 bundles 里列出且 dependencies 解析得到的包。不补的话
                 // 插件会出现在列表里却完全不生效 —— 看着就像「插件坏了」。
@@ -6326,6 +6330,8 @@ public class HarnessController {
     public String[] importArchive(java.io.File archive) { return plugins.importArchive(archive); }
     /** 自动注册「本地已存在但没注册进 profile」的插件（自己在容器里手写的插件走这条）。 */
     public java.util.List<String> autoRegisterLocalPlugins() { return plugins.autoRegisterLocalPlugins(); }
+    /** 自愈自指依赖（file:./node_modules/* → link:），修不了的隔离掉。 */
+    public String healSelfRefDeps() { return plugins.healSelfRefDeps(); }
     public String fetchMarketIndex() { return plugins.fetchMarketIndex(); }
     /** 拉市场列表（首选 plugins.json，带 npm 映射；失败退回 Markdown 表格）。 */
     public java.util.List<String[]> fetchMarketRows() { return plugins.fetchMarketRows(); }
