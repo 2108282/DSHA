@@ -3241,6 +3241,10 @@ public class HarnessController {
                     "if pgrep -f '[d]sh-watchdog.sh' >/dev/null 2>&1; then exit 0; fi\n" +
                     "PORT=" + port + "\n" +
                     "FAIL=0\n" +
+                    // 与「停止」共用同一份进程判据（排除看门狗自己，否则它会杀掉自身）。
+                    // 这里原来是 pkill -f 'bin.js web'：在独立脚本里跑不会自杀，
+                    // 但仍可能命中 proot —— 那会把承载整个环境的进程带走。
+                    shPidsDsh(false) + "\n" +
                     "while true; do\n" +
                     "  if curl -s -m 5 -o /dev/null \"http://127.0.0.1:$PORT/\"; then\n" +
                     "    FAIL=0\n" +
@@ -3249,7 +3253,7 @@ public class HarnessController {
                     "    echo \"$(date '+%F %T') WebUI 失联 $FAIL 次\" >> /root/dsh-watchdog.log\n" +
                     "    if [ \"$FAIL\" -ge 3 ]; then\n" +
                     "      echo \"$(date '+%F %T') WebUI 已失联，自动重启\" >> /root/dsh-watchdog.log\n" +
-                    "      pkill -f 'bin.js web' 2>/dev/null; pkill -f 'dsh web' 2>/dev/null\n" +
+                    "      for p in $(pids_dsh); do kill -TERM \"$p\" 2>/dev/null; done\n" +
                     "      # 关键：等端口彻底关闭再重启（旧进程可能还在写 SQLite，\n" +
                     "      # 立即重启会双进程写同一会话 → seq 重复 → 会话损坏（官方#420）\n" +
                     "      for i in $(seq 1 20); do\n" +
@@ -4153,17 +4157,81 @@ public class HarnessController {
         return null;
     }
 
+    /**
+     * 停 WebUI 的命令。
+     *
+     * <p><b>为什么不只用 {@code pkill -f}</b>：命令行模式会随 dsh 的启动方式变 ——
+     * 源码模式是 {@code node … apps/cli/lib/bin.js web}，预构建模式是包装脚本再转
+     * {@code node …/dsh-cli/lib/bin.js}，后面还跟着一串会变的 opts。模式对不上就一个都杀不掉，
+     * 而用户看到的只是「点了停止没反应」。
+     *
+     * <p>改成遍历 {@code /proc} 自己认：只认命令行里带 {@code bin.js web} / {@code dsh web} /
+     * dsh 自家包名的进程，并<b>明确排除 proot 自己</b> —— proot 不隔离 PID，容器里能看到宿主
+     * 全部进程，杀到 proot 就等于把 App 一起带走（点重启后约 10 秒闪退、通知栏一起消失，
+     * 这个坑踩过）。
+     *
+     * <p>末尾回报 {@code STOP_LEFT}（还剩几个）与 {@code STOP_PORT}（3080 还在不在监听），
+     * 让调用方能<b>眼见为实</b>，而不是无论如何都显示「已停止」。
+     */
+    /**
+     * 安全找出 dsh 相关进程的 shell 片段 —— <b>唯一定义</b>，停止与看门狗共用。
+     *
+     * <p><b>为什么不能用 {@code pkill -f '<模式>'}</b>：这些命令是通过
+     * {@code bash -c "<整段脚本>"} 跑的，那条 shell 自己的 cmdline 里<b>包含整段脚本文本</b>，
+     * 模式串就在里面 —— pkill 于是把执行它的 shell 一起杀掉。实测输出
+     * {@code proot info: vpid 1: terminated with signal 15}：脚本在第一条 pkill 就死了，
+     * 后面的 sleep 与 SIGKILL 永远不执行，dsh 当然还活着。<b>「点了停止没反应」就是这么来的。</b>
+     *
+     * <p>另一个老坑：proot 不隔离 PID，容器里 /proc 看得到宿主全部进程，
+     * {@code pkill} 命中 proot 自己就把承载整个环境的进程杀了，App 的前台服务随之死亡。
+     * 这条教训在本文件里已经写过三遍注释（见 {@code 177}、{@code 237}、{@code 4594} 附近），
+     * 唯独停止这条路漏了 —— 所以这次把判据收成一份，谁都别再各写一遍。
+     *
+     * <p>{@code case} 从上往下匹配：先排除含 {@code pids_dsh}（也就是本脚本自己）与 proot 的，
+     * 再匹配目标。
+     */
+    static String shPidsDsh(boolean includeWatchdog) {
+        return "pids_dsh() { "
+            + "for d in /proc/[0-9]*; do "
+            +   "c=$(tr '\\0' ' ' < $d/cmdline 2>/dev/null) || continue; "
+            +   "case \"$c\" in *pids_dsh*|*proot*|*proroot*"
+            +       (includeWatchdog ? "" : "|*dsh-watchdog*") + ") continue ;; esac; "
+            +   "case \"$c\" in "
+            +     (includeWatchdog ? "*dsh-watchdog*|" : "")
+            +     "*\"bin.js web\"*|*\"dsh web\"*|*dsh-app-boot*|*dsh-cli*) "
+            +       "echo \"${d#/proc/}\" ;; "
+            +   "esac; "
+            + "done; }; ";
+    }
+
     private String stopWebCommand() {
-        // 兼容源码模式（bin.js web）与 RC6 模式（dsh web）
-        // 先杀看门狗，否则 watchdog 会把 WebUI 又拉起来
-        // 优雅退出：先 SIGTERM（让 dsh 优雅 flush SQLite 会话），等 3s 再 SIGKILL 兜底。
-        // 直接 SIGKILL 会导致 SQLite 写一半 → 会话损坏（用户反馈：
-        // "历史加载失败 SessionPersistenceCorruptionError"）
-        return "pkill -f dsh-watchdog.sh 2>/dev/null; "
-             + "pkill -TERM -f 'bin.js web' 2>/dev/null; pkill -TERM -f 'dsh web' 2>/dev/null; "
-             + "sleep 3; "
-             + "pkill -9 -f 'bin.js web' 2>/dev/null; pkill -9 -f 'dsh web' 2>/dev/null; "
-             + "echo stopped";
+        // 停止时连看门狗一起收掉，否则它立刻把 WebUI 拉回来
+        return shPidsDsh(true)
+            // 先 SIGTERM：让 dsh 优雅 flush SQLite。直接 -9 会把会话写坏
+            // （用户报过 SessionPersistenceCorruptionError）。看门狗也在这一批里，
+            // 它先死掉就不会把 WebUI 又拉起来。
+            + "for p in $(pids_dsh); do kill -TERM \"$p\" 2>/dev/null; done; "
+            + "sleep 3; "
+            + "for p in $(pids_dsh); do kill -9 \"$p\" 2>/dev/null; done; "
+            + "sleep 1; "
+            // 眼见为实：还剩几个进程、3080 还在不在监听。
+            // 端口那项要区分「查了，是干净的」和「工具都没有，查不了」——
+            // 一律回 0 就又是一个「兜底把失败藏起来」的写法（这轮已经栽过两次）。
+            + "echo STOP_LEFT=$(pids_dsh | wc -l | tr -d ' '); "
+            + "if command -v ss >/dev/null 2>&1; then "
+            +   "echo STOP_PORT=$(ss -ltn 2>/dev/null | grep -c ':3080'); "
+            + "elif command -v netstat >/dev/null 2>&1; then "
+            +   "echo STOP_PORT=$(netstat -ltn 2>/dev/null | grep -c ':3080'); "
+            + "else echo STOP_PORT=unknown; fi; "
+            + "echo stopped";
+    }
+
+    /** 从 {@code KEY=数字} 形式的输出里取值；取不到（含 {@code unknown}）给 -1。 */
+    private static int parseKvInt(String out, String key) {
+        if (out == null) return -1;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile(java.util.regex.Pattern.quote(key) + "=(\\d+)").matcher(out);
+        return m.find() ? Integer.parseInt(m.group(1)) : -1;
     }
 
     private String statusCommand() {
@@ -4217,8 +4285,11 @@ public class HarnessController {
 
     public void stopWebViaTermux() {
         try {
+            // 同样不能用 pkill -f：脚本文本里带着模式串，会把执行它的 shell 一起杀掉
             TermuxBridge.runScript(appContext,
-                    "pkill -f 'bin.js web' 2>/dev/null; echo stopped", null);
+                    shPidsDsh(true)
+                            + "for p in $(pids_dsh); do kill -9 \"$p\" 2>/dev/null; done; "
+                            + "echo stopped", null);
         } catch (Throwable ignored) {
         }
     }
@@ -4672,10 +4743,23 @@ public class HarnessController {
                     p.destroy();
                     webProcess = null;
                 }
-                proot.execAndRead(stopWebCommand());
+                String out = proot.execAndRead(stopWebCommand());
                 // Web 停了桥也没用：停桥（幂等）
                 LanProxyService.stop();
-                setState("", 0, "已停止后台服务", "", false);
+                // 眼见为实：以前不管杀没杀掉都显示「已停止」，于是 dsh 还在跑、
+                // 端口还占着，用户却以为停了 —— 这正是「停止用不了」的体验来源。
+                int left = parseKvInt(out, "STOP_LEFT");
+                int port = parseKvInt(out, "STOP_PORT");
+                if (left > 0 || port > 0) {
+                    String why = "停止没干净：" + (left > 0 ? "还有 " + left + " 个 dsh 进程" : "")
+                            + (left > 0 && port > 0 ? "，" : "")
+                            + (port > 0 ? "3080 仍在监听" : "")
+                            + " —— 再点一次「停止」，或到设置页看活动日志";
+                    logActivity(why);
+                    setState("", 0, why, "", false);
+                } else {
+                    setState("", 0, "已停止后台服务", "", false);
+                }
             } catch (Exception ignored) {
             }
         });
