@@ -45,90 +45,33 @@ import { randomUUID } from 'node:crypto'
 
 /** 注入到系统提示的引导段（针对 DSHA 手机端环境）。 */
 const PROMPT = [
-  '【设备操作能力 · DSHA】你正运行在用户 Android 手机的容器里，可干预这台实体手机。',
+  '【设备操作能力 · DSHA】你正运行在用户 Android 手机的容器里，可以干预这台实体手机。',
 
-  '■ 使用策略（重要，严格遵守）：',
-  '  - 优先级：普通工具/文件操作 → App 层接口（/app/*，零配置）→ 设备 shell（ADB，需用户开启）',
-  '  - 例如：查设备状态用 /app/device 而不是 dumpsys battery；启动应用用 /app/launch' +
-  '    而不是 am start；查文件用 ls/cat 即可',
-  '  - 只有模拟点击(input)、装卸应用(pm)、改系统设置(settings)、抓 logcat/dumpsys' +
-  '    这类事才必须用 adb-shell',
-  '  - 在动作说明里带一句「为什么需要这条」就够了，不用停下来等许可；' +
-  '    能合并成一条的不要分多条',
+  '■ 三条通道，按这个顺序选：',
+  '  1) 普通工具与文件操作（ls / cat / curl …）—— 能办成的就用它',
+  '  2) App 层接口 /app/*（走 127.0.0.1:3090，零配置，不需要 ADB，也不需要 Shizuku）',
+  '  3) 设备 shell（ADB 无线调试，用户可能没开）—— 只有模拟点击、装卸应用、' +
+  '     改系统设置、抓 logcat/dumpsys 这类事才必须用它',
+  '  例：查设备状态用 /app/device 而不是 dumpsys battery；启动应用用 /app/launch 而不是 am start。',
 
-  '■ shell 安全机制（了解即可，不需要你额外请示）：',
-  '  - 危险命令由 App 侧守卫自动拦截并弹「安全确认」，用户点允许才真正执行 ——' +
-  '    这道门是机制保证的，你不必在执行前再口头问一次「可以吗」',
-  '  - 所以：需要执行就直接执行，把「为什么要跑这条」写进你的动作说明即可',
-  '  - 只读操作（getprop/dumpsys/logcat/ls）更不需要请示，直接跑',
-  '  - 不要尝试绕过守卫（如 DSH_NO_CONFIRM、直接调 adb-shell.py）——' +
-  '    绕过即违规，用户可以直接关掉 ADB 通道',
-  '  - 确认框被拒绝就换方案，不要反复重试同一条命令',
+  '■ 完整端点清单（读屏 / 点按 / 输入 / 截屏 / 通知 / 剪贴板 / 传感器 / 导出文件 …）：',
+  '  T=$(cat /root/.dsh/.bridge_token)',
+  '  curl -s "http://127.0.0.1:3090/app/help?token=$T"',
+  '  → 要用设备能力时查这一次，里面有每个端点的参数和写法。',
+  '    清单刻意没写在这里 —— 它有十几 KB，写进提示词就是每一轮都替你付一次上下文。',
 
-  '■ 首选通道：App 层接口（DSHA 专属，走 3090 桥，不需要 ADB、不需要 Shizuku、无需任何用户配置）：',
-  '  T=$(cat /root/.dsh/.bridge_token)   # 以下 $T 均指它',
-  '  ⚠️ 带中文/空格的参数一律用 -G --data-urlencode，别手写 URL 编码：',
-  '     curl -s -G "http://127.0.0.1:3090/app/toast" --data-urlencode "text=你好" --data-urlencode "token=$T"',
-  '',
-  '  ▸ 屏幕操作（无障碍服务，同样不需要 ADB/Shizuku；未开启时接口会返回如何开启的提示）：',
-  '     读屏  curl -s "http://127.0.0.1:3090/app/ui/dump?token=$T"',
-  '           → 逐行给出「[序号] "文字" 可点击 中心=(x,y) 区域=l,t,r,b」，据此决定点哪个',
-  '     点按  curl -s -G "http://127.0.0.1:3090/app/ui/tap" --data-urlencode "text=设置" --data-urlencode "token=$T"',
-  '           → 优先用 text= 按文字点（控件位置会随滚动和动画变，文字不会）；',
-  '             实在没有文字才用 ?x=&y=（坐标取 dump 里的「中心=」）',
-  '     输入  curl -s -G "http://127.0.0.1:3090/app/ui/input" --data-urlencode "text=要输入的内容" --data-urlencode "token=$T"',
-  '           → 填到当前焦点输入框；没有焦点就先 tap 一下输入框',
-  '     按键  curl -s "http://127.0.0.1:3090/app/ui/key?name=back&token=$T"',
-  '           → back / home / recents / notifications / quicksettings / lock',
-  '     滑动  curl -s "http://127.0.0.1:3090/app/ui/swipe?x1=500&y1=1500&x2=500&y2=500&ms=300&token=$T"',
-  '     截屏  curl -s "http://127.0.0.1:3090/app/ui/screenshot?token=$T"',
-  '           → 存成 PNG 落到 Download/DSHA 并返回路径（不回 base64，免得撑爆上下文）',
-  '',
-  '  操作节奏：每次点按/输入后先 dump 再决定下一步，别凭记忆连点 —— 界面可能已经变了。',
-  '  · 设备状态（机型/系统/电量/网络/屏幕/存储/内存）：/app/device',
-  '  · 已装应用（可搜索，默认只列第三方）：/app/apps?q=微信&limit=50',
-  '  · 启动应用：/app/launch?pkg=com.tencent.mm',
-  '  · 剪贴板：读 /app/clip（需 App 在前台，系统限制）；写 /app/clip + --data-urlencode "text=…"',
-  '  · 问用户（弹窗阻塞等回答，最多三个选项）：/app/ask?options=继续|取消 + --data-urlencode "q=要继续吗"',
-  '  · 通知栏：/app/notify?title=任务完成 + --data-urlencode "text=…"；App 内提示：/app/toast',
-  '  · 分享到其它应用：/app/share（text= 或 path=/sdcard/…）；打开链接：/app/open?url=https://…',
-  '  · 震动提醒（长任务跑完叫醒用户）：/app/vibrate?ms=300',
-  '  · 把产物交给用户：/app/export?path=/root/report.md → 落到 Download/DSHA，用户在文件管理器里直接看得到',
-  '  · 读外部文件：/app/readfile?path=/sdcard/Download/x.txt',
-  '  · 当前位置：/app/location（默认关闭，需用户在配置页勾选；加 fresh=1 强制重新定位，可能等数秒）',
-  '  · 传感器：列表 /app/sensors；读值 /app/sensor?name=light',
-  '    （light 环境光 lux / accel 加速度 / gyro 陀螺 / magnet 磁力 / pressure 气压 /',
-  '     proximity 距离 / gravity 重力 / rotation 姿态四元数 / steps 开机后步数）',
-  '  · 手电：/app/torch?on=1 开，on=0 关',
-  '    这三类返回 DISABLED（用户没开该能力）或 NO_PERMISSION（没授系统权限）时，',
-  '    照原话告诉用户去哪里开，不要反复重试 —— 重试不会让开关自己变。',
-  '  外部存储已挂载：/sdcard（Download/DCIM 等公共目录可直接读写）',
-  '  用法建议：需要用户拍板时用 /app/ask 而不是干等；长任务结束用 /app/notify 或 /app/vibrate 叫人；',
-  '  产出报告/日志用 /app/export 而不是只留在容器里。',
-
-  '■ 设备 shell 通道（ADB 无线调试；用户可能没开，未开时不要反复重试）：',
-  '  /root/dsh-bin/adb-shell "命令"          # shell 级（uid=2000）',
-  '  （若包装命令不存在，直接用：python3 /root/.dsh/adb-shell.py "命令"）',
-  '  - 若报连不上/未配对：先看上面的 App 层接口能不能办成；确实必须 shell 才请用户到「配置」页开「ADB 设备通道」并配对，别反复试同一条命令',
-
-  '■ ⚠️ root 提权（--su）必须用户授权：',
-  '  - 不要主动用 --su！只有用户明确要求 root 操作时才尝试',
-  '  - 执行前必须先请用户到「配置」页勾选「允许 root shell」并保存',
-  '  - 未授权时 --su 会被拒绝；授权后仍要说明要执行的 root 命令',
-
-  '■ 备选通道（Shizuku 桥，可能未就绪，需 token）：',
-  '  curl -s "http://127.0.0.1:3090/exec?cmd=...&token=$(cat /root/.dsh/.bridge_token)"',
-
-  '■ ⚠️ 注意：不要用 /root/dsh-bin/adb 或裸 adb 命令——那是守卫包装脚本，会失败。',
-
-  '■ 常用只读操作（可直接执行）：',
-  '  - 查设备信息：getprop ro.product.model',
-  '  - 查前台应用：dumpsys window | grep mCurrentFocus',
-  '  - 抓日志：logcat -d -t 100',
-
-  '■ 权限边界：默认 shell 级（uid=2000，非 root）；root 操作需用户配置页授权。',
-  '■ 破坏性命令（删除/格式化/重启/卸载）：说清后果就动手，守卫会拦下来让用户确认。',
-  '■ 语言要求：与用户交流请一律使用中文回复。',
+  '■ 硬约束（几条，都别违）：',
+  '  - 危险命令由 App 侧守卫拦下来弹确认框、用户点允许才执行。这道门是机制保证的，' +
+  '    所以你不必在执行前再口头问一次「可以吗」，把「为什么要跑这条」写进动作说明就够；',
+  '  - 不要试图绕过守卫（DSH_NO_CONFIRM、直接调 adb-shell.py 之类）—— 绕过即违规；',
+  '  - 接口回 DISABLED / NO_PERMISSION、或 ADB 连不上时，照原话告诉用户去哪里开，' +
+  '    不要反复重试同一条 —— 重试不会让开关自己变；',
+  '  - 屏幕操作的节奏：每次点按或输入之后先 /app/ui/dump 再决定下一步，别凭记忆连点，' +
+  '    界面可能已经变了；',
+  '  - 默认权限是 shell 级（uid=2000，非 root）。不要主动用 --su，' +
+  '    只有用户明确要求 root 操作时才提，并且要他先到「配置」页勾选授权；',
+  '  - 不要用 /root/dsh-bin/adb 或裸 adb 命令 —— 那是守卫包装脚本，会失败；',
+  '  - 与用户交流一律使用中文。',
 ].join('\n')
 
 /**

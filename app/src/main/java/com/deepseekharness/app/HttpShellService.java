@@ -453,6 +453,8 @@ public final class HttpShellService {
                 result = appVibrate(path);
             } else if (path.startsWith("/app/ask")) {
                 result = appAsk(path);
+            } else if (path.startsWith("/app/help")) {
+                result = appHelp();
             } else if (path.startsWith("/app/plugins")) {
                 result = appPlugins(path);
             } else if (path.startsWith("/app/overlay")) {
@@ -686,6 +688,78 @@ public final class HttpShellService {
      *   <li>不带参数 → 只读，返回 {@code LOADED:… / FAILED:… / AT:<毫秒时间戳>}。</li>
      * </ul>
      */
+    /**
+     * {@code /app/help}：3090 桥的完整端点清单，纯文本、给 agent 读。
+     *
+     * <p><b>为什么要有这个端点</b>：这份清单原来整份写在 device-shell-guide 的注入提示词里
+     * （12KB，约几千 token），而它是<b>每一轮对话都要付的成本</b> —— 哪怕这轮根本不碰设备。
+     * 挪到运行时按需查之后，提示词只留骨架，agent 要用设备能力时 curl 一次就拿到全部细节。
+     *
+     * <p>还有个额外好处：这份清单跟端点实现<b>在同一个文件里</b>，加端点时顺手就更新了；
+     * 写在插件的提示词里则要改 assets、bump 版本、重签清单，于是必然脱节
+     * （AGENTS.md 里「文档说 14 个端点、实际 26 个」就是这么来的）。
+     */
+    private String appHelp() {
+        return "DSHA 3090 桥端点清单（token 取自 /root/.dsh/.bridge_token，记为 $T）\n"
+            + "带中文/空格的参数一律用 -G --data-urlencode，别手写 URL 编码。\n"
+            + "\n"
+            + "== 屏幕操作（无障碍服务，不需要 ADB/Shizuku）==\n"
+            + "读屏  curl -s \"127.0.0.1:3090/app/ui/dump?token=$T\"\n"
+            + "      → 每行「[序号] \"文字\" 可点击 中心=(x,y) 区域=l,t,r,b」\n"
+            + "点按  curl -s -G 127.0.0.1:3090/app/ui/tap --data-urlencode \"text=设置\" --data-urlencode \"token=$T\"\n"
+            + "      → 优先按文字点：控件位置随滚动/动画变，文字不变。没有文字才用 ?x=&y=\n"
+            + "输入  curl -s -G 127.0.0.1:3090/app/ui/input --data-urlencode \"text=内容\" --data-urlencode \"token=$T\"\n"
+            + "      → 填到当前焦点框；没有焦点先 tap 一下输入框\n"
+            + "按键  /app/ui/key?name=back  （back/home/recents/notifications/quicksettings/lock）\n"
+            + "滑动  /app/ui/swipe?x1=500&y1=1500&x2=500&y2=500&ms=300\n"
+            + "截屏  /app/ui/screenshot   → 存 PNG 到 Download/DSHA 并返回路径（不回 base64）\n"
+            + "节奏：每次点按/输入后先 dump 再决定下一步，别凭记忆连点。\n"
+            + "\n"
+            + "== 设备与应用 ==\n"
+            + "/app/device                     机型/系统/电量/网络/屏幕/存储/内存\n"
+            + "/app/apps?q=微信&limit=50       已装应用（默认只列第三方）\n"
+            + "/app/launch?pkg=com.tencent.mm  启动应用\n"
+            + "/app/clip                       读剪贴板（需 App 在前台，系统限制）\n"
+            + "/app/clip + text=…              写剪贴板\n"
+            + "/app/readfile?path=/sdcard/…    读外部文件\n"
+            + "/sdcard 已挂载，Download / DCIM 等公共目录可直接读写\n"
+            + "\n"
+            + "== 与用户交互 ==\n"
+            + "/app/ask?options=继续|取消 + q=…  弹窗阻塞等回答（最多三个选项）\n"
+            + "/app/notify?title=… + text=…      通知栏\n"
+            + "/app/toast + text=…               App 内提示\n"
+            + "/app/vibrate?ms=300               震动（长任务跑完叫醒用户）\n"
+            + "/app/share（text= 或 path=）      分享到其它应用\n"
+            + "/app/open?url=https://…           打开链接\n"
+            + "/app/export?path=/root/report.md  把产物交给用户 → 落 Download/DSHA\n"
+            + "建议：需要用户拍板用 /app/ask 而不是干等；长任务结束用 notify 或 vibrate 叫人；\n"
+            + "产出报告用 /app/export，别只留在容器里。\n"
+            + "\n"
+            + "== 传感器与位置（默认关闭，需用户在配置页勾选）==\n"
+            + "/app/location（加 fresh=1 强制重新定位，可能等数秒）\n"
+            + "/app/sensors 列表 · /app/sensor?name=light 读值\n"
+            + "（light 环境光 lux / accel / gyro / magnet / pressure / proximity /\n"
+            + " gravity / rotation 姿态四元数 / steps 开机后步数）\n"
+            + "/app/torch?on=1 手电\n"
+            + "这三类返回 DISABLED（用户没开该能力）或 NO_PERMISSION（没授系统权限）时，\n"
+            + "照原话告诉用户去哪开，不要重试 —— 重试不会让开关自己变。\n"
+            + "\n"
+            + "== 插件状态 ==\n"
+            + "/app/plugins                          读回上次上报的加载状态\n"
+            + "/app/plugins?loaded=a,b&failed=c      上报（插件侧用）\n"
+            + "\n"
+            + "== 设备 shell（ADB 无线调试，用户可能没开）==\n"
+            + "/root/dsh-bin/adb-shell \"命令\"        shell 级（uid=2000）\n"
+            + "包装命令不存在时：python3 /root/.dsh/adb-shell.py \"命令\"\n"
+            + "报连不上/未配对：先看上面的 App 层接口能不能办成；确实必须 shell 才请用户到\n"
+            + "「配置」页开「ADB 设备通道」并配对，别反复试同一条命令。\n"
+            + "不要用 /root/dsh-bin/adb 或裸 adb —— 那是守卫包装脚本，会失败。\n"
+            + "\n"
+            + "== root（--su）==\n"
+            + "默认权限是 shell 级（uid=2000，非 root）。不要主动用 --su；\n"
+            + "只有用户明确要求 root 操作时才尝试，且要先请他到「配置」页勾选「允许 root shell」。\n";
+    }
+
     private String appPlugins(String path) {
         try {
             String q = queryOf(path);
