@@ -600,6 +600,68 @@ public final class PureLogicTest {
                 "https://raw.githubusercontent.com/o/r/main",
                 GitHubRef.parse("o/r").rawPrefix("main"));
 
+        // ===== PluginSpec：pnpm 支持的全部来源都要认得出 =====
+        // dsh plugin --profile 是很薄的 pnpm 转发器，所以 pnpm 的每一种来源都是一种
+        // 合法的插件安装方式。原来那条只放过 npm 包名与 github: 的字符白名单，
+        // 把 #commit 锁定、#path: 子目录、gitlab:/bitbucket:、完整 git URL、
+        // 远程 tarball、jsr:、命名 registry、本地 .tgz 全挡在门外。
+        eqi("spec: npm 包名", PluginSpec.NPM, PluginSpec.classify("dsh-web-ui"));
+        eqi("spec: scoped 包名", PluginSpec.NPM, PluginSpec.classify("@dfy-plugins/dsh-turn-guard"));
+        eqi("spec: 带版本", PluginSpec.NPM, PluginSpec.classify("express@1.0.0"));
+        eqi("spec: 带 dist-tag", PluginSpec.NPM, PluginSpec.classify("express@nightly"));
+        eqi("spec: 带版本范围（含空格）", PluginSpec.NPM, PluginSpec.classify("react@>=0.1.0 <0.2.0"));
+        eqi("spec: jsr registry", PluginSpec.JSR, PluginSpec.classify("jsr:@hono/hono@4"));
+        eqi("spec: 命名 registry", PluginSpec.NAMED_REGISTRY,
+                PluginSpec.classify("gh:@my-org/private-pkg"));
+        eqi("spec: git 简写 owner/repo", PluginSpec.GIT_SHORTHAND,
+                PluginSpec.classify("kevva/is-positive"));
+        eqi("spec: github: 前缀", PluginSpec.GIT_SHORTHAND,
+                PluginSpec.classify("github:zkochan/is-negative"));
+        eqi("spec: gitlab:", PluginSpec.GIT_SHORTHAND,
+                PluginSpec.classify("gitlab:pnpm/git-resolver"));
+        eqi("spec: bitbucket:", PluginSpec.GIT_SHORTHAND,
+                PluginSpec.classify("bitbucket:pnpmjs/git-resolver"));
+        eqi("spec: commit 锁定", PluginSpec.GIT_SHORTHAND,
+                PluginSpec.classify("kevva/is-positive#97edff6f525f192a3f83cea1944765f769ae2678"));
+        eqi("spec: semver ref", PluginSpec.GIT_SHORTHAND,
+                PluginSpec.classify("kevva/is-positive#semver:^2.0.0"));
+        eqi("spec: monorepo 子目录 path:", PluginSpec.GIT_SHORTHAND,
+                PluginSpec.classify("RexSkz/test#path:/packages/simple-react-app"));
+        eqi("spec: 分支与子目录组合", PluginSpec.GIT_SHORTHAND,
+                PluginSpec.classify("RexSkz/test.git#beta&path:/packages/app"));
+        eqi("spec: git+ssh 完整 URL", PluginSpec.GIT_URL,
+                PluginSpec.classify("git+ssh://git@github.com:zkochan/is-negative.git#2.0.1"));
+        eqi("spec: https 且 .git 结尾算 git", PluginSpec.GIT_URL,
+                PluginSpec.classify("https://github.com/zkochan/is-negative.git#2.0.1"));
+        eqi("spec: 远程 tarball（http 且非 .git）", PluginSpec.TARBALL_URL,
+                PluginSpec.classify("https://github.com/indexzero/forever/tarball/v0.5.6"));
+        eqi("spec: 本地目录", PluginSpec.LOCAL_DIR, PluginSpec.classify("./plugins/turn-guard"));
+        eqi("spec: link: 本地 checkout", PluginSpec.LOCAL_DIR,
+                PluginSpec.classify("link:/root/plugin-src/x"));
+        eqi("spec: 本地压缩包 .tgz", PluginSpec.LOCAL_TARBALL, PluginSpec.classify("./pkg-0.1.0.tgz"));
+        eqi("spec: file: 指向压缩包", PluginSpec.LOCAL_TARBALL,
+                PluginSpec.classify("file:/root/a.tar.gz"));
+        // 安全：以 - 开头会被 pnpm 当命令行选项，引号挡不住这种语义偷换
+        ok("spec: 以 - 开头一律拒绝（会被当成 pnpm 选项）",
+                !PluginSpec.isUsable("--force") && !PluginSpec.isUsable("-g")
+                        && !PluginSpec.isUsable("-D"));
+        ok("spec: 控制字符与换行拒绝",
+                !PluginSpec.isUsable("a\nb") && !PluginSpec.isUsable("a\tb"));
+        ok("spec: 空与 null 拒绝", !PluginSpec.isUsable("") && !PluginSpec.isUsable(null));
+        eq("spec: 抠得出 path: 子目录（clone+构建那条路要用）", "packages/app",
+                PluginSpec.subPathOf("RexSkz/test.git#beta&path:/packages/app"));
+        eq("spec: 没有 path: 时为空", "", PluginSpec.subPathOf("o/r#v1.0"));
+        ok("spec: 只有 git 来源算「只带源码」（可能缺构建产物）",
+                PluginSpec.shipsSourceOnly(PluginSpec.GIT_SHORTHAND)
+                        && PluginSpec.shipsSourceOnly(PluginSpec.GIT_URL)
+                        && !PluginSpec.shipsSourceOnly(PluginSpec.NPM)
+                        && !PluginSpec.shipsSourceOnly(PluginSpec.TARBALL_URL));
+        // 「从哪装」与「叫什么名」是两个判据：owner/repo 是合法来源，但不是合法包名
+        ok("spec: 包名判据更严，不放过 owner/repo 与 github:",
+                PluginSpec.isPackageName("@a/b") && PluginSpec.isPackageName("abc")
+                        && !PluginSpec.isPackageName("owner/repo")
+                        && !PluginSpec.isPackageName("github:o/r"));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

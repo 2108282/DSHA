@@ -115,7 +115,31 @@ public class PluginFragment extends Fragment {
                 }
                 String[] info = c.parseGithubUrl(u);
                 if (info == null) {
-                    say("无法解析链接：" + u);
+                    // 不是 GitHub 链接 —— 但 pnpm 认的来源远不止 GitHub：jsr:、gh:、gitlab:、
+                    // bitbucket:、git+ssh、远程 tarball、owner/repo#commit、#path: 子目录、
+                    // 本地目录与 .tgz。识别得出来就摆成一条可直接安装的条目，
+                    // 别再一句「无法解析链接」把用户挡回去。
+                    int kind = PluginSpec.classify(u);
+                    if (kind == PluginSpec.UNKNOWN) {
+                        say("不认识这个来源：" + u + "\n支持 npm 包名（可带 @版本）、jsr:、"
+                                + "owner/repo（可带 #分支 / #commit / #semver: / #path:）、"
+                                + "github:/gitlab:/bitbucket:、完整 git URL、远程 tarball、"
+                                + "本地目录或 .tgz");
+                        return;
+                    }
+                    parsedRef.set(null);
+                    java.util.List<String[]> one = new java.util.ArrayList<>();
+                    // it[6] 放原始 spec —— installMarketItem 认不出 GitHub 链接时直接拿它装
+                    String note = "来源类型：" + PluginSpec.describe(kind)
+                            + (PluginSpec.shipsSourceOnly(kind)
+                            ? "\n\n这类来源装的是源码。缺构建产物时会自动在容器里 clone 并构建，"
+                              + "要几分钟。" : "");
+                    String sub = PluginSpec.subPathOf(u);
+                    if (!sub.isEmpty()) note += "\n仓库子目录：" + sub;
+                    one.add(new String[]{u, "0", "", "⏳待定",
+                            PluginSpec.describe(kind), note, u});
+                    adapter.setData(one, true);
+                    say("识别为「" + PluginSpec.describe(kind) + "」，点「安装」直接装");
                     return;
                 }
                 final String owner2 = info[1].substring(0, info[1].indexOf('/'));
@@ -889,6 +913,12 @@ public class PluginFragment extends Fragment {
     private void installMarketItem(String[] it) {
         GitHubRef gr = GitHubRef.parse(it[6]);
         if (gr == null) {
+            // 不是 GitHub 链接，但可能是别的 pnpm 来源（jsr: / gitlab: / 远程 tarball /
+            // 本地目录或 .tgz / owner/repo#ref …）——直接把 spec 交给 dsh
+            if (PluginSpec.isUsable(it[6])) {
+                installBySpec(it[0], it[6]);
+                return;
+            }
             say("这条市场记录的链接解析不了：" + it[6]);
             Toast.makeText(requireContext(), "链接格式不认识，装不了", Toast.LENGTH_LONG).show();
             return;
@@ -904,6 +934,26 @@ public class PluginFragment extends Fragment {
         final String url = it[6], display = it[0];
         new Thread(() -> {
             String r = c.installFromGithubUrl(url);
+            final String msg = r == null || r.isEmpty() ? "无输出" : r;
+            toastOnMain(appCtx, "安装流程结束：" + display);
+            runOnUiThreadSafely(() -> {
+                say(msg.replace('\n', ' '));
+                showInstalled();
+                new android.app.AlertDialog.Builder(requireContext())
+                        .setTitle("安装结果：" + display)
+                        .setMessage(msg)
+                        .setPositiveButton("知道了", null)
+                        .show();
+            });
+        }).start();
+    }
+
+    /** 按任意 pnpm 来源直接安装（npm / jsr: / gitlab: / 远程 tarball / 本地路径 …）。 */
+    private void installBySpec(String display, String spec) {
+        say("正在安装 " + display + "（" + PluginSpec.describe(PluginSpec.classify(spec)) + "）…");
+        final android.content.Context appCtx = requireContext().getApplicationContext();
+        new Thread(() -> {
+            String r = c.installPlugin(spec);
             final String msg = r == null || r.isEmpty() ? "无输出" : r;
             toastOnMain(appCtx, "安装流程结束：" + display);
             runOnUiThreadSafely(() -> {

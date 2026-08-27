@@ -244,18 +244,18 @@ class PluginController {
     }
 
     /** 校验可进入 shell 的插件 spec：npm 名 / github: / link: / file: 路径。 */
+    /**
+     * 校验可进入 shell 的插件<b>安装来源</b>。判据整体交给 {@link PluginSpec} ——
+     * 它按 pnpm 支持的全部来源来认（npm / jsr / 命名 registry / git 简写与完整 URL /
+     * 远程 tarball / 本地目录与压缩包），而不是原来那条只放过 npm 包名与 github: 的
+     * 字符白名单。那条白名单把 #commit 锁定、#path: 子目录、gitlab:／bitbucket:、
+     * 完整 git URL 全挡在门外，而它们在插件 README 里到处都是。
+     *
+     * <p>注意与 {@link PluginSpec#isPackageName} 分工：这里管「从哪装」，那里管
+     * 「叫什么名字」——{@code owner/repo} 是合法来源但不是合法包名。
+     */
     static boolean isValidPluginSpec(String spec) {
-        if (spec == null) return false;
-        String s = spec.trim();
-        if (s.isEmpty() || s.length() > 256) return false;
-        if (s.startsWith("github:")) {
-            return s.length() > "github:".length()
-                    && s.substring("github:".length()).matches("[A-Za-z0-9._-]+/[A-Za-z0-9._-]+");
-        }
-        if (s.startsWith("link:") || s.startsWith("file:")) {
-            return s.substring(5).matches("[A-Za-z0-9@._:/\\-]+");
-        }
-        return s.matches("(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+");
+        return PluginSpec.isUsable(spec);
     }
 
 
@@ -507,7 +507,7 @@ class PluginController {
                     skipped.add(label + "（package.json 里没有 name）");
                     continue;
                 }
-                if (!isValidPluginSpec(name)) {
+                if (!PluginSpec.isPackageName(name)) {
                     skipped.add(label + "（包名 " + name + " 不合法）");
                     continue;
                 }
@@ -2181,7 +2181,7 @@ class PluginController {
     public String exportOnePlugin(String name) {
         if (name == null || name.trim().isEmpty()) return "BAD_NAME";
         final String n = name.trim();
-        if (!isValidPluginSpec(n)) return "BAD_NAME";
+        if (!PluginSpec.isPackageName(n)) return "BAD_NAME";
         final String OUT_GUEST = "/root/.dsha-plugin-one.tar.gz";
         java.io.File outHost = new java.io.File(proot.getRootfsDir(), "root/.dsha-plugin-one.tar.gz");
         try {
