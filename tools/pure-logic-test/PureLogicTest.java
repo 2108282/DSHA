@@ -737,6 +737,42 @@ public final class PureLogicTest {
                 java.util.Arrays.toString(ArchiveProbe.pluginRoots(new String[]{
                         "repo-main/package.json", "repo-main/plugins/x/package.json"})));
 
+        // ===== MarketCol：市场行的列语义 =====
+        // 这个类是为了挡住已经出过两次的同一类错：往某一列塞了别的东西 ——
+        // it[4] 一条路填分类另一条填 npm 名（安装时拿 "ui" 当包名去装）、
+        // it[3] 一条路填兼容性另一条填收录日期（「仅显示兼容」一条也筛不掉）。
+        String[] good = new String[MarketCol.NPM + 1];
+        good[MarketCol.NAME] = "dsh-x";
+        good[MarketCol.STARS] = "55";
+        good[MarketCol.OWNER] = "someone";
+        good[MarketCol.COMPAT] = "⏳待定";
+        good[MarketCol.CATEGORY] = "UI 增强";
+        good[MarketCol.DESC] = "描述";
+        good[MarketCol.URL] = "https://github.com/someone/dsh-x";
+        good[MarketCol.NPM] = "dsh-x";
+        ok("market: 正常一行通过自检", MarketCol.isSaneRow(good));
+        String[] dateInCompat = good.clone();
+        dateInCompat[MarketCol.COMPAT] = "2026-08-14";
+        ok("market: 日期落进兼容性列必须被挡下（筛选器就是这么失效的）",
+                !MarketCol.isSaneRow(dateInCompat));
+        String[] badStars = good.clone();
+        badStars[MarketCol.STARS] = "ui";
+        ok("market: 星标列不是数字要挡下（否则排序静默乱掉）", !MarketCol.isSaneRow(badStars));
+        String[] noName = good.clone();
+        noName[MarketCol.NAME] = "";
+        ok("market: 名字为空要挡下", !MarketCol.isSaneRow(noName));
+        ok("market: 列数不够要挡下", !MarketCol.isSaneRow(new String[]{"a", "1"}));
+        eq("market: npmOf 取出 npm 包名", "dsh-x", MarketCol.npmOf(good));
+        String[] notNpm = good.clone();
+        notNpm[MarketCol.NPM] = "仅GitHub仓库";
+        eq("market: 不是合法包名的 npm 列当作没有", "", MarketCol.npmOf(notNpm));
+        ok("market: 日期形状识别", MarketCol.looksLikeDate("2026-08-14")
+                && MarketCol.looksLikeDate("2026/8/1")
+                && !MarketCol.looksLikeDate("⏳待定")
+                && !MarketCol.looksLikeDate("✅ 已验证"));
+        eq("market: at() 越界给空串", "", MarketCol.at(good, 99));
+        eq("market: at() 顺手去空格", "dsh-x", MarketCol.at(new String[]{"  dsh-x  "}, 0));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

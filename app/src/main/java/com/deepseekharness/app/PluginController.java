@@ -1168,17 +1168,28 @@ class PluginController {
                     } else {
                         desc = o.optString("description", "").trim();
                     }
-                    // 收录日期挪进描述：it[3] 这个位置是**兼容性标记**（「仅显示兼容」
-                    // 筛选器读的就是它）。之前往这里塞日期，筛选器于是永远筛不掉任何条目 ——
-                    // 点了没反应。这份索引不带兼容性标注，所以填「⏳待定」，
-                    // 按既有语义「未知兼容性不误杀」。
+                    // 收录日期只能进描述。COMPAT 那一列是**兼容性标记**（「仅显示兼容」
+                    // 读的就是它），往那儿塞日期筛选器就永远筛不掉东西 —— 踩过一次。
+                    // 这份索引不带兼容性标注，填「⏳待定」，按既有语义「未知不误杀」。
                     String added = o.optString("added", "").trim();
                     if (!added.isEmpty()) desc = desc.isEmpty() ? "收录于 " + added
                             : desc + "（收录于 " + added + "）";
-                    out.add(new String[]{name, String.valueOf(o.optInt("stars", 0)), owner,
-                            "⏳待定",
-                            categoryLabel(catMap, o.optString("category", "")), desc, url,
-                            npm});   // 第 8 列是 npm 包名（Markdown 那条路没有这一列）
+                    String[] row = new String[MarketCol.NPM + 1];
+                    row[MarketCol.NAME] = name;
+                    row[MarketCol.STARS] = String.valueOf(o.optInt("stars", 0));
+                    row[MarketCol.OWNER] = owner;
+                    row[MarketCol.COMPAT] = "⏳待定";
+                    row[MarketCol.CATEGORY] = categoryLabel(catMap, o.optString("category", ""));
+                    row[MarketCol.DESC] = desc;
+                    row[MarketCol.URL] = url;
+                    row[MarketCol.NPM] = npm;
+                    // 形状自检：挡住「往某列塞了别的东西」这类错（日期落进 COMPAT、
+                    // 星标不是数字…）。宁可丢一条脏数据，也别让整页筛选/排序静默失灵。
+                    if (!MarketCol.isSaneRow(row)) {
+                        android.util.Log.w("DSHA", "市场索引里一行形状不对，已跳过: " + name);
+                        continue;
+                    }
+                    out.add(row);
                 }
                 if (!out.isEmpty()) {
                     host.logActivity("市场索引来自 plugins.json（" + out.size() + " 条，含 npm 映射）");
@@ -1419,7 +1430,15 @@ class PluginController {
                 if (compat.length() > 8) compat = compat.substring(0, 8);
                 // 过滤非插件（桌面壳/TUI/合集等），避免市场乱拉
                 if (isLikelyNonPlugin(name, url, desc)) continue;
-                out.add(new String[]{name, star, owner, compat, category, desc, url});
+                String[] row = new String[MarketCol.BASE_WIDTH];
+                row[MarketCol.NAME] = name;
+                row[MarketCol.STARS] = star;
+                row[MarketCol.OWNER] = owner;
+                row[MarketCol.COMPAT] = compat;
+                row[MarketCol.CATEGORY] = category;
+                row[MarketCol.DESC] = desc;
+                row[MarketCol.URL] = url;
+                if (MarketCol.isSaneRow(row)) out.add(row);
                 continue;
             }
             // ===== 条目：表格式  | [name](url) | 类型 | 兼容 | 说明 |  =====
@@ -1449,7 +1468,15 @@ class PluginController {
                 if (compat.length() > 8) compat = compat.substring(0, 8);
                 // 过滤非插件（表格格式同样适用）
                 if (isLikelyNonPlugin(name, url, desc)) continue;
-                out.add(new String[]{name, "0", owner, compat, category, desc, url});
+                String[] row2 = new String[MarketCol.BASE_WIDTH];
+                row2[MarketCol.NAME] = name;
+                row2[MarketCol.STARS] = "0";
+                row2[MarketCol.OWNER] = owner;
+                row2[MarketCol.COMPAT] = compat;
+                row2[MarketCol.CATEGORY] = category;
+                row2[MarketCol.DESC] = desc;
+                row2[MarketCol.URL] = url;
+                if (MarketCol.isSaneRow(row2)) out.add(row2);
             }
         }
         return out;

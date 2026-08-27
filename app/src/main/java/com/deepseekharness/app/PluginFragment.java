@@ -368,9 +368,9 @@ public class PluginFragment extends Fragment {
     private java.util.List<String> collectCategories() {
         java.util.List<String> out = new java.util.ArrayList<>();
         for (String[] it : items) {
-            if (it.length > 4 && it[4] != null && !it[4].trim().isEmpty()
-                    && !out.contains(it[4].trim())) {
-                out.add(it[4].trim());
+            if (it.length > 4 && it[MarketCol.CATEGORY] != null && !it[MarketCol.CATEGORY].trim().isEmpty()
+                    && !out.contains(it[MarketCol.CATEGORY].trim())) {
+                out.add(it[MarketCol.CATEGORY].trim());
             }
         }
         return out;
@@ -792,15 +792,15 @@ public class PluginFragment extends Fragment {
 
     /** 详情弹窗：star/作者/更新日期 + 完整描述 + README + 安装按钮。 */
     private void showDetail(String[] it) {
-        String owner = it[2];
-        String repo = it[6].endsWith("/") ? "" : it[6].substring(it[6].lastIndexOf('/') + 1);
+        String owner = it[MarketCol.OWNER];
+        String repo = it[MarketCol.URL].endsWith("/") ? "" : it[MarketCol.URL].substring(it[MarketCol.URL].lastIndexOf('/') + 1);
 
         // 三路异步都会回来改这个弹窗（仓库信息、描述翻译、README），所以正文统一由
         // detailMessage 组装、各自只改自己那一格 —— 否则谁后回来谁把对方的成果覆盖掉。
-        final String[] star = {it[1]};
+        final String[] star = {it[MarketCol.STARS]};
         final String[] who = {owner};
         final String[] date = {""};
-        final String[] zh = {Translator.cached(requireContext(), it[5])};  // 缓存命中就不显示「翻译中」
+        final String[] zh = {Translator.cached(requireContext(), it[MarketCol.DESC])};  // 缓存命中就不显示「翻译中」
         final String[] readme = {null};
         final android.app.AlertDialog[] holder = new android.app.AlertDialog[1];
 
@@ -823,13 +823,13 @@ public class PluginFragment extends Fragment {
         };
 
         holder[0] = new android.app.AlertDialog.Builder(requireContext())
-                .setTitle(it[0])
+                .setTitle(it[MarketCol.NAME])
                 .setView(scroll)
                 .setPositiveButton("安装", (d, w) -> startAutoInstall(it, owner, repo))
                 .setNeutralButton("复制仓库链接", (d, w) -> {
                     android.content.ClipboardManager cm = (android.content.ClipboardManager)
                             requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
-                    cm.setPrimaryClip(android.content.ClipData.newPlainText("url", it[6]));
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("url", it[MarketCol.URL]));
                     Toast.makeText(requireContext(), "链接已复制", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("关闭", null)
@@ -863,10 +863,10 @@ public class PluginFragment extends Fragment {
 
         // 异步翻译描述。只在详情打开时翻这一条 —— 列表整页翻要几十个请求，又慢又费钱
         if (zh[0] == null && Translator.enabled(requireContext())
-                && it[5] != null && !it[5].trim().isEmpty()) {
+                && it[MarketCol.DESC] != null && !it[MarketCol.DESC].trim().isEmpty()) {
             final android.content.Context app = requireContext().getApplicationContext();
             new Thread(() -> {
-                String out = Translator.translate(app, it[5]);
+                String out = Translator.translate(app, it[MarketCol.DESC]);
                 if (out == null) return;    // 失败就保持原文，不弹错误框打扰人
                 runOnUiThreadSafely(() -> {
                     zh[0] = out;
@@ -1048,15 +1048,15 @@ public class PluginFragment extends Fragment {
      * 的另一半原因。
      */
     private void installMarketItem(String[] it) {
-        GitHubRef gr = GitHubRef.parse(it[6]);
+        GitHubRef gr = GitHubRef.parse(it[MarketCol.URL]);
         if (gr == null) {
             // 不是 GitHub 链接，但可能是别的 pnpm 来源（jsr: / gitlab: / 远程 tarball /
             // 本地目录或 .tgz / owner/repo#ref …）——直接把 spec 交给 dsh
-            if (PluginSpec.isUsable(it[6])) {
-                installBySpec(it[0], it[6]);
+            if (PluginSpec.isUsable(it[MarketCol.URL])) {
+                installBySpec(it[MarketCol.NAME], it[MarketCol.URL]);
                 return;
             }
-            say("这条市场记录的链接解析不了：" + it[6]);
+            say("这条市场记录的链接解析不了：" + it[MarketCol.URL]);
             Toast.makeText(requireContext(), "链接格式不认识，装不了", Toast.LENGTH_LONG).show();
             return;
         }
@@ -1066,9 +1066,9 @@ public class PluginFragment extends Fragment {
         }
         // monorepo 子目录：整条链接交给 installFromGithubUrl —— 它认子目录，
         // 并会在容器里 clone + 装依赖 + 构建（几分钟级，所以先把话说清）
-        say("正在安装 " + it[0] + "（仓库子目录插件，要在容器里构建，请耐心等几分钟）…");
+        say("正在安装 " + it[MarketCol.NAME] + "（仓库子目录插件，要在容器里构建，请耐心等几分钟）…");
         final android.content.Context appCtx = requireContext().getApplicationContext();
-        final String url = it[6], display = it[0];
+        final String url = it[MarketCol.URL], display = it[MarketCol.NAME];
         new Thread(() -> {
             String r = c.installFromGithubUrl(url);
             final String msg = r == null || r.isEmpty() ? "无输出" : r;
@@ -1098,7 +1098,7 @@ public class PluginFragment extends Fragment {
     }
 
     private void startAutoInstall(String[] it, String owner, String repo) {
-        final String display = it[0];
+        final String display = it[MarketCol.NAME];
         say("正在预检 " + display + " …");
         new Thread(() -> {
             final String spec = "github:" + owner + "/" + repo;
@@ -1106,10 +1106,10 @@ public class PluginFragment extends Fragment {
             // 省掉一次多源网络探测。fetchNpmName 要去仓库读 package.json、多镜像回退，
             // 常常查不到，「没查到 npm 包名」那条提示就是它；plugins.json 的映射每天由 CI 刷新。
             //
-            // 刻意不复用 it[4]：Markdown 那条路的 it[4] 是**分类**（"ui"、"tools"），
+            // 刻意不复用 it[MarketCol.CATEGORY]：Markdown 那条路的 it[MarketCol.CATEGORY] 是**分类**（"ui"、"tools"），
             // 而分类名恰好也是合法的包名形态 —— 拿它当包名会去装一个叫 "ui" 的包。
-            String fromIndex = (it.length > 7 && it[7] != null
-                    && PluginSpec.isPackageName(it[7].trim())) ? it[7].trim() : null;
+            String fromIndex = (it.length > 7 && it[MarketCol.NPM] != null
+                    && PluginSpec.isPackageName(it[MarketCol.NPM].trim())) ? it[MarketCol.NPM].trim() : null;
             String hint = fromIndex != null ? fromIndex : c.fetchNpmName(owner, repo);
             final String[] pre = c.precheckForMarket(spec, hint);
             final String verdict = pre[0], why = pre[1];
@@ -1129,7 +1129,7 @@ public class PluginFragment extends Fragment {
                             .setMessage(DeprecatedPlugins.reason(deprecated)
                                     + "\n\n两边改造同一批界面元素，同时启用的表现是抽屉和浮层出两份、"
                                     + "点一下响应两次。"
-                                    + "\n\n仓库：\n" + it[6])
+                                    + "\n\n仓库：\n" + it[MarketCol.URL])
                             .setPositiveButton("仍然安装",
                                     (d, w) -> installInBackground(pkg, display, spec))
                             .setNegativeButton("算了", null)
@@ -1152,7 +1152,7 @@ public class PluginFragment extends Fragment {
                 say(badge + "：" + display);
                 android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(requireContext())
                         .setTitle(badge + "：" + display)
-                        .setMessage(why + "\n\n仓库：\n" + it[6])
+                        .setMessage(why + "\n\n仓库：\n" + it[MarketCol.URL])
                         // 即使预检说装不上也保留「仍然试试」—— 预检是启发式的，
                         // 不该替用户做最终决定（万一作者刚发布、或仓库结构特殊）
                         .setPositiveButton("仍然安装",
@@ -1163,7 +1163,7 @@ public class PluginFragment extends Fragment {
                                             android.content.Context.CLIPBOARD_SERVICE);
                             if (cm != null) {
                                 cm.setPrimaryClip(
-                                        android.content.ClipData.newPlainText("url", it[6]));
+                                        android.content.ClipData.newPlainText("url", it[MarketCol.URL]));
                                 Toast.makeText(requireContext(), "链接已复制", Toast.LENGTH_SHORT).show();
                             }
                         })
