@@ -79,4 +79,24 @@ final class MarketCol {
     static boolean looksLikeDate(String s) {
         return s != null && s.matches("\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}.*");
     }
+
+    /**
+     * <b>已装插件</b>行的列语义 —— 跟市场行完全不同，别混。
+     *
+     * <p>最容易踩的是 {@code [1]}：市场行那是<b>星标数</b>，已装行是<b>启用状态</b>
+     * （{@code "启用"} / {@code "禁用"}）。两套语义各自只在 adapter 的对应分支里使用。
+     */
+    static final class Installed {
+        /** 插件包名。 */
+        static final int NAME = 0;
+        /** {@code "启用"} 或 {@code "禁用"}。 */
+        static final int STATE = 1;
+        /** 简介：内置插件用 App 侧的中文，其余读 package.json 的 description。 */
+        static final int DESC = 2;
+        /** 列数。 */
+        static final int WIDTH = 3;
+
+        private Installed() {
+        }
+    }
 }

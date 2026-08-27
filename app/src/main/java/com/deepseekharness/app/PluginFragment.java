@@ -1275,18 +1275,24 @@ public class PluginFragment extends Fragment {
         public void onBindViewHolder(@NonNull VH h, int pos) {
             String[] it = data.get(pos);
             if (isMarket) {
-                h.name.setText(it[0]);
-                h.desc.setText(it[5]);
-                h.status.setText("⭐ " + it[1] + " · 👤 " + (it[2].isEmpty() ? "?" : it[2]) + " · " + it[3] + " · " + it[4]);
+                h.name.setText(it[MarketCol.NAME]);
+                h.desc.setText(MarketCol.at(it, MarketCol.DESC));
+                h.status.setText("⭐ " + MarketCol.at(it, MarketCol.STARS)
+                        + " · 👤 " + (MarketCol.at(it, MarketCol.OWNER).isEmpty()
+                                ? "?" : MarketCol.at(it, MarketCol.OWNER))
+                        + " · " + MarketCol.at(it, MarketCol.COMPAT)
+                        + " · " + MarketCol.at(it, MarketCol.CATEGORY));
                 h.installBtn.setVisibility(View.VISIBLE);
                 h.installBtn.setText("安装");
                 h.switchView.setVisibility(View.GONE);
                 h.itemView.setOnClickListener(v -> showDetail(it));
                 h.installBtn.setOnClickListener(v -> installMarketItem(it));
             } else {
-                h.name.setText(it[0]);
-                h.desc.setText("");
-                boolean enabled = "启用".equals(it[1]);
+                h.name.setText(it[MarketCol.Installed.NAME]);
+                // 简介：内置插件用我们写的中文，其余读它 package.json 的 description。
+                // 以前这里写死空串 —— 列表上只有一串包名，用户根本不知道每个插件干什么。
+                h.desc.setText(MarketCol.at(it, MarketCol.Installed.DESC));
+                boolean enabled = "启用".equals(it[MarketCol.Installed.STATE]);
                 // 注册了不等于加载成功：PENDING（inject 的服务没提供者）不报错，插件就静静地
                 // 什么都不做。这一行是用户唯一能看到真实原因的地方，别让它退化成"已启用"。
                 String fail = loadFailures.get(it[0]);
