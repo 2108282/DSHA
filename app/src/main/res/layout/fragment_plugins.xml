@@ -141,6 +141,112 @@
         android:textColorHint="@color/text_muted"
         android:textSize="@dimen/text_body" />
 
+    <!-- 多选操作条：长按插件卡片才进入多选，平时不占任何位置（不加常驻入口） -->
+    <LinearLayout
+        android:id="@+id/multiBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/gap_tight"
+        android:paddingEnd="@dimen/gap_tight"
+        android:paddingTop="@dimen/gap_tight"
+        android:paddingBottom="@dimen/gap_tight"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/multiCount"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="已选 0 个"
+                android:textColor="@color/text_secondary"
+                android:textSize="@dimen/text_label" />
+
+            <TextView
+                android:id="@+id/multiSelectAll"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:background="@drawable/bg_btn"
+                android:gravity="center"
+                android:minWidth="64dp"
+                android:text="全选"
+                android:textColor="@color/text_secondary"
+                android:textSize="@dimen/text_label" />
+
+            <TextView
+                android:id="@+id/multiCancel"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="@dimen/gap_tight"
+                android:background="@drawable/bg_btn"
+                android:gravity="center"
+                android:minWidth="64dp"
+                android:text="退出"
+                android:textColor="@color/text_secondary"
+                android:textSize="@dimen/text_label" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_tight"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/multiEnable"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn"
+                android:gravity="center"
+                android:text="启用"
+                android:textColor="@color/text_secondary"
+                android:textSize="@dimen/text_label" />
+
+            <TextView
+                android:id="@+id/multiDisable"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="@dimen/gap_tight"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn"
+                android:gravity="center"
+                android:text="禁用"
+                android:textColor="@color/text_secondary"
+                android:textSize="@dimen/text_label" />
+
+            <TextView
+                android:id="@+id/multiExport"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="@dimen/gap_tight"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn"
+                android:gravity="center"
+                android:text="导出"
+                android:textColor="@color/text_secondary"
+                android:textSize="@dimen/text_label" />
+
+            <TextView
+                android:id="@+id/multiDelete"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="@dimen/gap_tight"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn"
+                android:gravity="center"
+                android:text="删除"
+                android:textColor="@color/text_secondary"
+                android:textSize="@dimen/text_label" />
+        </LinearLayout>
+    </LinearLayout>
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/pluginList"
         android:layout_width="match_parent"

@@ -439,24 +439,153 @@ class PluginController {
             }
             // 老状态兼容：以前用改目录名禁用过的，启用时得把目录名改回来，
             // 否则 patch 里写着「启用」而包根本不在 node_modules 里
-            if (enable) {
-                for (String d : HarnessController.PLUGIN_DIRS) {
-                    java.io.File base = new java.io.File(proot.getRootfsDir(), d.substring(1));
-                    java.io.File offDir = new java.io.File(base, name + ".disabled");
-                    java.io.File onDir = new java.io.File(base, name);
-                    if (existsOrBrokenLink(offDir) && !existsOrBrokenLink(onDir)
-                            && !(offDir.isFile() && offDir.length() == 0)) {
-                        //noinspection ResultOfMethodCallIgnored
-                        offDir.renameTo(onDir);
-                    }
-                }
-            }
+            if (enable) restoreDisabledDir(name);
             host.logActivity((enable ? "启用" : "禁用") + "插件 " + name
                     + "（patch 层，刷新页面即生效）");
             return true;
         } catch (Throwable t) {
             lastToggleError = "patch 层切换失败：" + t;
             return null;
+        }
+    }
+
+    /** 老状态兼容：以前用改目录名禁用过的，启用时把目录名改回来。 */
+    private void restoreDisabledDir(String name) {
+        for (String d : HarnessController.PLUGIN_DIRS) {
+            java.io.File base = new java.io.File(proot.getRootfsDir(), d.substring(1));
+            java.io.File offDir = new java.io.File(base, name + ".disabled");
+            java.io.File onDir = new java.io.File(base, name);
+            if (existsOrBrokenLink(offDir) && !existsOrBrokenLink(onDir)
+                    && !(offDir.isFile() && offDir.length() == 0)) {
+                //noinspection ResultOfMethodCallIgnored
+                offDir.renameTo(onDir);
+            }
+        }
+    }
+
+    /**
+     * 批量启用/禁用。
+     *
+     * <p><b>一次写 patch</b>：逐个调 {@link #togglePlugin} 会「读 → 改 → 写」N 遍，
+     * 选十个插件就是十次文件往返，慢，而且每一轮之间都给并发留了缝。这里把所有 id
+     * 合起来算完再写一次。
+     *
+     * <p>抠不到 loader 行 id 的（写 patch 也不生效）退回逐个搬文件的老路。
+     */
+    public String togglePlugins(java.util.List<String> names, boolean enable) {
+        if (names == null || names.isEmpty()) return "没有选中任何插件";
+        java.util.LinkedHashMap<String, java.util.List<String>> idsOf = new java.util.LinkedHashMap<>();
+        for (String n : names) {
+            java.util.List<String> ids = readPluginPatchIds(n);
+            if (!ids.isEmpty()) idsOf.put(n, ids);
+        }
+        int okCount = 0;
+        java.util.List<String> failed = new java.util.ArrayList<>();
+        if (!idsOf.isEmpty()) {
+            synchronized (patchLock) {
+                java.io.File patch = profilePatchFile();
+                if (patch.getParentFile() != null && patch.getParentFile().isDirectory()) {
+                    String yaml = readTextFile(patch);
+                    java.util.Set<String> off =
+                            new java.util.LinkedHashSet<>(PatchToggle.disabledIds(yaml));
+                    for (java.util.List<String> ids : idsOf.values()) {
+                        if (enable) off.removeAll(ids);
+                        else off.addAll(ids);
+                    }
+                    if (writeTextAtomic(patch, PatchToggle.withDisabled(yaml, off))) {
+                        okCount += idsOf.size();
+                        if (enable) {
+                            for (String n : idsOf.keySet()) restoreDisabledDir(n);
+                        }
+                    } else {
+                        failed.addAll(idsOf.keySet());
+                    }
+                } else {
+                    failed.addAll(idsOf.keySet());
+                }
+            }
+        }
+        for (String n : names) {
+            if (idsOf.containsKey(n)) continue;
+            if (togglePlugin(n, enable)) okCount++;
+            else failed.add(n + "（" + getLastToggleError() + "）");
+        }
+        host.logActivity("批量" + (enable ? "启用" : "禁用") + " " + okCount + " 个插件");
+        return "已" + (enable ? "启用" : "禁用") + " " + okCount + " 个"
+                + (failed.isEmpty() ? "，刷新页面即可生效"
+                : "；这些没成功：" + String.join("、", failed));
+    }
+
+    /** 批量卸载。以「是否还在 profile 清单里」判成败，比解析命令输出可靠。 */
+    public String removePlugins(java.util.List<String> names) {
+        if (names == null || names.isEmpty()) return "没有选中任何插件";
+        int ok = 0;
+        java.util.List<String> bad = new java.util.ArrayList<>();
+        for (String n : names) {
+            String out;
+            try {
+                out = removePlugin(n);
+            } catch (Throwable t) {
+                out = String.valueOf(t);
+            }
+            if (!isInProfileManifest(n)) ok++;
+            else bad.add(n + "（" + shortOf(out) + "）");
+        }
+        host.logActivity("批量卸载 " + ok + " 个插件");
+        return "已卸载 " + ok + " 个" + (bad.isEmpty() ? "，刷新页面即可生效"
+                : "；这些没成功：" + String.join("、", bad));
+    }
+
+    private static String shortOf(String s) {
+        if (s == null || s.isEmpty()) return "无输出";
+        String t = s.replace('\n', ' ').trim();
+        return t.length() > 60 ? t.substring(0, 60) + "…" : t;
+    }
+
+    /**
+     * 把选中的若干插件打成<b>一个</b>压缩包放进 {@code Download/DSHA/插件/}。
+     *
+     * <p>{@code -h} 解引用是必须的：已装插件在 node_modules 里多半只是软链，
+     * 不解引用打出来是一把空链接（备份那边为同一个原因丢过对话）。
+     */
+    public String exportSelectedPlugins(java.util.List<String> names) {
+        if (names == null || names.isEmpty()) return "NO_SELECTION";
+        final String OUT_GUEST = "/root/.dsha-plugins-sel.tar.gz";
+        java.io.File outHost = new java.io.File(proot.getRootfsDir(), "root/.dsha-plugins-sel.tar.gz");
+        try {
+            for (String d : HarnessController.PLUGIN_DIRS) {
+                java.io.File dir = new java.io.File(proot.getRootfsDir(), d.substring(1));
+                if (!dir.isDirectory()) continue;
+                StringBuilder args = new StringBuilder();
+                int found = 0;
+                for (String n : names) {
+                    if (n == null || !PluginSpec.isPackageName(n)) continue;
+                    if (!existsOrBrokenLink(new java.io.File(dir, n))) continue;
+                    args.append(' ').append(ShellQuote.arg(n));
+                    found++;
+                }
+                if (found == 0) continue;
+                String r = proot.execAndRead("rm -f " + ShellQuote.arg(OUT_GUEST)
+                        + "; cd " + ShellQuote.arg(d)
+                        + " && tar -czhf " + ShellQuote.arg(OUT_GUEST) + args
+                        + " 2>&1; echo TAR_EXIT=$?");
+                if (r == null || !r.contains("TAR_EXIT=0") || !outHost.isFile()) continue;
+                String file = "DSHA-plugins-" + found + "个-"
+                        + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                        .format(new java.util.Date()) + ".tar.gz";
+                String path = copyToDownloads(outHost, file, PublicDirs.PLUGINS);
+                if (path != null) {
+                    host.logActivity("批量导出 " + found + " 个插件 → " + path);
+                    return path;
+                }
+            }
+            return "NOT_FOUND";
+        } catch (Exception e) {
+            android.util.Log.w("DSHA", "批量导出失败: " + e);
+            return null;
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            outHost.delete();
         }
     }
 

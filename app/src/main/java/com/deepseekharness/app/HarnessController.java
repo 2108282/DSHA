@@ -6187,6 +6187,12 @@ public class HarnessController {
     public String exportPlugins() { return plugins.exportPlugins(); }
     /** 导出单个插件到 Download/DSHA/插件/（单文件）。 */
     public String exportOnePlugin(String name) { return plugins.exportOnePlugin(name); }
+    /** 批量启用/禁用（一次写 patch）。 */
+    public String togglePlugins(java.util.List<String> names, boolean enable) { return plugins.togglePlugins(names, enable); }
+    /** 批量卸载。 */
+    public String removePlugins(java.util.List<String> names) { return plugins.removePlugins(names); }
+    /** 把选中的若干插件打成一个压缩包放进 Download/DSHA/插件/。 */
+    public String exportSelectedPlugins(java.util.List<String> names) { return plugins.exportSelectedPlugins(names); }
     public boolean importPlugins(java.io.File tarGz) { return plugins.importPlugins(tarGz); }
     /** 导入插件归档（自动识别 tar.gz / tar / zip 与单插件 / 多插件布局）。
      *  返回 {status, message}，status = "OK" | "ERR"。 */

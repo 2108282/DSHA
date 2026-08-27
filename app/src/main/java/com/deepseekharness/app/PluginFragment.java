@@ -223,6 +223,7 @@ public class PluginFragment extends Fragment {
 
         btnMarket.setOnClickListener(v -> {
             mode = Mode.MARKET;
+            exitMulti();   // 多选只属于插件管理页，切走就收起来
             styleTab(btnMarket, true);
             styleTab(btnInstalled, false);
             view.findViewById(R.id.actionBar).setVisibility(View.GONE);
@@ -256,6 +257,15 @@ public class PluginFragment extends Fragment {
 
         view.findViewById(R.id.btnExport).setOnClickListener(v -> exportPlugins());
         view.findViewById(R.id.btnImport).setOnClickListener(v -> importPlugins());
+        // 多选操作条（长按插件卡片才出现）
+        multiBar = view.findViewById(R.id.multiBar);
+        multiCount = view.findViewById(R.id.multiCount);
+        view.findViewById(R.id.multiSelectAll).setOnClickListener(v -> selectAllInstalled());
+        view.findViewById(R.id.multiCancel).setOnClickListener(v -> exitMulti());
+        view.findViewById(R.id.multiEnable).setOnClickListener(v -> batchToggle(true));
+        view.findViewById(R.id.multiDisable).setOnClickListener(v -> batchToggle(false));
+        view.findViewById(R.id.multiExport).setOnClickListener(v -> batchExport());
+        view.findViewById(R.id.multiDelete).setOnClickListener(v -> batchDelete());
         // 隐藏自带插件开关：记住选择，切换时刷新已装列表
         final android.widget.CheckBox hideCb = view.findViewById(R.id.chkHideBuiltin);
         hideCb.setChecked(requireContext().getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
@@ -537,6 +547,13 @@ public class PluginFragment extends Fragment {
                     return;
                 }
                 for (String[] p : pl) installed.add(p);
+                // 刷新后把已经不在列表里的选中项剔掉（比如刚被批量删掉的、或被
+                // 「隐藏自带插件」筛掉的）——否则批量操作会作用在看不见的插件上
+                if (multiMode) {
+                    selected.retainAll(installedNames);
+                    if (selected.isEmpty()) exitMulti();
+                    else updateMultiBar();
+                }
                 adapter.setData(installed, false);
                 say("已装 " + installed.size() + " 个插件 · 开关启用/禁用");
             });
@@ -567,6 +584,115 @@ public class PluginFragment extends Fragment {
                 }
             });
         }).start();
+    }
+
+    // ===== 多选（只在已装插件页生效）=====
+    // 入口是**长按卡片**，不加常驻按钮：一年用几次的操作不该在页面上占位置。
+    // 长按原来是「卸载这一个」——那件事现在由多选里的删除承担，语义更统一。
+    private View multiBar;
+    private TextView multiCount;
+    private boolean multiMode = false;
+    private final java.util.LinkedHashSet<String> selected = new java.util.LinkedHashSet<>();
+
+    private void enterMulti(String first) {
+        if (mode != Mode.INSTALLED) return;   // 市场页不参与多选
+        multiMode = true;
+        if (first != null) selected.add(first);
+        if (multiBar != null) multiBar.setVisibility(View.VISIBLE);
+        updateMultiBar();
+        adapter.notifyDataSetChanged();
+    }
+
+    private void exitMulti() {
+        multiMode = false;
+        selected.clear();
+        if (multiBar != null) multiBar.setVisibility(View.GONE);
+        adapter.notifyDataSetChanged();
+    }
+
+    private void toggleSelect(String name) {
+        if (!selected.remove(name)) selected.add(name);
+        if (selected.isEmpty()) {
+            exitMulti();       // 一个都不选就自动退出，省一次「退出」点击
+            return;
+        }
+        updateMultiBar();
+        adapter.notifyDataSetChanged();
+    }
+
+    private void selectAllInstalled() {
+        for (String[] row : installed) {
+            if (row.length > 0 && row[0] != null && !row[0].isEmpty()) selected.add(row[0]);
+        }
+        updateMultiBar();
+        adapter.notifyDataSetChanged();
+    }
+
+    private void updateMultiBar() {
+        if (multiCount != null) multiCount.setText("已选 " + selected.size() + " 个");
+    }
+
+    /** 选中的名字快照 —— 后台线程里不能直接读 selected（用户可能同时在改）。 */
+    private java.util.List<String> selectedSnapshot() {
+        return new java.util.ArrayList<>(selected);
+    }
+
+    private void batchToggle(boolean enable) {
+        final java.util.List<String> names = selectedSnapshot();
+        if (names.isEmpty()) return;
+        say((enable ? "正在启用 " : "正在禁用 ") + names.size() + " 个插件…");
+        final android.content.Context appCtx = requireContext().getApplicationContext();
+        exitMulti();
+        new Thread(() -> {
+            String r = c.togglePlugins(names, enable);
+            toastOnMain(appCtx, r);
+            runOnUiThreadSafely(() -> {
+                say(r);
+                showInstalled();
+            });
+        }).start();
+    }
+
+    private void batchExport() {
+        final java.util.List<String> names = selectedSnapshot();
+        if (names.isEmpty()) return;
+        say("正在导出 " + names.size() + " 个插件…");
+        final android.content.Context appCtx = requireContext().getApplicationContext();
+        exitMulti();
+        new Thread(() -> {
+            String r = c.exportSelectedPlugins(names);
+            final String msg;
+            if ("NO_SELECTION".equals(r)) msg = "没有选中插件";
+            else if ("NOT_FOUND".equals(r)) msg = "选中的插件都找不到实体（可能已被卸载）";
+            else if (r == null) msg = "导出失败：打包或写出出错";
+            else msg = "已导出 " + names.size() + " 个插件到 " + r;
+            toastOnMain(appCtx, msg);
+            runOnUiThreadSafely(() -> say(msg));
+        }).start();
+    }
+
+    private void batchDelete() {
+        final java.util.List<String> names = selectedSnapshot();
+        if (names.isEmpty()) return;
+        // 卸载不可逆，二次确认里把名字全列出来 —— 多选最容易误点的就是它
+        new android.app.AlertDialog.Builder(requireContext())
+                .setTitle("卸载 " + names.size() + " 个插件")
+                .setMessage(String.join("\n", names) + "\n\n卸载后需要重新安装才能恢复，确定？")
+                .setPositiveButton("卸载", (d, w) -> {
+                    say("正在卸载 " + names.size() + " 个插件…");
+                    final android.content.Context appCtx = requireContext().getApplicationContext();
+                    exitMulti();
+                    new Thread(() -> {
+                        String r = c.removePlugins(names);
+                        toastOnMain(appCtx, r);
+                        runOnUiThreadSafely(() -> {
+                            say(r);
+                            showInstalled();
+                        });
+                    }).start();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     /** 导出单个插件到 Download/DSHA/插件/（单文件）。
@@ -1128,26 +1254,27 @@ public class PluginFragment extends Fragment {
                 h.installBtn.setOnClickListener(v -> exportOne(it[0]));
                 h.switchView.setVisibility(View.VISIBLE);
                 h.itemView.setOnClickListener(null); // 防止 RecyclerView 复用到市场的点击监听
-                // 长按卸载（问题插件一键移除）
+                // 长按进入多选（原来长按是「卸载这一个」——那件事现在归多选里的删除，
+                // 语义更统一，也省掉一个只为单个插件存在的对话框）
                 h.itemView.setOnLongClickListener(v -> {
-                    new android.app.AlertDialog.Builder(requireContext())
-                            .setTitle("卸载插件：" + it[0])
-                            .setMessage("将执行：dsh plugin --profile web remove " + it[0] + "\n\n确定卸载？")
-                            .setPositiveButton("卸载", (d, w) -> {
-                                say("正在卸载 " + it[0] + " …");
-                                new Thread(() -> {
-                                    String out = c.removePlugin(it[0]);
-                                    runOnUiThreadSafely(() -> {
-                                        say("卸载结果：" + (out == null ? "无输出" : out.replace("\n", " ").substring(0, Math.min(150, out.length()))));
-                                        Toast.makeText(requireContext(), "卸载完成，刷新页面即可生效（多数插件热加载）", Toast.LENGTH_SHORT).show();
-                                        showInstalled();
-                                    });
-                                }).start();
-                            })
-                            .setNegativeButton("取消", null)
-                            .show();
+                    enterMulti(it[0]);
                     return true;
                 });
+                if (multiMode) {
+                    // 多选态：点卡片切换选中；用透明度标示未选中（不新增 drawable、
+                    // 也不动卡片布局）；开关与导出按钮暂时锁住，避免误触
+                    boolean sel = selected.contains(it[0]);
+                    h.itemView.setOnClickListener(v -> toggleSelect(it[0]));
+                    h.itemView.setAlpha(sel ? 1f : 0.45f);
+                    h.status.setText(sel ? "✓ 已选中" : (enabled ? "已启用" : "已禁用"));
+                    h.switchView.setEnabled(false);
+                    h.installBtn.setEnabled(false);
+                } else {
+                    h.itemView.setOnClickListener(null); // 防止 RecyclerView 复用到市场的点击监听
+                    h.itemView.setAlpha(1f);
+                    h.switchView.setEnabled(true);
+                    h.installBtn.setEnabled(true);
+                }
                 h.switchView.setOnCheckedChangeListener(null);
                 h.switchView.setChecked(enabled);
                 h.switchView.setOnCheckedChangeListener((btn, checked) -> {
