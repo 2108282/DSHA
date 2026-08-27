@@ -1720,7 +1720,11 @@ class PluginController {
                 dupeNote = "\n\n⚠️ 检测到 @deepseek-ai 重复副本且无法自动处理（版本不一致）——"
                         + "工具调用可能全部失败，建议卸载这个插件。";
             }
-            return r + explainPeerWarnings(r) + dupeNote
+            // 装完却没进 profile = pnpm 把包放进去了、dsh 的 reconcile 不认它。
+            // 不能只报告，得按原因去救（缺构建产物就构建、只是没写就补注册、
+            // 压根不是 bundle 就说清楚）。
+            String rescue = isInProfileManifest(pkg) ? "" : rescueUnregistered(pkg, fallbackSpec);
+            return r + explainPeerWarnings(r) + dupeNote + rescue
                     + "\n\n[已安装到 profile，重启 WebUI 生效]" + verifyNote(pkg);
         }
         return r == null ? "无输出" : r;
@@ -2004,6 +2008,83 @@ class PluginController {
         return done;
     }
 
+    /** 读 package.json 的顶层字符串字段（读不到给空串）。 */
+    private String readPkgField(java.io.File pkgDir, String field) {
+        try {
+            java.io.File pj = new java.io.File(pkgDir, "package.json");
+            if (!pj.isFile() || pj.length() > 4L * 1024 * 1024) return "";
+            org.json.JSONObject o = new org.json.JSONObject(new String(
+                    java.nio.file.Files.readAllBytes(pj.toPath()), StandardCharsets.UTF_8));
+            return o.optString(field, "").trim();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** 读 package.json 的 {@code scripts.build}。 */
+    private String readPkgBuild(java.io.File pkgDir) {
+        try {
+            java.io.File pj = new java.io.File(pkgDir, "package.json");
+            if (!pj.isFile()) return "";
+            org.json.JSONObject o = new org.json.JSONObject(new String(
+                    java.nio.file.Files.readAllBytes(pj.toPath()), StandardCharsets.UTF_8));
+            org.json.JSONObject sc = o.optJSONObject("scripts");
+            return sc == null ? "" : sc.optString("build", "").trim();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /**
+     * pnpm 装成功了、插件却没进 profile 时的自救。
+     *
+     * <p><b>为什么会出现这种状态</b>：{@code dsh plugin add} 转发给 pnpm 装完之后要做一次
+     * reconcile —— 官方的判据是「<b>dependencies 解析得到的</b>、且声明了 {@code dsh.bundle}
+     * 的包才加入层栈」。TypeScript 插件从 git 装进来的是源码，{@code main} 指的
+     * {@code lib/index.js} 并不存在，于是这个包<b>解析不到</b>，reconcile 就不把它写进
+     * bundles。pnpm 那边一切正常（{@code INSTALL_EXIT=0}、Packages: +2），dsh 也不算失败，
+     * 结果就是「提示安装成功，插件却没生效」。
+     *
+     * <p>所以这里按原因分三种处置，而不是笼统报一句「没注册上」：
+     * <ul>
+     *   <li>没有 {@code dsh.bundle} → 它按 dsh 的规矩就只是个普通依赖（供别的插件 import
+     *       的库），不该被加载。说清楚，别瞎补。</li>
+     *   <li>有 bundle 但入口文件不存在 → 源码缺构建产物，转去容器里 clone + 构建。</li>
+     *   <li>有 bundle、入口也在 → 那只是 reconcile 没写，直接补注册。</li>
+     * </ul>
+     */
+    private String rescueUnregistered(String pkg, String fallbackSpec) {
+        if (pkg == null || pkg.isEmpty()) return "";
+        java.io.File entity = new java.io.File(proot.getRootfsDir(),
+                HarnessController.PLUGIN_DIRS[0].substring(1) + "/" + pkg);
+        if (!existsOrBrokenLink(entity)) return "";   // 连实体都没有，没什么可救
+        if (!hasDshBundle(entity)) {
+            return "\n\n这个包没有声明 dsh.bundle —— 按 dsh 的规矩它只是一个普通依赖"
+                    + "（供别的插件 import 的库），本来就不会作为插件加载。这不是装错了。";
+        }
+        String mainRel = readPkgField(entity, "main");
+        boolean entryMissing = !mainRel.isEmpty()
+                && !new java.io.File(entity, mainRel).isFile();
+        if (entryMissing) {
+            GitHubRef gr = GitHubRef.parse(fallbackSpec);
+            String why = "\n\n入口文件 " + mainRel + " 不存在 —— pnpm 装进来的是源码，"
+                    + "构建产物没跟着走，dsh 的 reconcile 因此认为这个包解析不到、"
+                    + "不把它加进 bundles。这就是「装成功了却没生效」的原因。";
+            if (gr != null) {
+                host.logActivity("插件 " + pkg + " 缺构建产物，转 clone+构建");
+                return why + "\n改为在容器里 clone 并构建（要几分钟）：\n\n"
+                        + installSubdirFromSource(gr, pkg, mainRel, readPkgBuild(entity));
+            }
+            return why + "\n来源不是 GitHub，没法自动构建。源码在容器里的 "
+                    + HarnessController.PLUGIN_DIRS[0] + "/" + pkg
+                    + "，可以进内置终端手动跑它的 build。";
+        }
+        registerImportedPlugin(pkg);
+        return isInProfileManifest(pkg)
+                ? "\n\n[dsh 没把它写进 bundles，已自动补注册（重启 WebUI 生效）]"
+                : "\n\n[尝试补注册但没成功 —— web profile 可能还没初始化]";
+    }
+
     /**
      * 装完<b>眼见为实</b>：命令退出 0 不等于插件真的注册上了。
      *
@@ -2111,11 +2192,15 @@ class PluginController {
                 return proot.execAndRead(
                         "if [ -d /root/" + wd + " ]; then cd /root/" + wd + "; " + host.depsSelfHeal() +
                         "printf 'registry=https://registry.npmmirror.com\\\\n' > /root/.npmrc; " +
-                        "( node apps/cli/lib/bin.js plugin --profile web add " + arg
-                                + " 2>&1 || dsh plugin --profile web add " + arg + " 2>&1 ); " +
+                        // 先判断源码仓库的 CLI 入口在不在。直接 node 一个不存在的文件会吐
+                        // 一整段 MODULE_NOT_FOUND 堆栈（requireStack: []），它把 dsh 自己那句
+                        // 关键警告从 tail 里挤了出去 —— 用户看到一屏 Node 堆栈，却看不到
+                        // 「这个包没有 dsh.bundle」这种真正的原因。
+                        "( if [ -f apps/cli/lib/bin.js ]; then node apps/cli/lib/bin.js plugin --profile web add "
+                                + arg + " 2>&1; else dsh plugin --profile web add " + arg + " 2>&1; fi ); " +
                         "else echo '[DSHA] 无源码目录，回退全局 dsh'; " +
                         "printf 'registry=https://registry.npmmirror.com\\\\n' > /root/.npmrc; " +
-                        "dsh plugin --profile web add " + arg + " 2>&1; fi | tail -15; echo INSTALL_EXIT=${PIPESTATUS[0]}");
+                        "dsh plugin --profile web add " + arg + " 2>&1; fi | tail -40; echo INSTALL_EXIT=${PIPESTATUS[0]}");
             } catch (Exception e) {
                 return "安装失败: " + e.getMessage();
             }
