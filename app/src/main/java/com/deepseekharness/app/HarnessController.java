@@ -5513,7 +5513,7 @@ public class HarnessController {
                 deleteRecursively(stage);
                 syncApiKeyFromRootfs();
                 return "恢复完成（基础模式：整包还原）\n"
-                        + "若启动报插件缺失，可到「市场」重新安装该插件。重启 WebUI 生效";
+                        + "若启动报插件缺失，可到「市场」重新安装该插件。刷新页面即可生效（多数插件热加载）";
             }
             String body = out.replace("RESTORE_OK", "").replace("RESTORE_PARTIAL", "")
                     .replace("RESTORE_EMPTY", "").trim();
@@ -5586,7 +5586,7 @@ public class HarnessController {
             }
             return (ok ? "恢复完成" : "恢复完成（部分内容已跳过，详见下方）")
                     + (body.isEmpty() ? "" : "\n" + body)
-                    + "\n重启 WebUI 生效";
+                    + "\n刷新页面即可生效（多数插件热加载）";
         } catch (Exception e) {
             return "恢复失败: " + e.getMessage();
         }
@@ -6194,6 +6194,8 @@ public class HarnessController {
     /** 自动注册「本地已存在但没注册进 profile」的插件（自己在容器里手写的插件走这条）。 */
     public java.util.List<String> autoRegisterLocalPlugins() { return plugins.autoRegisterLocalPlugins(); }
     public String fetchMarketIndex() { return plugins.fetchMarketIndex(); }
+    /** 拉市场列表（首选 plugins.json，带 npm 映射；失败退回 Markdown 表格）。 */
+    public java.util.List<String[]> fetchMarketRows() { return plugins.fetchMarketRows(); }
     public long getMarketCacheAgeMs() { return plugins.getMarketCacheAgeMs(); }
     public void refreshMarketIndex() { plugins.refreshMarketIndex(); }
     public String[] fetchRepoInfo(String owner, String repo) { return plugins.fetchRepoInfo(owner, repo); }

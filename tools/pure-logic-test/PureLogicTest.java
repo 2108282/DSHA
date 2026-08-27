@@ -662,6 +662,41 @@ public final class PureLogicTest {
                         && !PluginSpec.isPackageName("owner/repo")
                         && !PluginSpec.isPackageName("github:o/r"));
 
+        // ===== PatchToggle：用官方 patch 层开关插件（不搬文件、HMR 热生效）=====
+        String userYaml = "- id: my-own-row\n  config:\n    port: 8080\n";
+        java.util.Set<String> off1 = new java.util.LinkedHashSet<>();
+        off1.add("minigames");
+        String out1 = PatchToggle.withDisabled(userYaml, off1);
+        ok("patch: 用户自己写的行一字不动", out1.contains("- id: my-own-row")
+                && out1.contains("port: 8080"));
+        ok("patch: DSHA 区块加在末尾（后应用的层才盖得住前面 bundle 那一行）",
+                out1.indexOf(PatchToggle.BEGIN) > out1.indexOf("my-own-row"));
+        ok("patch: 禁用的 id 读得回来", PatchToggle.disabledIds(out1).contains("minigames"));
+        eqi("patch: 只禁用了一个", 1, PatchToggle.disabledIds(out1).size());
+        String out2 = PatchToggle.withDisabled(out1, new java.util.LinkedHashSet<>());
+        ok("patch: 全部启用时连标记一起去掉（不留空区块）",
+                !out2.contains(PatchToggle.BEGIN) && !out2.contains(PatchToggle.END));
+        ok("patch: 去掉区块后用户内容原样保留",
+                out2.contains("- id: my-own-row") && out2.contains("port: 8080"));
+        eqi("patch: 去掉区块后禁用集合为空", 0, PatchToggle.disabledIds(out2).size());
+        eq("patch: 反复开关不会越写越长（往返回到原样）", out2, PatchToggle.stripBlock(out1));
+        java.util.Set<String> off3 = new java.util.LinkedHashSet<>();
+        off3.add("@scope/name");
+        ok("patch: 带 @ / 的 id 要加引号（否则 YAML 解析出错，整个 loader 起不来）",
+                PatchToggle.withDisabled("", off3).contains("'@scope/name'"));
+        ok("patch: 加过引号的 id 也读得回来",
+                PatchToggle.disabledIds(PatchToggle.withDisabled("", off3)).contains("@scope/name"));
+        // 插件自己的 patch 里定的 loader 行 id —— 它跟包名往往不一样，
+        // 拿包名去写 disabled 是写不中的（loader 只 warn 一句然后忽略）
+        String pluginPatch = "- insert:\n    - id: minigames\n      name: dsh-minigames\n";
+        eqi("patch: 抠出插件 insert 的行 id", 1, PatchToggle.insertedIds(pluginPatch).size());
+        eq("patch: 行 id 不等于包名（这正是必须抠它的原因）", "minigames",
+                PatchToggle.insertedIds(pluginPatch).get(0));
+        ok("patch: 注释掉的行不算 id", PatchToggle.insertedIds("# - id: fake\n").isEmpty());
+        ok("patch: 没有 patch 文件时不炸", PatchToggle.disabledIds(null).isEmpty()
+                && PatchToggle.insertedIds(null).isEmpty()
+                && PatchToggle.stripBlock(null).isEmpty());
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

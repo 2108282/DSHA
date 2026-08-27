@@ -165,6 +165,19 @@ class PluginController {
      *  注意：必须用 existsOrBrokenLink（悬空链接的 File.exists() 返回 false，
      *  会把禁用误判成启用——用户反馈"切页回来按钮显示启用"）。 */
     private boolean isPluginDisabled(String name) {
+        // 新机制：profile 的 patch 层里写了 disabled: true
+        try {
+            java.util.List<String> ids = readPluginPatchIds(name);
+            if (!ids.isEmpty()) {
+                java.util.Set<String> off = PatchToggle.disabledIds(
+                        readTextFile(profilePatchFile()));
+                for (String id : ids) {
+                    if (off.contains(id)) return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        // 老机制：目录改名（历史状态仍要认，否则升级后所有旧的禁用都会失效）
         for (String d : HarnessController.PLUGIN_DIRS) {
             java.io.File base = new java.io.File(proot.getRootfsDir(), d.substring(1));
             if (existsOrBrokenLink(new java.io.File(base, name + ".disabled"))) return true;
@@ -269,7 +282,125 @@ class PluginController {
         return lastToggleError == null ? "" : lastToggleError;
     }
 
+    /** 读文本文件（读不到给空串）。 */
+    private String readTextFile(java.io.File f) {
+        try {
+            if (f == null || !f.isFile() || f.length() > 8L * 1024 * 1024) return "";
+            return new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                    StandardCharsets.UTF_8);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** 先写同目录临时文件再改名 —— 中途失败不会留下半个 patch 文件（那会让 loader 整个起不来）。 */
+    private boolean writeTextAtomic(java.io.File f, String text) {
+        try {
+            java.io.File tmp = new java.io.File(f.getParentFile(), f.getName() + ".dsha-tmp");
+            try (java.io.OutputStream os = new java.io.FileOutputStream(tmp)) {
+                os.write(text.getBytes(StandardCharsets.UTF_8));
+                os.flush();
+            }
+            if (f.exists() && !f.delete()) {
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+                return false;
+            }
+            if (!tmp.renameTo(f)) {
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+                return false;
+            }
+            return true;
+        } catch (Throwable t) {
+            android.util.Log.w("DSHA", "写 patch 失败 " + f + ": " + t);
+            return false;
+        }
+    }
+
+    /**
+     * 读插件<b>自己的</b> {@code cordis.patch.yml}，抠出它 insert 进 loader 的行 id。
+     *
+     * <p>patch 层的 disabled 要按 <b>id</b> 定位那一行，而 id 是插件作者在自己 patch 里
+     * 定的，跟包名往往不一样 —— 拿包名去写是写不中的（loader 只会 warn 一句然后忽略）。
+     */
+    private java.util.List<String> readPluginPatchIds(String name) {
+        for (String d : HarnessController.PLUGIN_DIRS) {
+            java.io.File pkgDir = new java.io.File(proot.getRootfsDir(),
+                    d.substring(1) + "/" + name);
+            if (!pkgDir.isDirectory()) continue;
+            String rel = "";
+            try {
+                org.json.JSONObject o = new org.json.JSONObject(
+                        readTextFile(new java.io.File(pkgDir, "package.json")));
+                org.json.JSONObject dsh = o.optJSONObject("dsh");
+                org.json.JSONObject b = dsh == null ? null : dsh.optJSONObject("bundle");
+                if (b != null) rel = b.optString("patch", "").trim();
+            } catch (Throwable ignored) {
+            }
+            if (rel.isEmpty()) rel = "cordis.patch.yml";
+            while (rel.startsWith("./")) rel = rel.substring(2);
+            java.util.List<String> ids = PatchToggle.insertedIds(
+                    readTextFile(new java.io.File(pkgDir, rel)));
+            if (!ids.isEmpty()) return ids;
+        }
+        return new java.util.ArrayList<>();
+    }
+
+    /** profile 自己的 patch 文件。 */
+    private java.io.File profilePatchFile() {
+        return new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/cordis.patch.yml");
+    }
+
+    /**
+     * 用<b>官方 patch 层</b>开关插件：往 profile 的 {@code cordis.patch.yml} 写
+     * {@code disabled: true|false}。不搬文件、约 1 秒 HMR 热生效、不用重启。
+     *
+     * @return {@code null} 表示这条路走不通（抠不到 loader 行 id、或 profile 还没初始化），
+     *         调用方应退回搬文件的老路 —— 半途而废比走老路更糟
+     */
+    private Boolean togglePluginViaPatch(String name, boolean enable) {
+        try {
+            java.io.File patch = profilePatchFile();
+            if (patch.getParentFile() == null || !patch.getParentFile().isDirectory()) return null;
+            java.util.List<String> ids = readPluginPatchIds(name);
+            if (ids.isEmpty()) return null;      // 写了也不生效，不如让老路去搬文件
+            String yaml = readTextFile(patch);
+            java.util.Set<String> off = new java.util.LinkedHashSet<>(PatchToggle.disabledIds(yaml));
+            if (enable) off.removeAll(ids);
+            else off.addAll(ids);
+            if (!writeTextAtomic(patch, PatchToggle.withDisabled(yaml, off))) {
+                lastToggleError = "写 profile 的 cordis.patch.yml 失败";
+                return null;
+            }
+            // 老状态兼容：以前用改目录名禁用过的，启用时得把目录名改回来，
+            // 否则 patch 里写着「启用」而包根本不在 node_modules 里
+            if (enable) {
+                for (String d : HarnessController.PLUGIN_DIRS) {
+                    java.io.File base = new java.io.File(proot.getRootfsDir(), d.substring(1));
+                    java.io.File offDir = new java.io.File(base, name + ".disabled");
+                    java.io.File onDir = new java.io.File(base, name);
+                    if (existsOrBrokenLink(offDir) && !existsOrBrokenLink(onDir)
+                            && !(offDir.isFile() && offDir.length() == 0)) {
+                        //noinspection ResultOfMethodCallIgnored
+                        offDir.renameTo(onDir);
+                    }
+                }
+            }
+            host.logActivity((enable ? "启用" : "禁用") + "插件 " + name
+                    + "（patch 层，刷新页面即生效）");
+            return true;
+        } catch (Throwable t) {
+            lastToggleError = "patch 层切换失败：" + t;
+            return null;
+        }
+    }
+
     public boolean togglePlugin(String name, boolean enable) {
+        lastToggleError = "";
+        // 首选官方 patch 层：不搬文件、HMR 约 1 秒生效、不用重启。走不通才退回搬文件。
+        Boolean viaPatch = togglePluginViaPatch(name, enable);
+        if (viaPatch != null) return viaPatch;
         lastToggleError = "";
         try {
             final String PKG = "/root/.dsh/profiles/web/package.json";
@@ -535,7 +666,7 @@ class PluginController {
                .append(done.size() > 1 ? done.size() + " 个插件：" : "")
                .append(String.join(", ", done));
             if (!skipped.isEmpty()) msg.append("\n跳过：").append(String.join("；", skipped));
-            msg.append("\n重启 WebUI 生效");
+            msg.append("\n刷新页面即可生效（多数插件热加载）");
             return new String[]{"OK", msg.toString()};
         } catch (Exception e) {
             return new String[]{"ERR", "导入失败：" + HarnessController.describe(e)};
@@ -749,6 +880,72 @@ class PluginController {
 
     /** 拉取插件市场快照 JSON（GitHub API 列最新快照 → jsdelivr/raw 下载），返回 JSON 文本 */
     /** 拉取插件市场索引：PLUGINS-ALL.md（jsdelivr 优先，含多镜像）；失败时回退本地缓存 */
+    /**
+     * 拉市场列表（<b>首选 plugins.json</b>，失败退回 Markdown 表格）。
+     *
+     * <p>换数据源的理由：{@code awesome-dsh-plugin.com/plugins.json} 比我们原来解析的
+     * {@code PLUGINS-ALL.md} 多两样关键东西 ——
+     * <ul>
+     *   <li><b>npm 包名映射</b>（{@code npm} 字段）。我们原来是拿 owner/repo 去仓库读
+     *       package.json 猜包名（{@code fetchNpmName}），走网络、多源回退、还常常查不到 ——
+     *       「没查到 npm 包名」这条提示就是它。索引里现成有，直接用；</li>
+     *   <li>作者给的 {@code install} 命令、双语描述、每日 CI 刷新的星标与下载量。</li>
+     * </ul>
+     * 这是社区市场 dsh-market 用的同一份数据源（它的 README 明说 npm mapping 由 CI 每天刷新）。
+     *
+     * <p>字段位置沿用既有约定，UI 与安装流程不用改：
+     * {@code [0]=名字 [1]=星标 [2]=owner [3]=收录日期 [4]=npm包名或「仅GitHub仓库」
+     * [5]=描述 [6]=仓库URL}。
+     */
+    public java.util.List<String[]> fetchMarketRows() {
+        String[] sources = {
+                "https://awesome-dsh-plugin.com/plugins.json",
+                "https://cdn.jsdelivr.net/gh/awesome-dsh-plugin/awesome-dsh-plugin@main/plugins.json",
+                HarnessController.gitHubProxy("https://raw.githubusercontent.com/"
+                        + "awesome-dsh-plugin/awesome-dsh-plugin/main/plugins.json"),
+        };
+        for (String u : sources) {
+            String body = httpGetText(u, 15000, 60000);
+            if (body == null || body.length() < 200) continue;
+            try {
+                org.json.JSONArray arr = new org.json.JSONObject(body).optJSONArray("plugins");
+                if (arr == null || arr.length() == 0) continue;
+                java.util.List<String[]> out = new java.util.ArrayList<>(arr.length());
+                for (int i = 0; i < arr.length(); i++) {
+                    org.json.JSONObject o = arr.optJSONObject(i);
+                    if (o == null) continue;
+                    String name = o.optString("name", "").trim();
+                    if (name.isEmpty()) continue;
+                    String owner = o.optString("owner", "").trim();
+                    String url = o.optString("url", "").trim();
+                    if (url.isEmpty() && !owner.isEmpty()) {
+                        url = "https://github.com/" + owner + "/" + name;
+                    }
+                    String npm = o.optString("npm", "").trim();
+                    String desc;
+                    org.json.JSONObject d = o.optJSONObject("description");
+                    if (d != null) {
+                        desc = d.optString("zh", "").trim();
+                        if (desc.isEmpty()) desc = d.optString("en", "").trim();
+                    } else {
+                        desc = o.optString("description", "").trim();
+                    }
+                    out.add(new String[]{name, String.valueOf(o.optInt("stars", 0)), owner,
+                            o.optString("added", ""),
+                            npm.isEmpty() ? "仅GitHub仓库" : npm, desc, url});
+                }
+                if (!out.isEmpty()) {
+                    host.logActivity("市场索引来自 plugins.json（" + out.size() + " 条，含 npm 映射）");
+                    return out;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        // 退回老路：Markdown 表格（没有 npm 映射，安装时还得自己去猜包名）
+        java.util.List<String[]> rows = parseMarketTable(fetchMarketIndex());
+        return rows == null ? new java.util.ArrayList<>() : rows;
+    }
+
     public String fetchMarketIndex() {
         // 未过期缓存直接秒开（不请求网络）；失败再回退旧缓存
         String fresh = readMarketCache(true);
@@ -1725,7 +1922,7 @@ class PluginController {
             // 压根不是 bundle 就说清楚）。
             String rescue = isInProfileManifest(pkg) ? "" : rescueUnregistered(pkg, fallbackSpec);
             return r + explainPeerWarnings(r) + dupeNote + rescue
-                    + "\n\n[已安装到 profile，重启 WebUI 生效]" + verifyNote(pkg);
+                    + "\n\n[已安装到 profile，刷新页面即可生效（多数插件热加载）]" + verifyNote(pkg);
         }
         return r == null ? "无输出" : r;
     }
@@ -2012,7 +2209,7 @@ class PluginController {
             }
             if (!done.isEmpty()) {
                 host.logActivity("自动注册本地插件 " + done.size() + " 个："
-                        + String.join(", ", done) + "（重启 WebUI 生效）");
+                        + String.join(", ", done) + "（刷新页面即可生效（多数插件热加载））");
             }
         } catch (Throwable t) {
             android.util.Log.w("DSHA", "自动注册本地插件失败: " + t);
@@ -2164,7 +2361,7 @@ class PluginController {
         }
         registerImportedPlugin(pkg);
         return isInProfileManifest(pkg)
-                ? "\n\n[dsh 没把它写进 bundles，已自动补注册（重启 WebUI 生效）]"
+                ? "\n\n[dsh 没把它写进 bundles，已自动补注册（刷新页面即可生效（多数插件热加载））]"
                 : "\n\n[尝试补注册但没成功 —— web profile 可能还没初始化]";
     }
 

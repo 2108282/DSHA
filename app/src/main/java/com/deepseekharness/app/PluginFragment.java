@@ -491,8 +491,9 @@ public class PluginFragment extends Fragment {
         }
         say("正在拉取插件市场…");
         new Thread(() -> {
-            String json = c.fetchMarketIndex();
-            List<String[]> list = json == null ? new ArrayList<>() : HarnessController.parseMarketTable(json);
+            // 首选 plugins.json（带 npm 包名映射，装的时候不用再去仓库猜），
+            // 拉不到才退回 Markdown 表格 —— 退回逻辑在 fetchMarketRows 里
+            List<String[]> list = c.fetchMarketRows();
             runOnUiThreadSafely(() -> {
                 if (list.isEmpty()) {
                     say("市场拉取失败（网络不通？）");
@@ -973,7 +974,12 @@ public class PluginFragment extends Fragment {
         say("正在预检 " + display + " …");
         new Thread(() -> {
             final String spec = "github:" + owner + "/" + repo;
-            String hint = c.fetchNpmName(owner, repo);
+            // 索引里现成的 npm 包名优先（it[4]）——省掉一次多源网络探测。
+            // fetchNpmName 要去仓库读 package.json、多镜像回退，常常查不到，
+            // 「没查到 npm 包名」那条提示就是它；而 plugins.json 的 npm 映射每天由 CI 刷新。
+            String fromIndex = (it.length > 4 && it[4] != null
+                    && PluginSpec.isPackageName(it[4].trim())) ? it[4].trim() : null;
+            String hint = fromIndex != null ? fromIndex : c.fetchNpmName(owner, repo);
             final String[] pre = c.precheckForMarket(spec, hint);
             final String verdict = pre[0], why = pre[1];
             final String pkg = pre[2] != null ? pre[2] : (hint != null ? hint : spec);
@@ -1039,7 +1045,7 @@ public class PluginFragment extends Fragment {
     /** 安装结果（成功/失败）弹窗 + 重启 WebUI 按钮 */
     private void showInstallResult(String pkg, String display, String out) {
         boolean ok = out != null && out.contains("INSTALL_EXIT=0");
-        say((ok ? "✅ 安装成功 " : "❌ 安装失败 ") + display + (ok ? "，重启 WebUI 生效" : ""));
+        say((ok ? "✅ 安装成功 " : "❌ 安装失败 ") + display + (ok ? "，刷新页面即可生效（多数插件热加载）" : ""));
         new android.app.AlertDialog.Builder(requireContext())
                 .setTitle((ok ? "✅ 安装成功：" : "❌ 安装失败：") + display)
                 .setMessage(out == null ? "无输出" : out)
@@ -1127,7 +1133,7 @@ public class PluginFragment extends Fragment {
                                     String out = c.removePlugin(it[0]);
                                     runOnUiThreadSafely(() -> {
                                         say("卸载结果：" + (out == null ? "无输出" : out.replace("\n", " ").substring(0, Math.min(150, out.length()))));
-                                        Toast.makeText(requireContext(), "卸载完成，重启 WebUI 生效", Toast.LENGTH_SHORT).show();
+                                        Toast.makeText(requireContext(), "卸载完成，刷新页面即可生效（多数插件热加载）", Toast.LENGTH_SHORT).show();
                                         showInstalled();
                                     });
                                 }).start();
@@ -1143,7 +1149,7 @@ public class PluginFragment extends Fragment {
                     if (ok) {
                         it[1] = checked ? "启用" : "禁用";
                         h.status.setText(checked ? "已启用" : "已禁用");
-                        Toast.makeText(requireContext(), it[0] + (checked ? " 已启用（重启 WebUI 生效）" : " 已禁用"), Toast.LENGTH_SHORT).show();
+                        Toast.makeText(requireContext(), it[0] + (checked ? " 已启用（刷新页面即可生效（多数插件热加载））" : " 已禁用"), Toast.LENGTH_SHORT).show();
                     } else {
                         // 把真实原因摊开：以前一律显示「操作失败」，用户无从下手
                         String why = c.getLastToggleError();
