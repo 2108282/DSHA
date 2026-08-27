@@ -1072,9 +1072,40 @@ class PluginController {
      * 的条目剪掉，于是补一次剪一次，用户看到的是插件装了却永远不生效。
      *
      * @param spec dependencies 里写的来源。{@code null} 表示实体已经在 node_modules 里
-     *             （导入插件那条路），用 {@code file:./node_modules/<name>}；
+     *             （导入插件那条路）—— 这时会先把实体挪出 node_modules 再 {@code link:} 回去，
+     *             <b>绝不能</b>写 {@code file:./node_modules/<name>}（那是指向自己的路径，
+     *             会让后续每次 pnpm install 都 ELOOP）；
      *             从源码构建的插件传 {@code link:<源码绝对路径>}，那才是它真实的来源。
      */
+    /**
+     * 把插件实体从 profile 的 {@code node_modules} 挪到 {@code /root/plugin-src}，
+     * 返回可以写进 dependencies 的 {@code link:} spec；挪不动返回 {@code null}。
+     *
+     * <p>{@code cp -rL} 的 {@code -L} 是必须的：实体本身多半就是一根软链
+     * （pnpm 的 store 链接、或我们自己安置内置插件时建的），不解引用挪过去还是一根链接，
+     * 换个位置继续悬空。
+     */
+    private String moveOutOfNodeModules(String name) {
+        try {
+            final String nm = ShellQuote.arg(name);
+            String r = proot.execAndRead(
+                    "cd /root/.dsh/profiles/web || exit 1; "
+                    + "test -e node_modules/" + nm + " || exit 2; "
+                    + "mkdir -p \"$(dirname /root/plugin-src/" + nm + ")\" && "
+                    + "rm -rf /root/plugin-src/" + nm + " && "
+                    + "cp -rL node_modules/" + nm + " /root/plugin-src/" + nm + " 2>&1 && "
+                    + "rm -rf node_modules/" + nm + " && echo MOVED_OK", 120_000);
+            if (r != null && r.contains("MOVED_OK")) {
+                return "link:/root/plugin-src/" + name;
+            }
+            android.util.Log.w("DSHA", "把 " + name + " 挪出 node_modules 失败: " + r);
+            return null;
+        } catch (Throwable t) {
+            android.util.Log.w("DSHA", "把 " + name + " 挪出 node_modules 异常: " + t);
+            return null;
+        }
+    }
+
     private void registerImportedPlugin(String name, String spec) {
         try {
             java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
