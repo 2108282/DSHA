@@ -1783,6 +1783,18 @@ class PluginController {
                 if (npmRegistryHas(name, null)) {
                     return installPlugin(name) + verifyNote(name);
                 }
+                // 第二优先：作者上传到 Release 的预构建包（秒级，不用在手机上构建）
+                String relTgz = findReleaseTarball(ref);
+                if (relTgz != null) {
+                    host.logActivity("插件 " + name + " 用 Release 预构建包安装");
+                    String out = runPluginInstall(relTgz);
+                    if (out != null && out.contains("INSTALL_EXIT=0")) {
+                        if (!isInProfileManifest(name)) registerImportedPlugin(name);
+                        return "用作者发布的预构建包安装 " + name + "：\n" + relTgz + "\n\n"
+                                + out + verifyNote(name);
+                    }
+                    host.logActivity("Release 预构建包装不上，退回源码构建");
+                }
                 // 没发布 npm：入口文件必须真的在仓库里，否则源码装进去也是空壳
                 if (!main.isEmpty()) {
                     String probe = null;
@@ -2008,6 +2020,57 @@ class PluginController {
         return done;
     }
 
+    /**
+     * 找作者发布的<b>预构建</b> tarball（GitHub Release 的上传资产）。
+     *
+     * <p>这是 dsh-market（社区插件市场，2.2k star、MIT）实测出来的安装优先级里的第二级：
+     * <b>先 npm 的已验证包，再作者上传的 Release tarball，最后才退到整仓库源码</b>。
+     * 预构建装起来是秒级、且不需要本地跑构建脚本，而源码那条路要拉全部依赖 + tsc，
+     * 在手机上以分钟计。所以这一级必须先试。
+     *
+     * <p><b>只认 {@code assets} 里的资产</b>：GitHub 给每个 tag 自动生成的
+     * {@code tarball_url} / {@code zipball_url} 是<b>源码</b>快照，里面同样没有构建产物 ——
+     * 拿它当预构建用等于绕了一圈回到原地。作者手动上传的（多半是 {@code pnpm pack} 的产物）
+     * 才是我们要的。
+     *
+     * @return 可直接交给 pnpm 的 tarball URL；没有就返回 null
+     */
+    private String findReleaseTarball(GitHubRef ref) {
+        if (ref == null) return null;
+        for (String api : new String[]{
+                "https://api.github.com/repos/" + ref.slug() + "/releases/latest",
+                "https://api.github.com/repos/" + ref.slug() + "/releases?per_page=5"}) {
+            String body = httpGetText(HarnessController.gitHubProxy(api), 8000, 20000);
+            if (body == null || body.isEmpty()) continue;
+            try {
+                org.json.JSONArray releases;
+                String t = body.trim();
+                if (t.startsWith("[")) {
+                    releases = new org.json.JSONArray(t);
+                } else {
+                    releases = new org.json.JSONArray();
+                    releases.put(new org.json.JSONObject(t));
+                }
+                for (int i = 0; i < releases.length(); i++) {
+                    org.json.JSONObject rel = releases.optJSONObject(i);
+                    if (rel == null) continue;
+                    org.json.JSONArray assets = rel.optJSONArray("assets");
+                    if (assets == null) continue;
+                    for (int j = 0; j < assets.length(); j++) {
+                        org.json.JSONObject a = assets.optJSONObject(j);
+                        if (a == null) continue;
+                        String name = a.optString("name", "").toLowerCase(java.util.Locale.US);
+                        String url = a.optString("browser_download_url", "").trim();
+                        if (url.isEmpty()) continue;
+                        if (name.endsWith(".tgz") || name.endsWith(".tar.gz")) return url;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
     /** 读 package.json 的顶层字符串字段（读不到给空串）。 */
     private String readPkgField(java.io.File pkgDir, String field) {
         try {
@@ -2071,8 +2134,28 @@ class PluginController {
                     + "构建产物没跟着走，dsh 的 reconcile 因此认为这个包解析不到、"
                     + "不把它加进 bundles。这就是「装成功了却没生效」的原因。";
             if (gr != null) {
+                // 第一优先：作者上传到 Release 的预构建包。秒级，且不用在手机上跑构建 ——
+                // 这是社区市场 dsh-market 实测出来的次序（npm → Release 预构建 → 源码）。
+                String tgz = findReleaseTarball(gr);
+                if (tgz != null) {
+                    host.logActivity("插件 " + pkg + " 改用 Release 预构建包");
+                    String out = runPluginInstall(tgz);
+                    String reg = "";
+                    if (out != null && out.contains("INSTALL_EXIT=0")
+                            && !isInProfileManifest(pkg)) {
+                        registerImportedPlugin(pkg);
+                        reg = isInProfileManifest(pkg) ? "\n[已自动补注册]" : "";
+                    }
+                    if (out != null && out.contains("INSTALL_EXIT=0")) {
+                        return why + "\n作者在 Release 里放了预构建包，改用它重装（这条路是秒级）：\n"
+                                + tgz + "\n\n" + out + reg + verifyNote(pkg);
+                    }
+                    // 预构建包也没装上 → 继续退到源码构建，不在这里断掉
+                    host.logActivity("Release 预构建包安装失败，退回源码构建");
+                }
                 host.logActivity("插件 " + pkg + " 缺构建产物，转 clone+构建");
-                return why + "\n改为在容器里 clone 并构建（要几分钟）：\n\n"
+                return why + "\n作者没在 Release 里放预构建包，改为在容器里 clone 并构建"
+                        + "（要几分钟）：\n\n"
                         + installSubdirFromSource(gr, pkg, mainRel, readPkgBuild(entity));
             }
             return why + "\n来源不是 GitHub，没法自动构建。源码在容器里的 "
