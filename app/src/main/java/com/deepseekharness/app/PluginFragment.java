@@ -974,11 +974,14 @@ public class PluginFragment extends Fragment {
         say("正在预检 " + display + " …");
         new Thread(() -> {
             final String spec = "github:" + owner + "/" + repo;
-            // 索引里现成的 npm 包名优先（it[4]）——省掉一次多源网络探测。
-            // fetchNpmName 要去仓库读 package.json、多镜像回退，常常查不到，
-            // 「没查到 npm 包名」那条提示就是它；而 plugins.json 的 npm 映射每天由 CI 刷新。
-            String fromIndex = (it.length > 4 && it[4] != null
-                    && PluginSpec.isPackageName(it[4].trim())) ? it[4].trim() : null;
+            // 索引里现成的 npm 包名优先（第 8 列，只有 plugins.json 那条路有）——
+            // 省掉一次多源网络探测。fetchNpmName 要去仓库读 package.json、多镜像回退，
+            // 常常查不到，「没查到 npm 包名」那条提示就是它；plugins.json 的映射每天由 CI 刷新。
+            //
+            // 刻意不复用 it[4]：Markdown 那条路的 it[4] 是**分类**（"ui"、"tools"），
+            // 而分类名恰好也是合法的包名形态 —— 拿它当包名会去装一个叫 "ui" 的包。
+            String fromIndex = (it.length > 7 && it[7] != null
+                    && PluginSpec.isPackageName(it[7].trim())) ? it[7].trim() : null;
             String hint = fromIndex != null ? fromIndex : c.fetchNpmName(owner, repo);
             final String[] pre = c.precheckForMarket(spec, hint);
             final String verdict = pre[0], why = pre[1];
@@ -1084,6 +1087,9 @@ public class PluginFragment extends Fragment {
         }
 
         @NonNull
+        /** 回滚开关时抑制监听器，避免一次点击被放大成两次相反的操作。 */
+        private boolean suppressToggle = false;
+
         @Override
         public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
             View v = LayoutInflater.from(parent.getContext())
@@ -1145,20 +1151,36 @@ public class PluginFragment extends Fragment {
                 h.switchView.setOnCheckedChangeListener(null);
                 h.switchView.setChecked(enabled);
                 h.switchView.setOnCheckedChangeListener((btn, checked) -> {
-                    boolean ok = c.togglePlugin(it[0], checked);
-                    if (ok) {
-                        it[1] = checked ? "启用" : "禁用";
-                        h.status.setText(checked ? "已启用" : "已禁用");
-                        Toast.makeText(requireContext(), it[0] + (checked ? " 已启用（刷新页面即可生效（多数插件热加载））" : " 已禁用"), Toast.LENGTH_SHORT).show();
-                    } else {
-                        // 把真实原因摊开：以前一律显示「操作失败」，用户无从下手
-                        String why = c.getLastToggleError();
-                        if (!why.isEmpty()) {
-                            Toast.makeText(requireContext(), why, Toast.LENGTH_LONG).show();
-                        }
-                        btn.setChecked(!checked);
-                        Toast.makeText(requireContext(), "操作失败", Toast.LENGTH_SHORT).show();
-                    }
+                    // suppressToggle：回滚时 setChecked 会再次触发这个监听器，
+                    // 那会把用户的一次点击变成两次相反的操作（原来就有这个隐患，
+                    // 只是同步执行时不容易看出来）。
+                    if (suppressToggle) return;
+                    // 切换要读写 profile 的 cordis.patch.yml，还要读插件自己的 patch 抠
+                    // loader 行 id —— 好几次文件 IO，放在 UI 线程上是 ANR 的料。
+                    // 开关先停在用户点的位置（乐观），失败再回滚。
+                    btn.setEnabled(false);
+                    final android.content.Context appCtx = requireContext().getApplicationContext();
+                    new Thread(() -> {
+                        final boolean ok = c.togglePlugin(it[0], checked);
+                        final String why = ok ? "" : c.getLastToggleError();
+                        runOnUiThreadSafely(() -> {
+                            btn.setEnabled(true);
+                            if (ok) {
+                                it[1] = checked ? "启用" : "禁用";
+                                h.status.setText(checked ? "已启用" : "已禁用");
+                                Toast.makeText(appCtx, it[0]
+                                                + (checked ? " 已启用，刷新页面即可生效" : " 已禁用"),
+                                        Toast.LENGTH_SHORT).show();
+                            } else {
+                                suppressToggle = true;
+                                btn.setChecked(!checked);
+                                suppressToggle = false;
+                                // 把真实原因摊开：以前一律显示「操作失败」，用户无从下手
+                                Toast.makeText(appCtx, why.isEmpty() ? "操作失败" : why,
+                                        Toast.LENGTH_LONG).show();
+                            }
+                        });
+                    }).start();
                 });
             }
         }

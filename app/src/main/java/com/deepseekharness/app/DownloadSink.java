@@ -28,8 +28,25 @@ final class DownloadSink {
     private DownloadSink() {
     }
 
-    /** 把已打开的流落盘。返回用户可见路径，失败返回 null。 */
+    /**
+     * 把已打开的流落盘。返回用户可见路径，失败返回 null。
+     *
+     * <p><b>负责关闭传进来的流</b>：GeckoView 的 {@code WebResponse.body} 是一条真实的
+     * 网络连接，不关就一直挂着（多下几个文件就攒出一把泄漏的连接）。语义上这个方法
+     * 「消费」这条流，关闭责任放在这里比散在每个调用方靠得住。
+     */
     static String save(Context ctx, InputStream in, String fileName, String mime) {
+        try {
+            return saveInner(ctx, in, fileName, mime);
+        } finally {
+            try {
+                if (in != null) in.close();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private static String saveInner(Context ctx, InputStream in, String fileName, String mime) {
         if (ctx == null || in == null) return null;
         String name = sanitize(fileName);
         final String base = Environment.DIRECTORY_DOWNLOADS;

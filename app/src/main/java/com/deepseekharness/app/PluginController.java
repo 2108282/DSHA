@@ -944,7 +944,8 @@ class PluginController {
                         + "awesome-dsh-plugin/awesome-dsh-plugin/main/plugins.json"),
         };
         for (String u : sources) {
-            String body = httpGetText(u, 15000, 60000);
+            // plugins.json 有 800KB+，必须放开上限，否则被截断后解析失败、静默退回 Markdown
+            String body = httpGetText(u, 15000, 60000, 8 * 1024 * 1024);
             if (body == null || body.length() < 200) continue;
             try {
                 org.json.JSONArray arr = new org.json.JSONObject(body).optJSONArray("plugins");
@@ -971,7 +972,8 @@ class PluginController {
                     }
                     out.add(new String[]{name, String.valueOf(o.optInt("stars", 0)), owner,
                             o.optString("added", ""),
-                            npm.isEmpty() ? "仅GitHub仓库" : npm, desc, url});
+                            o.optString("category", ""), desc, url,
+                            npm});   // 第 8 列是 npm 包名（Markdown 那条路没有这一列）
                 }
                 if (!out.isEmpty()) {
                     host.logActivity("市场索引来自 plugins.json（" + out.size() + " 条，含 npm 映射）");
@@ -1478,6 +1480,13 @@ class PluginController {
 
     /** 通用 GET 取文本（插件解析用）。失败返回 null，不抛。 */
     private String httpGetText(String url, int connectMs, int readMs) {
+        return httpGetText(url, connectMs, readMs, 512 * 1024);
+    }
+
+    /** 带上限的版本。默认 512KB 对 package.json / registry 元数据够用，但市场索引
+     *  plugins.json 已经 800KB 以上 —— 用默认上限会**静默截断**，JSON 解析失败后悄悄
+     *  退回 Markdown 那条老路，看起来一切正常而 npm 映射根本没生效。 */
+    private String httpGetText(String url, int connectMs, int readMs, int maxBytes) {
         java.net.HttpURLConnection conn = null;
         try {
             conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
@@ -1492,7 +1501,7 @@ class PluginController {
                 byte[] buf = new byte[8192];
                 int n;
                 int total = 0;
-                final int MAX = 512 * 1024;      // 上限：package.json / registry 元数据够用了
+                final int MAX = maxBytes > 0 ? maxBytes : 512 * 1024;
                 while ((n = in.read(buf)) != -1 && total < MAX) {
                     bos.write(buf, 0, n);
                     total += n;
