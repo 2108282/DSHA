@@ -1168,8 +1168,15 @@ class PluginController {
                     } else {
                         desc = o.optString("description", "").trim();
                     }
+                    // 收录日期挪进描述：it[3] 这个位置是**兼容性标记**（「仅显示兼容」
+                    // 筛选器读的就是它）。之前往这里塞日期，筛选器于是永远筛不掉任何条目 ——
+                    // 点了没反应。这份索引不带兼容性标注，所以填「⏳待定」，
+                    // 按既有语义「未知兼容性不误杀」。
+                    String added = o.optString("added", "").trim();
+                    if (!added.isEmpty()) desc = desc.isEmpty() ? "收录于 " + added
+                            : desc + "（收录于 " + added + "）";
                     out.add(new String[]{name, String.valueOf(o.optInt("stars", 0)), owner,
-                            o.optString("added", ""),
+                            "⏳待定",
                             categoryLabel(catMap, o.optString("category", "")), desc, url,
                             npm});   // 第 8 列是 npm 包名（Markdown 那条路没有这一列）
                 }

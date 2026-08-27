@@ -307,7 +307,21 @@ public class PluginFragment extends Fragment {
      *  用户看到按钮却点不动，功能藏在另一个按钮后面。 */
     private void showFilterMenu(android.view.View anchor) {
         android.widget.PopupMenu pm = new android.widget.PopupMenu(requireContext(), anchor);
-        pm.getMenu().add(0, 1, 0, "仅显示兼容").setCheckable(true).setChecked(filterIncompat);
+        // 当前索引到底带不带兼容性标注？plugins.json 那份就不带（只有 stars / downloads /
+        // category / npm），全是「⏳待定」。这时候「仅显示兼容」一点也筛不掉东西 ——
+        // 与其让用户点了没反应，不如把原因写在菜单上并把它灰掉。
+        boolean hasCompat = false;
+        for (String[] it : items) {
+            if (it.length > 3 && it[3] != null) {
+                String c3 = it[3].trim();
+                if (!c3.isEmpty() && !c3.contains("待定") && !c3.contains("未测")) {
+                    hasCompat = true;
+                    break;
+                }
+            }
+        }
+        pm.getMenu().add(0, 1, 0, hasCompat ? "仅显示兼容" : "仅显示兼容（本索引未标注兼容性）")
+                .setCheckable(true).setChecked(filterIncompat && hasCompat).setEnabled(hasCompat);
         pm.getMenu().add(0, 2, 0, "隐藏已安装").setCheckable(true).setChecked(hideInstalled);
         // 分类来自市场源本身（it[4]），按实际出现的值动态列出 ——
         // 硬编码分类名会在上游改标题时静默失效
