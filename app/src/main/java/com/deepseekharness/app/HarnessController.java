@@ -4731,6 +4731,49 @@ public class HarnessController {
         return true;
     }
 
+    /**
+     * 通过 ADB 通道（uid=2000 的 shell 身份）给自己开后台白名单 —— 免 root。
+     *
+     * <p>比引导用户去设置页翻更靠得住：厂商 ROM 的电池设置藏得深、每家名字还不一样，
+     * 而这几条在 AOSP 系上语义一致：
+     * <ul>
+     *   <li>{@code dumpsys deviceidle whitelist +<包名>} → 进 Doze 白名单，
+     *       熄屏静止后不被打入待机；</li>
+     *   <li>{@code cmd appops set <包名> RUN_ANY_IN_BACKGROUND allow} → 解除后台运行限制。</li>
+     * </ul>
+     *
+     * <p>全都幂等，重复执行无害。<b>ADB 没接上时直接跳过</b> —— 这是加分项，
+     * 息屏保活的主力是 WakeLock 那条（不依赖 ADB，见 HarnessService.acquireLocks）。
+     *
+     * <p>分成多次调用而不是拼一条带分号的串：{@code adb-shell.py} 收的是命令参数，
+     * 塞整段 shell 不一定被它当一条命令执行 —— 与其赌，不如一条一条来。
+     */
+    public String hardenBackground() {
+        StringBuilder log = new StringBuilder();
+        try {
+            if (!AdbBridge.injected(proot)) return "ADB 通道没就绪，跳过后台加固";
+            final String pkg = BuildConfig.APPLICATION_ID;
+            String[] cmds = {
+                    "dumpsys deviceidle whitelist +" + pkg,
+                    "cmd appops set " + pkg + " RUN_ANY_IN_BACKGROUND allow",
+                    "cmd appops set " + pkg + " RUN_IN_BACKGROUND allow",
+            };
+            for (String cmd : cmds) {
+                String r = proot.execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py "
+                        + cmd + " 2>&1 | tail -2", 45_000);
+                log.append(cmd).append(" → ")
+                   .append(r == null ? "无输出" : r.replace('\n', ' ').trim()).append('\n');
+            }
+            logActivity("已通过 ADB 开后台白名单（Doze + appops），息屏更不容易被冻");
+            android.util.Log.i("DSHA", "[保活] 后台加固:\n" + log);
+            return log.toString();
+        } catch (Throwable t) {
+            // 别静默：这条失败只表现为「息屏一会儿就停」，没日志根本追不到
+            android.util.Log.w("DSHA", "[保活] 后台加固失败: " + t);
+            return "后台加固失败：" + t;
+        }
+    }
+
     public void stopWeb() {
         // 记录手动停止时间：最近停止后 90s 内关闭自动预启动（尊重用户）
         prefs.edit().putLong("last_web_stop", System.currentTimeMillis()).apply();
