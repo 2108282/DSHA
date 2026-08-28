@@ -132,7 +132,7 @@ DSHA 不只是「能跑起来」。下面每一项都是实装的功能。
 | 15 个自愈与补丁脚本 | pnpm 空壳还原、bundle 解析修复、profile 引导修复、`.l2s` 链摊平、会话修复、依赖修复、写文件补丁… |
 | 脚本增量热更新 | 关键脚本可从 GitHub 增量更新并**离线验签**（公钥内置，签名不符整批拒绝），不必等新 APK |
 | 失败原因落盘 | 备份、安装、启动的失败原因写进文件，自检直接读 —— 不让「没反应」变成无从排查 |
-| CI 守门人 | 每次推送跑 Fast checks：清单一致性 + 离线验签 + 153 条纯逻辑断言 + assets 脚本真编译；发布时证书指纹不符直接中止 |
+| CI 守门人 | 每次推送跑 Fast checks：清单一致性 + 离线验签 + 256 条纯逻辑断言 + assets 脚本真编译；发布时证书指纹不符直接中止 |
 
 </details>
 
@@ -170,7 +170,7 @@ DSHA 不只是「能跑起来」。下面每一项都是实装的功能。
 |---|---|
 | [AGENTS.md](AGENTS.md) | 给 AI 与新贡献者的入口文档：结构、契约、踩过的坑，省掉全库扫描 |
 | Agent Skills | [`agent-skills/`](agent-skills/) 提供 `device-shell`（ADB / Shizuku 桥）与 `screen-ocr-operator`（OCR + 批量操作屏幕） |
-| 纯逻辑测试集 | 153 条断言，不依赖 Android API，`bash tools/pure-logic-test.sh` 秒级跑完 |
+| 纯逻辑测试集 | 256 条断言，不依赖 Android API，`bash tools/pure-logic-test.sh` 秒级跑完 |
 | 活动日志 | 关键动作与失败原因留痕，用户报问题时有据可查 |
 | 全 CI 构建 | 不需要电脑：推 tag 即出签名 APK，arm64 runner 现场造 rootfs |
 
@@ -188,7 +188,7 @@ DSHA 不只是「能跑起来」。下面每一项都是实装的功能。
 | 装机 | 装 APK 就完事 | 装 Termux → 敲命令 → 装工具链 |
 | 环境 | 完整 Ubuntu，`apt` 与原生模块随便用 | 需要为 bionic 逐个打补丁 / 重编 |
 | 开销 | proroot 已无 ptrace 开销 | 无容器层，理论最快 |
-| 沙箱 | 可用 | bubblewrap 被 sepolicy 挡，只能降级 |
+| 沙箱 | 两边都受限 | 两边都受限 |
 
 ---
 
@@ -201,7 +201,8 @@ DSHA 不只是「能跑起来」。下面每一项都是实装的功能。
 | 架构 | ⚠️ 仅 arm64-v8a | 32 位与 x86 设备不支持 |
 | 系统 | ✅ Android 8.0+ | 更老的版本没测过 |
 | 包体 | ⚠️ 约 370 MB | 内置完整 Ubuntu 环境的代价，换来的是免下载、免命令行 |
-| bash 沙箱 | ⚠️ 不可用 | Android sepolicy 挡住 bubblewrap，dsh 以 `danger-full-access` 运行 —— 请自行判断风险 |
+| bash 工具 | ✅ 可用 | 完整 Ubuntu 的 bash，agent 跑 shell 命令没有限制 |
+| bash 的**沙箱隔离** | ⚠️ 不可用 | bubblewrap 要 unprivileged user namespace，Android sepolicy 不给 —— 容器派和 Termux 派都一样绕不过。所以没有内核级边界，约束靠 dsh 的权限档位：默认 `danger-full-access`，可在配置页改成 `workspace-write` 或 `read-only`。请自行判断风险 |
 | 卓易通 / 鸿蒙 anco | ❓ 未验证 | 理论可行，尚无真机回归 |
 | 悬浮条 | ⚠️ 需要授权 | 用 `TYPE_APPLICATION_OVERLAY` 自绘；免 ROOT 拿不到真正的「状态栏歌词」接口 |
 | 数据位置 | ⚠️ 需要文件权限 | 「所有文件访问」被拒时数据留在私有目录，卸载即丢（自检会明确告知当前状态） |
@@ -272,7 +273,7 @@ git tag v1.2.3 && git push origin v1.2.3   # 触发 release 流水线，自动�
 
 ```bash
 ./build.sh                      # 需要先有 app/src/main/assets/offline-rootfs.tar.gz
-bash tools/pure-logic-test.sh   # 153 条纯逻辑断言，不需要设备
+bash tools/pure-logic-test.sh   # 256 条纯逻辑断言，不需要设备
 ```
 
 ---
