@@ -280,8 +280,13 @@ public class ProotBootstrap {
     public String[] ptyArgv(String... guestCmd) {
         java.util.List<String> argv = baseProotArgv();
         if (guestCmd == null || guestCmd.length == 0) {
+            // 某些 Android/容器运行时组合创建出来的 PTY 会保留 -echo，表现为输入时
+            // 什么都看不到、回车后命令却照常执行。先在同一个 PTY 上恢复标准模式，
+            // 再 exec 登录 shell；这条准备命令本身不会留下额外的中间进程。
             argv.add("/bin/bash");
-            argv.add("-l");
+            argv.add("-c");
+            argv.add("stty sane 2>/dev/null || stty echo icanon 2>/dev/null || true; "
+                    + "exec /bin/bash -l");
         } else {
             java.util.Collections.addAll(argv, guestCmd);
         }
