@@ -3147,7 +3147,17 @@ public class HarnessController {
         if (port != 3080) opts += " --port " + port;
         if (lanReady) opts += " --host 0.0.0.0" + lanTrustArgs(); // 0.0.0.0 + 信任本机所有 IP（Host 头校验放行）
         String wd = detectWorkdir();
-        return "node /root/dsh-config-fix.js 2>/dev/null || true; "
+        return
+                // Node 的模块编译缓存（v22.8+ 起支持，我们是 Node 24）：把编译后的字节码落盘，
+                // 二次启动省掉重新编译。dsh 启动要加载几百个模块，这一项对「点启动到 WebUI
+                // 可用」的体感最直接。
+                //
+                // 它是 quiet optimization —— 目录不可写、node 版本不支持时会静默跳过，
+                // 不影响启动，所以不需要兜底判断（要关就设 NODE_DISABLE_COMPILE_CACHE=1）。
+                // 先 mkdir 是因为目录不存在会被判 FAILED 而静默放弃缓存。
+                "mkdir -p /root/.cache/node-compile 2>/dev/null; "
+                + "export NODE_COMPILE_CACHE=/root/.cache/node-compile; "
+                + "node /root/dsh-config-fix.js 2>/dev/null || true; "
                 // 判定源码模式必须认启动入口 bin.js：RC6 模式下工作区目录也存在（只是没有源码），
                 // 只认 -d 会把空工作区误判成源码树 → 启动失败
                 + "if [ -f /root/" + wd + "/apps/cli/lib/bin.js ]; then cd /root/" + wd + "; " + depsSelfHeal()

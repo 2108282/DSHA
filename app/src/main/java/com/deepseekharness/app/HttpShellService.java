@@ -453,6 +453,8 @@ public final class HttpShellService {
                 result = appVibrate(path);
             } else if (path.startsWith("/app/ask")) {
                 result = appAsk(path);
+            } else if (path.startsWith("/app/version")) {
+                result = appVersion();
             } else if (path.startsWith("/app/help")) {
                 result = appHelp();
             } else if (path.startsWith("/app/plugins")) {
@@ -699,8 +701,37 @@ public final class HttpShellService {
      * 写在插件的提示词里则要改 assets、bump 版本、重签清单，于是必然脱节
      * （AGENTS.md 里「文档说 14 个端点、实际 26 个」就是这么来的）。
      */
+    /**
+     * 桥协议版本 —— 插件侧靠它判断「这台 App 支持哪些端点」。
+     *
+     * <p><b>什么时候该涨</b>（写清楚，否则这个号形同虚设）：
+     * <ul>
+     *   <li><b>加新端点：不涨。</b>老插件不知道新端点，行为不变；新插件想用新端点，
+     *       自己 try 一下拿 404 就知道了；</li>
+     *   <li><b>改已有端点的参数含义、返回格式，或删端点：涨。</b>这类改动会让按老约定
+     *       写的插件静默拿到错东西 —— 那正是版本号要挡的事。</li>
+     * </ul>
+     *
+     * <p>所以插件的正确写法是 {@code if (protocol >= N)} 而不是 {@code == N}。
+     */
+    private static final int BRIDGE_PROTOCOL = 1;
+
+    /**
+     * {@code /app/version}：桥协议与 App 版本，给插件做特性检测。
+     *
+     * <p>没有这个端点时，插件只能靠「试着调一下看会不会 404」来猜 App 的能力，
+     * 而 dsh 与 DSHA 是各自升级的 —— 用户完全可能拿新插件配旧 App。
+     */
+    private String appVersion() {
+        return "BRIDGE_PROTOCOL=" + BRIDGE_PROTOCOL + "\n"
+                + "APP_VERSION=" + BuildConfig.VERSION_NAME + "\n"
+                + "APP_CODE=" + BuildConfig.VERSION_CODE + "\n"
+                + "HINT=端点清单见 /app/help；判版本请用 >= 而不是 ==\n";
+    }
+
     private String appHelp() {
-        return "DSHA 3090 桥端点清单（token 取自 /root/.dsh/.bridge_token，记为 $T）\n"
+        return "DSHA 3090 桥端点清单（BRIDGE_PROTOCOL=" + BRIDGE_PROTOCOL + "）\n"
+            + "token 取自 /root/.dsh/.bridge_token，下面记为 $T。\n"
             + "带中文/空格的参数一律用 -G --data-urlencode，别手写 URL 编码。\n"
             + "\n"
             + "== 屏幕操作（无障碍服务，不需要 ADB/Shizuku）==\n"
@@ -743,6 +774,10 @@ public final class HttpShellService {
             + "/app/torch?on=1 手电\n"
             + "这三类返回 DISABLED（用户没开该能力）或 NO_PERMISSION（没授系统权限）时，\n"
             + "照原话告诉用户去哪开，不要重试 —— 重试不会让开关自己变。\n"
+            + "\n"
+            + "== 元信息 ==\n"
+            + "/app/version                          桥协议版本 + App 版本（特性检测用）\n"
+            + "/app/help                             本清单\n"
             + "\n"
             + "== 插件状态 ==\n"
             + "/app/plugins                          读回上次上报的加载状态\n"
