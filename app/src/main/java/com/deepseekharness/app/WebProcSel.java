@@ -37,6 +37,32 @@ final class WebProcSel {
      */
     static final String STOP_SENTINEL = "/root/.dsha-stopped";
 
+    /**
+     * 看门狗启动时的幂等闸 —— 生成成独立片段是为了能被 {@code bash -n} 与
+     * {@code tools/stop-proc-test.sh} 覆盖（这段写错的两种后果都很难发现：
+     * 要么看门狗<b>永远不启动</b>，Web 崩了没人拉；要么每次启动都多一个实例，
+     * 几个看门狗抢着拉 Web）。
+     *
+     * <p>三层判断，从可靠到勉强：pid 文件 + {@code kill -0}（不读 /proc，不受 hidepid
+     * 影响）→ cmdline 核对（挡 pid 回卷复用；读不到就信 {@code kill -0}，宁可多起一个
+     * 也不要一个都不起）→ {@code pgrep} 兜底（同会话内有效）。
+     */
+    static String watchdogGuards() {
+        return "_wd_alive() {\n"
+            + "  [ -f " + PID_WATCHDOG + " ] || return 1\n"
+            + "  _p=$(cat " + PID_WATCHDOG + " 2>/dev/null)\n"
+            + "  case \"$_p\" in ''|*[!0-9]*) return 1 ;; esac\n"
+            + "  kill -0 \"$_p\" 2>/dev/null || return 1\n"
+            + "  if [ -r /proc/$_p/cmdline ]; then\n"
+            + "    tr '\\0' ' ' < /proc/$_p/cmdline 2>/dev/null | grep -q dsh-watchdog || return 1\n"
+            + "  fi\n"
+            + "  return 0\n"
+            + "}\n"
+            + "if _wd_alive; then exit 0; fi\n"
+            + "if pgrep -f '[d]sh-watchdog.sh' >/dev/null 2>&1; then exit 0; fi\n"
+            + "echo $$ > " + PID_WATCHDOG + " 2>/dev/null\n";
+    }
+
     /** 端口的 {@code /proc/net/tcp} 表示（大写十六进制、补到 4 位）。 */
     static String portHex(int port) {
         return String.format(java.util.Locale.ROOT, "%04X", port & 0xFFFF);

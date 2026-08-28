@@ -1194,12 +1194,22 @@ class PluginController {
             String stamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
                     .format(new java.util.Date());
             String dest = "/root/.dsha-quarantine/" + stamp;
+            // 这里原来是 `mv …; rm -rf node_modules/<name>; echo QUARANTINED` —— 三条用分号
+            // 串起来，于是 **mv 失败也照样 rm**，而且 QUARANTINED 无论如何都会打印：
+            // 上层据此把插件从 dependencies 与 bundles 里摘掉，用户看到「已移入隔离目录」，
+            // 实际上实体被删了、隔离目录里什么都没有。这个环境里 mv 失败并不罕见
+            // （含 .l2s 替身的目录、跨设备的坏链接都会失败）。
+            // 现在：mv 成功才算隔离，失败就什么都不动，下次启动再试。
             String r = proot.execAndRead("cd /root/.dsh/profiles/web && "
                     + "mkdir -p \"$(dirname " + ShellQuote.arg(dest + "/" + name) + ")\" && "
                     // 坏链接不能 cp（一 cp 就又 ELOOP），只能整条 mv 走
-                    + "mv node_modules/" + nm + " " + ShellQuote.arg(dest + "/" + name)
-                    + " 2>&1; rm -rf node_modules/" + nm + " 2>/dev/null; echo QUARANTINED",
+                    + "if mv node_modules/" + nm + " " + ShellQuote.arg(dest + "/" + name)
+                    + " 2>&1; then echo QUARANTINED; else echo QUARANTINE_FAILED; fi",
                     60_000);
+            if (r != null && r.contains("QUARANTINE_FAILED")) {
+                android.util.Log.w("DSHA", "隔离 " + name + " 失败（实体保持原样）: " + r);
+                return false;
+            }
             return r != null && r.contains("QUARANTINED");
         } catch (Throwable t) {
             android.util.Log.w("DSHA", "隔离 " + name + " 失败: " + t);
