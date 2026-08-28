@@ -68,14 +68,23 @@
             android:textSize="@dimen/text_caption" />
     </LinearLayout>
 
-    <com.termux.view.TerminalView
-        android:id="@+id/pty_view"
+    <!-- TerminalView 自己按整个 View 的宽高绘制字符，不读取 View.padding。
+         用外层容器提供真正的安全边距，避免第一行文字被圆角裁掉。 -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="@drawable/bg_preview"
-        android:focusable="true"
-        android:focusableInTouchMode="true" />
+        android:background="@drawable/bg_terminal"
+        android:padding="@dimen/gap_tight">
+
+        <com.termux.view.TerminalView
+            android:id="@+id/pty_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/terminal_surface"
+            android:focusable="true"
+            android:focusableInTouchMode="true" />
+    </FrameLayout>
 
     <!-- 扩展键：按钮由代码生成（12 个 TextView 写在 XML 里既长又难统一样式） -->
     <HorizontalScrollView

@@ -14,6 +14,10 @@
     <color name="warn">#C48A1A</color>
     <color name="err">#C45A5A</color>
     <color name="preview">#F0F3F8</color>
+    <!-- Termux 的默认 ANSI 前景色是白色；终端背景必须固定为深色，不能复用
+         会在浅色主题下变亮的 preview，否则就会出现浅灰底白字。 -->
+    <color name="terminal_surface">#0A0D12</color>
+    <color name="terminal_outline">#263041</color>
     <color name="logo_top">#E8EEF8</color>
     <color name="logo_bot">#D5DFF0</color>
     <!-- 按压涟漪：主色低透明度，浅色底上淡淡一层 -->
