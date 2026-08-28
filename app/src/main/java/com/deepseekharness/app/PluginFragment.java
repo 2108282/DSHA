@@ -1221,11 +1221,14 @@ public class PluginFragment extends Fragment {
         boolean ok = out != null && out.contains("INSTALL_EXIT=0");
         say((ok ? "✅ 安装成功 " : "❌ 安装失败 ") + display + (ok ? "，刷新页面即可生效" : ""));
         final String text = out == null ? "无输出" : out;
-        new android.app.AlertDialog.Builder(requireContext())
+        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(requireContext())
                 .setTitle((ok ? "✅ 安装成功：" : "❌ 安装失败：") + display)
                 // 失败时那几十行输出是用户唯一的线索：要能滚动、能选中、能一键复制
                 .setView(buildSelectableMessage(text))
-                .setPositiveButton("重启 WebUI", (d, w) -> {
+                .setNeutralButton("复制", (d, w) -> copyToClipboard(text, "安装输出"))
+                .setNegativeButton("关闭", null);
+        if (ok) {
+            b.setPositiveButton("重启 WebUI", (d, w) -> {
                     // 1.5s 延迟回调期间用户可能已离开本页：全程用 applicationContext，
                     // 不能在回调里再 requireContext()（fragment detach 后必抛异常闪退）
                     final android.content.Context app = requireContext().getApplicationContext();
@@ -1241,10 +1244,31 @@ public class PluginFragment extends Fragment {
                         }
                         if (isAdded()) say("WebUI 已重启");
                     }, 1500);
-                })
-                .setNeutralButton("复制", (d, w) -> copyToClipboard(text, "安装输出"))
-                .setNegativeButton("关闭", null)
-                .show();
+                });
+        } else {
+            // 装失败时「重启 WebUI」没有意义 —— 用户真正需要的是把 profile 退回装之前。
+            // 今天这批故障（自指依赖 ELOOP、装成 monorepo 管理包、缺构建产物成空壳）
+            // 全都是「装完之后 profile 被写坏」，退回去比继续在坏状态上试下一个插件有用。
+            b.setPositiveButton("撤销这次安装", (d, w) -> undoInstall());
+        }
+        b.show();
+    }
+
+    /** 撤销上一次插件安装：还原存档点，然后刷新列表。 */
+    private void undoInstall() {
+        say("正在退回到安装之前…");
+        final android.app.Activity act = getActivity();
+        new Thread(() -> {
+            final String r = c.undoLastPluginInstall();
+            if (act == null) return;
+            act.runOnUiThread(() -> {
+                // 1.5s~几十秒的后台操作期间用户可能已经离开本页，
+                // detach 之后再 requireContext() 必抛异常闪退
+                if (!isAdded()) return;
+                showCopyableResult("撤销结果", r);
+                showInstalled();
+            });
+        }, "dsha-undo").start();
     }
 
 

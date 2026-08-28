@@ -1746,14 +1746,11 @@ public class HarnessController {
                 ensureTaskNotifier();
                 ensureStatusOverlay();
                 ensureBuiltinBundles();
-                // 先修自指依赖，再注册新的：坏条目会让 pnpm 一扫就 ELOOP，
-                // 那时候注册什么都是白搭（下一次 install 照样撞在那条坏链上）
-                String healed = healSelfRefDeps();
+                // 自愈自指依赖 + 自动注册本地插件，两件事共用一个存档点
+                // （都在动 profile；拆成两份的话第二份拍到的是改了一半的状态）。
+                // 先修再注册：坏条目会让 pnpm 一扫就 ELOOP，那时候注册什么都白搭。
+                String healed = plugins.startupProfileMaintenance();
                 if (healed != null && !healed.isEmpty()) logActivity(healed);
-                // 自己在容器里手写的插件同样要注册：放进 node_modules 不等于注册，
-                // dsh 只加载 bundles 里列出且 dependencies 解析得到的包。不补的话
-                // 插件会出现在列表里却完全不生效 —— 看着就像「插件坏了」。
-                autoRegisterLocalPlugins();
                 if (!guideRegistered("dsh-device-shell-guide")) {
                     boolean disabled = new java.io.File(proot.getRootfsDir(),
                             "root/.dsh/profiles/web/node_modules/dsh-device-shell-guide.disabled").exists();
@@ -6362,6 +6359,10 @@ public class HarnessController {
     public java.util.List<String> autoRegisterLocalPlugins() { return plugins.autoRegisterLocalPlugins(); }
     /** 自愈自指依赖（file:./node_modules/* → link:），修不了的隔离掉。 */
     public String healSelfRefDeps() { return plugins.healSelfRefDeps(); }
+    /** 撤销上一次插件安装（还原到安装前的存档点）。 */
+    public String undoLastPluginInstall() { return PluginSavepoint.restore(proot, this); }
+    /** 最近一个存档点的信息（给 UI 显示），没有返回 null。 */
+    public String lastPluginSavepointInfo() { return PluginSavepoint.latestInfo(proot); }
     public String fetchMarketIndex() { return plugins.fetchMarketIndex(); }
     /** 拉市场列表（首选 plugins.json，带 npm 映射；失败退回 Markdown 表格）。 */
     public java.util.List<String[]> fetchMarketRows() { return plugins.fetchMarketRows(); }

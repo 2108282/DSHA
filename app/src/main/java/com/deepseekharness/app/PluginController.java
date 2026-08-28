@@ -482,6 +482,10 @@ class PluginController {
         int okCount = 0;
         java.util.List<String> failed = new java.util.ArrayList<>();
         if (!idsOf.isEmpty()) {
+            // 批量启停一次改多个插件的 patch 行 —— 点错了逐个改回来很烦，留一份存档点。
+            // 单个开关刻意不打：用户再点一下就回去了，打了反而把有用的存档点挤掉。
+            PluginSavepoint.create(proot, host,
+                    (enable ? "批量启用 " : "批量禁用 ") + idsOf.size() + " 个插件");
             synchronized (patchLock) {
                 java.io.File patch = profilePatchFile();
                 if (patch.getParentFile() != null && patch.getParentFile().isDirectory()) {
@@ -987,6 +991,11 @@ class PluginController {
     }
 
     public boolean importPlugins(java.io.File tarGz) {
+        // 导入等价于安装（往 node_modules 解包 + 注册），同样留一份存档点 ——
+        // 导入这条路的坑还更多：归档布局认错就会把 monorepo 的管理包当插件搬进去
+        // （端到端测试抓到过）。
+        PluginSavepoint.create(proot, host,
+                "导入插件归档 " + (tarGz == null ? "?" : tarGz.getName()));
         try {
             java.io.File staging = new java.io.File(proot.getRootfsDir(),
                     "root/plugins-import-stage-" + System.currentTimeMillis());
@@ -1101,6 +1110,10 @@ class PluginController {
      * @return 给用户看的处理结果；没有要修的返回空串
      */
     public String healSelfRefDeps() {
+        return healSelfRefDeps(new LazySavepoint("自愈自指依赖"));
+    }
+
+    String healSelfRefDeps(LazySavepoint sp) {
         try {
             java.io.File pf = new java.io.File(proot.getRootfsDir(),
                     "root/.dsh/profiles/web/package.json");
@@ -1117,6 +1130,9 @@ class PluginController {
                 }
             }
             if (selfRef.isEmpty()) return "";
+            // 要改 package.json、还要 mv 掉 node_modules 条目 —— 自愈本身也可能判错，
+            // 所以先留一份能退回的状态
+            sp.ensure();
             java.util.List<String> fixed = new java.util.ArrayList<>();
             java.util.List<String> quarantined = new java.util.ArrayList<>();
             for (String name : selfRef) {
@@ -2209,6 +2225,15 @@ class PluginController {
                     + "可能把 profile 弄坏 —— 等那个装完再点。";
         }
         try {
+            // 装之前留一份存档点，装坏了能一键退回（PluginSavepoint 的类注释里写了它能
+            // 还原什么、还原不了什么）。
+            //
+            // 只在**最外层**打：installSubdirFromSource 构建完会回头调 installPlugin，
+            // 那是同一线程重入 tryLock，再打一份就会把「装之前」的干净状态覆盖成
+            // 「装了一半」的状态 —— 保险变成了拍下事故现场。
+            if (installLock.getHoldCount() == 1) {
+                PluginSavepoint.create(proot, host, pkg);
+            }
             return installPluginLocked(pkg, fallbackSpec);
         } finally {
             installLock.unlock();
@@ -2667,7 +2692,59 @@ class PluginController {
      *
      * @return 这一轮补注册了哪些插件名
      */
+    /**
+     * 懒存档点：第一次真要改 profile 时才打。
+     *
+     * <p><b>为什么要懒</b>：{@link #autoRegisterLocalPlugins} 每次启动都跑，而绝大多数启动
+     * 它什么都不用改（幂等空转）。若进门就打一份，{@code KEEP} 份很快被空存档点占满，
+     * 把真正有用的那份挤掉 —— 保险机制自己先失效了。
+     *
+     * <p>同一个实例<b>可以跨多个操作共用</b>：启动路径上 {@link #healSelfRefDeps} 与
+     * {@code autoRegisterLocalPlugins} 是连着跑的，共用一份才是「两个都没动之前」的干净状态；
+     * 各打一份的话，第二份拍到的是「已经改了一半」的现场 —— 那就不是保险，是事故照片。
+     */
+    final class LazySavepoint {
+        private final String what;
+        private boolean created;
+        private String id;
+
+        LazySavepoint(String what) {
+            this.what = what;
+        }
+
+        /** 真要动 profile 了 —— 确保存档点存在（幂等，只打一次）。 */
+        void ensure() {
+            if (created) return;
+            created = true;                 // 先置位：create 失败也不重试，免得每个插件试一次
+            id = PluginSavepoint.create(proot, host, what);
+        }
+
+        /** 打过存档点没有（给调用方决定要不要在结果里提「可撤销」）。 */
+        boolean taken() {
+            return id != null;
+        }
+    }
+
+    /**
+     * 启动时的 profile 维护：先自愈自指依赖，再自动注册本地插件。
+     *
+     * <p>两件事共用<b>同一个</b>存档点 —— 它们连着跑、都在动 profile，
+     * 拆成两份的话第二份拍到的是改了一半的状态。
+     *
+     * @return 自愈的结果文案（没有要修的返回空串）
+     */
+    public String startupProfileMaintenance() {
+        LazySavepoint sp = new LazySavepoint("启动时维护 profile（自愈自指依赖 + 自动注册本地插件）");
+        String healed = healSelfRefDeps(sp);
+        autoRegisterLocalPlugins(sp);
+        return healed;
+    }
+
     public java.util.List<String> autoRegisterLocalPlugins() {
+        return autoRegisterLocalPlugins(new LazySavepoint("自动注册本地插件"));
+    }
+
+    java.util.List<String> autoRegisterLocalPlugins(LazySavepoint sp) {
         java.util.List<String> done = new java.util.ArrayList<>();
         try {
             java.util.Set<String> declared = scanDshDeclaredPlugins();
@@ -2685,7 +2762,9 @@ class PluginController {
                 // 被这里当成「本地已有插件」补注册了。
                 String mainRel = readPkgField(entity, "main");
                 if (!mainRel.isEmpty() && !new java.io.File(entity, mainRel).isFile()) continue;
-                registerImportedPlugin(n);                 // 实体在 node_modules → file:./node_modules/<n>
+                // 要动 profile 了 —— 存档点在这里打（前面那些 continue 都是空转，不该占一份）
+                sp.ensure();
+                registerImportedPlugin(n);                 // 实体在 node_modules → 挪出去再 link:
                 if (isInProfileManifest(n)) done.add(n);
             }
             if (!done.isEmpty()) {
