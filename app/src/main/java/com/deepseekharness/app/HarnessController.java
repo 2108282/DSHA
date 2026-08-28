@@ -202,12 +202,9 @@ public class HarnessController {
                 if (pid == self) continue;
                 String cmd = readProcCmdline(pid);
                 if (cmd == null || cmd.isEmpty()) continue;
-                // 绝不碰容器启动器：杀了它等于把整个环境连 App 一起带走
-                if (cmd.contains("libproot.so") || cmd.contains("libproroot")) continue;
-                boolean isWeb = (cmd.contains("bin.js") && cmd.contains("web"))
-                        || cmd.contains("dsh web")
-                        || cmd.contains("dsh-watchdog.sh");
-                if (!isWeb) continue;
+                // 判据（含「绝不碰容器启动器」那一条）统一在 WebProcSel.looksLikeWeb ——
+                // 与容器内那份 shell 判据同源，改一处不会漏另一处；断言见 pure-logic-test
+                if (!WebProcSel.looksLikeWeb(cmd)) continue;
                 try {
                     android.os.Process.killProcess(pid);
                     killed++;
@@ -222,6 +219,71 @@ public class HarnessController {
         return killed;
     }
 
+    /**
+     * 按 pid 文件在 <b>Android 侧</b>杀 Web 与看门狗 —— 不依赖容器内的 /proc 视图，
+     * 也不依赖 cmdline 长相。这是停止链路上最可靠的一环。
+     *
+     * <p>为什么需要它：容器内那套判据有两个环境性硬限制（都实测过）——
+     * {@code /proc/net/tcp} 非 root 读不到，{@code /proc} 只看得到同 uid 的进程。
+     * 而 pid 是我们启动时自己写下的（{@code exec} 前的 {@code $$}），
+     * App 侧用 {@code android.os.Process.killProcess} 直接送 SIGKILL 就行。
+     *
+     * <p>返回的文字直接进活动日志，真机首验时它能一次性定性三件事：pid 文件在不在、
+     * App 侧看不看得见那个 pid（看不见 = dsh 不在本 App uid 下，那是另一类问题）、
+     * 有没有杀成功。
+     */
+    private String killByPidFiles() {
+        StringBuilder log = new StringBuilder();
+        String[][] targets = {
+                {WebProcSel.pidFileRel(WebProcSel.PID_WEB), "node", "Web"},
+                {WebProcSel.pidFileRel(WebProcSel.PID_WATCHDOG), "dsh-watchdog", "看门狗"},
+        };
+        for (String[] it : targets) {
+            java.io.File f = new java.io.File(proot.getRootfsDir(), it[0]);
+            if (!f.isFile()) {
+                log.append(it[2]).append("：没有 pid 文件（旧版本启动的，或从没起过）\n");
+                continue;
+            }
+            String raw = "";
+            try {
+                raw = new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                        StandardCharsets.UTF_8).trim();
+            } catch (Throwable ignored) {
+            }
+            int pid = -1;
+            try {
+                pid = Integer.parseInt(raw);
+            } catch (Throwable ignored) {
+            }
+            if (pid <= 1) {
+                log.append(it[2]).append("：pid 文件内容不是 pid（").append(raw).append("）\n");
+                continue;
+            }
+            String cmd = readProcCmdline(pid);
+            if (cmd == null || cmd.isEmpty()) {
+                // 关键诊断：App 自己都看不到这个 pid。要么它已经退了，要么它不属于本 App 的
+                // uid（例如经 ADB/shell 起的）—— 后一种情况 killProcess 也会无声失败，
+                // 得换一整套思路，所以这行必须留在日志里。
+                log.append(it[2]).append("：pid ").append(pid)
+                   .append(" 在 App 侧 /proc 里看不到（已退出，或不在本 App uid 下）\n");
+                continue;
+            }
+            if (!cmd.contains(it[1])) {
+                // pid 会回卷复用，长相对不上就当这个文件过期了 —— 宁可少杀，不能杀错
+                log.append(it[2]).append("：pid ").append(pid).append(" 长相对不上（")
+                   .append(tail(cmd, 60)).append("），当过期忽略\n");
+                continue;
+            }
+            try {
+                android.os.Process.killProcess(pid);
+                log.append(it[2]).append("：已杀 pid ").append(pid).append("\n");
+            } catch (Throwable e) {
+                log.append(it[2]).append("：杀 pid ").append(pid).append(" 失败 ").append(e).append("\n");
+            }
+        }
+        return log.toString().trim();
+    }
+
     private String readProcCmdline(int pid) {
         try {
             byte[] b = java.nio.file.Files.readAllBytes(
@@ -233,25 +295,30 @@ public class HarnessController {
         }
     }
 
-    /** 安全杀 web 进程：proot **不隔离 PID**，容器内 /proc 看到的是宿主的全部进程，
-     *  pkill 一旦命中 proot 自身就会把承载整个环境的进程杀掉，App 的前台服务随之死亡
-     *  （现象：点重启十秒后闪退、通知栏一起消失）。
+    /** 安全杀 web 进程：判据与停止那条路<b>共用同一份</b>（{@link WebProcSel#pidsDsh}）。
      *
-     *  所以这里不直接 pkill，而是 pgrep 出候选，逐个查 /proc/<pid>/cmdline，
-     *  凡带 proot / libproot 的一律跳过。多写几行，换掉一整类自杀风险。 */
+     *  <p>这里原来是 {@code pgrep -f 'bin.js web'} 那一套，有两个毛病：
+     *  <ul>
+     *    <li><b>会自杀</b>：这段是通过 {@code bash -c "<整段脚本>"} 跑的，那条 shell 的
+     *        cmdline 里<b>含着模式串本身</b>，pgrep 于是把执行它的 shell 也列了出来；
+     *        随后的 {@code grep libproot} 只挡容器启动器、挡不住自己 —— 脚本在第一条
+     *        kill 就死了，后面的 SIGKILL 兜底永远不执行。这正是「点了停止没反应」那一类
+     *        症状的成因，停止主路径修过一次，这条兜底路径漏了。</li>
+     *    <li>判据与主路径分家：主路径认 {@code dsh-app-boot} / 重启脚本，这里不认。</li>
+     *  </ul>
+     *
+     *  <p>{@code pids_dsh} 自带两层排除：含 {@code pids_dsh} 的（也就是本脚本自己）与
+     *  proot/proroot（杀了它等于把整个环境连 App 一起带走，这个坑踩过）。 */
     private String safeKillWebCmd(String sig) {
-        return "for _p in $(pgrep -f 'bin.js web' 2>/dev/null; pgrep -f 'dsh web' 2>/dev/null; "
-                + "pgrep -f dsh-watchdog.sh 2>/dev/null); do "
-                // 同时排除两种容器启动器：只写 proot 的话，切到 proroot 后
-                // 这道保护就失效了（关键字不匹配），而失效的后果是把整个环境连 App 杀掉
-                + "tr '\\0' ' ' < /proc/$_p/cmdline 2>/dev/null "
-                + "| grep -qE 'libproot\\.so|libproroot' && continue; "
-                + "kill -" + sig + " $_p 2>/dev/null; done; ";
+        return WebProcSel.pidsDsh(true) + WebProcSel.pidsFile()
+                + "for _p in $(pids_file; pids_dsh); do kill -" + sig + " \"$_p\" 2>/dev/null; done; ";
     }
 
     public void stopWebAndWait() {
         try {
             destroyAllWebProcesses();
+            // 与 stopWeb 同一条链路：先按 pid 文件在 App 侧精确杀（不受容器 /proc 视图限制）
+            killByPidFiles();
             proot.execAndRead(stopWebCommand());
             if (!waitPortClosed(5000)) {
                 // 只杀 dsh web 相关进程（bin.js web / dsh web），不裸杀 node
@@ -3081,7 +3148,10 @@ public class HarnessController {
                 .getBoolean("lan_mode", false);
         boolean lanReady = lan && tryEnableLanBind();
         StringBuilder sb = new StringBuilder();
-        sb.append("export DSH_HOME=/root/.dsh && ")
+        // 用户明确要启动：撤掉停止哨兵。这是它<b>唯一</b>的删除点（见 WebProcSel.STOP_SENTINEL 的说明）——
+        // 谁都别顺手在别处 rm 一下，那等于把「用户已停止」这个事实抹掉。
+        sb.append("rm -f ").append(WebProcSel.STOP_SENTINEL).append(" 2>/dev/null; ")
+          .append("export DSH_HOME=/root/.dsh && ")
           .append(apiKeyExportChain())
           .append("export DSH_PERMISSION_MODE=").append(ShellQuote.arg(getPermissionMode())).append(" && ")
           // 危险命令确认：agent 在 rootfs 内的 rm/dd 等操作需用户确认
@@ -3161,6 +3231,11 @@ public class HarnessController {
                 // 判定源码模式必须认启动入口 bin.js：RC6 模式下工作区目录也存在（只是没有源码），
                 // 只认 -d 会把空工作区误判成源码树 → 启动失败
                 + "if [ -f /root/" + wd + "/apps/cli/lib/bin.js ]; then cd /root/" + wd + "; " + depsSelfHeal()
+                // pid 落盘就在 exec 前一步：exec 用 node 顶替这条 shell、**pid 不变**，
+                // 所以写下的 $$ 就是 node 的 pid。停止时按它杀，不用猜命令行长相
+                // （详见 WebProcSel.PID_WEB —— /proc/net 读不到、/proc 只看得到同 uid，
+                //  按长相找进程这条路在真机上一直不可靠）。
+                + "echo $$ > " + WebProcSel.PID_WEB + " 2>/dev/null; "
                 + "exec node --expose-internals apps/cli/lib/bin.js web" + opts + " > ~/dsh-web.log 2>&1; "
                 + "else "
                 + "if command -v dsh >/dev/null 2>&1 && test -f \"$(command -v dsh)\"; then "
@@ -3175,6 +3250,7 @@ public class HarnessController {
                 // NODE_OPTIONS 传不了这个标志（node 明确拒绝），只能作为命令行参数；
                 // 而 dsh 是个 wrapper，所以先 readlink 出真正的 bin.js 再交给 node。
                 + "DSH_REAL=$(readlink -f \"$(command -v dsh)\" 2>/dev/null || command -v dsh); "
+                + "echo $$ > " + WebProcSel.PID_WEB + " 2>/dev/null; "
                 + "exec node --expose-internals \"$DSH_REAL\" web" + opts + " > ~/dsh-web.log 2>&1; "
                 + "else echo '[DSHA] 全局 dsh 不可用（悬空链接或未安装），请到分步安装页重装 ⑤ deepseek-harness'; exit 1; fi; fi";
     }
@@ -3231,6 +3307,14 @@ public class HarnessController {
             java.io.File wdDir = new java.io.File(proot.getRootfsDir(), "root");
             String restart =
                     "#!/bin/bash\n" +
+                    // 最后一道闸：用户已停止就放弃重启。看门狗重启读的正是这个脚本
+                    // （dsh-cmd.txt 与它同内容），所以即使看门狗漏杀、即使进程判据认不出，
+                    // 拉起这个动作本身也会自己放弃 —— 这条不依赖任何 cmdline 匹配。
+                    "if [ -f " + WebProcSel.STOP_SENTINEL + " ]; then\n" +
+                    "  echo \"$(date '+%F %T') 用户已停止，放弃重启\"\n" +
+                    "  echo '要手动起：先 rm " + WebProcSel.STOP_SENTINEL + "，或用 App 启动页的「启动」'\n" +
+                    "  exit 0\n" +
+                    "fi\n" +
                     "export DSH_HOME=/root/.dsh\n" +
                     apiKeyExportLine() +
                     "export DSH_PERMISSION_MODE=" + ShellQuote.arg(getPermissionMode()) + "\n" +
@@ -3249,14 +3333,28 @@ public class HarnessController {
                     "#!/bin/bash\n" +
                     "# DSHA 看门狗：WebUI 失联 3 次（约 90 秒）自动重启\n" +
                     "# 幂等：已有看门狗实例则退出（[d] 技巧避免匹配到 pgrep 自身）\n" +
+                    "# 幂等：已有看门狗实例就退出。先认 pid 文件 + kill -0 ——\n" +
+                    "# kill -0 不读 /proc，所以不受 Android hidepid 影响（另一个会话里的\n" +
+                    "# pgrep 看不见别人的进程，于是会重复起看门狗，多个实例抢着拉 Web）。\n" +
+                    "if [ -f " + WebProcSel.PID_WATCHDOG + " ] && "
+                        + "kill -0 \"$(cat " + WebProcSel.PID_WATCHDOG + " 2>/dev/null)\" 2>/dev/null; "
+                        + "then exit 0; fi\n" +
                     "if pgrep -f '[d]sh-watchdog.sh' >/dev/null 2>&1; then exit 0; fi\n" +
+                    "echo $$ > " + WebProcSel.PID_WATCHDOG + " 2>/dev/null\n" +
                     "PORT=" + port + "\n" +
                     "FAIL=0\n" +
                     // 与「停止」共用同一份进程判据（排除看门狗自己，否则它会杀掉自身）。
                     // 这里原来是 pkill -f 'bin.js web'：在独立脚本里跑不会自杀，
                     // 但仍可能命中 proot —— 那会把承载整个环境的进程带走。
-                    shPidsDsh(false) + "\n" +
+                    WebProcSel.pidsDsh(false) + "\n" +
                     "while true; do\n" +
+                    // 每轮先看闸：用户按了停止就自己退出，不留一个还在数失联次数的进程。
+                    // 「秒复活」这条路上，看门狗是头号嫌疑 —— 它是独立 bash 进程，
+                    // App 侧那些 keepalive_paused / last_web_stop 判据完全管不到它。
+                    "  if [ -f " + WebProcSel.STOP_SENTINEL + " ]; then\n" +
+                    "    echo \"$(date '+%F %T') 用户已停止，看门狗退出\" >> /root/dsh-watchdog.log\n" +
+                    "    exit 0\n" +
+                    "  fi\n" +
                     "  if curl -s -m 5 -o /dev/null \"http://127.0.0.1:$PORT/\"; then\n" +
                     "    FAIL=0\n" +
                     "  else\n" +
@@ -4184,69 +4282,82 @@ public class HarnessController {
      * <p>末尾回报 {@code STOP_LEFT}（还剩几个）与 {@code STOP_PORT}（3080 还在不在监听），
      * 让调用方能<b>眼见为实</b>，而不是无论如何都显示「已停止」。
      */
+    // 进程判据与哨兵的唯一定义搬到了 WebProcSel（纯逻辑、带断言）——
+    // 停止这条路的病根一直在判据上，收成一个能写断言的类才挡得住「又改错一处」。
+
     /**
-     * 安全找出 dsh 相关进程的 shell 片段 —— <b>唯一定义</b>，停止与看门狗共用。
+     * 停止后的「复活侦测」：端口又活了的时候，问一句<b>是谁拉起来的</b>。
      *
-     * <p><b>为什么不能用 {@code pkill -f '<模式>'}</b>：这些命令是通过
-     * {@code bash -c "<整段脚本>"} 跑的，那条 shell 自己的 cmdline 里<b>包含整段脚本文本</b>，
-     * 模式串就在里面 —— pkill 于是把执行它的 shell 一起杀掉。实测输出
-     * {@code proot info: vpid 1: terminated with signal 15}：脚本在第一条 pkill 就死了，
-     * 后面的 sleep 与 SIGKILL 永远不执行，dsh 当然还活着。<b>「点了停止没反应」就是这么来的。</b>
-     *
-     * <p>另一个老坑：proot 不隔离 PID，容器里 /proc 看得到宿主全部进程，
-     * {@code pkill} 命中 proot 自己就把承载整个环境的进程杀了，App 的前台服务随之死亡。
-     * 这条教训在本文件里已经写过三遍注释（见 {@code 177}、{@code 237}、{@code 4594} 附近），
-     * 唯独停止这条路漏了 —— 所以这次把判据收成一份，谁都别再各写一遍。
-     *
-     * <p>{@code case} 从上往下匹配：先排除含 {@code pids_dsh}（也就是本脚本自己）与 proot 的，
-     * 再匹配目标。
+     * <p>光知道「还剩 N 个进程」定位不了复活 —— 复活的是<b>新</b>进程，要看它的父进程。
+     * 所以这里连 PPid 与父进程 cmdline 一起打，一次真机操作就能指认拉起者
+     * （看门狗？重启脚本？还是 App 自己某条路径）。
      */
-    static String shPidsDsh(boolean includeWatchdog) {
-        return "pids_dsh() { "
-            + "for d in /proc/[0-9]*; do "
-            +   "c=$(tr '\\0' ' ' < $d/cmdline 2>/dev/null) || continue; "
-            +   "case \"$c\" in *pids_dsh*|*proot*|*proroot*"
-            +       (includeWatchdog ? "" : "|*dsh-watchdog*") + ") continue ;; esac; "
-            +   "case \"$c\" in "
-            +     (includeWatchdog ? "*dsh-watchdog*|" : "")
-            +     "*\"bin.js web\"*|*\"dsh web\"*|*dsh-app-boot*|*dsh-cli*) "
-            +       "echo \"${d#/proc/}\" ;; "
-            +   "esac; "
-            + "done; }; ";
+    private String reviveDiagCommand(int port) {
+        return WebProcSel.pidsPort(port) + WebProcSel.pidsFile()
+            + "echo REVIVE_BEGIN; "
+            + "echo \"哨兵: $([ -f " + WebProcSel.STOP_SENTINEL + " ] && echo 在 || echo '不在（被谁删了）')\"; "
+            + "echo \"pid文件: web=$(cat " + WebProcSel.PID_WEB + " 2>/dev/null)"
+            +   " 看门狗=$(cat " + WebProcSel.PID_WATCHDOG + " 2>/dev/null)\"; "
+            + "for p in $(pids_file; pids_port | sort -u); do "
+            +   "c=$(tr '\\0' ' ' < /proc/$p/cmdline 2>/dev/null | cut -c1-100); "
+            +   "pp=$(awk '/^PPid:/{print $2}' /proc/$p/status 2>/dev/null); "
+            +   "pc=$(tr '\\0' ' ' < /proc/$pp/cmdline 2>/dev/null | cut -c1-80); "
+            +   "echo \"活着 $p | $c\"; "
+            +   "echo \"  父 $pp | $pc\"; "
+            + "done; "
+            + "tail -3 /root/dsh-watchdog.log 2>/dev/null | sed 's/^/  看门狗日志: /'; "
+            + "echo REVIVE_END";
     }
 
     private String stopWebCommand() {
+        int port = parsePort();
         // 停止时连看门狗一起收掉，否则它立刻把 WebUI 拉回来
-        return shPidsDsh(true)
+        return
+            // ① 先挂闸再动手：哨兵一落地，看门狗与它写的重启脚本下一轮就自己退出。
+            //    这一条不依赖「杀得准」，是「秒复活」的正面解法。
+            "touch " + WebProcSel.STOP_SENTINEL + " 2>/dev/null; "
+            + WebProcSel.pidsDsh(true)
+            + WebProcSel.pidsPort(port)
+            + WebProcSel.pidsFile()
+            // ② 三份判据取并集，从可靠到勉强：
+            //    pid 文件（启动时自己写的，最准）→ cmdline 长相（看门狗这类不占端口的靠它）
+            //    → 端口反查（/proc/net 在 Android 10+ 基本读不到，能用就用）。
+            //    去重是为了 STOP_LEFT 数得准。
+            + "all_pids() { { pids_file; pids_dsh; pids_port; } | sort -u; }; "
             // 先 SIGTERM：让 dsh 优雅 flush SQLite。直接 -9 会把会话写坏
             // （用户报过 SessionPersistenceCorruptionError）。看门狗也在这一批里，
             // 它先死掉就不会把 WebUI 又拉起来。
-            + "for p in $(pids_dsh); do kill -TERM \"$p\" 2>/dev/null; done; "
+            + "for p in $(all_pids); do kill -TERM \"$p\" 2>/dev/null; done; "
             + "sleep 3; "
-            + "for p in $(pids_dsh); do kill -9 \"$p\" 2>/dev/null; done; "
+            + "for p in $(all_pids); do kill -9 \"$p\" 2>/dev/null; done; "
             + "sleep 1; "
-            // 眼见为实：还剩几个进程、3080 还在不在监听。
+            // 眼见为实：还剩几个进程、Web 端口还在不在监听。
             // 端口那项要区分「查了，是干净的」和「工具都没有，查不了」——
             // 一律回 0 就又是一个「兜底把失败藏起来」的写法（这轮已经栽过两次）。
-            + "echo STOP_LEFT=$(pids_dsh | wc -l | tr -d ' '); "
+            // 端口号必须用实际配置值：写死 3080 的话，改过端口的用户这项永远是 0（假干净）。
+            + "echo STOP_LEFT=$(all_pids | wc -l | tr -d ' '); "
             + "if command -v ss >/dev/null 2>&1; then "
-            +   "echo STOP_PORT=$(ss -ltn 2>/dev/null | grep -c ':3080'); "
+            +   "echo STOP_PORT=$(ss -ltn 2>/dev/null | grep -c ':" + port + "'); "
             + "elif command -v netstat >/dev/null 2>&1; then "
-            +   "echo STOP_PORT=$(netstat -ltn 2>/dev/null | grep -c ':3080'); "
-            + "else echo STOP_PORT=unknown; fi; "
+            +   "echo STOP_PORT=$(netstat -ltn 2>/dev/null | grep -c ':" + port + "'); "
+            + "else echo STOP_PORT=$(pids_port | wc -l | tr -d ' '); fi; "
             + "echo stopped; "
-            // ── 诊断：把「所有含 node 或 dsh 的进程」连 cmdline 一起列出来 ──
-            // 停止已经改过一版还是不行，就不该再猜模式了：把设备上的地面真相打出来，
-            // 用户点一次停止就能把这段发回来，一眼看出该匹配什么。
+            // ── 诊断：把「所有含 node 或 dsh 的进程」连 cmdline 与父进程一起列出来 ──
+            // 停止已经改过两版还是不行，就不该再猜模式了：把设备上的地面真相打出来，
+            // 用户点一次停止就能把这段发回来。**PPid 与父进程 cmdline 是关键** ——
+            // 「秒复活」问的不是「有谁活着」而是「谁把它拉起来的」，只有父进程能回答。
             // 只列前 100 字符 × 最多 20 条，避免灌满日志。
             + "echo STOP_DIAG_BEGIN; "
             + "for d in /proc/[0-9]*; do "
             +   "c=$(tr '\\0' ' ' < $d/cmdline 2>/dev/null) || continue; "
-            +   "case \"$c\" in *pids_dsh*) continue ;; esac; "
+            +   "case \"$c\" in *pids_dsh*|*pids_port*) continue ;; esac; "
             +   "case \"$c\" in *node*|*dsh*) "
-            +     "echo \"${d#/proc/} | $(printf '%s' \"$c\" | cut -c1-100)\" ;; "
+            +     "pp=$(awk '/^PPid:/{print $2}' $d/status 2>/dev/null); "
+            +     "pc=$(tr '\\0' ' ' < /proc/$pp/cmdline 2>/dev/null | cut -c1-60); "
+            +     "echo \"${d#/proc/} ppid=$pp | $(printf '%s' \"$c\" | cut -c1-100)\"; "
+            +     "echo \"    父: $pc\" ;; "
             +   "esac; "
-            + "done | head -20; "
+            + "done | head -40; "
             + "echo STOP_DIAG_END";
     }
 
@@ -4321,7 +4432,7 @@ public class HarnessController {
         try {
             // 同样不能用 pkill -f：脚本文本里带着模式串，会把执行它的 shell 一起杀掉
             TermuxBridge.runScript(appContext,
-                    shPidsDsh(true)
+                    WebProcSel.pidsDsh(true)
                             + "for p in $(pids_dsh); do kill -9 \"$p\" 2>/dev/null; done; "
                             + "echo stopped", null);
         } catch (Throwable ignored) {
@@ -4815,11 +4926,16 @@ public class HarnessController {
         prefs.edit().putBoolean("keepalive_paused", true).apply();
         IO.execute(() -> {
             try {
-                Process p = webProcess;
-                if (p != null) {
-                    p.destroy();
-                    webProcess = null;
-                }
+                // 停止这条路以前只 destroy 了「最后一个」webProcess，而重启那条走的是
+                // destroyAllWebProcesses()。预热与用户点启动是两条 startWeb 路径，
+                // 容器里可能同时有不止一个实例 —— 只 destroy 一个，剩下那个继续占着端口，
+                // 用户看到的就是「点了停止但没停」。两条路统一用全量。
+                destroyAllWebProcesses();
+                // ① pid 文件通道：按启动时自己写下的 pid，在 App 侧直接杀。
+                //    容器内那套判据受两个环境限制（/proc/net 读不到、/proc 只见同 uid），
+                //    这条不受 —— 所以放在最前面。
+                String pidLog = killByPidFiles();
+                if (!pidLog.isEmpty()) logActivity("停止 · pid 文件通道：\n" + pidLog);
                 String out = proot.execAndRead(stopWebCommand());
                 // Web 停了桥也没用：停桥（幂等）
                 LanProxyService.stop();
@@ -4834,19 +4950,63 @@ public class HarnessController {
                 if (diag != null && !diag.trim().isEmpty()) {
                     logActivity("停止诊断（含 node/dsh 的进程）：\n" + diag.trim());
                 }
-                if (left > 0 || port > 0) {
-                    String why = "停止没干净：" + (left > 0 ? "还有 " + left + " 个 dsh 进程" : "")
-                            + (left > 0 && port > 0 ? "，" : "")
-                            + (port > 0 ? "3080 仍在监听" : "")
-                            + " —— 再点一次「停止」，或到设置页看活动日志";
-                    logActivity(why);
-                    setState("", 0, why, "", false);
-                } else {
-                    setState("", 0, "已停止后台服务", "", false);
+                // 没停干净就补第二轮：Android 侧按 pid 精确杀（不依赖容器内命令，
+                // 也不受 proot/proroot 切换影响）+ 容器内兜底。这一套原来只有「重启」
+                // 那条路在用，停止这条路漏了 —— 于是「重启能停下来、停止停不下来」。
+                if (left > 0 || port > 0 || !waitPortClosed(1500)) {
+                    int k = killWebProcessesFromAndroid();
+                    proot.execAndRead(safeKillWebCmd("TERM") + "sleep 2; "
+                            + safeKillWebCmd("9") + "sleep 1; echo done");
+                    logActivity("停止第二轮：Android 侧精确杀 " + k + " 个"
+                            + (waitPortClosed(4000) ? "，端口已关闭" : "，端口仍被占用"));
                 }
+                boolean stillUp = isWebPortUp(400);
+                String why = stillUp
+                        ? "停止没干净：端口还在监听 —— 到设置页看活动日志"
+                        : "已停止后台服务";
+                logActivity(why);
+                setState("", 0, why, "", false);
+                // ── 复活侦测 ──
+                // 真机症状是「停止后 dsh 秒复活」：停完那一刻是干净的，几秒后又活了。
+                // 停完立刻报「已停止」根本反映不出这件事，所以再等 4 秒回头看一眼；
+                // 又活了就把占端口进程的**父进程**打出来 —— 「谁拉起来的」只有父进程能回答。
+                //
+                // 放独立线程而不是接在这后面：IO 是单线程执行器，在里面多睡 4~10 秒会让
+                // 用户紧接着点的「启动」排队等待（这个坑本文件注释里写过）。
+                startReviveProbe();
             } catch (Exception ignored) {
             }
         });
+    }
+
+    /**
+     * 停止后的复活侦测：4 秒后回看端口，还活着就记下「谁拉起来的」并再收一轮。
+     *
+     * <p>哨兵（{@link WebProcSel#STOP_SENTINEL}）此时已经落地，所以第二轮之后拉起者自己也会退出；
+     * 这里的重点是<b>把证据留在活动日志里</b>，让下一次不必再猜。
+     */
+    private void startReviveProbe() {
+        Thread t = new Thread(() -> {
+            try {
+                Thread.sleep(4000);
+                if (!isWebPortUp(400)) return;
+                String rev = proot.execAndRead(reviveDiagCommand(parsePort()));
+                String seg = sliceBetween(rev, "REVIVE_BEGIN", "REVIVE_END");
+                logActivity("复活侦测：停止 4 秒后端口又活了。谁拉起来的：\n"
+                        + (seg == null || seg.trim().isEmpty() ? String.valueOf(rev) : seg.trim()));
+                proot.execAndRead(stopWebCommand());  // 哨兵已在，这轮之后拉起者会自己退出
+                killWebProcessesFromAndroid();
+                boolean closed = waitPortClosed(4000);
+                String why2 = closed
+                        ? "已停止（期间有东西试图把 Web 拉起来，已一并收掉；证据在活动日志）"
+                        : "停止没干净：有东西在反复拉起 Web —— 把活动日志里的「复活侦测」发回来";
+                logActivity(why2);
+                setState("", 0, why2, "", false);
+            } catch (Throwable ignored) {
+            }
+        }, "dsha-revive-probe");
+        t.setDaemon(true);
+        t.start();
     }
 
     public void checkStatus() {

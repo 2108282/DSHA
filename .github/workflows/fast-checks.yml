@@ -114,4 +114,10 @@ jobs:
         # 看到 RESTORE_OK 不会去找。这条直接跑 restore-merge.py，不需要设备。
         run: bash tools/restore-scope-test.sh
 
+      - name: 停止判据端到端（造真进程 + pid 文件，跑一遍 shell 片段）
+        # 停止功能改坏过三轮，每轮「看代码都对」但真机毫无作用 —— 病根在环境：
+        # /proc/net/tcp 非 root 读不到、/proc 只见同 uid。纯逻辑断言只能保证字符串拼对了，
+        # 拼对的片段照样可能全程返回空，所以这条真的起进程跑一遍。
+        run: bash tools/stop-proc-test.sh
+
 

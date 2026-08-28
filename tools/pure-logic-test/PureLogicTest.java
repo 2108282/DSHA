@@ -773,6 +773,59 @@ public final class PureLogicTest {
         eq("market: at() 越界给空串", "", MarketCol.at(good, 99));
         eq("market: at() 顺手去空格", "dsh-x", MarketCol.at(new String[]{"  dsh-x  "}, 0));
 
+        // ---------- WebProcSel：停止的进程判据 ----------
+        // 这批断言的由来：「停止」已经改坏过三轮，每次病根都在判据上，而症状全都长一样
+        //（点了没反应 / 停了又复活），只能靠真机反复试。把判据钉在这里，改错当场就红。
+        //
+        // 真机地面真相：/usr/local/bin/dsh 是软链 → lib/bin.js，启动命令用 readlink -f
+        // 解到真实文件，所以 cmdline 是「node --expose-internals …/dsh/lib/bin.js web」。
+        ok("stop: 认出预构建模式的 dsh（…/dsh/lib/bin.js web）",
+                WebProcSel.looksLikeWeb("node --expose-internals "
+                        + "/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web"));
+        ok("stop: 认出源码模式（apps/cli/lib/bin.js web --port 3080）",
+                WebProcSel.looksLikeWeb("node --expose-internals apps/cli/lib/bin.js web --port 3080"));
+        ok("stop: 认出看门狗", WebProcSel.looksLikeWeb("bash /root/dsh-watchdog.sh"));
+        // 重启脚本正在跑 = 马上会有一个新的 Web 进程，漏掉它就是「秒复活」
+        ok("stop: 认出看门狗的重启脚本", WebProcSel.looksLikeWeb("bash /root/dsh-cmd.txt"));
+        ok("stop: 认出手动重启脚本", WebProcSel.looksLikeWeb("bash /root/dsh-web-restart.sh"));
+        // 下面两条是「App 自杀」的防线：proot 不隔离 PID，它的命令行里带着 rootfs 路径和
+        // 待执行命令，bin.js / web 都可能出现在里面 —— 杀到它等于把整个环境连 App 一起带走
+        ok("stop: 绝不认容器启动器 proot（杀它 = App 一起死）",
+                !WebProcSel.looksLikeWeb("/data/user/0/com.dsh.client/files/linux/libproot.so "
+                        + "-r /data/.../ubuntu bash -c node apps/cli/lib/bin.js web"));
+        ok("stop: 绝不认 proroot（切了运行时也不能失效）",
+                !WebProcSel.looksLikeWeb("/data/user/0/com.dsh.client/files/libproroot.so bash -c dsh web"));
+        // 这条是「误杀用户/agent 的 node」的防线（历史上用过 pkill -f node）
+        ok("stop: 不碰用户自己的 node", !WebProcSel.looksLikeWeb("node server.js"));
+        ok("stop: 不碰装包中的 pnpm", !WebProcSel.looksLikeWeb("node /usr/local/bin/pnpm install"));
+        // 端口反查用 /proc/net/tcp，端口是大写十六进制补四位。算错就一个都查不到，
+        // 而且完全静默 —— 正是这类「兜底把失败藏起来」的写法坑过两次
+        eq("stop: 3080 → /proc/net/tcp 的 0C08", "0C08", WebProcSel.portHex(3080));
+        eq("stop: 8080 → 1F90", "1F90", WebProcSel.portHex(8080));
+        eq("stop: 80 补到四位", "0050", WebProcSel.portHex(80));
+        ok("stop: 找进程的片段排除自身与两种容器启动器",
+                WebProcSel.pidsDsh(true).contains("*pids_dsh*|*pids_port*|*proot*|*proroot*"));
+        ok("stop: 停止时把看门狗一起算成目标",
+                WebProcSel.pidsDsh(true).contains("*dsh-watchdog*|*\"bin.js web\"*"));
+        ok("stop: 看门狗自己调用时把自己排除（否则它杀自己）",
+                WebProcSel.pidsDsh(false).contains("|*dsh-watchdog*) continue")
+                        && !WebProcSel.pidsDsh(false).contains("*dsh-watchdog*|*\"bin.js web\"*"));
+        ok("stop: 端口反查只认 LISTEN（st=0A）",
+                WebProcSel.pidsPort(3080).contains("$4==\"0A\""));
+        ok("stop: 哨兵是容器内 /root 下的路径",
+                WebProcSel.STOP_SENTINEL.startsWith("/root/"));
+        // pid 文件通道：这条是主力（/proc/net 读不到、/proc 只见同 uid，按长相找进程不可靠）
+        ok("stop: pid 通道认 Web 与看门狗两个文件",
+                WebProcSel.pidsFile().contains(WebProcSel.PID_WEB)
+                        && WebProcSel.pidsFile().contains(WebProcSel.PID_WATCHDOG));
+        ok("stop: pid 通道杀之前核对身份（pid 会回卷复用，杀错就是杀别人）",
+                WebProcSel.pidsFile().contains("'*node*'")
+                        && WebProcSel.pidsFile().contains("'*dsh-watchdog*'"));
+        ok("stop: pid 通道也排除容器启动器",
+                WebProcSel.pidsFile().contains("*proot*|*proroot*"));
+        eq("stop: pid 文件的 rootfs 相对路径（Android 侧用 File 直接读）",
+                "root/.dsha-web.pid", WebProcSel.pidFileRel(WebProcSel.PID_WEB));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"
