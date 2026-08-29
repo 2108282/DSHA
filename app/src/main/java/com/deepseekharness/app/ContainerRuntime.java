@@ -107,7 +107,21 @@ public interface ContainerRuntime {
         }
     }
 
-    /** 实验实现：proroot（coderredlab/proroot），LD_PRELOAD 路径翻译，零 ptrace。 */
+    /** 实验实现：proroot（coderredlab/proroot），LD_PRELOAD 路径翻译，零 ptrace。
+     *
+     *  <p><b>与 proot 的一个行为差异，改停止/重启相关代码前必须知道</b>：
+     *  {@link Proot} 的 argv 里带 {@code --kill-on-exit}（启动器退出时连带收掉容器内的
+     *  子进程），而 proroot 这边<b>没有这个参数</b>（LD_PRELOAD 方案里也没有等价机制）。
+     *  也就是说在<b>默认运行时</b>下：
+     *  <ul>
+     *    <li>{@code Process.destroy()} 只杀启动器，容器里的 node 会变成孤儿继续跑、
+     *        继续占着 Web 端口；</li>
+     *    <li>{@code nohup … &} 起的看门狗同样活得好好的。</li>
+     *  </ul>
+     *  所以「停止」不能指望杀启动器来传播信号 —— 必须按 pid 精确杀（见
+     *  {@link WebProcSel#PID_WEB} 那条链路）。别给 proroot 补 {@code --kill-on-exit}
+     *  来「省掉」那些代码：它未必认这个参数，认不出就是启动失败、降级回 proot。
+     */
     class Proroot implements ContainerRuntime {
         /** 五个 .so 都得在同一目录，启动器靠 /proc/self/exe 的 dirname 找同伴。 */
         static final String[] LIBS = {

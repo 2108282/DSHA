@@ -136,7 +136,18 @@ android {
     }
 
     androidResources {
-        noCompress += ['gz', 'xz']
+        // 这些 entry 本身已经是压缩格式，让 aapt 再 deflate 一遍是纯亏：
+        // 打包时白花 CPU（离线包 301MB 只压掉 1%），运行时还多一层 inflate。
+        //
+        // **'bin' 是必须的**：protectOfflineBundle 会把 offline-rootfs.tar.gz 改名成 .bin
+        //（aapt 会悄悄把 .tar.gz 解开），改完名之后上面那个 'gz' 就管不到它了 ——
+        // 两个机制互相打脸，实测 APK 里 assets/offline-rootfs.bin 一直是 DEFLATE：
+        // 301252487 → 298128549，压掉 1%，代价是打包多花几分钟、首次解压多 inflate 一遍
+        // 整个 301MB。改成 STORED 之后 APK 大约 +3MB，换来的是首启解压少一层。
+        //
+        // 'ja' 是 GeckoView 的 omni.ja（Gecko 期望能直接 mmap，压着会强制先解压）；
+        // 'tar' 是 adb-wheels.tar；'whl' 是 zstandard 的 wheel（本身就是 zip）。
+        noCompress += ['gz', 'xz', 'bin', 'ja', 'tar', 'whl']
     }
 
     compileOptions {

@@ -4807,7 +4807,11 @@ public class HarnessController {
                 // 关键：Web 启动中 busy=true 会让安装/重装按钮全灰。
                 // 端口就绪即视为启动完成 → 释放 busy（不能等 drainOutput 阻塞返回，
                 // 否则 Web 运行期间 busy 永远 true → 重装按钮永远灰色）。
-                // 用独立线程阻塞 drain（保持 proot+node 进程存活，后台 nohup 会被 --kill-on-exit 杀掉），
+                // 用独立线程阻塞 drain（保持启动器 + node 进程存活）。
+                // 注意别把这句读成「不 drain 就会自动收尾」：`--kill-on-exit` 只有
+                // ContainerRuntime.Proot 传，**默认的 proroot 没有这个参数**，
+                // 它退出时容器里的 node 与 nohup 起的看门狗都会活下来（变孤儿继续跑）。
+                // 停止那条链路因此不能靠杀启动器传播信号，只能按 pid 精确杀。
                 // 本线程继续等待端口就绪后释放 busy 并处理退出诊断。
                 Thread drainer = new Thread(() -> {
                     try {

@@ -1317,6 +1317,18 @@ class PluginController {
      * [5]=描述 [6]=仓库URL}。
      */
     public java.util.List<String[]> fetchMarketRows() {
+        // ① 未过期缓存直接秒开，完全不碰网络。
+        //    Markdown 索引那条路（fetchMarketIndex）一直是这么做的，plugins.json 这条
+        //    上线时漏了缓存 —— 于是每次打开市场页都要现下 800KB+，网络慢就是干等，
+        //    离线更是直接退回没有 npm 映射的 Markdown（装插件的成功率跟着掉）。
+        String fresh = readPluginsJsonCache(true);
+        if (fresh != null) {
+            java.util.List<String[]> cachedRows = parsePluginsJson(fresh);
+            if (!cachedRows.isEmpty()) {
+                host.logActivity("市场索引来自本地缓存（" + cachedRows.size() + " 条，未过期）");
+                return cachedRows;
+            }
+        }
         String[] sources = {
                 "https://awesome-dsh-plugin.com/plugins.json",
                 "https://cdn.jsdelivr.net/gh/awesome-dsh-plugin/awesome-dsh-plugin@main/plugins.json",
@@ -1327,67 +1339,126 @@ class PluginController {
             // plugins.json 有 800KB+，必须放开上限，否则被截断后解析失败、静默退回 Markdown
             String body = httpGetText(u, 15000, 60000, 8 * 1024 * 1024);
             if (body == null || body.length() < 200) continue;
-            try {
-                org.json.JSONObject root = new org.json.JSONObject(body);
-                org.json.JSONArray arr = root.optJSONArray("plugins");
-                // 索引自带分类的中英文名（categories.<key>.zh），直接用它 ——
-                // 筛选菜单是按 it[4] 的实际值动态列的，所以这里换成中文，
-                // 筛选项就跟着变中文，不用在 UI 里硬编码一张对照表
-                org.json.JSONObject catMap = root.optJSONObject("categories");
-                if (arr == null || arr.length() == 0) continue;
-                java.util.List<String[]> out = new java.util.ArrayList<>(arr.length());
-                for (int i = 0; i < arr.length(); i++) {
-                    org.json.JSONObject o = arr.optJSONObject(i);
-                    if (o == null) continue;
-                    String name = o.optString("name", "").trim();
-                    if (name.isEmpty()) continue;
-                    String owner = o.optString("owner", "").trim();
-                    String url = o.optString("url", "").trim();
-                    if (url.isEmpty() && !owner.isEmpty()) {
-                        url = "https://github.com/" + owner + "/" + name;
-                    }
-                    String npm = o.optString("npm", "").trim();
-                    String desc;
-                    org.json.JSONObject d = o.optJSONObject("description");
-                    if (d != null) {
-                        desc = d.optString("zh", "").trim();
-                        if (desc.isEmpty()) desc = d.optString("en", "").trim();
-                    } else {
-                        desc = o.optString("description", "").trim();
-                    }
-                    // 收录日期只能进描述。COMPAT 那一列是**兼容性标记**（「仅显示兼容」
-                    // 读的就是它），往那儿塞日期筛选器就永远筛不掉东西 —— 踩过一次。
-                    // 这份索引不带兼容性标注，填「⏳待定」，按既有语义「未知不误杀」。
-                    String added = o.optString("added", "").trim();
-                    if (!added.isEmpty()) desc = desc.isEmpty() ? "收录于 " + added
-                            : desc + "（收录于 " + added + "）";
-                    String[] row = new String[MarketCol.NPM + 1];
-                    row[MarketCol.NAME] = name;
-                    row[MarketCol.STARS] = String.valueOf(o.optInt("stars", 0));
-                    row[MarketCol.OWNER] = owner;
-                    row[MarketCol.COMPAT] = "⏳待定";
-                    row[MarketCol.CATEGORY] = categoryLabel(catMap, o.optString("category", ""));
-                    row[MarketCol.DESC] = desc;
-                    row[MarketCol.URL] = url;
-                    row[MarketCol.NPM] = npm;
-                    // 形状自检：挡住「往某列塞了别的东西」这类错（日期落进 COMPAT、
-                    // 星标不是数字…）。宁可丢一条脏数据，也别让整页筛选/排序静默失灵。
-                    if (!MarketCol.isSaneRow(row)) {
-                        android.util.Log.w("DSHA", "市场索引里一行形状不对，已跳过: " + name);
-                        continue;
-                    }
-                    out.add(row);
-                }
-                if (!out.isEmpty()) {
-                    host.logActivity("市场索引来自 plugins.json（" + out.size() + " 条，含 npm 映射）");
-                    return out;
-                }
-            } catch (Throwable ignored) {
+            java.util.List<String[]> out = parsePluginsJson(body);
+            if (!out.isEmpty()) {
+                writePluginsJsonCache(body); // 拉成功即缓存，之后 6 小时内秒开
+                host.logActivity("市场索引来自 plugins.json（" + out.size() + " 条，含 npm 映射）");
+                return out;
             }
         }
-        // 退回老路：Markdown 表格（没有 npm 映射，安装时还得自己去猜包名）
+        // ② 联网全失败：用过期缓存。它带 npm 映射，比退回 Markdown 有用得多
+        String stale = readPluginsJsonCache(false);
+        if (stale != null) {
+            java.util.List<String[]> staleRows = parsePluginsJson(stale);
+            if (!staleRows.isEmpty()) {
+                host.logActivity("市场索引用了过期缓存（" + staleRows.size() + " 条，网络不通）");
+                return staleRows;
+            }
+        }
+        // ③ 最后退回老路：Markdown 表格（没有 npm 映射，安装时还得自己去猜包名）
         java.util.List<String[]> rows = parseMarketTable(fetchMarketIndex());
         return rows == null ? new java.util.ArrayList<>() : rows;
+    }
+
+    /** plugins.json 的本地缓存文件（与 Markdown 索引的 market-index.md 对称）。 */
+    private java.io.File pluginsJsonCacheFile() {
+        return new java.io.File(appContext.getFilesDir(), "market-plugins.json");
+    }
+
+    /**
+     * 读 plugins.json 缓存。
+     *
+     * @param freshOnly true 时超过 {@link HarnessController#MARKET_CACHE_TTL_MS}（6 小时）
+     *                  就当没有；false 用于「联网失败，拿旧的顶上」
+     */
+    private String readPluginsJsonCache(boolean freshOnly) {
+        try {
+            java.io.File f = pluginsJsonCacheFile();
+            // 20KB 门槛：挡住写了一半的残缺文件（整份索引 800KB 以上）
+            if (f.isFile() && f.length() > 20000) {
+                if (freshOnly && System.currentTimeMillis() - f.lastModified()
+                        > HarnessController.MARKET_CACHE_TTL_MS) {
+                    return null;
+                }
+                return new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                        java.nio.charset.StandardCharsets.UTF_8);
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** 写 plugins.json 缓存（先落临时文件再 rename —— 中途被杀不会留下半份索引）。 */
+    private void writePluginsJsonCache(String body) {
+        try {
+            java.io.File f = pluginsJsonCacheFile();
+            java.io.File tmp = new java.io.File(f.getParentFile(), f.getName() + ".tmp");
+            java.nio.file.Files.write(tmp.toPath(),
+                    body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            if (!tmp.renameTo(f)) {
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 把 plugins.json 解析成市场行（列语义见 {@link #fetchMarketRows} 的说明）。 */
+    private java.util.List<String[]> parsePluginsJson(String body) {
+        java.util.List<String[]> out = new java.util.ArrayList<>();
+        try {
+            org.json.JSONObject root = new org.json.JSONObject(body);
+            org.json.JSONArray arr = root.optJSONArray("plugins");
+            // 索引自带分类的中英文名（categories.<key>.zh），直接用它 ——
+            // 筛选菜单是按 it[4] 的实际值动态列的，所以这里换成中文，
+            // 筛选项就跟着变中文，不用在 UI 里硬编码一张对照表
+            org.json.JSONObject catMap = root.optJSONObject("categories");
+            if (arr == null || arr.length() == 0) return out;
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                String name = o.optString("name", "").trim();
+                if (name.isEmpty()) continue;
+                String owner = o.optString("owner", "").trim();
+                String url = o.optString("url", "").trim();
+                if (url.isEmpty() && !owner.isEmpty()) {
+                    url = "https://github.com/" + owner + "/" + name;
+                }
+                String npm = o.optString("npm", "").trim();
+                String desc;
+                org.json.JSONObject d = o.optJSONObject("description");
+                if (d != null) {
+                    desc = d.optString("zh", "").trim();
+                    if (desc.isEmpty()) desc = d.optString("en", "").trim();
+                } else {
+                    desc = o.optString("description", "").trim();
+                }
+                // 收录日期只能进描述。COMPAT 那一列是**兼容性标记**（「仅显示兼容」
+                // 读的就是它），往那儿塞日期筛选器就永远筛不掉东西 —— 踩过一次。
+                // 这份索引不带兼容性标注，填「⏳待定」，按既有语义「未知不误杀」。
+                String added = o.optString("added", "").trim();
+                if (!added.isEmpty()) desc = desc.isEmpty() ? "收录于 " + added
+                        : desc + "（收录于 " + added + "）";
+                String[] row = new String[MarketCol.NPM + 1];
+                row[MarketCol.NAME] = name;
+                row[MarketCol.STARS] = String.valueOf(o.optInt("stars", 0));
+                row[MarketCol.OWNER] = owner;
+                row[MarketCol.COMPAT] = "⏳待定";
+                row[MarketCol.CATEGORY] = categoryLabel(catMap, o.optString("category", ""));
+                row[MarketCol.DESC] = desc;
+                row[MarketCol.URL] = url;
+                row[MarketCol.NPM] = npm;
+                // 形状自检：挡住「往某列塞了别的东西」这类错（日期落进 COMPAT、
+                // 星标不是数字…）。宁可丢一条脏数据，也别让整页筛选/排序静默失灵。
+                if (!MarketCol.isSaneRow(row)) {
+                    android.util.Log.w("DSHA", "市场索引里一行形状不对，已跳过: " + name);
+                    continue;
+                }
+                out.add(row);
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
     }
 
     /** 分类 key → 中文名（索引里带 categories 映射；取不到就原样返回 key）。 */

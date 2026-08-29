@@ -193,9 +193,21 @@ public class LaunchFragment extends Fragment {
         mainHandler.post(tick);
     }
 
+    /**
+     * 心跳间隔：状态还在变的时候要勤，稳定之后没必要。
+     *
+     * <p>原来固定 1.5 秒 —— 也就是说用户停在启动页或 WebUI 里的整段时间，每分钟 40 次
+     * HTTP 探测 + 40 次日志指纹检查。Web 已经起来、人也进去看了的时候，这些只是维持
+     * 状态灯与地址 chip，4 秒一次完全够。而「等启动」那段仍然 1.5 秒：那里的等待秒数要
+     * 走字、就绪后还要自动跳进 WebUI，慢了会被当成卡住。
+     */
+    private long nextTickDelayMs() {
+        if (starting || !webReady) return 1500;   // 还在等启动：保持灵敏
+        return insideWeb ? 4000 : 2500;
+    }
+
     private void tickOnce() {
-        if (!isAdded()) return;
-        new Thread(() -> {
+        if (!isAdded()) return;        new Thread(() -> {
             final boolean up = httpOk(uiUrl());
             final String log = readWebLogTail();
             if (!isAdded()) return;
@@ -235,7 +247,7 @@ public class LaunchFragment extends Fragment {
                     }
                     logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
                 }
-                mainHandler.postDelayed(tick, 1500);
+                mainHandler.postDelayed(tick, nextTickDelayMs());
             });
         }, "dsha-launch-tick").start();
     }
