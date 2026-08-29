@@ -107,6 +107,9 @@ public class MainActivity extends AppCompatActivity {
         // skip_extract —— 首启那次弹窗被用户划掉/进程被杀后，下次开 App 还有机会补上
         // （issue #22）。方法内部只在 .dsh 尚无用户数据时才弹，不会覆盖已有数据。
         HarnessController.get(this).maybePromptRestore(this);
+        // 上次重解压没走完 → 数据保护目录还在，问用户要不要把数据恢复回来。
+        // **必须排在升级提示之前**：数据没归位就再提示重解压，只会把同一个失败重复一遍。
+        HarnessController.get(this).maybeOfferPreservedDataRecovery(this);
         // 离线包升级感知：APK 内置新离线包 → 提示重解压（数据自动保留）。
         // 放外面：正常启动（rootfs 已解压）也要检测，方法内部自带
         // isOfflineExtracted() 保护（首启未解压时静默）。

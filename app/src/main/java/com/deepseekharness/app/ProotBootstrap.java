@@ -1047,60 +1047,10 @@ public class ProotBootstrap {
             setupResolvConf();
             // 解压完成后还原用户数据（.dsh + 所有工作目录 .env）
             if (dataBak != null) {
-                try {
-                    java.io.File dshDst = new java.io.File(rootfsDir, "root/.dsh");
-                    java.io.File dshBak = new java.io.File(dataBak, "dsh");
-                    if (dshBak.isDirectory()) {
-                        if (!dshDst.exists()) dshDst.mkdirs();
-                        copyRecursively(dshBak, dshDst);
-                    }
-                    // 还原插件源码目录：profile 里那些 link:/root/plugin-src/<名字> 全指向它，
-                    // 少了它插件会在启动前被 fix-stale-bundles 当「解析不到」摘掉
-                    java.io.File psBak = new java.io.File(dataBak, "plugin-src");
-                    if (psBak.isDirectory()) {
-                        java.io.File psDst = new java.io.File(rootfsDir, "root/plugin-src");
-                        if (!psDst.exists()) psDst.mkdirs();
-                        copyRecursively(psBak, psDst);
-                    }
-                    // 还原各工作目录 .env（env-<dir> 命名，还原到 root/<dir>/.env）
-                    java.io.File[] envBaks = dataBak.listFiles((d, n) -> n.startsWith("env-"));
-                    if (envBaks != null) {
-                        for (java.io.File eb : envBaks) {
-                            String dirName = eb.getName().substring("env-".length());
-                            java.io.File envDst = new java.io.File(rootfsDir, "root/" + dirName + "/.env");
-                            if (envDst.getParentFile() != null) envDst.getParentFile().mkdirs();
-                            copyFile(eb, envDst);
-                        }
-                    }
-                    // .bridge_token 是**本机**的 3090 桥凭据，不算用户数据 —— BackupManager
-                    // 备份时就明确排除了它（见那里的注释），而这里却随整个 .dsh 备份还原回来，
-                    // 两处对「什么算用户数据」的判断不一致。后果非常隐蔽：
-                    // HttpShellService.authToken 是静态字段、只在缓存为空时才读文件，于是
-                    // App 校验的是自己内存里那个、插件与 agent skill 拿到的是还原回来的旧的
-                    // → 一律 401。表现出来就是「悬浮窗不显示 + agent 工具调用失败」，而不走
-                    // 3090 的内置 UI 注入、提示词注入全都好着 —— 真机上就是这么报上来的，
-                    // 光看现象根本想不到是 token。
-                    // 清掉本机专属的东西：清单来自 UserDataPolicy，与备份的 --exclude 同源。
-                    // 数据保护是把 .dsh 整目录复制回来的，所以必须再清一遍 —— 否则旧的桥
-                    // token 和内置插件版本标记会活过这次重解压，而它们描述的对象（App 内存里
-                    // 的 token、/root/dsha-* 插件实体）已经随 rootfs 一起换掉了。
-                    // 这个形状真机上出过两次故障，详见 UserDataPolicy 的类注释。
-                    for (String rel : UserDataPolicy.purgeAfterRestore()) {
-                        java.io.File stale = new java.io.File(rootfsDir, rel);
-                        if (stale.isFile()) {
-                            //noinspection ResultOfMethodCallIgnored
-                            stale.delete();
-                            android.util.Log.i("DSHA", "重解压后清掉本机专属文件: " + rel);
-                        }
-                    }
-                    // 再让 App 侧重新生成桥 token 并写回，两边对齐（dsh 后端自己也缓存 token，
-                    // 所以仍需重启 Web 才彻底生效 —— 解压页本来就会重启）
-                    HttpShellService.resetTokenAfterRestore();
-                    android.util.Log.i("DSHA", "重解压已还原用户数据 (.dsh + 工作区 .env)");
-                } catch (Throwable e) {
-                    android.util.Log.w("DSHA", "还原用户数据失败: " + e);
-                }
-                deleteRecursively(dataBak);
+                // 还原逻辑与「事后兜底恢复」共用同一份实现（restorePreservedData）——
+                // 「解压完还原」和「上次没走完、事后补救」是同一件事，分成两份写必然分家。
+                String rr = restorePreservedData(dataBak, true);
+                android.util.Log.i("DSHA", "重解压还原用户数据：" + rr);
             }
             markOfflineExtracted();
             // 记录离线包版本（启动时对比，发现新版可提示升级）
@@ -1110,6 +1060,190 @@ public class ProotBootstrap {
             if (apk != null) {
                 try { apk.close(); } catch (Exception ignored) {}
             }
+        }
+    }
+
+    /**
+     * 把 {@code .data-preserve-*} 里的用户数据还原回 rootfs。
+     *
+     * <p>两个调用方共用这一份：重解压流程（解压完立刻还原）与<b>事后兜底恢复</b>
+     * （上次升级没走完，残留目录还在）。分成两份写的话，迟早只改一边 ——
+     * 这个项目在「什么算用户数据」上已经分家过好几次（备份 vs 数据保护、
+     * 桥 token 的处置），所以这里从一开始就收成一处。
+     *
+     * @param deleteAfter 还原完是否删掉保护目录（正常都删；只有用户明确说「先留着」时才不删）
+     * @return 人话结果，直接进活动日志 / 对话框
+     */
+    String restorePreservedData(java.io.File dataBak, boolean deleteAfter) {
+        StringBuilder log = new StringBuilder();
+        try {
+            java.io.File dshBak = new java.io.File(dataBak, "dsh");
+            java.io.File dshDst = new java.io.File(rootfsDir, "root/.dsh");
+            if (dshBak.isDirectory()) {
+                // 当前 rootfs 里已经有用起来的 .dsh（事后恢复的典型情形）→ 先挪开，不覆盖。
+                // 与 restoreFromBackup 的做法一致：宁可留两份让用户自己挑，也不悄悄盖掉。
+                if (hasLiveDshData()) {
+                    java.io.File aside = new java.io.File(rootfsDir,
+                            "root/.dsh.pre-recover-" + System.currentTimeMillis());
+                    if (dshDst.renameTo(aside)) {
+                        log.append("原有 .dsh 已挪到 ").append(aside.getName()).append("；");
+                    } else {
+                        return "当前 .dsh 里已经有数据，又挪不开它 —— 没有动任何东西（怕覆盖掉你正在用的）";
+                    }
+                }
+                if (!dshDst.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    dshDst.mkdirs();
+                }
+                copyRecursively(dshBak, dshDst);
+                log.append("已还原 .dsh；");
+            }
+            java.io.File psBak = new java.io.File(dataBak, "plugin-src");
+            if (psBak.isDirectory()) {
+                java.io.File psDst = new java.io.File(rootfsDir, "root/plugin-src");
+                if (!psDst.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    psDst.mkdirs();
+                }
+                copyRecursively(psBak, psDst);
+                log.append("已还原插件源码目录；");
+            }
+            java.io.File[] envBaks = dataBak.listFiles((d, n) -> n.startsWith("env-"));
+            if (envBaks != null) {
+                for (java.io.File eb : envBaks) {
+                    String dirName = eb.getName().substring("env-".length());
+                    java.io.File envDst = new java.io.File(rootfsDir, "root/" + dirName + "/.env");
+                    if (envDst.getParentFile() != null) {
+                        //noinspection ResultOfMethodCallIgnored
+                        envDst.getParentFile().mkdirs();
+                    }
+                    copyFile(eb, envDst);
+                }
+                if (envBaks.length > 0) {
+                    log.append("已还原 ").append(envBaks.length).append(" 个工作区的 .env；");
+                }
+            }
+            // 清掉本机专属的东西（桥 token、内置插件版本标记…）。清单来自 UserDataPolicy，
+            // 与备份的 --exclude 同源。数据保护是整目录复制回来的，所以必须再清一遍：
+            // 否则旧桥 token 会活过这次还原，而 App 内存里那个已经换了 → agent 一律 401，
+            // 表现是「悬浮条不显示 + 工具调用失败」，光看现象根本想不到是 token。
+            for (String rel : UserDataPolicy.purgeAfterRestore()) {
+                java.io.File stale = new java.io.File(rootfsDir, rel);
+                if (stale.isFile()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    stale.delete();
+                    android.util.Log.i("DSHA", "还原后清掉本机专属文件: " + rel);
+                }
+            }
+            HttpShellService.resetTokenAfterRestore();
+            if (deleteAfter) {
+                deleteRecursively(dataBak);
+                log.append("保护目录已清理");
+            } else {
+                log.append("保护目录保留在 ").append(dataBak.getName());
+            }
+            return log.length() == 0 ? "保护目录里没有可还原的东西" : log.toString();
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "还原用户数据失败: " + e);
+            return "还原过程出错：" + e + "（保护目录没有删，可以再试一次）";
+        }
+    }
+
+    /** 当前 rootfs 里是不是已经有「用起来了」的 .dsh（有会话或设置就算）。 */
+    boolean hasLiveDshData() {
+        java.io.File dsh = new java.io.File(rootfsDir, "root/.dsh");
+        if (!dsh.isDirectory()) return false;
+        String[] signs = {"sessions", "settings.yaml", "profiles", "credentials.yaml"};
+        for (String n : signs) {
+            java.io.File f = new java.io.File(dsh, n);
+            if (FileCopy.existsNoFollow(f)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 找出上次升级没走完留下的数据保护目录（{@code .data-preserve-<时间戳>}）。
+     *
+     * <p>正常流程结束时它会被删掉，所以还在 = 上一次重解压中途失败了（空间不够、
+     * 被系统杀、断电…）。里面是用户的对话与插件源码，而 App 原先<b>不会</b>再看它一眼 ——
+     * 数据就在磁盘上，用户却拿不回来，这才是最难受的那种丢。
+     *
+     * <p>有多份时取时间戳最大的那份（最近一次），其余留着不动。
+     *
+     * @return 目录，或 null（没有残留 / 残留是空的）
+     */
+    public java.io.File findPreservedData() {
+        try {
+            java.io.File[] all = baseDir.listFiles((d, n) -> n.startsWith(".data-preserve-"));
+            if (all == null || all.length == 0) return null;
+            java.io.File best = null;
+            for (java.io.File f : all) {
+                if (!f.isDirectory()) continue;
+                String[] kids = f.list();
+                if (kids == null || kids.length == 0) continue; // 空壳，不值得提示
+                if (best == null || f.getName().compareTo(best.getName()) > 0) best = f;
+            }
+            return best;
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /** 还有几份残留（提示里告诉用户，别让他以为只有一份）。 */
+    public int preservedDataCount() {
+        java.io.File[] all = baseDir.listFiles((d, n) -> n.startsWith(".data-preserve-"));
+        if (all == null) return 0;
+        int n = 0;
+        for (java.io.File f : all) {
+            String[] kids = f.isDirectory() ? f.list() : null;
+            if (kids != null && kids.length > 0) n++;
+        }
+        return n;
+    }
+
+    /** 残留数据的人话摘要：什么时候留下的、里面有多少会话、有没有插件源码。 */
+    public String preservedDataSummary(java.io.File d) {
+        if (d == null) return "";
+        StringBuilder sb = new StringBuilder();
+        try {
+            String ts = d.getName().substring(".data-preserve-".length());
+            try {
+                long ms = Long.parseLong(ts);
+                sb.append("留下的时间：")
+                  .append(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+                          .format(new java.util.Date(ms)))
+                  .append('\n');
+            } catch (NumberFormatException ignored) {
+            }
+            java.io.File sessions = new java.io.File(d, "dsh/sessions");
+            // sessions 多半是一根指向公开目录的软链（那是「卸载不丢数据」的实现方式），
+            // 所以这里数的是链接指向的那个目录 —— 用 list() 会跟随链接，正好。
+            String[] kids = sessions.list();
+            if (kids != null) {
+                sb.append("对话文件：").append(kids.length).append(" 个");
+                if (FileCopy.isLink(sessions)) sb.append("（存放在公开目录，链接原样保留）");
+                sb.append('\n');
+            }
+            if (new java.io.File(d, "dsh/settings.yaml").exists()) sb.append("设置：有\n");
+            if (new java.io.File(d, "plugin-src").isDirectory()) {
+                String[] ps = new java.io.File(d, "plugin-src").list();
+                sb.append("插件源码：").append(ps == null ? 0 : ps.length).append(" 个\n");
+            }
+            java.io.File[] envs = d.listFiles((dd, n) -> n.startsWith("env-"));
+            if (envs != null && envs.length > 0) sb.append("工作区配置：").append(envs.length).append(" 份\n");
+        } catch (Throwable ignored) {
+        }
+        return sb.toString().trim();
+    }
+
+    /** 用户选择「不要了」：把残留整个删掉（只有用户明确点删才走这里）。 */
+    public boolean dropPreservedData(java.io.File d) {
+        try {
+            if (d == null || !d.isDirectory()) return false;
+            deleteRecursively(d);
+            return !d.exists();
+        } catch (Throwable e) {
+            return false;
         }
     }
 

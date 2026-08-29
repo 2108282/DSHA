@@ -6392,6 +6392,13 @@ public class HarnessController {
         IO.execute(() -> {
             try {
                 if (!proot.isOfflineExtracted()) return; // 首启未解压：走正常解压流程，不提示
+                // 上次重解压留下的数据保护目录还在 → 先让用户把数据恢复回来，别再提示升级。
+                // 再来一次重解压只会把同一个失败重复一遍，而且用户会以为「升级又坏了」，
+                // 真正该做的是先把上一轮的数据归位（maybeOfferPreservedDataRecovery）。
+                if (proot.findPreservedData() != null) {
+                    android.util.Log.i("DSHA", "有未恢复的数据保护目录 → 暂不提示内置环境升级");
+                    return;
+                }
                 final String bundled = proot.bundledOfflineVersion();
                 final String installed = proot.installedOfflineVersion();
                 if ("0".equals(bundled) || bundled.equals(installed)) return; // 无内置包/无更新
@@ -6427,6 +6434,82 @@ public class HarnessController {
                                     prefs.edit().putString("ignored_offline_version", bundled).apply())
                             .setNeutralButton("稍后", null)
                             .show();
+                });
+            } catch (Throwable ignored) {
+            }
+        });
+    }
+
+    /**
+     * 上次重解压没走完 → 提示把残留的用户数据恢复回来。
+     *
+     * <p>数据保护目录（{@code .data-preserve-<时间戳>}）在正常流程结束时会被删掉，所以它
+     * 还在就意味着上一次重解压中途失败了（空间不够、被系统杀、断电…）。里面是用户的对话与
+     * 插件源码，而 App 原先<b>不会再看它一眼</b> —— 数据明明还在磁盘上，用户却拿不回来，
+     * 这是最难受的那种「丢」。
+     *
+     * <p>刻意不自动恢复：当前环境里可能已经有新对话了，悄悄覆盖比不恢复更糟。所以是问一句，
+     * 并且恢复时把现有的 {@code .dsh} 挪到 {@code .dsh.pre-recover-<ts>} 而不是删掉 ——
+     * 两份都留着，用户可以自己挑。
+     */
+    public void maybeOfferPreservedDataRecovery(final android.app.Activity act) {
+        IO.execute(() -> {
+            try {
+                final java.io.File d = proot.findPreservedData();
+                if (d == null) return;
+                final int count = proot.preservedDataCount();
+                final String summary = proot.preservedDataSummary(d);
+                final boolean live = proot.hasLiveDshData();
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    try {
+                        StringBuilder msg = new StringBuilder();
+                        msg.append("重新解压内置环境的过程中断过一次。你的数据当时被保护起来了，"
+                                + "现在还在手机上。\n\n");
+                        if (!summary.isEmpty()) msg.append(summary).append("\n\n");
+                        if (live) {
+                            msg.append("注意：现在的环境里已经有对话数据。恢复会把现在这份挪到 "
+                                    + ".dsh.pre-recover-<时间>，再把保护起来的那份放回去 —— "
+                                    + "两份都留着，之后你可以自己挑。\n\n");
+                        }
+                        if (count > 1) {
+                            msg.append("（一共有 ").append(count)
+                               .append(" 份保护数据，这次恢复最近的那份）\n\n");
+                        }
+                        msg.append("恢复完需要重启一次 Web UI 才生效。");
+                        new android.app.AlertDialog.Builder(act)
+                                .setTitle("上次升级没有完成")
+                                .setMessage(msg.toString())
+                                .setPositiveButton("恢复", (dlg, w) -> IO.execute(() -> {
+                                    setProgress("正在恢复上次中断的数据", 0);
+                                    String r = proot.restorePreservedData(d, true);
+                                    logActivity("恢复上次升级中断的数据：" + r);
+                                    setState("", 0, "已恢复上次中断的数据（重启 Web 生效）：" + r,
+                                            "", false);
+                                }))
+                                .setNeutralButton("稍后", null)
+                                .setNegativeButton("不要了", (dlg, w) -> {
+                                    try {
+                                        new android.app.AlertDialog.Builder(act)
+                                                .setTitle("确认删掉这份数据？")
+                                                .setMessage("里面是上次升级前保护起来的对话与"
+                                                        + "插件源码，删掉之后不可恢复。")
+                                                .setPositiveButton("删掉", (d2, w2) ->
+                                                        IO.execute(() -> {
+                                                            boolean ok = proot.dropPreservedData(d);
+                                                            logActivity(ok
+                                                                    ? "用户删掉了上次升级残留的保护数据"
+                                                                    : "删除保护数据失败（文件可能被占用）");
+                                                        }))
+                                                .setNegativeButton("取消", null)
+                                                .show();
+                                    } catch (Throwable ignored) {
+                                    }
+                                })
+                                .show();
+                    } catch (Throwable ignored) {
+                        // 在 finishing 的 Activity 上 show() 会抛 BadTokenException，
+                        // 这里是主线程、不在外层 catch 范围内 —— 必须自己兜住。
+                    }
                 });
             } catch (Throwable ignored) {
             }
