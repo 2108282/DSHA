@@ -281,7 +281,10 @@ jobs:
             ```
 
             由 CI 构建并用项目 release keystore 签名，可直接覆盖安装。
-            以下是自动生成的变更记录：
+
+            **面向用户的变化见 [CHANGELOG.md](https://github.com/qiannianhuanxiang/DSHA/blob/main/CHANGELOG.md)。**
+            下面那份是 GitHub 自动生成的 —— 它只列 PR，而这个项目绝大多数改动是直接 push 的，
+            所以那份看起来会比实际少得多（v1.1.9 有 102 个提交，自动记录里只有 1 条）。
           files: |
             ${{ steps.apk.outputs.file }}
             ${{ steps.apk.outputs.file }}.sha256
