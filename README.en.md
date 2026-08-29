@@ -310,11 +310,16 @@ QQ group **960636357** — test builds, bug reports, plugin talk.
 
 ## Star History
 
-<a href="https://www.star-history.com/#qiannianhuanxiang/DSHA&Date">
+<a href="https://github.com/qiannianhuanxiang/DSHA/stargazers">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left" />
-    <img alt="DSHA Star History" src="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left" />
+    <source media="(prefers-color-scheme: dark)" srcset="docs/star-history-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="docs/star-history.svg" />
+    <img alt="DSHA Star History" src="docs/star-history.svg" width="820" />
   </picture>
 </a>
+
+<sub>Generated weekly by [`tools/gen-star-history.py`](tools/gen-star-history.py)
+([workflow](.github/workflows/star-history.yml)). Since 2026-06-30 GitHub restricts the
+stargazers API to a repository's own admins and collaborators, which breaks third-party
+live-embedded charts — so we fetch the data and draw the chart ourselves.</sub>
 

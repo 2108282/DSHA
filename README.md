@@ -297,11 +297,15 @@ QQ 群 **960636357** —— 测试版、问题反馈、插件交流。
 
 ## Star History
 
-<a href="https://www.star-history.com/#qiannianhuanxiang/DSHA&Date">
+<a href="https://github.com/qiannianhuanxiang/DSHA/stargazers">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left" />
-    <img alt="DSHA Star History" src="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left" />
+    <source media="(prefers-color-scheme: dark)" srcset="docs/star-history-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="docs/star-history.svg" />
+    <img alt="DSHA Star History" src="docs/star-history.svg" width="820" />
   </picture>
 </a>
+
+<sub>曲线由 [`tools/gen-star-history.py`](tools/gen-star-history.py) 每周自动生成（[workflow](.github/workflows/star-history.yml)）。
+GitHub 从 2026-06-30 起把 stargazers API 限制成只有仓库 admin/collaborator 能读，
+第三方实时嵌入图因此普遍失效，所以数据自己拉、图自己画。</sub>
 
