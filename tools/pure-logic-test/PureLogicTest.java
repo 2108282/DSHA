@@ -826,6 +826,35 @@ public final class PureLogicTest {
         eq("stop: pid 文件的 rootfs 相对路径（Android 侧用 File 直接读）",
                 "root/.dsha-web.pid", WebProcSel.pidFileRel(WebProcSel.PID_WEB));
 
+        // ---------- AssetBatch：一次会话跑多个自愈脚本 ----------
+        // 切分错了的后果是静默的：比如 fs-write-patch 的输出被分到别人名下，
+        // 「PATCHED」就再也匹配不到，功能照跑但记账没了，没人会发现。
+        java.util.List<String> remotes = java.util.Arrays.asList("a.sh", "b.sh", "c.sh");
+        String cmd = AssetBatch.buildCommand("SEP1", remotes);
+        ok("batch: 每个脚本都 bash 了并删掉临时文件",
+                cmd.contains("bash /root/a.sh; rm -f /root/a.sh")
+                        && cmd.contains("bash /root/c.sh; rm -f /root/c.sh"));
+        ok("batch: 每个脚本前打一行哨兵", cmd.split("echo SEP1", -1).length == 4);
+        // 用 ; 而不是 && —— 前一个脚本失败时后面的照样跑（和「各自一次会话」等价）
+        ok("batch: 不用 && 串联（失败不影响后面）", !cmd.contains("&&"));
+
+        java.util.List<String> names = java.util.Arrays.asList("a.sh", "b.sh", "c.sh", "d.sh");
+        // 真实形状：第一个哨兵之前可能有容器启动器的提示；c.sh 什么都没打印
+        String sample = "proot info: something\nSEP\nAAA\nSEP\nline1\nPATCHED ok\nSEP\nSEP\nD1\nD2\n";
+        java.util.Map<String, String> got = AssetBatch.splitOutput("SEP", names, sample);
+        eq("batch: 第一个脚本的输出", "AAA", got.get("a.sh"));
+        eq("batch: 多行输出完整保留", "line1\nPATCHED ok", got.get("b.sh"));
+        eq("batch: 没有输出的脚本给空串（不能错位）", "", got.get("c.sh"));
+        eq("batch: 最后一个脚本的输出", "D1\nD2", got.get("d.sh"));
+        ok("batch: 前导段（启动器提示）不算进任何脚本",
+                !String.valueOf(got.get("a.sh")).contains("proot info"));
+        // 整批被超时打断：后面的脚本给空串，调用方按「没输出」处理，不能抛
+        java.util.Map<String, String> cut = AssetBatch.splitOutput("SEP", names, "\nSEP\nAAA\n");
+        eq("batch: 超时截断时已跑的那个仍取得到", "AAA", cut.get("a.sh"));
+        eq("batch: 超时截断时没跑的给空串", "", cut.get("d.sh"));
+        eq("batch: 输出为 null 时全给空串", "",
+                AssetBatch.splitOutput("SEP", names, null).get("a.sh"));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

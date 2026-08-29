@@ -1868,12 +1868,8 @@ public class HarnessController {
      *  （dsh 用 link(临时文件,目标) 发布 + 删临时目录，撞上 proot 的 --link2symlink）。
      *  给 fs-local 打「目标不存在改用 rename 发布」的补丁，幂等，命中已打过时 0.05 秒返回。 */
     public void ensureFsWritePatch() {
-        String r = runAssetScript("fs-write-patch.sh", "dsha-fs-write-patch.sh", 90_000);
-        android.util.Log.i("DSHA", "write 发布补丁: " + (r == null ? "无输出" : r.trim()));
-        // 只在真的打上时记账：幂等返回（ALREADY）每次启动都会有，记了就是刷屏
-        if (r != null && r.contains("PATCHED")) {
-            logActivity("给 dsh 打了 write / 会话发布补丁（治新建文件变悬空链接）");
-        }
+        noteFsWritePatchResult(
+                runAssetScript("fs-write-patch.sh", "dsha-fs-write-patch.sh", 90_000));
     }
 
     /** 启动前自愈：老 WebView 兼容补丁（AbortSignal.any/timeout polyfill，幂等） */
@@ -3057,6 +3053,63 @@ public class HarnessController {
         }
     }
 
+    /**
+     * 一次容器会话里顺序跑多个 assets 脚本，返回每个脚本各自的输出（key = assetName）。
+     *
+     * <p><b>为什么要有它</b>：{@link #runAssetScript} 每调一次就是一次独立的容器会话 ——
+     * 启动器 + bash 的固定成本要付一遍。而启动路径上排着 6 个幂等自愈脚本，绝大多数时候
+     * 它们只是确认「补丁已经在了」就返回，真正干活的时间远小于起会话的开销。
+     * 合并之后语义不变：还是顺序执行、彼此独立、某个失败不影响后面（用 {@code ;} 串联，
+     * 和原来各自一次会话一样），只是固定成本付一次。
+     *
+     * <p><b>唯一的行为差异</b>：原先每个脚本有各自的超时，现在整批共用一个。也就是说
+     * 前面某个脚本卡到超时，后面的这一轮就不跑了（下次启动还会再来，它们都是幂等的）。
+     * 这几个脚本都是本地 sed/patch，卡住基本等于容器本身出了问题，那时后面的也做不成 ——
+     * 拿这个换掉 5 次会话的固定开销是划算的。
+     *
+     * <p>输出用一行随机哨兵切分，所以脚本自己打印什么都不会破坏切分。
+     *
+     * @param specs 每项是 {@code {assetName, 落在 rootfs /root 下的文件名}}，按数组顺序执行
+     */
+    java.util.Map<String, String> runAssetScripts(String[][] specs, long timeoutMs) {
+        java.util.List<String> assetNames = new java.util.ArrayList<>();
+        java.util.List<String> remoteNames = new java.util.ArrayList<>();
+        for (String[] sp : specs) {
+            String script = readAsset(sp[0]);
+            if (script == null || script.isEmpty()) continue;
+            try {
+                java.io.File f = new java.io.File(proot.getRootfsDir(), "root/" + sp[1]);
+                if (f.getParentFile() != null) f.getParentFile().mkdirs();
+                java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "写脚本失败（跳过）: " + sp[0] + " " + e);
+                continue;
+            }
+            assetNames.add(sp[0]);
+            remoteNames.add(sp[1]);
+        }
+        if (assetNames.isEmpty()) return new java.util.LinkedHashMap<>();
+        String sep = AssetBatch.newSeparator();
+        long t0 = System.currentTimeMillis();
+        String all = proot.execAndRead(AssetBatch.buildCommand(sep, remoteNames), timeoutMs);
+        lastSelfHealMs += System.currentTimeMillis() - t0;
+        lastSelfHealSessions++;
+        return AssetBatch.splitOutput(sep, assetNames, all);
+    }
+
+    /** 启动准备阶段的耗时与会话数（只用于活动日志里那一行观测，真机拿数据用）。 */
+    private long lastSelfHealMs;
+    private int lastSelfHealSessions;
+
+    /** {@code fs-write-patch.sh} 的结果记账 —— 单跑与批量跑共用同一份判断。 */
+    private void noteFsWritePatchResult(String r) {
+        android.util.Log.i("DSHA", "write 发布补丁: " + (r == null ? "无输出" : r.trim()));
+        // 只在真的打上时记账：幂等返回（ALREADY）每次启动都会有，记了就是刷屏
+        if (r != null && r.contains("PATCHED")) {
+            logActivity("给 dsh 打了 write / 会话发布补丁（治新建文件变悬空链接）");
+        }
+    }
+
     public String readAsset(String name) {
         // 增量更新的覆盖层优先：脚本层的修复（几 KB）不必等下一个 384MB 的 APK。
         // 覆盖层为空或读失败就回落到 APK 内置版本 —— 删掉覆盖文件即回退。
@@ -3119,38 +3172,50 @@ public class HarnessController {
 
 
     public String startWebCommand() {
-        // 启动前自愈：确保配置修复脚本已就位（钳制超限 timeoutMs）
+        // 启动前自愈：确保配置修复脚本已就位（纯文件写入，不进容器）
         ensureConfigFixAsset();
-        // 启动前自愈：老 WebView 兼容补丁（AbortSignal.any/timeout polyfill，幂等）
+        // ── 启动前自愈脚本：合并成一次容器会话 ──
+        // 这四个原来是四次独立调用（webserver-auth / polyfill / origin-port 各一次，
+        // fs-write 一次），也就是四次启动器 + bash 的固定开销，而它们绝大多数时候只是
+        // 确认「补丁已经在了」。顺序保持原样，彼此本来也没有依赖（改的是不同文件）。
+        // 它们都跟 profile 无关，所以整批放在 ensureBuiltinBundles 之前，与原顺序一致。
+        lastSelfHealMs = 0;
+        lastSelfHealSessions = 0;
+        long prepStart = System.currentTimeMillis();
         try {
-            ensureWebUiPolyfill();
-        } catch (Throwable ignored) {
-        }
-        // 启动前自愈：外部浏览器 /api 403 修复（Chrome 150+ Origin 省略端口，幂等）
-        try {
-            ensureWebUiOriginPatch();
-        } catch (Throwable ignored) {
-        }
-        // 启动前自愈：write 工具新建文件变悬空链接（proot l2s 与 dsh link 发布冲突，幂等）
-        try {
-            ensureFsWritePatch();
-
+            java.util.Map<String, String> r1 = runAssetScripts(new String[][]{
+                    // dsh 的 Web 服务本身没有鉴权（上游只绑 127.0.0.1，而 Android 上任何
+                    // App 都能访问回环且不需要权限）→ 给它加 token 校验
+                    {"webserver-auth-patch.sh", "dsha-webserver-auth.sh"},
+                    // 老 WebView 兼容：AbortSignal.any/timeout + crypto.randomUUID polyfill
+                    {"webui-polyfill.sh", "dsha-webui-polyfill.sh"},
+                    // 外部浏览器 /api 403 修复（Chrome 150+ 的 Origin 省略端口）
+                    {"webui-origin-port-patch.sh", "dsha-origin-port-patch.sh"},
+                    // write 工具新建文件变悬空链接（l2s 与 dsh 的 link 发布冲突）
+                    {"fs-write-patch.sh", "dsha-fs-write-patch.sh"},
+            }, 210_000);
+            noteFsWritePatchResult(r1.get("fs-write-patch.sh"));
         } catch (Throwable ignored) {
         }
         // 启动前自愈：内置插件（mobile-nav/device-shell-guide）注册校验，
-        // 被 dsh plugin reconcile 清掉/丢失时自动补回（幂等）
+        // 被 dsh plugin reconcile 清掉/丢失时自动补回（幂等，纯 Java）
         try {
             ensureBuiltinBundles();
         } catch (Throwable ignored) {
         }
-        // 启动前把热数据迁移到公开目录（会话/设置/附件跨重装不丢），
-        // 幂等且安全：只迁纯文件目录、不碰 credentials、失败保留私有副本。
+        // ── 第二批：这两个要动 .dsh 数据与 profile 的 bundles ──
+        // **必须留在 ensureBuiltinBundles 之后**：先补回内置 bundle，再清理解析不到的，
+        // 顺序反过来会把刚补回的又清掉。所以这里单独一批，不与上面那四个合并。
         try {
-            runAssetScript("migrate-public-data.sh", "dsha-migrate-public.sh", 60_000);
+            runAssetScripts(new String[][]{
+                    // 热数据迁移到公开目录（会话/设置/附件跨重装不丢）：
+                    // 幂等且安全，只迁纯文件目录、不碰 credentials、失败保留私有副本
+                    {"migrate-public-data.sh", "dsha-migrate-public.sh"},
+                    // 清理无法解析的 stale bundle（防 cannot resolve profile bundle 启动崩溃）
+                    {"fix-stale-bundles.sh", "dsha-fix-stale-bundles.sh"},
+            }, 120_000);
         } catch (Throwable ignored) {
         }
-        // 启动前自愈：清理无法解析的 stale bundle（防 cannot resolve profile bundle 启动崩溃）
-        runAssetScript("fix-stale-bundles.sh", "dsha-fix-stale-bundles.sh", 60_000);
         // 局域网访问：deepseek-harness 官方 CLI 默认拒绝 --host 0.0.0.0，
         // 需先打 lan-bind-patch.sh 放行（失败则回落到 127.0.0.1，服务保证能起）。
         boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
@@ -3199,6 +3264,11 @@ public class HarnessController {
           .append(runCoreCommand(lanReady));
         // 写入看门狗（重启脚本 = 启动核心命令），并拉起看门狗守护
         writeWatchdogFiles(runCoreCommand(lanReady), parsePort());
+        // 观测用（真机拿数据）：准备阶段总耗时，以及自愈脚本占了多少、跑了几次容器会话。
+        // 这一行是「还要不要继续合并会话」的依据 —— 没有数字就不该再动启动路径。
+        logActivity("启动准备耗时 " + (System.currentTimeMillis() - prepStart)
+                + "ms（自愈脚本 " + lastSelfHealMs + "ms / "
+                + lastSelfHealSessions + " 次容器会话）");
         return sb.toString();
     }
 
