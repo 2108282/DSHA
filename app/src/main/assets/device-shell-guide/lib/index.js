@@ -43,7 +43,17 @@ import { randomUUID } from 'node:crypto'
  * systemPrompt 用的就是这个写法（packages/bundle/web-app/src/index.ts）。
  */
 
-/** 注入到系统提示的引导段（针对 DSHA 手机端环境）。 */
+/** 注入到系统提示的引导段（针对 DSHA 手机端环境）。
+ *
+ * <p><b>改这段之前先想一件事：这个文件会通过 runtime 增量更新推给老版本的 App。</b>
+ * 清单里有它（runtime-manifest.json），而热更新只换脚本、不换 Java —— 也就是说
+ * 新提示词随时可能跑在一个**没有新端点**的 App 上（ensureDeviceShellGuide 有好几条
+ * 路径会把 overlay 里的新文件写进 rootfs，比如插件被用户禁用时的「仅更新实体」）。
+ * 老 App 收到未知路径不会回 404，而是把它当 shell 命令处理，回给 agent 一堆无意义输出。
+ *
+ * 所以：凡是引用「较新才有的端点」的地方，都要就地给一份能用的兜底 ——
+ * 否则老用户那边的表现是 agent 突然不知道自己能操作手机（比压缩掉几 KB 提示词严重得多）。
+ */
 const PROMPT = [
   '【设备操作能力 · DSHA】你正运行在用户 Android 手机的容器里，可以干预这台实体手机。',
 
@@ -59,6 +69,15 @@ const PROMPT = [
   '  curl -s "http://127.0.0.1:3090/app/help?token=$T"',
   '  → 要用设备能力时查这一次，里面有每个端点的参数和写法。',
   '    清单刻意没写在这里 —— 它有十几 KB，写进提示词就是每一轮都替你付一次上下文。',
+  '  ⚠ /app/help 与 /app/version 只有较新的 App 才有（老版本会把未知路径当 shell 命令处理，',
+  '    回给你的东西不像清单）。那种情况按下面这份最小清单用，别反复重试 /app/help：',
+  '    设备信息 /app/device · 应用列表 /app/apps?q= · 启动应用 /app/launch?pkg=',
+  '    读屏 /app/ui/dump · 按文字点按 /app/ui/tap?text= · 输入 /app/ui/input?text=',
+  '    滑动 /app/ui/swipe · 截屏 /app/ui/screenshot · 按键 /app/ui/key',
+  '    通知 /app/notify?title=&text= · 提问 /app/ask?q=&options=a|b · Toast /app/toast?text=',
+  '    剪贴板 /app/clip（写入加 ?text=） · 分享 /app/share?text= · 开链接 /app/open?url=',
+  '    震动 /app/vibrate?ms= · 导出文件 /app/export?path= · 读 sdcard 文件 /app/readfile?path=',
+  '    位置 /app/location · 传感器 /app/sensors 与 /app/sensor?type= · 手电 /app/torch?on=1',
 
   '■ 硬约束（几条，都别违）：',
   '  - 危险命令由 App 侧守卫拦下来弹确认框、用户点允许才执行。这道门是机制保证的，' +
