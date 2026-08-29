@@ -994,36 +994,44 @@ public class ProotBootstrap {
             // .env 遍历 /root 下所有子目录（兼容用户自定义 workdir，不只默认 deepseek-harness）。
             java.io.File dataBak = null;
             if (rootfsDir.exists()) {
-                java.io.File dshDir = new java.io.File(rootfsDir, "root/.dsh");
+                // 用户数据保护：把 /root 下的东西**整体挪走**，而不是挑几样复制。
+                //
+                // 原先只保 .dsh、plugin-src 和各工作区的 .env —— 于是工作区目录里其它所有
+                // 东西（用户写的代码、agent 的产出、下载的文件）随 rootfs 一起被删。
+                // 真机反馈的原话是「确实，工作区域的内容全部丢失了」。
+                // **「挑哪些文件要保」这个判断只要存在，就一定会漏掉某样东西**；
+                // 整目录挪走之后这个问题从根上没有了。
+                //
+                // 为什么用 rename 而不是复制：dataBak 与 rootfs 在同一个文件系统里
+                //（都在 files/linux 下），rename 是 O(1)、不占额外空间、瞬间完成；
+                // 复制要付「数据大小 ×2」的空间和好几分钟 —— 对话几个 GB 的用户正是在
+                // 这一步空间不够，而那时 rootfs 已经删了。rename 失败才退回复制（保留软链）。
                 java.io.File rootHome = new java.io.File(rootfsDir, "root");
-                // 插件源码目录：monorepo clone 构建来的、以及自愈自指依赖时挪出来的插件
-                // 实体都住在这里，profile 的 dependencies 用 link:/root/plugin-src/<名字>
-                // 指向它。它**不在 .dsh 里**，所以原先的数据保护漏掉了整个目录 ——
-                // 重解压之后 link: 指向不存在的路径，启动前的 fix-stale-bundles 把它们
-                // 从 bundles 里摘掉，用户的插件就这么静默消失了（备份那条路早就把它内联进
-                // 包了，见 BackupManager 的 .dsha-plugin-src —— 两处对「什么算用户数据」
-                // 的判断又一次分家）。
-                java.io.File pluginSrc = new java.io.File(rootfsDir, "root/plugin-src");
-                java.io.File[] workDirs = rootHome.isDirectory() ? rootHome.listFiles(java.io.File::isDirectory) : null;
-                boolean hasData = dshDir.isDirectory() || pluginSrc.isDirectory()
-                        || (workDirs != null && workDirs.length > 0);
-                if (hasData) {
+                java.io.File[] kids = rootHome.isDirectory() ? rootHome.listFiles() : null;
+                if (kids != null && kids.length > 0) {
                     dataBak = new java.io.File(baseDir, ".data-preserve-" + System.currentTimeMillis());
+                    //noinspection ResultOfMethodCallIgnored
                     dataBak.mkdirs();
-                    if (dshDir.isDirectory()) {
-                        copyRecursively(dshDir, new java.io.File(dataBak, "dsh"));
-                    }
-                    if (pluginSrc.isDirectory()) {
-                        copyRecursively(pluginSrc, new java.io.File(dataBak, "plugin-src"));
-                    }
-                    if (workDirs != null) {
-                        for (java.io.File d : workDirs) {
-                            java.io.File e = new java.io.File(d, ".env");
-                            if (e.isFile()) {
-                                copyFile(e, new java.io.File(dataBak, "env-" + d.getName()));
+                    int moved = 0, copied = 0, failed = 0;
+                    for (java.io.File k : kids) {
+                        // 内置插件实体（/root/dsha-*）不必保：新 APK 会按
+                        // BUILTIN_ASSET_VERSION 重新注入，而且新版往往就是要换掉它们
+                        if (k.getName().startsWith("dsha-")) continue;
+                        java.io.File dst = new java.io.File(dataBak, k.getName());
+                        if (k.renameTo(dst)) {
+                            moved++;
+                        } else {
+                            try {
+                                copyRecursively(k, dst);
+                                copied++;
+                            } catch (Throwable e) {
+                                failed++;
+                                android.util.Log.w("DSHA", "保护 " + k.getName() + " 失败: " + e);
                             }
                         }
                     }
+                    android.util.Log.i("DSHA", "用户数据已保护：挪走 " + moved + " 项、复制 "
+                            + copied + " 项、失败 " + failed + " 项 → " + dataBak.getName());
                 }
             }
             // 空间预检：**必须在删 rootfs 之前**。删完才发现装不回来是这条路上最坏的结果
@@ -1077,54 +1085,74 @@ public class ProotBootstrap {
     String restorePreservedData(java.io.File dataBak, boolean deleteAfter) {
         StringBuilder log = new StringBuilder();
         try {
-            java.io.File dshBak = new java.io.File(dataBak, "dsh");
-            java.io.File dshDst = new java.io.File(rootfsDir, "root/.dsh");
-            if (dshBak.isDirectory()) {
-                // 当前 rootfs 里已经有用起来的 .dsh（事后恢复的典型情形）→ 先挪开，不覆盖。
-                // 与 restoreFromBackup 的做法一致：宁可留两份让用户自己挑，也不悄悄盖掉。
-                if (hasLiveDshData()) {
-                    java.io.File aside = new java.io.File(rootfsDir,
-                            "root/.dsh.pre-recover-" + System.currentTimeMillis());
-                    if (dshDst.renameTo(aside)) {
-                        log.append("原有 .dsh 已挪到 ").append(aside.getName()).append("；");
-                    } else {
-                        return "当前 .dsh 里已经有数据，又挪不开它 —— 没有动任何东西（怕覆盖掉你正在用的）";
-                    }
-                }
-                if (!dshDst.exists()) {
-                    //noinspection ResultOfMethodCallIgnored
-                    dshDst.mkdirs();
-                }
-                copyRecursively(dshBak, dshDst);
-                log.append("已还原 .dsh；");
+            java.io.File rootHome = new java.io.File(rootfsDir, "root");
+            if (!rootHome.isDirectory()) {
+                //noinspection ResultOfMethodCallIgnored
+                rootHome.mkdirs();
             }
-            java.io.File psBak = new java.io.File(dataBak, "plugin-src");
-            if (psBak.isDirectory()) {
-                java.io.File psDst = new java.io.File(rootfsDir, "root/plugin-src");
-                if (!psDst.exists()) {
-                    //noinspection ResultOfMethodCallIgnored
-                    psDst.mkdirs();
-                }
-                copyRecursively(psBak, psDst);
-                log.append("已还原插件源码目录；");
+            java.io.File[] items = dataBak.listFiles();
+            if (items == null || items.length == 0) return "保护目录里没有可还原的东西";
+
+            // 当前 .dsh 里已经有用起来的数据（事后恢复的典型情形）→ 先挪开，不覆盖。
+            // 与 restoreFromBackup 的做法一致：宁可留两份让用户自己挑，也不悄悄盖掉。
+            boolean bringsDsh = false;
+            for (java.io.File it : items) {
+                String n = it.getName();
+                if (".dsh".equals(n) || "dsh".equals(n)) { bringsDsh = true; break; }
             }
-            java.io.File[] envBaks = dataBak.listFiles((d, n) -> n.startsWith("env-"));
-            if (envBaks != null) {
-                for (java.io.File eb : envBaks) {
-                    String dirName = eb.getName().substring("env-".length());
-                    java.io.File envDst = new java.io.File(rootfsDir, "root/" + dirName + "/.env");
-                    if (envDst.getParentFile() != null) {
+            if (bringsDsh && hasLiveDshData()) {
+                java.io.File cur = new java.io.File(rootHome, ".dsh");
+                java.io.File aside = new java.io.File(rootHome,
+                        ".dsh.pre-recover-" + System.currentTimeMillis());
+                if (cur.renameTo(aside)) {
+                    log.append("原有 .dsh 已挪到 ").append(aside.getName()).append("；");
+                } else {
+                    return "当前 .dsh 里已经有数据，又挪不开它 —— 没有动任何东西（怕覆盖掉你正在用的）";
+                }
+            }
+
+            int moved = 0, copied = 0, failed = 0;
+            for (java.io.File it : items) {
+                String n = it.getName();
+                java.io.File dst;
+                // 命名兼容：1.1.9 及更早的保护目录用的是挑选式命名（dsh / plugin-src / env-<工作区>），
+                // 1.1.9.1 起是「/root 下的原名」整目录挪走。两种都要认 ——
+                // 用户手机上完全可能存着上一版留下的保护目录。
+                if ("dsh".equals(n)) {
+                    dst = new java.io.File(rootHome, ".dsh");
+                } else if (n.startsWith("env-")) {
+                    String dir = n.substring("env-".length());
+                    dst = new java.io.File(rootHome, dir + "/.env");
+                } else {
+                    dst = new java.io.File(rootHome, n);
+                }
+                try {
+                    if (dst.getParentFile() != null && !dst.getParentFile().isDirectory()) {
                         //noinspection ResultOfMethodCallIgnored
-                        envDst.getParentFile().mkdirs();
+                        dst.getParentFile().mkdirs();
                     }
-                    copyFile(eb, envDst);
-                }
-                if (envBaks.length > 0) {
-                    log.append("已还原 ").append(envBaks.length).append(" 个工作区的 .env；");
+                    // 新解压的 rootfs 在 /root 下带着默认文件（.bashrc 之类）。同名时
+                    // **用户那份优先** —— 用户改过的 .bashrc 也是他的数据，而默认文件
+                    // 任何时候都能从 APK 里再拿一份。
+                    if (FileCopy.existsNoFollow(dst)) deleteRecursively(dst);
+                    if (it.renameTo(dst)) {
+                        moved++;
+                    } else {
+                        copyRecursively(it, dst);
+                        copied++;
+                    }
+                } catch (Throwable e) {
+                    failed++;
+                    android.util.Log.w("DSHA", "还原 " + n + " 失败: " + e);
                 }
             }
+            log.append("挪回 ").append(moved).append(" 项");
+            if (copied > 0) log.append("、复制 ").append(copied).append(" 项");
+            if (failed > 0) log.append("、失败 ").append(failed).append(" 项");
+            log.append("；");
+
             // 清掉本机专属的东西（桥 token、内置插件版本标记…）。清单来自 UserDataPolicy，
-            // 与备份的 --exclude 同源。数据保护是整目录复制回来的，所以必须再清一遍：
+            // 与备份的 --exclude 同源。数据保护是把整个 /root 挪回来的，所以必须再清一遍：
             // 否则旧桥 token 会活过这次还原，而 App 内存里那个已经换了 → agent 一律 401，
             // 表现是「悬浮条不显示 + 工具调用失败」，光看现象根本想不到是 token。
             for (String rel : UserDataPolicy.purgeAfterRestore()) {
@@ -1136,13 +1164,15 @@ public class ProotBootstrap {
                 }
             }
             HttpShellService.resetTokenAfterRestore();
-            if (deleteAfter) {
+            if (deleteAfter && failed == 0) {
                 deleteRecursively(dataBak);
                 log.append("保护目录已清理");
+            } else if (failed > 0) {
+                log.append("有失败项，保护目录保留在 ").append(dataBak.getName()).append("（可再试一次）");
             } else {
                 log.append("保护目录保留在 ").append(dataBak.getName());
             }
-            return log.length() == 0 ? "保护目录里没有可还原的东西" : log.toString();
+            return log.toString();
         } catch (Throwable e) {
             android.util.Log.w("DSHA", "还原用户数据失败: " + e);
             return "还原过程出错：" + e + "（保护目录没有删，可以再试一次）";
