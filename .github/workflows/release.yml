@@ -289,3 +289,19 @@ jobs:
             ${{ steps.apk.outputs.file }}
             ${{ steps.apk.outputs.file }}.sha256
           fail_on_unmatched_files: true
+
+      - name: 同步覆盖到 v1.1.9 Release（同一份 code 100 的包）
+        # 1.1.9 首发那天覆盖过一次（code 98 → 99），说明「两个 Release 挂不同包」会让
+        # 人下到旧版还不自知。现在要求两个入口都指向同一份修复版 —— 已装 1.1.9 的用户
+        # 在 Releases 页点 v1.1.9 拿到的也必须是 code 100 的包（versionName 1.1.9.1，
+        # 可覆盖安装）。产物就是上一轮 `build` 输出的 APK，不必重新构建。
+        # 只有正式版（不含连字符）才同步；rc/预发布本来就是给人试的，不动老的。
+        if: ${{ !contains(steps.tag.outputs.value, '-') && steps.ver.outputs.code >= 100 }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          APK="${{ steps.apk.outputs.file }}"
+          gh release upload v1.1.9 "$APK" --repo qiannianhuanxiang/DSHA --clobber
+          gh release upload v1.1.9 "$APK.sha256" --repo qiannianhuanxiang/DSHA --clobber
+          echo "已把 $APK 覆盖到 v1.1.9 Release（与 ${{ steps.tag.outputs.value }} 同一份）"
