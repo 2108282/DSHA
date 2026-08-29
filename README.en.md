@@ -307,3 +307,14 @@ QQ group **960636357** — test builds, bug reports, plugin talk.
 ## License
 
 [MIT](LICENSE). Third-party licenses in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Star History
+
+<a href="https://www.star-history.com/#qiannianhuanxiang/DSHA&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left" />
+    <img alt="DSHA Star History" src="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left" />
+  </picture>
+</a>
+

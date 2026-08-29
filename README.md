@@ -294,3 +294,14 @@ QQ 群 **960636357** —— 测试版、问题反馈、插件交流。
 ## 许可
 
 [MIT](LICENSE)。第三方组件许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## Star History
+
+<a href="https://www.star-history.com/#qiannianhuanxiang/DSHA&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left" />
+    <img alt="DSHA Star History" src="https://api.star-history.com/svg?repos=qiannianhuanxiang/DSHA&type=Date&legend=top-left" />
+  </picture>
+</a>
+
