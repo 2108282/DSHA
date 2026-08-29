@@ -25,13 +25,28 @@ check(){ if [ "$2" = yes ]; then ok "$1"; else bad "$1"; fi; }
 command -v javac >/dev/null 2>&1 || { echo "没有 javac（需要 JDK 17+）"; exit 1; }
 
 mkdir -p "$WORK/src/com/deepseekharness/app"
-cp "$JD/WebProcSel.java" "$WORK/src/com/deepseekharness/app/"
+cp "$JD/WebProcSel.java" "$JD/WatchdogScript.java" "$JD/ShellQuote.java" \
+   "$WORK/src/com/deepseekharness/app/"
 cat > "$WORK/src/com/deepseekharness/app/Dump.java" <<'EOF'
 package com.deepseekharness.app;
 public class Dump {
     public static void main(String[] a) {
-        if (a.length > 1 && "guards".equals(a[1])) {
+        String what = a.length > 1 ? a[1] : "";
+        if ("guards".equals(what)) {
             System.out.print(WebProcSel.watchdogGuards());
+            return;
+        }
+        if ("watchdog".equals(what)) {
+            System.out.print(WatchdogScript.watchdog(Integer.parseInt(a[0])));
+            return;
+        }
+        if ("restart".equals(what)) {
+            // 工作区名从参数来：要能验「名字里有空格/引号也不会把脚本弄坏」
+            String wd = a.length > 2 ? a[2] : "deepseek-harness";
+            System.out.print(WatchdogScript.restart(
+                    "export DEEPSEEK_API_KEY='sk-test'\n",
+                    ShellQuote.arg("workspace-write"), wd,
+                    "exec node --expose-internals bin.js web > ~/dsh-web.log 2>&1"));
             return;
         }
         System.out.println(WebProcSel.pidsPort(Integer.parseInt(a[0])));
@@ -55,6 +70,44 @@ fi
 if bash -n "$WORK/guards.sh" 2>/dev/null; then ok "看门狗幂等闸是合法 shell"; else
   bad "看门狗幂等闸有语法错误"; cat "$WORK/guards.sh"; exit 1
 fi
+
+# ---------- 生成出来的两段脚本必须是合法 shell ----------
+# 这两段是拼字符串拼出来的，写错的后果全是静默的：看门狗启动即退（Web 崩了没人拉）、
+# 或者重启脚本自己坏掉（看门狗以为重启了、其实什么都没发生）。Java 编译期查不出来。
+run_dump watchdog | sed "s#/root/#$WORK/#g" > "$WORK/wd.sh"
+if bash -n "$WORK/wd.sh" 2>"$WORK/wderr"; then ok "看门狗脚本是合法 shell"; else
+  bad "看门狗脚本有语法错误：$(cat "$WORK/wderr")"; fi
+# 结构不变量：哨兵检查必须在 while 循环**里**（放循环外就只在启动那一刻看一次，
+# 用户点停止后这个实例会一直数失联次数、最后把 Web 拉回来）
+if grep -Pzoq 'while true; do\n  if \[ -f ' "$WORK/wd.sh" 2>/dev/null \
+   || python3 - "$WORK/wd.sh" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+i = s.find("while true; do\n")
+sys.exit(0 if i >= 0 and s[i:i+80].find("if [ -f ") > 0 else 1)
+PY
+then ok "哨兵检查在看门狗的循环里（每轮都看）"; else bad "哨兵检查不在循环里"; fi
+
+run_dump restart | sed "s#/root/#$WORK/#g" > "$WORK/rs.sh"
+if bash -n "$WORK/rs.sh" 2>"$WORK/rserr"; then ok "重启脚本是合法 shell"; else
+  bad "重启脚本有语法错误：$(cat "$WORK/rserr")"; fi
+# 工作区名是用户可改的（配置页），名字里带空格必须照样能跑
+run_dump restart "my work dir" | sed "s#/root/#$WORK/#g" > "$WORK/rs2.sh"
+if bash -n "$WORK/rs2.sh" 2>"$WORK/rs2err"; then ok "工作区名带空格时重启脚本仍合法"; else
+  bad "工作区名带空格把重启脚本弄坏了：$(cat "$WORK/rs2err")"; fi
+# 名字里带单引号是最容易把 '…' 包裹弄断的情形
+run_dump restart "it's work" | sed "s#/root/#$WORK/#g" > "$WORK/rs3.sh"
+if bash -n "$WORK/rs3.sh" 2>"$WORK/rs3err"; then ok "工作区名带单引号时重启脚本仍合法"; else
+  bad "工作区名带单引号把重启脚本弄坏了：$(head -2 "$WORK/rs3err")"; fi
+# 光「语法合法」不够 —— 手工的 '…' 包裹遇到单引号时会重新配对，bash -n 照样过，
+# 只是 mkdir/cd 指向了另一个目录（表现为「看门狗重启永远失败」且无任何报错）。
+# 所以这里真跑一遍 mkdir + cd，看目录名对不对。
+mkdir -p "$WORK/wdroot"
+run_dump restart "it's work" | sed "s#/root/#$WORK/wdroot/#g" > "$WORK/rs4.sh"
+sed -n '/^mkdir -p/,/^cd /p' "$WORK/rs4.sh" > "$WORK/rs4-head.sh"
+bash "$WORK/rs4-head.sh" >/dev/null 2>&1
+check "带单引号的工作区名真的建成了同名目录（不是只过语法）" \
+      "$([ -d "$WORK/wdroot/it's work" ] && echo yes || echo no)"
 
 if ! command -v node >/dev/null 2>&1; then
   echo "  --   没有 node，跳过运行时部分"

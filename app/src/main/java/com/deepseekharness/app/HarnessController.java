@@ -3385,72 +3385,12 @@ public class HarnessController {
     private void writeWatchdogFiles(String restartCmd, int port) {
         try {
             java.io.File wdDir = new java.io.File(proot.getRootfsDir(), "root");
-            String restart =
-                    "#!/bin/bash\n" +
-                    // 最后一道闸：用户已停止就放弃重启。看门狗重启读的正是这个脚本
-                    // （dsh-cmd.txt 与它同内容），所以即使看门狗漏杀、即使进程判据认不出，
-                    // 拉起这个动作本身也会自己放弃 —— 这条不依赖任何 cmdline 匹配。
-                    "if [ -f " + WebProcSel.STOP_SENTINEL + " ]; then\n" +
-                    "  echo \"$(date '+%F %T') 用户已停止，放弃重启\"\n" +
-                    "  echo '要手动起：先 rm " + WebProcSel.STOP_SENTINEL + "，或用 App 启动页的「启动」'\n" +
-                    "  exit 0\n" +
-                    "fi\n" +
-                    "export DSH_HOME=/root/.dsh\n" +
-                    apiKeyExportLine() +
-                    "export DSH_PERMISSION_MODE=" + ShellQuote.arg(getPermissionMode()) + "\n" +
-                    "export DSH_CONFIRM=1\n" +
-                    "export BROWSER=true\n" +
-                    // 工作区目录先于 cd 创建：RC6 模式没有源码树，不建目录的话
-                    // 看门狗重启第一步 cd || exit 1 必失败 → 自动重启形同虚设。
-                    // 不建 /root/.codex/pets（deepseek-pet 空目录会崩插件树）：
-                    // 空则删，让插件走「无 pet」正常分支。
-                    "mkdir -p /root/'" + getWorkdir() + "' /root/.dsh/plugins 2>/dev/null\n" +
-                    "[ -d /root/.codex/pets ] && [ -z \"$(ls -A /root/.codex/pets 2>/dev/null)\" ] " +
-                    "&& rmdir /root/.codex/pets 2>/dev/null || true\n" +
-                    "cd /root/'" + getWorkdir() + "' || exit 1\n" +
-                    restartCmd + "\n";
-            String watchdog =
-                    "#!/bin/bash\n" +
-                    "# DSHA 看门狗：WebUI 失联 3 次（约 90 秒）自动重启\n" +
-                    "# 幂等：已有看门狗实例则退出（[d] 技巧避免匹配到 pgrep 自身）\n" +
-                    "# 幂等 + pid 落盘：见 WebProcSel.watchdogGuards（那里能被 bash -n 与\n" +
-                    "# tools/stop-proc-test.sh 覆盖 —— 这段写错会让看门狗永远不启动，\n" +
-                    "# 或者每次启动多一个实例抢着拉 Web，两种都不容易发现）。\n" +
-                    WebProcSel.watchdogGuards() +
-                    "PORT=" + port + "\n" +
-                    "FAIL=0\n" +
-                    // 与「停止」共用同一份进程判据（排除看门狗自己，否则它会杀掉自身）。
-                    // 这里原来是 pkill -f 'bin.js web'：在独立脚本里跑不会自杀，
-                    // 但仍可能命中 proot —— 那会把承载整个环境的进程带走。
-                    WebProcSel.pidsDsh(false) + "\n" +
-                    "while true; do\n" +
-                    // 每轮先看闸：用户按了停止就自己退出，不留一个还在数失联次数的进程。
-                    // 「秒复活」这条路上，看门狗是头号嫌疑 —— 它是独立 bash 进程，
-                    // App 侧那些 keepalive_paused / last_web_stop 判据完全管不到它。
-                    "  if [ -f " + WebProcSel.STOP_SENTINEL + " ]; then\n" +
-                    "    echo \"$(date '+%F %T') 用户已停止，看门狗退出\" >> /root/dsh-watchdog.log\n" +
-                    "    exit 0\n" +
-                    "  fi\n" +
-                    "  if curl -s -m 5 -o /dev/null \"http://127.0.0.1:$PORT/\"; then\n" +
-                    "    FAIL=0\n" +
-                    "  else\n" +
-                    "    FAIL=$((FAIL+1))\n" +
-                    "    echo \"$(date '+%F %T') WebUI 失联 $FAIL 次\" >> /root/dsh-watchdog.log\n" +
-                    "    if [ \"$FAIL\" -ge 3 ]; then\n" +
-                    "      echo \"$(date '+%F %T') WebUI 已失联，自动重启\" >> /root/dsh-watchdog.log\n" +
-                    "      for p in $(pids_dsh); do kill -TERM \"$p\" 2>/dev/null; done\n" +
-                    "      # 关键：等端口彻底关闭再重启（旧进程可能还在写 SQLite，\n" +
-                    "      # 立即重启会双进程写同一会话 → seq 重复 → 会话损坏（官方#420）\n" +
-                    "      for i in $(seq 1 20); do\n" +
-                    "        curl -s -m 2 -o /dev/null http://127.0.0.1:$PORT/ 2>/dev/null && sleep 1 || break\n" +
-                    "      done\n" +
-                    "      sleep 1\n" +
-                    "      nohup bash /root/dsh-cmd.txt >> /root/dsh-watchdog-restart.log 2>&1 &\n" +
-                    "      FAIL=0\n" +
-                    "    fi\n" +
-                    "  fi\n" +
-                    "  sleep 30\n" +
-                    "done\n";
+            // 两段脚本的文本生成搬到 WatchdogScript（纯逻辑）——
+            // 拼错一处的后果全是静默的（看门狗启动即退、或者以为重启了其实没动），
+            // 放那里才能写断言、才能过 bash -n。
+            String restart = WatchdogScript.restart(apiKeyExportLine(),
+                    ShellQuote.arg(getPermissionMode()), getWorkdir(), restartCmd);
+            String watchdog = WatchdogScript.watchdog(port);
             java.io.File wdScript = new java.io.File(wdDir, "dsh-watchdog.sh");
             java.io.File rstScript = new java.io.File(wdDir, "dsh-web-restart.sh");
             java.io.File cmdFile = new java.io.File(wdDir, "dsh-cmd.txt");

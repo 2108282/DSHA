@@ -855,6 +855,41 @@ public final class PureLogicTest {
         eq("batch: 输出为 null 时全给空串", "",
                 AssetBatch.splitOutput("SEP", names, null).get("a.sh"));
 
+        // ---------- WatchdogScript：看门狗与重启脚本的结构不变量 ----------
+        // 这两段是拼字符串拼出来的，写错全是静默的。语法由 tools/stop-proc-test.sh 用
+        // bash -n 真跑一遍，这里钉住「顺序」和「引用方式」——它们错了语法照样合法。
+        String wd = WatchdogScript.watchdog(3080);
+        ok("watchdog: 有 shebang", wd.startsWith("#!/bin/bash\n"));
+        int whereWhile = wd.indexOf("while true; do\n");
+        int whereSentinel = wd.indexOf("if [ -f " + WebProcSel.STOP_SENTINEL + " ]");
+        int wherePids = wd.indexOf("pids_dsh() {");
+        ok("watchdog: 哨兵检查在循环里（放循环外就只在启动那一刻看一次）",
+                whereWhile > 0 && whereSentinel > whereWhile);
+        ok("watchdog: 进程判据在循环开始前就定义好", wherePids > 0 && wherePids < whereWhile);
+        ok("watchdog: 幂等闸（pid 文件 + kill -0）在最前面",
+                wd.indexOf("_wd_alive()") > 0 && wd.indexOf("_wd_alive()") < wherePids);
+        ok("watchdog: 失联判定是 3 次、间隔 30 秒",
+                wd.contains("-ge 3") && wd.contains("sleep 30"));
+        ok("watchdog: 重启走 dsh-cmd.txt（不直接内联启动命令）",
+                wd.contains("nohup bash /root/dsh-cmd.txt"));
+        ok("watchdog: 探测端口用传进来的那个", wd.contains("PORT=3080"));
+
+        String rs = WatchdogScript.restart("export DEEPSEEK_API_KEY='k'\n",
+                ShellQuote.arg("workspace-write"), "deepseek-harness", "exec node bin.js web");
+        ok("restart: 有 shebang", rs.startsWith("#!/bin/bash\n"));
+        int rsSentinel = rs.indexOf("if [ -f " + WebProcSel.STOP_SENTINEL + " ]");
+        ok("restart: 哨兵检查在任何实际动作之前（这是「停止后不许被拉起」的最后一道闸）",
+                rsSentinel > 0 && rsSentinel < rs.indexOf("export DSH_HOME")
+                        && rsSentinel < rs.indexOf("mkdir -p"));
+        ok("restart: 启动命令在最后", rs.trim().endsWith("exec node bin.js web"));
+        ok("restart: 常规工作区名生成的文本与手工包裹一致（改引用方式不影响老行为）",
+                rs.contains("cd /root/'deepseek-harness' || exit 1"));
+        // 工作区名用户可改。手工 '…' 包裹遇到单引号会重新配对：bash -n 照样过，
+        // 但 mkdir/cd 指向另一个目录（实测 it's work → its），且完全静默。
+        String rsQ = WatchdogScript.restart("", ShellQuote.arg("read-only"), "it's work", "true");
+        ok("restart: 工作区名带单引号时按 ShellQuote 转义（不是裸的 '…'）",
+                rsQ.contains("cd /root/'it'\\''s work' || exit 1"));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

@@ -94,6 +94,13 @@ jobs:
         # 字符串拼对了的片段照样可能全程返回空。所以这条真的起进程、真的写 pid 文件。
         run: bash tools/stop-proc-test.sh
 
+      - name: 解压往返（真实代码解真 tar.gz，逐个比 sha256）
+        # 首次解压是核心路径（几百 MB rootfs，解坏了用户环境直接废），而这段代码里
+        # 读写缓冲、GZIP 缓冲、长文件名、软链、块对齐都容易被「顺手优化」碰坏。
+        # 给 android.system.Os 写个 stub，于是 TarGzipExtractor.java 一个字符都不用改
+        # 就能在桌面 JVM 上跑 —— 测的是真代码。
+        run: bash tools/extract-roundtrip-test.sh
+
   # ---------- Job 3：assets 脚本层「能不能跑起来」 ----------
   # assets 下的 .py/.sh/.js 是唯一的远程代码通道（runtime 增量更新会把它们推给
   # 所有已安装用户），却不经过 gradle、没有编译期检查。一个写错的正则就能让整个
