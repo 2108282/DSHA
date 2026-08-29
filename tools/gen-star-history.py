@@ -173,7 +173,7 @@ def render(series, dark):
     parts.append('<circle cx="%.1f" cy="%.1f" r="3.5" fill="%s"/>'
                  % (px(last_day), py(series[-1][1]), line))
     parts.append('<text x="%d" y="%d" fill="%s" font-size="10">'
-                 '%s 生成 · 数据来自 GitHub stargazers API</text>'
+                 '数据截至 %s · GitHub stargazers API</text>'
                  % (PAD_L - 2, H - 12, sub, today))
     parts.append("</svg>")
     return "".join(parts)
@@ -193,8 +193,11 @@ def main():
     with open(os.path.join(OUT_DIR, "star-history-dark.svg"), "w", encoding="utf-8") as f:
         f.write(render(series, dark=True))
     with open(os.path.join(OUT_DIR, "star-history.json"), "w", encoding="utf-8") as f:
+        # 刻意**不写**「生成时间」这类每次都变的字段：写了的话，即使一颗新 star 都没有，
+        # 每次跑都会产出一次「文件变了」的提交 —— 首次上线就撞到了，CI 那趟自动提交
+        # 改的就只有这一行。只留与数据本身有关的东西，数据没变就完全没有 diff。
         json.dump({"repo": REPO, "total": series[-1][1] if series else 0,
-                   "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                   "latest": series[-1][0] if series else None,
                    "points": [{"date": d, "stars": n} for d, n in series]},
                   f, ensure_ascii=False, indent=1)
     print("STAR_HISTORY_OK %s：%d stars，%d 个数据点（%s → %s）"

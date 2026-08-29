@@ -1,7 +1,7 @@
 {
  "repo": "qiannianhuanxiang/DSHA",
- "total": 319,
- "generated": "2026-08-29T16:19:21Z",
+ "total": 321,
+ "latest": "2026-08-29",
  "points": [
   {
    "date": "2026-08-14",
@@ -65,7 +65,7 @@
   },
   {
    "date": "2026-08-29",
-   "stars": 319
+   "stars": 321
   }
  ]
 }
