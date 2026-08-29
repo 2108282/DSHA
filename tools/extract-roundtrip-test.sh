@@ -26,7 +26,7 @@ command -v javac >/dev/null 2>&1 || { echo "没有 javac（需要 JDK 17+）"; e
 
 # ---------- 1. 编译真实代码 + Os stub ----------
 mkdir -p "$WORK/src/com/deepseekharness/app" "$WORK/src/android/system"
-cp "$JD/TarGzipExtractor.java" "$WORK/src/com/deepseekharness/app/"
+cp "$JD/TarGzipExtractor.java" "$JD/FileCopy.java" "$WORK/src/com/deepseekharness/app/"
 cat > "$WORK/src/android/system/Os.java" <<'EOF'
 package android.system;
 
@@ -50,21 +50,31 @@ public final class Os {
     }
 }
 EOF
-cat > "$WORK/src/ExtractRun.java" <<'EOF'
+cat > "$WORK/src/com/deepseekharness/app/ExtractRun.java" <<'EOF'
+package com.deepseekharness.app;
+
 import java.io.File;
 
+/** 放在同一个包里：FileCopy 与 TarGzipExtractor 都是 package-private / 包内可见。 */
 public class ExtractRun {
     public static void main(String[] a) throws Exception {
-        com.deepseekharness.app.TarGzipExtractor.extract(new File(a[0]), new File(a[1]));
-        System.out.println("SKIPPED=" + com.deepseekharness.app.TarGzipExtractor.lastSkipped);
+        if (a.length > 2 && "copy".equals(a[2])) {
+            int fb = FileCopy.copyPreservingLinks(
+                    new File(a[0]), new File(a[1]));
+            System.out.println("FALLBACKS=" + fb);
+            return;
+        }
+        TarGzipExtractor.extract(new File(a[0]), new File(a[1]));
+        System.out.println("SKIPPED=" + TarGzipExtractor.lastSkipped);
     }
 }
 EOF
 if javac -encoding UTF-8 -nowarn -d "$WORK/cls" \
         "$WORK/src/android/system/Os.java" \
         "$WORK/src/com/deepseekharness/app/TarGzipExtractor.java" \
-        "$WORK/src/ExtractRun.java" 2>"$WORK/javac.err"; then
-    ok "TarGzipExtractor 能在桌面 JVM 上原样编译（测的是真代码）"
+        "$WORK/src/com/deepseekharness/app/FileCopy.java" \
+        "$WORK/src/com/deepseekharness/app/ExtractRun.java" 2>"$WORK/javac.err"; then
+    ok "TarGzipExtractor 与 FileCopy 能在桌面 JVM 上原样编译（测的是真代码）"
 else
     bad "编译失败：$(head -5 "$WORK/javac.err")"; exit 1
 fi
@@ -101,7 +111,7 @@ fi
 # ---------- 3. 用真实代码解压 ----------
 OUT="$WORK/out"
 mkdir -p "$OUT"
-if java -cp "$WORK/cls" ExtractRun "$WORK/sample.tar.gz" "$OUT" > "$WORK/run.log" 2>&1; then
+if java -cp "$WORK/cls" com.deepseekharness.app.ExtractRun "$WORK/sample.tar.gz" "$OUT" > "$WORK/run.log" 2>&1; then
     ok "解压跑通（$(grep -o 'SKIPPED=[0-9]*' "$WORK/run.log")）"
 else
     bad "解压抛异常：$(head -5 "$WORK/run.log")"; exit 1
@@ -128,6 +138,43 @@ for n in 8192 262144; do
     b=$(sha256sum "$OUT/sz-$n.bin" 2>/dev/null | cut -d' ' -f1)
     check "正好 $n 字节的文件逐字节一致（缓冲边界）" "$([ "$a" = "$b" ] && echo yes || echo no)"
 done
+
+# ---------- 5. 数据保护复制：软链必须原样保留 ----------
+# 重解压内置环境（v1→v2 这类升级）之前，会把 .dsh 挪进 .data-preserve-*。
+# 而 .dsh/sessions、storages、attachments、settings.yaml 是指向
+# /sdcard/Documents/dshdata 的软链（「卸载不丢数据」就是这么实现的）。
+# 跟随复制的后果：备份体积从几 KB 变成几 GB、还原后软链变真目录、下次启动
+# migrate-public-data.sh 撞上冲突分支又在公开侧留一份 *.conflict-<ts> ——
+# 一次升级把对话复制三遍，空间不够时还会在 rootfs 已删之后失败。
+PUB="$WORK/fake-public"
+DSH="$WORK/fake-dsh"
+mkdir -p "$PUB/sessions" "$DSH/profiles/web"
+head -c 5000000 /dev/urandom > "$PUB/sessions/big-conversation.bin"   # 假装很多对话
+printf 'key: value\n' > "$PUB/settings.yaml"
+ln -s "$PUB/sessions" "$DSH/sessions"
+ln -s "$PUB/settings.yaml" "$DSH/settings.yaml"
+printf '{"dependencies":{}}\n' > "$DSH/profiles/web/package.json"
+printf '#!/bin/sh\necho hi\n' > "$DSH/hook.sh"; chmod +x "$DSH/hook.sh"
+
+BAK="$WORK/preserve"
+if java -cp "$WORK/cls" com.deepseekharness.app.ExtractRun "$DSH" "$BAK" copy > "$WORK/copy.log" 2>&1; then
+    ok "数据保护复制跑通（$(cat "$WORK/copy.log")）"
+else
+    bad "数据保护复制抛异常：$(head -3 "$WORK/copy.log")"
+fi
+check "软链原样保留（sessions 仍是链接，不是真目录）" \
+      "$([ -L "$BAK/sessions" ] && echo yes || echo no)"
+check "软链目标没变" \
+      "$([ "$(readlink "$BAK/sessions")" = "$PUB/sessions" ] && echo yes || echo no)"
+check "指向单个文件的软链也保留（settings.yaml）" \
+      "$([ -L "$BAK/settings.yaml" ] && echo yes || echo no)"
+SZ=$(du -sk "$BAK" 2>/dev/null | cut -f1)
+check "备份体积没被链接目标撑大（${SZ}KB；跟随复制会是 4900KB 以上）" \
+      "$([ "${SZ:-99999}" -lt 500 ] && echo yes || echo no)"
+check "真文件照样复制到位" \
+      "$([ -f "$BAK/profiles/web/package.json" ] && echo yes || echo no)"
+check "可执行位保留（rootfs 里的脚本丢了执行位就跑不起来）" \
+      "$([ -x "$BAK/hook.sh" ] && echo yes || echo no)"
 
 echo "----------------------------------------------"
 if [ "$fail" -eq 0 ]; then echo "全部通过：$pass 条"; else echo "失败 $fail 条（通过 $pass）"; exit 1; fi

@@ -996,13 +996,25 @@ public class ProotBootstrap {
             if (rootfsDir.exists()) {
                 java.io.File dshDir = new java.io.File(rootfsDir, "root/.dsh");
                 java.io.File rootHome = new java.io.File(rootfsDir, "root");
+                // 插件源码目录：monorepo clone 构建来的、以及自愈自指依赖时挪出来的插件
+                // 实体都住在这里，profile 的 dependencies 用 link:/root/plugin-src/<名字>
+                // 指向它。它**不在 .dsh 里**，所以原先的数据保护漏掉了整个目录 ——
+                // 重解压之后 link: 指向不存在的路径，启动前的 fix-stale-bundles 把它们
+                // 从 bundles 里摘掉，用户的插件就这么静默消失了（备份那条路早就把它内联进
+                // 包了，见 BackupManager 的 .dsha-plugin-src —— 两处对「什么算用户数据」
+                // 的判断又一次分家）。
+                java.io.File pluginSrc = new java.io.File(rootfsDir, "root/plugin-src");
                 java.io.File[] workDirs = rootHome.isDirectory() ? rootHome.listFiles(java.io.File::isDirectory) : null;
-                boolean hasData = dshDir.isDirectory() || (workDirs != null && workDirs.length > 0);
+                boolean hasData = dshDir.isDirectory() || pluginSrc.isDirectory()
+                        || (workDirs != null && workDirs.length > 0);
                 if (hasData) {
                     dataBak = new java.io.File(baseDir, ".data-preserve-" + System.currentTimeMillis());
                     dataBak.mkdirs();
                     if (dshDir.isDirectory()) {
                         copyRecursively(dshDir, new java.io.File(dataBak, "dsh"));
+                    }
+                    if (pluginSrc.isDirectory()) {
+                        copyRecursively(pluginSrc, new java.io.File(dataBak, "plugin-src"));
                     }
                     if (workDirs != null) {
                         for (java.io.File d : workDirs) {
@@ -1012,6 +1024,18 @@ public class ProotBootstrap {
                             }
                         }
                     }
+                }
+            }
+            // 空间预检：**必须在删 rootfs 之前**。删完才发现装不回来是这条路上最坏的结果
+            //（用户环境没了，而且他手上没有别的办法恢复）。解出来大约是包的 3.5 倍，
+            // 这里按 4 倍加 200MB 余量估；估不出包大小（total=0）时不拦，避免误伤。
+            if (tot > 0) {
+                long need = tot * 4 + 200L * 1024 * 1024;
+                long free = baseDir.getUsableSpace();
+                if (free > 0 && free < need) {
+                    throw new IOException("空间不够，已中止升级（rootfs 未改动）\n"
+                            + "需要约 " + (need >> 20) + " MB，当前可用 " + (free >> 20) + " MB。\n"
+                            + "清点一下空间再试 —— 现在停下来比删掉环境又装不回来好。");
                 }
             }
             if (rootfsDir.exists()) deleteRecursively(rootfsDir);
@@ -1029,6 +1053,14 @@ public class ProotBootstrap {
                     if (dshBak.isDirectory()) {
                         if (!dshDst.exists()) dshDst.mkdirs();
                         copyRecursively(dshBak, dshDst);
+                    }
+                    // 还原插件源码目录：profile 里那些 link:/root/plugin-src/<名字> 全指向它，
+                    // 少了它插件会在启动前被 fix-stale-bundles 当「解析不到」摘掉
+                    java.io.File psBak = new java.io.File(dataBak, "plugin-src");
+                    if (psBak.isDirectory()) {
+                        java.io.File psDst = new java.io.File(rootfsDir, "root/plugin-src");
+                        if (!psDst.exists()) psDst.mkdirs();
+                        copyRecursively(psBak, psDst);
                     }
                     // 还原各工作目录 .env（env-<dir> 命名，还原到 root/<dir>/.env）
                     java.io.File[] envBaks = dataBak.listFiles((d, n) -> n.startsWith("env-"));
@@ -1115,19 +1147,18 @@ public class ProotBootstrap {
     }
 
     /** 递归拷贝目录/文件（重解压前数据保护用） */
+    /**
+     * 递归复制，**符号链接原样保留、绝不跟随** —— 实现与它防的那个坑见 {@link FileCopy}。
+     *
+     * <p>简版理由：{@code .dsh/sessions} 这些是指向 {@code /sdcard/Documents/dshdata} 的软链，
+     * 跟随复制会把几 GB 对话搬进 {@code .data-preserve-*}，还原后软链变真目录，
+     * 下次启动 migrate 脚本又在公开侧留一份 {@code *.conflict-<ts>}。
+     */
     private void copyRecursively(File src, File dst) throws IOException {
-        if (src.isDirectory()) {
-            if (!dst.exists() && !dst.mkdirs()) {
-                throw new IOException("无法创建目录: " + dst);
-            }
-            File[] children = src.listFiles();
-            if (children != null) {
-                for (File c : children) {
-                    copyRecursively(c, new File(dst, c.getName()));
-                }
-            }
-        } else if (src.isFile()) {
-            copyFile(src, dst);
+        int fallbacks = FileCopy.copyPreservingLinks(src, dst);
+        if (fallbacks > 0) {
+            android.util.Log.w("DSHA", "有 " + fallbacks
+                    + " 根软链没能原样重建，已退回按内容复制（会多占空间）: " + src);
         }
     }
 
