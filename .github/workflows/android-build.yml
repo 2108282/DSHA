@@ -17,14 +17,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch offline bundle
+      - name: Fetch and extract offline bundle from official release APK
         run: |
           set -euo pipefail
           mkdir -p app/src/main/assets
-          echo "正在下载预编译离线包..."
-          curl -fL --retry 3 -o app/src/main/assets/offline-rootfs.tar.gz \
-            https://github.com/qiannianhuanxiang/DSHA/releases/latest/download/offline-rootfs.tar.gz
+          echo "正在下载官方最新发布版 APK..."
+          curl -fL --retry 3 -o /tmp/dsha-release.apk \
+            https://github.com/qiannianhuanxiang/DSHA/releases/download/v1.1.9.1/deepseekharness-arm64-v1.1.9.1.apk
+          echo "正在从 APK 中解压提取 offline-rootfs..."
+          unzip -p /tmp/dsha-release.apk "assets/offline-rootfs.*" > app/src/main/assets/offline-rootfs.tar.gz
           echo "1" > app/src/main/assets/offline-rootfs.version
+          rm -f /tmp/dsha-release.apk
           ls -lh app/src/main/assets/offline-rootfs.tar.gz app/src/main/assets/offline-rootfs.version
 
       - name: Set up JDK 17
