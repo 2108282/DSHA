@@ -101,7 +101,11 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 cancelFlag.createNewFile();
 
                 // 强制中止容器内可能正在阻塞运行的外部命令（如长命令 bash/python/curl）
-                hc.getProot().execAsync("killall -9 bash python3 2>/dev/null || true");
+                new Thread(() -> {
+                    try {
+                        hc.getProot().execAndRead("killall -9 bash python3 2>/dev/null || true");
+                    } catch (Throwable ignored) {}
+                }, "stop-task-kill").start();
             }
         } catch (Throwable ignored) {}
 
