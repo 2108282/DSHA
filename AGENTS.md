@@ -82,7 +82,7 @@ Injected into the rootfs on demand and run through proot; all are idempotent and
 | Script | Called from | Purpose |
 |---|---|---|
 | `heal-session.sh` → `heal-sessions.py` | `doHealSessionCorruption` (Main start + `startWeb`) | Scan `/root/.dsh/sessions`, repair missing `message.id`, isolate unrepairable logs. Matches `session.jsonl{,.zstd}` **exactly** and stores pre-fix copies under `corrupt-backup/` — an earlier prefix match re-healed its own backups and doubled the file count every launch |
-| `fs-write-patch.sh` | `maybeFixFsWrite` (Main start) + `installGuard` + `startWebCommand` | Patch `dsh-fs-local` so a **new** file is published with `rename` instead of `link` (see traps) |
+| `fs-write-patch.sh` | `maybeFixFsWrite` (Main start) + `installGuard` + `startWebCommand` | Patch `dsh-fs-local`, `dsh-session-persistence-jsonl`, and `dsh-attachment-local` so files and attachments are published with `rename` instead of `link` (see traps) |
 | `backup-prepare.py` | `BackupManager.backup` | Emit `.dsha-backup-manifest.json` and inline `link:`/`file:` plugin sources into `.dsha-plugin-src/` |
 | `restore-merge.py` | `restoreFromBackup` | Locate `.dsh` at any depth, remap the workdir name, re-land inlined plugins, rewrite `link:` paths, add the `node_modules` symlinks, drop unresolvable bundles, write `.dsh/restore-report.txt` |
 | `rootfs-confirm-install.sh` | `ensureDangerGuard` | `/root/dsh-bin` wrappers + `dsh-confirm.sh` (3090 bridge, dual-stack) |

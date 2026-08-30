@@ -17,6 +17,10 @@ public final class Constants {
     public static final int NOTIF_HARNESS_SERVICE = 1001;
     /** TaskNotifier 任务完成通知 */
     public static final int NOTIF_TASK = 2002;
+    /** 智能体运行中实时状态通知（带停止按钮） */
+    public static final int NOTIF_TASK_RUNNING = 2003;
+    /** 智能体任务已终止通知（带重新输入框） */
+    public static final int NOTIF_TASK_STOPPED = 2004;
     /** HttpShellService 危险命令确认通知 */
     public static final int NOTIF_SHELL_CONFIRM = 3003;
     /** HttpShellService 助手提问通知 */

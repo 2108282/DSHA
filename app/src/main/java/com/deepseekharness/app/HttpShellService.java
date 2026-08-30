@@ -523,14 +523,38 @@ public final class HttpShellService {
                 ch.setDescription("智能体通过 App 发送的通知");
                 nm.createNotificationChannel(ch);
             }
+
+            // 任务结束，清除运行中状态通知
+            nm.cancel(Constants.NOTIF_TASK_RUNNING);
+
+            Intent openAppIntent = new Intent(ctx, MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent contentPi = PendingIntent.getActivity(ctx, 20, openAppIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            // 挂载 RemoteInput 继续对话输入组件
+            androidx.core.app.RemoteInput remoteInput = new androidx.core.app.RemoteInput.Builder(ConfirmReceiver.EXTRA_TASK_REPLY_TEXT)
+                    .setLabel("输入新指令继续对话...")
+                    .build();
+            Intent replyIntent = new Intent(ctx, ConfirmReceiver.class)
+                    .setAction(ConfirmReceiver.ACTION_TASK_REPLY);
+            PendingIntent replyPi = PendingIntent.getBroadcast(ctx, 25, replyIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0));
+            NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
+                    R.drawable.ic_launch, "💬 继续对话", replyPi)
+                    .addRemoteInput(remoteInput)
+                    .build();
+
             NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, "dsh_agent_channel")
                     .setSmallIcon(R.drawable.ic_launch)
                     .setContentTitle(title)
                     .setContentText(text)
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+                    .setContentIntent(contentPi)
+                    .addAction(replyAction)
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
                     .setAutoCancel(true);
-            nm.notify(2002, b.build());
+            nm.notify(Constants.NOTIF_TASK, b.build());
             return "OK";
         } catch (Throwable e) {
             return "ERROR: " + e.getMessage();
@@ -872,6 +896,16 @@ public final class HttpShellService {
             String kind = getParam(q, "kind", "delta");
             String text = getParam(q, "text", "");
             String session = getParam(q, "session", "");
+
+            // 通知栏同步实时运行状态与「🛑 停止任务」紧急制动按钮
+            if ("tool".equals(kind) || "text".equals(kind)) {
+                if (!text.trim().isEmpty()) {
+                    showRunningNotification(text);
+                }
+            } else if ("done".equals(kind) || "clear".equals(kind)) {
+                cancelRunningNotification();
+            }
+
             if (!OverlayController.enabled(ctx)) return "DISABLED";
             if (!OverlayController.permitted(ctx)) return "NO_PERMISSION";
             // 让插件知道用户想不想看这两类内容，省得白发一路 HTTP
@@ -883,6 +917,55 @@ public final class HttpShellService {
         } catch (Throwable e) {
             return "ERROR: " + e.getMessage();
         }
+    }
+
+    private void showRunningNotification(String text) {
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                NotificationChannel ch = new NotificationChannel(
+                        "dsh_agent_channel", "Agent 通知",
+                        NotificationManager.IMPORTANCE_HIGH);
+                ch.setDescription("智能体任务状态通知");
+                NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) nm.createNotificationChannel(ch);
+            }
+
+            Intent openAppIntent = new Intent(ctx, MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent contentPi = PendingIntent.getActivity(ctx, 110, openAppIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            Intent stopIntent = new Intent(ctx, ConfirmReceiver.class)
+                    .setAction(ConfirmReceiver.ACTION_STOP_TASK);
+            PendingIntent stopPi = PendingIntent.getBroadcast(ctx, 111, stopIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            NotificationCompat.Action stopAction = new NotificationCompat.Action.Builder(
+                    R.drawable.ic_launch, "🛑 停止任务", stopPi)
+                    .build();
+
+            String shortMsg = (text == null || text.trim().isEmpty()) ? "智能体正在执行自动化任务..." : shortText(text);
+
+            NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, "dsh_agent_channel")
+                    .setSmallIcon(R.drawable.ic_launch)
+                    .setContentTitle("DSHA · 正在执行")
+                    .setContentText(shortMsg)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(shortMsg))
+                    .setContentIntent(contentPi)
+                    .addAction(stopAction)
+                    .setOngoing(true)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH);
+
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
+        } catch (Throwable ignored) {}
+    }
+
+    private void cancelRunningNotification() {
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.cancel(Constants.NOTIF_TASK_RUNNING);
+        } catch (Throwable ignored) {}
     }
 
     private String appToast(String path) {
@@ -1405,6 +1488,11 @@ public final class HttpShellService {
     private void showConfirmNotification(String cmd, long epoch) {
         createConfirmChannel();
         String shortCmd = cmd.length() > 100 ? cmd.substring(0, 100) + "…" : cmd;
+        Intent openAppIntent = new Intent(ctx, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent contentPi = PendingIntent.getActivity(ctx, 30, openAppIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
         // epoch 随 Intent 带回：残留通知上的旧按钮会因 epoch 过期被丢弃
         Intent allowI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_ALLOW)
                 .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
@@ -1420,6 +1508,8 @@ public final class HttpShellService {
                 .setContentText("模型试图执行：" + shortCmd)
                 .setStyle(new NotificationCompat.BigTextStyle()
                         .bigText("模型试图在设备上执行：\n" + cmd + "\n\n是否允许？"))
+                .setContentIntent(contentPi)
+                .setAutoCancel(true)
                 .addAction(0, "允许", allowPi)
                 .addAction(0, "拒绝", denyPi)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -1437,13 +1527,21 @@ public final class HttpShellService {
     private void showAskNotification(String q, String[] opts, long epoch) {
         createConfirmChannel();
         String shortQ = q.length() > 100 ? q.substring(0, 100) + "…" : q;
+        Intent openAppIntent = new Intent(ctx, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent contentPi = PendingIntent.getActivity(ctx, 39, openAppIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
         NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                 .setSmallIcon(R.drawable.ic_launch)
                 .setContentTitle("💬 助手提问")
                 .setContentText(shortQ)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(q))
+                .setContentIntent(contentPi)
+                .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setOngoing(true);
+
         for (int i = 0; i < opts.length; i++) {
             String opt = opts[i];
             Intent intent = new Intent(ctx, ConfirmReceiver.class)
@@ -1454,6 +1552,22 @@ public final class HttpShellService {
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             nb.addAction(0, opt, pi);
         }
+
+        // 挂载 RemoteInput 直接就地文本输入快捷回复
+        androidx.core.app.RemoteInput remoteInput = new androidx.core.app.RemoteInput.Builder(ConfirmReceiver.EXTRA_REPLY_TEXT)
+                .setLabel("输入回复内容...")
+                .build();
+        Intent replyIntent = new Intent(ctx, ConfirmReceiver.class)
+                .setAction(ConfirmReceiver.ACTION_ASK_REPLY)
+                .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
+        PendingIntent replyPi = PendingIntent.getBroadcast(ctx, 49, replyIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0));
+        NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
+                R.drawable.ic_launch, "💬 快捷输入", replyPi)
+                .addRemoteInput(remoteInput)
+                .build();
+        nb.addAction(replyAction);
+
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) nm.notify(Constants.NOTIF_ASK_QUESTION, nb.build());
     }

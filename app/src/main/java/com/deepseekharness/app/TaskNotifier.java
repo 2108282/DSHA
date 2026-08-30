@@ -88,19 +88,38 @@ public class TaskNotifier {
     }
 
     private void notifyDone() {
+        NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) {
+            nm.cancel(Constants.NOTIF_TASK_RUNNING);
+        }
+
         Intent intent = new Intent(ctx, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent pi = PendingIntent.getActivity(ctx, 0, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        // 挂载 RemoteInput 继续对话组件
+        androidx.core.app.RemoteInput remoteInput = new androidx.core.app.RemoteInput.Builder(ConfirmReceiver.EXTRA_TASK_REPLY_TEXT)
+                .setLabel("输入新指令继续对话...")
+                .build();
+        Intent replyIntent = new Intent(ctx, ConfirmReceiver.class)
+                .setAction(ConfirmReceiver.ACTION_TASK_REPLY);
+        PendingIntent replyPi = PendingIntent.getBroadcast(ctx, 26, replyIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0));
+        NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
+                R.drawable.ic_launch, "💬 继续对话", replyPi)
+                .addRemoteInput(remoteInput)
+                .build();
+
         Notification n = new NotificationCompat.Builder(ctx, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_launch)
                 .setContentTitle("DSHA · 任务完成")
                 .setContentText("智能体已结束任务，点击查看结果")
                 .setContentIntent(pi)
+                .addAction(replyAction)
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .build();
-        NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) nm.notify(NOTIF_ID, n);
     }
 

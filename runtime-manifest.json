@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-29T05:07:22Z",
+  "generated": "2026-08-30T05:28:58Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -17,8 +17,8 @@
     {
       "path": "app/src/main/assets/adb-setup.sh",
       "asset": "adb-setup.sh",
-      "size": 5212,
-      "sha256": "e0f2b3fd86228230a9341c9c807f116080c7d7059546388195bfd3bfc85f901b",
+      "size": 4762,
+      "sha256": "73a6b03f4c8b1eadf67581bf97681378cdc05ebdf3daee972741effe57c5027c",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/adb-setup.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/adb-setup.sh",
@@ -28,8 +28,8 @@
     {
       "path": "app/src/main/assets/adb-shell.py",
       "asset": "adb-shell.py",
-      "size": 13132,
-      "sha256": "931970701d5f63bb917946459f90ec8f3d3724177ed2a8732696fc7098d9ef51",
+      "size": 13837,
+      "sha256": "016a06a259eccc513e9b13f087491b32fc2f23f1ac81ae9e991890faeb50793a",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/adb-shell.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/adb-shell.py",
@@ -105,8 +105,8 @@
     {
       "path": "app/src/main/assets/fs-write-patch.sh",
       "asset": "fs-write-patch.sh",
-      "size": 7259,
-      "sha256": "99da4df440d42a8908001075234bea393fb849fdafd43aaa3d7cc09947627550",
+      "size": 9935,
+      "sha256": "aa4bdefc693932de21c10505dac8eea22e57ef4d6acfa4d691d0801a2360731e",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/fs-write-patch.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/fs-write-patch.sh",
@@ -226,8 +226,8 @@
     {
       "path": "app/src/main/assets/rootfs-confirm-install.sh",
       "asset": "rootfs-confirm-install.sh",
-      "size": 8007,
-      "sha256": "bbcd5fb47cf88cfeed73e830b66c83beecc187b90a00fe5a89e9bb7261c198aa",
+      "size": 7994,
+      "sha256": "030fc17e00837960890758051f92674b2afb0f5a27888457fba603b794e3db58",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/rootfs-confirm-install.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/rootfs-confirm-install.sh",
@@ -237,8 +237,8 @@
     {
       "path": "app/src/main/assets/selftest.py",
       "asset": "selftest.py",
-      "size": 67478,
-      "sha256": "2ddc457aeb6be4e67e21cf639808ad19c8421e4605f77df5f0cbd46877d2c6d4",
+      "size": 68779,
+      "sha256": "3034b657923bf9849ef58460e0bc8e4bbbb223c59a29d887da19836a80ee1003",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/selftest.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/selftest.py",
@@ -290,32 +290,10 @@
       ]
     },
     {
-      "path": "app/src/main/assets/status-overlay/package.json",
-      "asset": "status-overlay/package.json",
-      "size": 539,
-      "sha256": "c5ccc0a6959f3ce7eebcac0564cc58478d6df406af8352997a051272a47ba689",
-      "urls": [
-        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/package.json",
-        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/status-overlay/package.json",
-        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/package.json"
-      ]
-    },
-    {
-      "path": "app/src/main/assets/status-overlay/lib/index.js",
-      "asset": "status-overlay/lib/index.js",
-      "size": 13892,
-      "sha256": "5a44140e9a447decd936f2ad5d5cebf10da41c00488d1d762f6afc7129a49b88",
-      "urls": [
-        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/lib/index.js",
-        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/status-overlay/lib/index.js",
-        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/lib/index.js"
-      ]
-    },
-    {
       "path": "app/src/main/assets/device-shell-guide/package.json",
       "asset": "device-shell-guide/package.json",
       "size": 539,
-      "sha256": "43b93a6b2755f512085e61d9385d5924a0f1b68a7abcf42edd77dcf4fccc33a9",
+      "sha256": "79d3a7fbb8b75cf8c7dbd0673c7cc266c747d837fe7145bcb50e3b7be07aa0d0",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/device-shell-guide/package.json",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/device-shell-guide/package.json",
@@ -325,34 +303,12 @@
     {
       "path": "app/src/main/assets/device-shell-guide/lib/index.js",
       "asset": "device-shell-guide/lib/index.js",
-      "size": 9154,
-      "sha256": "4e9ff0867b6479cfe3e230e70c65cece5d43cac96bc4735d5024d6b53cf7c7dc",
+      "size": 11062,
+      "sha256": "8dcf648e5676cf298b1333a0cfbc24d0bb778b28787d9a4116b9efb130223089",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/device-shell-guide/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/device-shell-guide/lib/index.js",
         "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/device-shell-guide/lib/index.js"
-      ]
-    },
-    {
-      "path": "app/src/main/assets/task-notifier/package.json",
-      "asset": "task-notifier/package.json",
-      "size": 325,
-      "sha256": "bdc77d51c191c0e5bc64467c51f43af6b2668ad1d54cfe90aee9465354d412e4",
-      "urls": [
-        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/package.json",
-        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/task-notifier/package.json",
-        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/package.json"
-      ]
-    },
-    {
-      "path": "app/src/main/assets/task-notifier/lib/index.js",
-      "asset": "task-notifier/lib/index.js",
-      "size": 2685,
-      "sha256": "b90f85cc72d20ba190b35733a1aec3fb8a1b9d73bfe0331b3217d82195d133de",
-      "urls": [
-        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/lib/index.js",
-        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/task-notifier/lib/index.js",
-        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/lib/index.js"
       ]
     },
     {
@@ -386,6 +342,50 @@
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-nav/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/mobile-nav/lib/index.js",
         "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/mobile-nav/lib/index.js"
+      ]
+    },
+    {
+      "path": "app/src/main/assets/status-overlay/package.json",
+      "asset": "status-overlay/package.json",
+      "size": 539,
+      "sha256": "c5ccc0a6959f3ce7eebcac0564cc58478d6df406af8352997a051272a47ba689",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/package.json",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/status-overlay/package.json",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/package.json"
+      ]
+    },
+    {
+      "path": "app/src/main/assets/status-overlay/lib/index.js",
+      "asset": "status-overlay/lib/index.js",
+      "size": 13892,
+      "sha256": "5a44140e9a447decd936f2ad5d5cebf10da41c00488d1d762f6afc7129a49b88",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/lib/index.js",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/status-overlay/lib/index.js",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/lib/index.js"
+      ]
+    },
+    {
+      "path": "app/src/main/assets/task-notifier/package.json",
+      "asset": "task-notifier/package.json",
+      "size": 325,
+      "sha256": "bdc77d51c191c0e5bc64467c51f43af6b2668ad1d54cfe90aee9465354d412e4",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/package.json",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/task-notifier/package.json",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/package.json"
+      ]
+    },
+    {
+      "path": "app/src/main/assets/task-notifier/lib/index.js",
+      "asset": "task-notifier/lib/index.js",
+      "size": 2685,
+      "sha256": "b90f85cc72d20ba190b35733a1aec3fb8a1b9d73bfe0331b3217d82195d133de",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/lib/index.js",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/task-notifier/lib/index.js",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/lib/index.js"
       ]
     }
   ]
