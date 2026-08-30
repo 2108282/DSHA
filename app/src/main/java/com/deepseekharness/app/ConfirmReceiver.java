@@ -20,8 +20,8 @@ import java.io.File;
 /**
  * 后台安全确认、助手提问与任务状态通知的按钮/输入接收器：
  * - 用户点确认/提问选项或就地输入回复
- * - 运行中通知点击「🛑 停止任务」紧急制动
- * - 完成/终止通知就地输入「💬 继续对话/重新输入」继续交流
+ * - 运行中通知点击「🛑 停止任务」紧急制动（向容器注入 cancel 标志并终止活动工具子进程）
+ * - 完成/终止通知就地输入「💬 继续对话/重新输入」继续交流（向容器写入 prompt 指令自动开启新轮次）
  */
 public class ConfirmReceiver extends BroadcastReceiver {
 
@@ -86,12 +86,22 @@ public class ConfirmReceiver extends BroadcastReceiver {
             nm.cancel(Constants.NOTIF_TASK_RUNNING);
         }
 
-        // 2. 立即注销清理租约文件，关闭设备操作权限
+        // 2. 立即注销清理租约文件，关闭设备操作权限；同时通知 DSH 插件停止 Agent 工作并杀掉活动的工具命令
         try {
             HarnessController hc = HarnessController.get(ctx);
             if (hc != null && hc.getProot() != null && hc.getProot().getRootfsDir() != null) {
-                File lf = new File(hc.getProot().getRootfsDir(), "root/.dsh/.auth_lease");
+                File dshDir = new File(hc.getProot().getRootfsDir(), "root/.dsh");
+                if (!dshDir.exists()) dshDir.mkdirs();
+
+                File lf = new File(dshDir, ".auth_lease");
                 if (lf.exists()) lf.delete();
+
+                // 创建取消请求标志文件，由 dsh-task-notifier 插件调用 agent.cancel()
+                File cancelFlag = new File(dshDir, ".cancel_requested");
+                cancelFlag.createNewFile();
+
+                // 强制中止容器内可能正在阻塞运行的外部命令（如长命令 bash/python/curl）
+                hc.getProot().execAsync("killall -9 bash python3 2>/dev/null || true");
             }
         } catch (Throwable ignored) {}
 
@@ -137,17 +147,30 @@ public class ConfirmReceiver extends BroadcastReceiver {
             nm.cancel(Constants.NOTIF_TASK_STOPPED);
         }
 
-        // 2. Toast 提示收到新指令
+        // 2. 将待发送指令写入容器 pending_prompt，由 dsh-task-notifier 插件自动注入 DSH 开启新轮次
+        try {
+            HarnessController hc = HarnessController.get(ctx);
+            if (hc != null && hc.getProot() != null && hc.getProot().getRootfsDir() != null) {
+                File dshDir = new File(hc.getProot().getRootfsDir(), "root/.dsh");
+                if (!dshDir.exists()) dshDir.mkdirs();
+                File promptFile = new File(dshDir, ".pending_prompt");
+                java.nio.file.Files.write(promptFile.toPath(),
+                        text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+        } catch (Throwable ignored) {}
+
+        // 3. Toast 提示收到新指令
         new Handler(Looper.getMainLooper()).post(() -> {
             try {
                 Toast.makeText(ctx, "✓ 收到新指令：" + (text.length() > 20 ? text.substring(0, 20) + "…" : text), Toast.LENGTH_SHORT).show();
             } catch (Throwable ignored) {}
         });
 
-        // 3. 打开 App 首页以展示并继续执行会话
+        // 4. 打开 App 首页以展示并继续执行会话
         try {
             Intent openIntent = new Intent(ctx, MainActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    .putExtra("dsh_reply_text", text);
             ctx.startActivity(openIntent);
         } catch (Throwable ignored) {}
     }

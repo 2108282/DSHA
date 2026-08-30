@@ -422,6 +422,10 @@ public final class HttpShellService {
             String result;
             if (!authed) {
                 result = "[UNAUTHORIZED]";
+            } else if (path.startsWith("/app/task/running")) {
+                result = appTaskRunning(path);
+            } else if (path.startsWith("/app/task/cancel")) {
+                result = appTaskCancel();
             } else if (path.startsWith("/app/notify")) {
                 // agent 通过 App 发通知栏提醒（App 层交互）
                 result = appNotify(path);
@@ -508,12 +512,24 @@ public final class HttpShellService {
     /** /app/notify?title=&text= ：发通知栏提醒 */
     private String appNotify(String path) {
         try {
-            // App 前台时不发通知（用户正看着页面，不打扰）——与 TaskNotifier 抑制一致
-            if (TaskNotifier.appInForeground) return "FOREGROUND_SKIP";
             String q = queryOf(path);
             String title = getParam(q, "title", "DSHA 通知");
             String text = getParam(q, "text", "");
             if (text.isEmpty()) return "NO_TEXT";
+
+            // 任务结束，清除运行中状态通知
+            cancelRunningNotification();
+
+            // App 前台时，通过 Toast 友好提示用户；若在后台则推送带输入框的通知卡片
+            if (TaskNotifier.appInForeground) {
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    try {
+                        Toast.makeText(ctx, "✓ " + title + "：" + (text.length() > 30 ? text.substring(0, 30) + "…" : text), Toast.LENGTH_SHORT).show();
+                    } catch (Throwable ignored) {}
+                });
+                return "FOREGROUND_SKIP";
+            }
+
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return "NO_SERVICE";
             if (Build.VERSION.SDK_INT >= 26) {
@@ -523,9 +539,6 @@ public final class HttpShellService {
                 ch.setDescription("智能体通过 App 发送的通知");
                 nm.createNotificationChannel(ch);
             }
-
-            // 任务结束，清除运行中状态通知
-            nm.cancel(Constants.NOTIF_TASK_RUNNING);
 
             Intent openAppIntent = new Intent(ctx, MainActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -919,7 +932,32 @@ public final class HttpShellService {
         }
     }
 
+    private String appTaskRunning(String path) {
+        try {
+            String q = queryOf(path);
+            String title = getParam(q, "title", "DSHA · 正在执行");
+            String text = getParam(q, "text", "智能体正在执行自动化任务...");
+            showRunningNotification(title, text);
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    private String appTaskCancel() {
+        try {
+            cancelRunningNotification();
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
     private void showRunningNotification(String text) {
+        showRunningNotification("DSHA · 正在执行", text);
+    }
+
+    private void showRunningNotification(String title, String text) {
         try {
             if (Build.VERSION.SDK_INT >= 26) {
                 NotificationChannel ch = new NotificationChannel(
@@ -948,9 +986,9 @@ public final class HttpShellService {
 
             NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, "dsh_agent_channel")
                     .setSmallIcon(R.drawable.ic_launch)
-                    .setContentTitle("DSHA · 正在执行")
+                    .setContentTitle(title != null && !title.isEmpty() ? title : "DSHA · 正在执行")
                     .setContentText(shortMsg)
-                    .setStyle(new NotificationCompat.BigTextStyle().bigText(shortMsg))
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(text != null && !text.isEmpty() ? text : shortMsg))
                     .setContentIntent(contentPi)
                     .addAction(stopAction)
                     .setOngoing(true)
