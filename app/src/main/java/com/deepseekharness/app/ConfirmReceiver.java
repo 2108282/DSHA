@@ -190,6 +190,7 @@ public class ConfirmReceiver extends BroadcastReceiver {
         }
 
         Intent openAppIntent = new Intent(ctx, MainActivity.class)
+                .putExtra("open_web", true)
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent contentPi = PendingIntent.getActivity(ctx, 201, openAppIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);

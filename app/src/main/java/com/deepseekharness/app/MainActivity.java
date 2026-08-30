@@ -166,6 +166,27 @@ public class MainActivity extends AppCompatActivity {
         if (savedInstanceState == null) {
             nav.setSelectedItemId(R.id.nav_launch);
         }
+        handleNotificationEnterWeb(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleNotificationEnterWeb(intent);
+    }
+
+    private void handleNotificationEnterWeb(Intent intent) {
+        if (intent != null && (intent.getBooleanExtra("open_web", false) || intent.getBooleanExtra("auto_enter_web", false))) {
+            BottomNavigationView nav = findViewById(R.id.bottom_nav);
+            if (nav != null && nav.getSelectedItemId() != R.id.nav_launch) {
+                nav.setSelectedItemId(R.id.nav_launch);
+            }
+            Fragment f = getSupportFragmentManager().findFragmentById(R.id.fragment_container);
+            if (f instanceof LaunchFragment) {
+                ((LaunchFragment) f).enterWebDirectly();
+            }
+        }
     }
 
     private void switchFragment(Fragment f) {

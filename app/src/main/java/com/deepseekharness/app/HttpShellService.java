@@ -542,6 +542,7 @@ public final class HttpShellService {
             }
 
             Intent openAppIntent = new Intent(ctx, MainActivity.class)
+                    .putExtra("open_web", true)
                     .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent contentPi = PendingIntent.getActivity(ctx, 20, openAppIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -970,6 +971,7 @@ public final class HttpShellService {
             }
 
             Intent openAppIntent = new Intent(ctx, MainActivity.class)
+                    .putExtra("open_web", true)
                     .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent contentPi = PendingIntent.getActivity(ctx, 110, openAppIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -1528,6 +1530,7 @@ public final class HttpShellService {
         createConfirmChannel();
         String shortCmd = cmd.length() > 100 ? cmd.substring(0, 100) + "…" : cmd;
         Intent openAppIntent = new Intent(ctx, MainActivity.class)
+                .putExtra("open_web", true)
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent contentPi = PendingIntent.getActivity(ctx, 30, openAppIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -1567,6 +1570,7 @@ public final class HttpShellService {
         createConfirmChannel();
         String shortQ = q.length() > 100 ? q.substring(0, 100) + "…" : q;
         Intent openAppIntent = new Intent(ctx, MainActivity.class)
+                .putExtra("open_web", true)
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent contentPi = PendingIntent.getActivity(ctx, 39, openAppIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
