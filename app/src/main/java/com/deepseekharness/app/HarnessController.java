@@ -2786,9 +2786,12 @@ public class HarnessController {
             // pnpm 会持续打印进度，五分钟一声不吭基本就是网络挂了
             runStep("安装依赖 pnpm install", 95,
                     "cd /root/" + wd + " && " +
-                    // 三项一次写全。以前只写 registry 且用 > 覆盖，会把
-                    // pnpm-env-fix.sh 刚配好的 package-import-method 冲掉 ——
-                    // 于是 pnpm 又回去用硬链接，proot 下就是 .l2s 悬空链那套老问题
+                    // 三项一次写全（以前只写 registry 且用 > 覆盖，会把 pnpm-env-fix.sh
+                    // 刚配好的两项冲掉）。**但别指望这里的 package-import-method 生效**：
+                    // pnpm ≥10 这一项只从 pnpm-workspace.yaml 读（2026-08-30 实测，
+                    // 见 tools/pnpm-import-test.sh），.npmrc 里的写法只对 pnpm 9 / npm 有意义。
+                    // 真正关掉硬链接导入的是 pnpm-env-fix.sh §③ 往工作区 pnpm-workspace.yaml
+                    // 追加的 packageImportMethod —— 它在上面那次 runAssetScript 里已经跑过。
                     "printf 'registry=https://registry.npmmirror.com\\n"
                     + "package-import-method=copy\\nside-effects-cache=false\\n'"
                     + " > /root/.npmrc && " +
