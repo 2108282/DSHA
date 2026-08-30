@@ -773,6 +773,36 @@ public final class PureLogicTest {
         eq("market: at() 越界给空串", "", MarketCol.at(good, 99));
         eq("market: at() 顺手去空格", "dsh-x", MarketCol.at(new String[]{"  dsh-x  "}, 0));
 
+        // ---------- MarketSearch：市场搜索的匹配范围 ----------
+        // 原来只比名称一列，而索引里插件名多半是 dsh-xxx 缩写 —— 用户搜「主题」「语音」
+        // 一条也出不来，看起来就像市场里根本没有这类插件。这批断言钉住「搜什么该命中」，
+        // 以及三条刻意不匹配的列（URL / 星标 / 兼容性标记）。
+        String[] mkt = good.clone();
+        mkt[MarketCol.NAME] = "dsh-theme-neo";
+        mkt[MarketCol.OWNER] = "AdamPlatin123";
+        mkt[MarketCol.CATEGORY] = "UI 增强";
+        mkt[MarketCol.DESC] = "给 Web UI 换配色的主题插件";
+        mkt[MarketCol.NPM] = "dsh-theme-neo";
+        ok("search: 没输入就不筛", MarketSearch.matches(mkt, MarketSearch.terms("  ")));
+        ok("search: 按名称命中", MarketSearch.matches(mkt, MarketSearch.terms("theme")));
+        ok("search: 按中文描述命中（索引描述取的是 description.zh）",
+                MarketSearch.matches(mkt, MarketSearch.terms("主题")));
+        ok("search: 按作者命中", MarketSearch.matches(mkt, MarketSearch.terms("adamplatin")));
+        ok("search: 按分类命中", MarketSearch.matches(mkt, MarketSearch.terms("增强")));
+        ok("search: 大小写不敏感", MarketSearch.matches(mkt, MarketSearch.terms("THEME")));
+        ok("search: 多词要全部命中", MarketSearch.matches(mkt, MarketSearch.terms("主题 配色")));
+        ok("search: 一个词不命中就排除（AND 不是 OR）",
+                !MarketSearch.matches(mkt, MarketSearch.terms("主题 备份")));
+        ok("search: 不拿 URL 参与匹配（否则搜 github 命中全部）",
+                !MarketSearch.matches(mkt, MarketSearch.terms("github")));
+        ok("search: 不拿星标参与匹配（搜 55 不该命中）",
+                !MarketSearch.matches(mkt, MarketSearch.terms("55")));
+        ok("search: 7 列的老 Markdown 索引不越界（越界会让整页崩在过滤循环里）",
+                MarketSearch.matches(
+                        new String[]{"dsh-x", "1", "o", "⏳待定", "分类", "说明", "u"},
+                        MarketSearch.terms("说明")));
+        eqi("search: 连续空白不产生空词", 2, MarketSearch.terms("  a   b  ").length);
+
         // ---------- WebProcSel：停止的进程判据 ----------
         // 这批断言的由来：「停止」已经改坏过三轮，每次病根都在判据上，而症状全都长一样
         //（点了没反应 / 停了又复活），只能靠真机反复试。把判据钉在这里，改错当场就红。

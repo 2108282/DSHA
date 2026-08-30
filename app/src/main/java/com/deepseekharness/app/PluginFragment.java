@@ -458,11 +458,14 @@ public class PluginFragment extends Fragment {
         if (mode != Mode.MARKET) return;
         applySort();
         java.util.List<String[]> filtered = new java.util.ArrayList<>();
-        String q = searchQuery.trim().toLowerCase();
+        String q = searchQuery.trim();
+        // 搜索跨「名称/描述/作者/分类/npm 包名」多词 AND 匹配 —— 判据在 MarketSearch
+        // （原来只比名称一列：插件名多是 dsh-xxx 缩写，搜「主题」「语音」一条都出不来）
+        String[] terms = MarketSearch.terms(q);
         int skipped = 0;
         int hidden = 0;
         for (String[] it : items) {
-            if (!q.isEmpty() && !it[0].toLowerCase().contains(q)) continue;
+            if (!MarketSearch.matches(it, terms)) continue;
             // 仅兼容开关：滤掉不兼容条目（⏳待定/未测 保留，未知兼容性不误杀）
             if (filterIncompat && isIncompat(it[3])) {
                 skipped++;
@@ -483,7 +486,7 @@ public class PluginFragment extends Fragment {
         }
         adapter.setData(filtered, true);
         String hint = "共 " + filtered.size() + " 个插件";
-        if (!q.isEmpty()) hint += "（搜索：\"" + q + "\"）";
+        if (!q.isEmpty()) hint += "（搜索：\"" + q + "\"，含描述/作者）";
         if (filterIncompat) hint += " · 仅显示兼容（已滤 " + skipped + " 条不兼容）";
         if (hideInstalled) hint += " · 已隐藏 " + hidden + " 个装过的";
         if (!categoryFilter.isEmpty()) hint += " · 分类：" + categoryFilter;
