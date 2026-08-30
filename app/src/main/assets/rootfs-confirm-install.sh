@@ -5,14 +5,47 @@ set -e
 DSH_BIN=/root/dsh-bin
 mkdir -p "$DSH_BIN"
 
-cat > /root/dsh-confirm.sh <<'EOF'
+cat > /root/dsh-confirm.sh <<'EOF2'
 #!/bin/bash
 # 用法：dsh-confirm.sh [--force] <命令...>
 #   --force：所有命令都弹确认（设备 shell 报备用；守卫开时）
 #   不带：仅危险命令确认（守卫内部行为由 3090 桥 confirmEnabled 决定）
+
+# ===== 临时授权租期检查（用户前置同意后，租期内免二次弹窗确认）=====
+if [ -f /root/.dsh/.auth_lease ]; then
+  EXP=$(cat /root/.dsh/.auth_lease 2>/dev/null)
+  NOW=$(date +%s)
+  if [ -n "$EXP" ] && [ "${NOW:-0}" -lt "${EXP%.*}" ]; then
+    exit 0
+  fi
+fi
+
+# ===== 安全临时文件清理（删除 Download 临时截图/租约文件免弹窗）=====
+is_safe_cleanup() {
+  local c="$1"
+  [[ "$c" =~ ^(rm|unlink)[[:space:]] ]] || return 1
+  [[ "$c" =~ -r|-R|\* ]] && return 1
+  for arg in $c; do
+    [[ "$arg" =~ ^(rm|unlink|-f|-v)$ ]] && continue
+    if [[ "$arg" =~ ^/sdcard/Download/[a-zA-Z0-9_\.-]+\.(png|jpg|jpeg|tmp)$ ]] || \
+       [[ "$arg" =~ ^/tmp/[a-zA-Z0-9_\.-]+$ ]] || \
+       [[ "$arg" == "/root/.dsh/.auth_lease" ]]; then
+      continue
+    else
+      return 1
+    fi
+  done
+  return 0
+}
+
 FORCE=0
 if [ "$1" = "--force" ]; then FORCE=1; shift; fi
 CMD="$*"
+
+if [ "$FORCE" != "1" ] && is_safe_cleanup "$CMD"; then
+  exit 0
+fi
+
 # 3090 桥有 token 鉴权（防其他 App 冒充 agent 弹确认框）：
 # 必须带 X-Token 头（= /root/.dsh/.bridge_token 内容），否则一律 [UNAUTHORIZED] 被拒
 TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
@@ -53,20 +86,17 @@ else
 fi
 echo "  处理：在 App「配置」页启用 ADB 设备通道，确认桥运行后重试" >&2
 exit 1
-EOF
+EOF2
 chmod +x /root/dsh-confirm.sh
 
 # 函数级守卫：由 bash 工具 lib 补丁（ensureBashGuardPatch）在每条命令前 source 加载。
-# 不用 BASH_ENV —— 它会污染插件初始化时的子 shell，导致 dsh web 加载插件失败。
-# 函数优先于 PATH 查找，PATH 被覆盖/哈希缓存都无法绕过命令名拦截
-cat > /root/dsh-guard.sh <<'EOF'
+cat > /root/dsh-guard.sh <<'EOF2'
 # DSHA 危险命令守卫（由 BASH_ENV 注入，勿手动删除）
 if [ "${DSH_CONFIRM:-0}" = "1" ] || [ "${DSH_SHELL:-0}" = "1" ]; then
   rm()      { /root/dsh-confirm.sh "rm $*"      && /usr/bin/rm "$@"; }
   rmdir()   { /root/dsh-confirm.sh "rmdir $*"    && /usr/bin/rmdir "$@"; }
   unlink()  { /root/dsh-confirm.sh "unlink $*"   && /usr/bin/unlink "$@"; }
   truncate(){ /root/dsh-confirm.sh "truncate $*" && /usr/bin/truncate "$@"; }
-  # find 带 -delete 或 -exec rm 时确认（正常 find 不受影响）
   find()    { for a in "$@"; do if [ "$a" = "-delete" ] || [ "$a" = "-exec" ]; then /root/dsh-confirm.sh "find $*" || return 1; break; fi; done; /usr/bin/find "$@"; }
   dd()      { /root/dsh-confirm.sh "dd $*"      && /usr/bin/dd "$@"; }
   mkfs()    { /root/dsh-confirm.sh "mkfs $*"    && /usr/sbin/mkfs "$@"; }
@@ -78,24 +108,19 @@ if [ "${DSH_CONFIRM:-0}" = "1" ] || [ "${DSH_SHELL:-0}" = "1" ]; then
   halt()    { /root/dsh-confirm.sh "halt $*"    && /usr/sbin/halt "$@"; }
   poweroff(){ /root/dsh-confirm.sh "poweroff $*" && /usr/sbin/poweroff "$@"; }
   wipe()    { /root/dsh-confirm.sh "wipe $*"    && /usr/sbin/wipe "$@"; }
-  # adb shell/exec-out/exec-in 通道：设备侧命令含危险操作时确认
   is_danger_cmd() {
     echo "$1" | grep -qE '(^|[^a-z])(rm|rmdir|unlink|truncate|wipe)([^a-z]|$)|(dd|mkfs|fdisk|format|reboot|shutdown|poweroff|halt)([^a-z]|$)|-delete|base64|\| ?(sh|bash)|eval|sh -c|toybox|pm clear|uninstall'
   }
   adb()     { local FOUND=0 CMDSTR=""; for a in "$@"; do if [ "$FOUND" = "1" ]; then CMDSTR="$CMDSTR $a"; fi; [ "$a" = "shell" ] || [ "$a" = "exec-out" ] || [ "$a" = "exec-in" ] && FOUND=1; done; if [ -n "$CMDSTR" ] && is_danger_cmd "$CMDSTR"; then /root/dsh-confirm.sh "adb shell:$CMDSTR" || return 1; fi; /root/.dsh-real/adb "$@" 2>/dev/null || command adb "$@"; }
 fi
-EOF
+EOF2
 chmod +x /root/dsh-guard.sh
 
-# adb 特殊包装：adb shell/exec-out/exec-in 会在设备上执行任意命令——一律确认（不做内容检测，防编码绕过）
-# 真实 adb 被移到 /root/.dsh-real/，绝对路径调用也命中包装器
 cat > "$DSH_BIN/adb" <<'EOF2'
 #!/bin/bash
 SELF=$(basename "$0")
 REAL=""
 for p in /root/.dsh-real /usr/local/bin /usr/bin /bin /system/bin /data/data/com.termux/files/usr/bin; do
-  # 只需排除「自己」，不能顺手排除 /root/.dsh-real/adb —— 那恰好是真实 adb 的标准存放位置，
-  # 排掉之后只能靠后面的 ls 兜底，兜不到就直接报「找不到真实 adb」
   if [ -x "$p/$SELF" ] && [ "$p/$SELF" != "$0" ]; then REAL="$p/$SELF"; break; fi
 done
 [ -z "$REAL" ] && REAL=$(ls /root/.dsh-real/adb /usr/local/bin/adb /usr/bin/adb /system/bin/adb 2>/dev/null | head -1)
@@ -124,7 +149,6 @@ exec "$REAL" "$@"
 EOF2
 chmod +x "$DSH_BIN/adb"
 
-# 把真实 adb 藏到 /root/.dsh-real/（幂等：已藏过则跳过）
 REAL_ADB=$(command -v adb 2>/dev/null | grep -v dsh-bin | head -1)
 if [ -n "$REAL_ADB" ] && [ ! -e /root/.dsh-real/adb ]; then
   mkdir -p /root/.dsh-real
@@ -142,7 +166,7 @@ done
 [ -z "\$REAL" ] && REAL=\$(ls /usr/local/bin/\$SELF /usr/bin/\$SELF /bin/\$SELF 2>/dev/null | head -1)
 if [ -z "\$REAL" ]; then echo "找不到真实命令: \$SELF" >&2; exit 127; fi
 if [ "\${DSH_CONFIRM:-0}" != "1" ] && [ "\${DSH_SHELL:-0}" != "1" ]; then
-  exec "\$REAL" "\$@"   # 未启用确认（安装流程等）直接放行
+  exec "\$REAL" "\$@"
 fi
 if /root/dsh-confirm.sh "\$SELF \$*"; then
   exec "\$REAL" "\$@"
@@ -154,4 +178,4 @@ chmod +x "$DSH_BIN/$C"
 done
 
 echo "OK dsh-bin: $(ls "$DSH_BIN" | tr '\n' ' ')"
-echo 11 > "$DSH_BIN/.version"
+echo 12 > "$DSH_BIN/.version"

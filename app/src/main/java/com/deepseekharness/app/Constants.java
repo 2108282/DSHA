@@ -19,6 +19,8 @@ public final class Constants {
     public static final int NOTIF_TASK = 2002;
     /** HttpShellService 危险命令确认通知 */
     public static final int NOTIF_SHELL_CONFIRM = 3003;
+    /** HttpShellService 助手提问通知 */
+    public static final int NOTIF_ASK_QUESTION = 3007;
     /** ConfigFragment ADB 配对卡 */
     public static final int NOTIF_ADB_PAIR_CARD = 3101;
     /** AdbPairReceiver 配对结果 */
