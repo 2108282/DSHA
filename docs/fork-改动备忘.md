@@ -4,9 +4,11 @@
 
 - **分叉基点**：上游 `main` @ `41539fa`（`fix(star-history): 去掉每次都变的时间戳字段`），对应 v1.1.9.1 之后
 - **分支**：`feat/auth-lease-and-automation-improvements`
-- **规模**：10 个提交，24 个文件，+1136 / −307
+- **规模**：11 个提交，24 个文件，约 +1200 / −310
 
-改动可以分成四组，彼此基本独立，**可以按组拆开提 PR**：A 授权租约、B 通知栏交互闭环、C 元素定位与截屏、D fork 侧 CI。其中 D 只服务于本 fork 的免费打包，不应该提给上游。
+改动可以分成五组，彼此基本独立，**可以按组拆开提 PR**：A 授权租约、B 通知栏交互闭环、C 元素定位与截屏、D 图片附件软链接修复、E fork 侧 CI。其中 E 只服务于本 fork 的免费打包，不应该提给上游。
+
+D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但它跟通知栏毫无关系，是独立的一处 bug 修复；**在另一个仓库 `/root/工作区/dsha-repo` 里它有一个干净的单主题提交 `6dcdcb8`**（父提交就是上游 `41539fa`，内容与 `9afb5a4` 里那份逐字节一致）。提 PR 直接用它，不必从混合提交里做手术。
 
 ---
 
@@ -120,13 +122,48 @@ PendingIntent 必须用 `FLAG_MUTABLE`（Android 12+），否则 RemoteInput 的
 
 一行：`android:canTakeScreenshot="true"`。缺这个声明，系统降级走 `MediaProjection` 投屏接口，每截一张图强制弹一次录屏授权框，视觉识别根本没法连续用。补上之后走无障碍底层显存通道，静默出图。
 
-### C3. 附件补丁自检（`selftest.py`）
+### C3. 附件补丁的自检项（`selftest.py`）
 
-`fs-write-patch.sh` 新增了对 `dsh-attachment-local` 的处理（第三个用 `link()` 原子发布的包，Android 外部存储上必然失败，报 `ATTACHMENT_WRITE_FAILED`）。`selftest.py` 相应加 `ATTACHMENT_PKG_CANDIDATES` 与「附件发布补丁」检查项，找 `DSHA_L2S_FIX_ATTACHMENT` 标记，未打时给出「到启动页点重启」的处置建议。详见 `bug/图片发送ATTACHMENT_WRITE_FAILED修复记录.md`。
+配合下面 D 组：加 `ATTACHMENT_PKG_CANDIDATES` 与「附件发布补丁」检查项，找 `DSHA_L2S_FIX_ATTACHMENT` 标记，未打时按 `NEXT_STEP` 的约定给出「到启动页点一次重启」的处置建议（那份表要求每条 FAIL 都得告诉用户下一步做什么）。
 
 ---
 
-## D. Fork 侧 CI（不建议提给上游）
+## D. 图片附件软链接修复（`ATTACHMENT_WRITE_FAILED`）
+
+**现象**：WebUI 输入框里加图片发送，弹红字 `图片发送失败（ATTACHMENT_WRITE_FAILED）`，多模态模型收不到图。
+
+**根因**：跟 `AGENTS.md` 已知坑位里那条硬链接问题是**同一个根因的第三个漏网包**。`/root/.dsh/attachments` 软链到 `/sdcard/Documents/dshdata/attachments`，而 Android 外部存储不支持 POSIX 硬链接，`link()` 直接返回 `EINVAL`/`EPERM`。上游 `fs-write-patch.sh` 已经修过 `dsh-fs-local`（段①）和 `dsh-session-persistence-jsonl`（段②）两个包，`dsh-attachment-local` 是第三个也用 `link(temp, target)` 做原子发布的包，一直没被覆盖。
+
+**修法**：`fs-write-patch.sh` 新增第③段，把 `await link(temporary, target)` 换成 `await rename(temporary, target)`。几处细节都是有意的：
+
+- **`EXDEV` 回退**。`rename` 不能跨文件系统，捕获到 `EXDEV` 就 `copyFile` + `unlink`。原来的 `link` 版本没有这个分支，因为它失败的方式不同。
+- **删掉末尾的 `await unlink(temporary)`**。`rename` 已经把临时文件消耗掉了，留着必报 `ENOENT`。
+- **匹配两级降级**：先整段字面量匹配，失配则用 `re.S` 正则再试一次（`PATCHED_REGEX`），都不中才 `PATTERN_MISS` + `exit 3`。dsh 版本一升，字面量就可能对不上。
+- **改完校验，不过就回滚**：`node --check`（ESM 要先复制成 `.mjs`，否则按 CJS 解析必报错）失败就从 `.dsha-bak` 恢复，输出 `ATTACHMENT_PATCH_ROLLBACK`。
+- **幂等**：认 `DSHA_L2S_FIX_ATTACHMENT` 标记，已打过直接 `ATTACHMENT_PATCH_ALREADY`。
+
+排查全过程另有一份记录：`bug/图片发送ATTACHMENT_WRITE_FAILED修复记录.md`。
+
+### D 组踩过的坑：新段落不能加在段②后面
+
+第一版把第③段追加到脚本末尾（段②之后），结果**补丁只在全新安装上生效，老用户永远拿不到**。
+
+原因是段②的每个分支结尾都是 `exit 0`（在上游原版里段②就是脚本末尾，那时无害）。老用户升级时①②早就打过了，段②走 `SESSION_PATCH_ALREADY` 就 `exit 0`，第③段一行都不会执行。实测三个场景确认过：
+
+| 场景 | 结果 |
+|---|---|
+| ①②已打过、③未打（老用户升级） | 段③完全不执行，`grep DSHA_L2S_FIX_ATTACHMENT` 为 0 |
+| 全新安装 | 段③正常执行 |
+
+**修法**：把第③段挪到段②**之前**，并改成跟段①同构的 `if/elif/else`（不带 `exit`），任何分支都不中断后续。这样三段的执行互不依赖。已复测：老用户场景输出 `FS_PATCH_ALREADY / PATCHED / ATTACHMENT_PATCH_OK / SESSION_PATCH_ALREADY`，补丁正常打上；重复跑输出三个 `ALREADY`（幂等）；段③ `PATTERN_MISS` 时段②照常继续。
+
+> 段②那四处 `exit 0` 是上游原有代码，本 fork 没有改动它 —— 只是把新段落放在了它前面绕开。要动上游代码就得多担一份 review 风险，不值得。
+
+**遗留小问题**（未修，不影响功能）：`HarnessController.noteFsWritePatchResult()` 只匹配输出里的 `"PATCHED"`，而段③成功时输出 `ATTACHMENT_PATCH_OK`，所以活动日志记不到这一段，排查时看不见。
+
+---
+
+## E. Fork 侧 CI（不建议提给上游）
 
 `.github/workflows/android-build.yml`：删掉 `bundle` job（原本在 `ubuntu-24.04-arm` 上现编 arm64 rootfs，约 90 分钟且 fork 用不上 ARM runner 配额），改为直接从上游 release APK 里 `unzip -p` 抽出 `assets/offline-rootfs.*`。触发分支加 `feat/**`。
 
@@ -159,7 +196,8 @@ PendingIntent 必须用 `FLAG_MUTABLE`（Android 12+），否则 RemoteInput 的
 - **`xdg-open` 适配器未入仓**。`/usr/local/bin/xdg-open`（Web 点击文件时 1:1 无损复制到 `Download/DSHA/`，解决 `spawn xdg-open ENOENT` 和导出被压成 `.gz`）目前只存在于设备文件系统上，不在 git 里，重装即丢。要保留得放进 `app/src/main/assets/` 并挂到 provision 流程。
 - **`runtime-manifest.sig` 被删**（不是修改，是整个文件删掉）。改了 assets 就必须重签，而签名用的 `DSHA-release.keystore` 只有上游有，所以本 fork 只能删掉它。按 `AGENTS.md` 的说明，签名不对会让客户端拒收整批增量更新 —— 提 PR 时必须请上游用 `tools/sign-runtime-manifest.sh` 重签，不要自己塞一个假的进去。
 - **B2 的停止链路只在真机验证过一次**，没有自动化回归。`agents.list()` 与 `agents.roots()` 的行为依赖 dsh 版本，上游升级 agent scope API 会静默失效。
-- **本地未跑过构建验证**。`tools/pure-logic-test.sh` 和 `:app:assembleDebug` 都没在这个容器里跑过（缺 SDK 34 / NDK 26），编译正确性只由 fork CI 的 `assembleDebug` 背书。
+- **本地未跑过构建验证**。`tools/pure-logic-test.sh` 和 `:app:assembleDebug` 都没在这个容器里跑过（缺 SDK 34 / NDK 26），编译正确性只由 fork CI 的 `assembleDebug` 背书。唯一在本地实跑验证过的是 D 组的 `fs-write-patch.sh`（`bash -n` 语法检查 + 三个场景的执行路径模拟）。
+- **`noteFsWritePatchResult` 记不到段③**（见 D 组末尾），活动日志缺一条，不影响功能。
 
 ## rebase 现状
 

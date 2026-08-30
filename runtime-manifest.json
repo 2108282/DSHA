@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-30T06:30:25Z",
+  "generated": "2026-08-30T09:53:08Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -105,8 +105,8 @@
     {
       "path": "app/src/main/assets/fs-write-patch.sh",
       "asset": "fs-write-patch.sh",
-      "size": 9935,
-      "sha256": "aa4bdefc693932de21c10505dac8eea22e57ef4d6acfa4d691d0801a2360731e",
+      "size": 10493,
+      "sha256": "583a1dbc36c15bc4a5f0316cfa6417d67567588766b4cd536c02596e8d45f6e7",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/fs-write-patch.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/fs-write-patch.sh",
@@ -293,7 +293,7 @@
       "path": "app/src/main/assets/device-shell-guide/package.json",
       "asset": "device-shell-guide/package.json",
       "size": 539,
-      "sha256": "79d3a7fbb8b75cf8c7dbd0673c7cc266c747d837fe7145bcb50e3b7be07aa0d0",
+      "sha256": "2b4300d43f3a0c9142bdf288df833a747eff6af6db504213c7dd9323560d4911",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/device-shell-guide/package.json",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/device-shell-guide/package.json",
@@ -303,8 +303,8 @@
     {
       "path": "app/src/main/assets/device-shell-guide/lib/index.js",
       "asset": "device-shell-guide/lib/index.js",
-      "size": 11062,
-      "sha256": "8dcf648e5676cf298b1333a0cfbc24d0bb778b28787d9a4116b9efb130223089",
+      "size": 12614,
+      "sha256": "982b134041a4e6b856ba65884680834cae0d1dd6dd4aae3ed6555b355bfaa1a4",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/device-shell-guide/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/device-shell-guide/lib/index.js",
