@@ -139,7 +139,7 @@ jobs:
           set -euo pipefail
           # CI 是 x86_64：去掉仅适用于本地 ARM64 的 aapt2 覆盖
           sed -i '/aapt2FromMavenOverride/d' gradle.properties
-          gradle :app:assembleDebug --no-daemon
+          gradle :app:assembleDebug --no-daemon --stacktrace
           ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - name: Report signing fingerprint
