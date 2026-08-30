@@ -4,13 +4,14 @@
  * 全生命周期通知与交互控制器：
  * 1. 运行中通知：监听 turn/start 与 tool/call，通过 3090 桥 /app/task/running 实时推送进度，带「🛑 停止任务」紧急制动按钮；
  * 2. 任务完成通知：监听 turn/end，通过 3090 桥 /app/notify 推送完成卡片，带「💬 继续对话」输入框；
- * 3. 任务紧急制动：监听 /root/.dsh/.cancel_requested，遍历 ctx.agents 调用 agent.cancel() 真正中止工作；
- * 4. 通知栏回复注入：监听 /root/.dsh/.pending_prompt，读取后自动向当前 agent 发送 followup 开启新一轮对话。
+ * 3. 任务紧急制动：监听 /root/.dsh/.cancel_requested，通过 ctx.inject(['agents']) 调用 agent.cancel() 真正中止工作；
+ * 4. 通知栏回复注入：监听 /root/.dsh/.pending_prompt，通过 ctx.inject(['agents']) 调用 agent.followup() 开启新一轮对话。
  */
 import { randomUUID } from 'node:crypto'
 import { readFileSync, existsSync, unlinkSync } from 'node:fs'
 import { readFile, unlink } from 'node:fs/promises'
 
+// 保持无模块级硬依赖，防止阻塞插件树初始化
 export const inject = []
 
 const THROTTLE_MS = 30_000
@@ -86,10 +87,15 @@ function formatToolDetail(name, argsJson) {
 }
 
 export function apply(ctx) {
-  // 1. 会话事件监听
+  let lastActiveSessionId = null
+
+  // 1. 会话事件监听（实时同步通知栏）
   ctx.on('session/event', (session, event) => {
     try {
       const type = event?.type
+      if (session?.id) {
+        lastActiveSessionId = session.id
+      }
 
       if (type === 'turn/start') {
         void callBridge('/app/task/running', {
@@ -138,59 +144,76 @@ export function apply(ctx) {
     } catch {}
   })
 
-  // 2. 周期巡检：监听取消指令文件与新回复指令文件
-  let timer = setInterval(async () => {
-    try {
-      // 检查中止请求
+  // 2. 作用域注入 agents 服务，安全、非阻塞地管理 Agent 生命周期（停止与继续对话）
+  ctx.inject(['agents'], (agentScope) => {
+    let timer = setInterval(async () => {
       try {
+        // A. 处理用户点击通知栏「🛑 停止任务」紧急制动
         if (existsSync(CANCEL_FLAG)) {
-          unlinkSync(CANCEL_FLAG)
-          // 遍历所有 live agents 中止当前任务
-          if (ctx.agents && typeof ctx.agents.list === 'function') {
-            for (const ag of ctx.agents.list()) {
+          try {
+            unlinkSync(CANCEL_FLAG)
+          } catch {}
+          try {
+            const list = agentScope.agents.list()
+            for (const ag of list) {
               try {
                 if (ag && typeof ag.cancel === 'function') {
                   ag.cancel({ kind: 'user' }, { keepInbox: true })
                 }
               } catch {}
             }
-          }
+          } catch {}
         }
-      } catch {}
 
-      // 检查继续对话/新指令请求
-      try {
+        // B. 处理用户在通知栏输入文字「💬 继续对话 / 重新输入」
         if (existsSync(PENDING_PROMPT)) {
-          const raw = (await readFile(PENDING_PROMPT, 'utf-8')).trim()
-          await unlink(PENDING_PROMPT).catch(() => {})
+          let raw = ''
+          try {
+            raw = (await readFile(PENDING_PROMPT, 'utf-8')).trim()
+            await unlink(PENDING_PROMPT).catch(() => {})
+          } catch {}
+
           if (raw) {
-            let targetAgent = null
-            if (ctx.agents && typeof ctx.agents.list === 'function') {
-              const list = ctx.agents.list()
-              if (list.length > 0) {
-                targetAgent = list[list.length - 1]
+            try {
+              let targetAgent = null
+              // 优先查找最近活跃的 session 对应的 agent
+              if (lastActiveSessionId) {
+                targetAgent = agentScope.agents.get(lastActiveSessionId)
               }
-            }
-            if (targetAgent && typeof targetAgent.followup === 'function') {
-              const msg = {
-                id: randomUUID(),
-                role: 'user',
-                content: [{ type: 'text', text: raw }],
-                source: { kind: 'user' }
+              // 兜底找根 agent 或最新 live agent
+              if (!targetAgent) {
+                const roots = typeof agentScope.agents.roots === 'function' ? agentScope.agents.roots() : []
+                if (roots && roots.length > 0) {
+                  targetAgent = roots[0]
+                } else {
+                  const list = agentScope.agents.list()
+                  if (list && list.length > 0) {
+                    targetAgent = list[list.length - 1]
+                  }
+                }
               }
-              targetAgent.followup(msg)
-            }
+
+              if (targetAgent && typeof targetAgent.followup === 'function') {
+                const msg = {
+                  id: randomUUID(),
+                  role: 'user',
+                  content: [{ type: 'text', text: raw }],
+                  source: { kind: 'user' }
+                }
+                targetAgent.followup(msg)
+              }
+            } catch {}
           }
         }
       } catch {}
-    } catch {}
-  }, 400)
+    }, 300)
 
-  if (timer && typeof timer.unref === 'function') {
-    timer.unref()
-  }
+    if (timer && typeof timer.unref === 'function') {
+      timer.unref()
+    }
 
-  ctx.on('dispose', () => {
-    if (timer) clearInterval(timer)
+    agentScope.on('dispose', () => {
+      if (timer) clearInterval(timer)
+    })
   })
 }
