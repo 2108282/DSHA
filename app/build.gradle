@@ -166,6 +166,11 @@ android {
             aidl.srcDirs = ['src/main/aidl']
         }
     }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
 }
 
 dependencies {

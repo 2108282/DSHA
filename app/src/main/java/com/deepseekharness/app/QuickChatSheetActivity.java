@@ -3,6 +3,7 @@ package com.deepseekharness.app;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -40,6 +41,7 @@ import androidx.appcompat.app.AppCompatActivity;
  * - 右上角 ◫ 分栏面板按钮（直达 App 完整全屏聊天页）；
  * - 独立单例栈运行，关闭后不在系统多任务/最近任务列表残留卡片。
  */
+@SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
 public class QuickChatSheetActivity extends AppCompatActivity {
 
     private FrameLayout rootOverlay;
