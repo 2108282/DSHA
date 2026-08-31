@@ -42,14 +42,14 @@ import android.widget.TextView;
 
 /**
  * 快捷对话底部抽屉弹层（纯代码动态构建，零外部 XML 依赖）：
- * 1. 左右 100% 铺满屏幕（消除 Dialog Decor 默认 Padding/Margin）；
- * 2. 多档 15% 阶梯智能吸附停靠（35%/50%/65%/80%/95%），低于 25% 退出；
- * 3. 底部严格锁定，拖拽仅顶部伸缩；
- * 4. 标题绝对居中，顶部留白紧凑；
+ * 1. 左右 100% 铺满物理屏幕（Theme.DeepseekHarness.SheetTransparent + Decor 零边距）；
+ * 2. 多档 15% 阶梯智能吸附停靠（35%/50%/65%/80%/95%），低于 25% 安全退出；
+ * 3. 底部严格锁定在屏幕最底端，拖拽仅顶部上下伸缩；
+ * 4. 标题物理绝对居中，顶部留白紧凑；
  * 5. 全局静态 WebView 单例保活，再次弹出零转圈、零重新加载；
  * 6. 1:1 精准字体还原（移除 OverviewMode，设置 textZoom 100）；
- * 7. 注入透明全局 CSS 变量与 DOM 背景，100% 透出毛玻璃半透明卡片；
- * 8. 键盘弹出时：卡片顶部物理 Y 坐标绝对锁死不动，仅 WebView 内部输入框上浮。
+ * 7. 注入透明全局 CSS 变量与 DOM 背景，100% 透出毛玻璃半透明卡片与桌面壁纸；
+ * 8. 键盘弹出时：弹层卡片整体（顶栏、高度与底边）绝对稳固不动，仅内部输入框上浮。
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
 public class QuickChatSheetActivity extends Activity {
@@ -77,16 +77,14 @@ public class QuickChatSheetActivity extends Activity {
     private float initialTouchY = 0f;
     private int initialHeightOnTouch = 0;
 
-    // 键盘弹出防卡片顶飞机制
-    private int lastVisibleDecorHeight = 0;
-    private int activeKeyboardHeight = 0;
+    // 键盘监听：仅为内部 webContainer 添加 paddingBottom，绝对不压缩 sheetCard 整体
     private ViewTreeObserver.OnGlobalLayoutListener keyboardLayoutListener;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // 窗口基础配置：全屏铺满、底部对齐（彻底锁死底部）、半透明遮罩、点击外部退出、键盘顶起
+        // 窗口基础配置：全屏铺满、底部对齐（彻底锁死底部）、半透明遮罩、点击外部退出
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         setFinishOnTouchOutside(true);
 
@@ -97,7 +95,8 @@ public class QuickChatSheetActivity extends Activity {
             window.setDimAmount(0.42f);
             window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
             window.setGravity(Gravity.BOTTOM);
-            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            // 采用 ADJUST_NOTHING：避免 Window 整体被系统粗暴向上推
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
             if (window.getDecorView() != null) {
                 window.getDecorView().setPadding(0, 0, 0, 0);
             }
@@ -161,7 +160,7 @@ public class QuickChatSheetActivity extends Activity {
             return false;
         });
 
-        // 2. 底部卡片主体（Gravity.BOTTOM 彻底锁定底部，左右铺满）
+        // 2. 底部卡片主体（Gravity.BOTTOM 彻底锁定底部，左右 100% 铺满）
         sheetCard = new LinearLayout(this);
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, defaultHeight);
@@ -324,7 +323,7 @@ public class QuickChatSheetActivity extends Activity {
         return tv;
     }
 
-    /** 设置键盘高度监听，锁定卡片顶部 Y 坐标不被顶飞，仅内部输入框上移 */
+    /** 键盘监听：卡片整体位置尺寸绝对不动，仅让内部 webContainer 底部抬起，输入框精准上移 */
     private void setupKeyboardObserver() {
         if (getWindow() == null || getWindow().getDecorView() == null) return;
         View decorView = getWindow().getDecorView();
@@ -332,37 +331,21 @@ public class QuickChatSheetActivity extends Activity {
         keyboardLayoutListener = () -> {
             Rect r = new Rect();
             decorView.getWindowVisibleDisplayFrame(r);
-            int visibleDecorHeight = r.height();
+            int rootHeight = decorView.getRootView().getHeight();
+            if (rootHeight == 0) rootHeight = screenHeight;
 
-            if (lastVisibleDecorHeight == 0) {
-                lastVisibleDecorHeight = visibleDecorHeight;
-                return;
-            }
-
-            int heightDiff = lastVisibleDecorHeight - visibleDecorHeight;
-            if (heightDiff > dpToPx(120)) { // 键盘弹出
-                activeKeyboardHeight = heightDiff;
-                applyKeyboardHeightAdjustment();
-            } else if (heightDiff < -dpToPx(120) || visibleDecorHeight == lastVisibleDecorHeight) { // 键盘收起
-                activeKeyboardHeight = 0;
-                applyKeyboardHeightAdjustment();
+            int keyboardHeight = rootHeight - r.bottom;
+            if (keyboardHeight > dpToPx(100)) { // 键盘弹出
+                if (webContainer != null && webContainer.getPaddingBottom() != keyboardHeight) {
+                    webContainer.setPadding(0, 0, 0, keyboardHeight);
+                }
+            } else { // 键盘收起
+                if (webContainer != null && webContainer.getPaddingBottom() != 0) {
+                    webContainer.setPadding(0, 0, 0, 0);
+                }
             }
         };
         decorView.getViewTreeObserver().addOnGlobalLayoutListener(keyboardLayoutListener);
-    }
-
-    private void applyKeyboardHeightAdjustment() {
-        if (sheetCard == null) return;
-        int targetH = currentHeight;
-        if (activeKeyboardHeight > 0) {
-            // 键盘弹出时：卡片高度等额减小键盘高度，锁死卡片顶部物理 Y 坐标绝对不动
-            targetH = Math.max(dpToPx(180), currentHeight - activeKeyboardHeight);
-        }
-        ViewGroup.LayoutParams lp = sheetCard.getLayoutParams();
-        if (lp != null && lp.height != targetH) {
-            lp.height = targetH;
-            sheetCard.setLayoutParams(lp);
-        }
     }
 
     private void setupGesture() {
@@ -379,7 +362,7 @@ public class QuickChatSheetActivity extends Activity {
                     if (targetH > maxHeight) targetH = maxHeight;
                     if (targetH > 0) {
                         currentHeight = targetH;
-                        applyKeyboardHeightAdjustment();
+                        updateCardHeight(targetH);
                     }
                     return true;
 
@@ -405,7 +388,17 @@ public class QuickChatSheetActivity extends Activity {
         }
     }
 
-    /** 15% 阶梯智能多档吸附算法 */
+    private void updateCardHeight(int height) {
+        if (sheetCard != null) {
+            ViewGroup.LayoutParams lp = sheetCard.getLayoutParams();
+            if (lp != null && lp.height != height) {
+                lp.height = height;
+                sheetCard.setLayoutParams(lp);
+            }
+        }
+    }
+
+    /** 15% 阶梯智能多档吸附算法（35%, 50%, 65%, 80%, 95%） */
     private void snapToNearest15PercentStep() {
         float[] steps = {0.35f, 0.50f, 0.65f, 0.80f, 0.95f};
         float currentRatio = (float) currentHeight / (float) screenHeight;
@@ -434,7 +427,7 @@ public class QuickChatSheetActivity extends Activity {
         anim.setInterpolator(new DecelerateInterpolator());
         anim.addUpdateListener(animation -> {
             currentHeight = (int) animation.getAnimatedValue();
-            applyKeyboardHeightAdjustment();
+            updateCardHeight(currentHeight);
         });
         anim.start();
     }
@@ -525,7 +518,7 @@ public class QuickChatSheetActivity extends Activity {
         try {
             String js = "(function() {" +
                     "  var css = `\n" +
-                    "    html, body, #root, [data-ds-dark-theme], main, .dsh-layout-root {\n" +
+                    "    html, body, #root, [data-ds-dark-theme], main, .dsh-layout-root, div[class*='_root_'], div[class*='_wrap_'], div[class*='_container_'] {\n" +
                     "      background: transparent !important;\n" +
                     "      background-color: transparent !important;\n" +
                     "    }\n" +
