@@ -243,6 +243,7 @@ public class QuickChatSheetActivity extends Activity {
         btnSettings.setLayoutParams(settingsLp);
         btnSettings.setOnClickListener(v -> {
             Intent intent = new Intent(this, MainActivity.class);
+            intent.putExtra("go_home", true);
             intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             startActivity(intent);
             dismissSheet();
@@ -490,6 +491,11 @@ public class QuickChatSheetActivity extends Activity {
                     keyboardSpacer.setLayoutParams(lp);
                 }
             }
+
+            // 键盘弹出且当前高度处于 <=50% 低位时，自动平滑拉升到 78% 默认舒适高度
+            if (keyboardHeight > dpToPx(100) && currentHeight <= (int) (screenHeight * 0.52f)) {
+                animateHeightTo(defaultHeight);
+            }
         };
         decorView.getViewTreeObserver().addOnGlobalLayoutListener(keyboardLayoutListener);
     }
@@ -718,6 +724,12 @@ public class QuickChatSheetActivity extends Activity {
                 imm.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), 0);
             }
         } catch (Throwable ignored) {}
+
+        // 如果用户在 <= 50% 的低位离开，下次唤醒自动重置为 78% 默认舒适高度
+        if (currentHeight <= (int) (screenHeight * 0.52f)) {
+            currentHeight = defaultHeight;
+            updateCardHeight(defaultHeight);
+        }
 
         if (sheetCard != null) {
             sheetCard.animate()
