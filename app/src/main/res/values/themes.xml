@@ -99,7 +99,7 @@
         <item name="materialButtonStyle">@style/Widget.DSHA.Button</item>
     </style>
 
-    <style name="Animation.DSHA.BottomSheet">
+    <style name="Animation.DSHA.BottomSheet" parent="@android:style/Animation">
         <item name="android:windowEnterAnimation">@anim/slide_in_bottom</item>
         <item name="android:windowExitAnimation">@anim/slide_out_bottom</item>
     </style>
