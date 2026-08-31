@@ -124,15 +124,15 @@ public class ConfirmReceiver extends BroadcastReceiver {
             }
         } catch (Throwable ignored) {}
 
-        // 4. Toast 提示
+        // 4. 先走通知：发送「任务已终止」通知写入「任务结果与交互」独立通道（带 RemoteInput 重新输入框）
+        showStoppedNotification(ctx);
+
+        // 5. 再走 Toast 提示
         new Handler(Looper.getMainLooper()).post(() -> {
             try {
                 Toast.makeText(ctx, "⚠️ 智能体任务已被用户紧急终止", Toast.LENGTH_SHORT).show();
             } catch (Throwable ignored) {}
         });
-
-        // 5. 发送「任务已终止」通知（带 RemoteInput 重新输入框）
-        showStoppedNotification(ctx);
     }
 
     private void handleTaskReply(Context ctx, Intent intent) {
@@ -182,9 +182,9 @@ public class ConfirmReceiver extends BroadcastReceiver {
     private void showStoppedNotification(Context ctx) {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel ch = new NotificationChannel(
-                    "dsh_agent_channel", "Agent 通知",
+                    Constants.CHANNEL_TASK_RESULT, "任务结果与交互",
                     NotificationManager.IMPORTANCE_HIGH);
-            ch.setDescription("智能体任务状态通知");
+            ch.setDescription("智能体任务完成、异常结束或终止时的结果通知");
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.createNotificationChannel(ch);
         }
@@ -209,7 +209,7 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 .addRemoteInput(remoteInput)
                 .build();
 
-        NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, "dsh_agent_channel")
+        NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_TASK_RESULT)
                 .setSmallIcon(R.drawable.ic_launch)
                 .setContentTitle("⚠️ DSHA · 任务已终止")
                 .setContentText("已按指令停止操作。如需调整，可直接在下方回复新指令。")

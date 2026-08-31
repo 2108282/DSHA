@@ -86,6 +86,8 @@ function formatToolDetail(name, argsJson) {
   return label
 }
 
+let lastCancelByNotification = 0
+
 export function apply(ctx) {
   let lastActiveSessionId = null
 
@@ -126,12 +128,19 @@ export function apply(ctx) {
 
         if (reason !== 'completed' && reason !== 'max-tokens') {
           if (reason === 'aborted') {
-            // 用户主动中断不需要再发完成通知（ConfirmReceiver 已发送已终止通知）
+            // 若为通知栏紧急制动触发，ConfirmReceiver 已发送过 2004 终止通知，此处避免重复
+            if (now - lastCancelByNotification < 5000) {
+              return
+            }
+            void callBridge('/app/notify', {
+              title: 'DSHA · 任务已中断',
+              text: 'Agent 任务已被中断，点击或在下方打字重新开始'
+            })
             return
           }
           void callBridge('/app/notify', {
             title: `DSHA · 任务已结束（${reason}）`,
-            text: 'Agent 一轮对话已结束，点击查看结果'
+            text: 'Agent 一轮对话已结束，点击或在下方打字继续对话'
           })
           return
         }
@@ -150,6 +159,7 @@ export function apply(ctx) {
       try {
         // A. 处理用户点击通知栏「🛑 停止任务」紧急制动
         if (existsSync(CANCEL_FLAG)) {
+          lastCancelByNotification = Date.now()
           try {
             unlinkSync(CANCEL_FLAG)
           } catch {}

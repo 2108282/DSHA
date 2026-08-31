@@ -106,6 +106,18 @@ PendingIntent 必须用 `FLAG_MUTABLE`（Android 12+），否则 RemoteInput 的
 
 `task-notifier/lib/index.js` 另加了 `TOOL_LABELS` 表和 `formatToolDetail()`，把 `tool/call` 事件翻译成人能读的一行（从 `command`/`path`/`query` 等 `ARG_KEYS` 里挑第一个有值的显示），否则通知栏只能看到工具名。
 
+### B7. 独立结果通知渠道与先通知后 Toast 逻辑改造
+
+**动机**：
+1. 之前的完成通知、报错通知和紧急终止通知全部混在 `dsh_agent_channel` 这一通道中。由于工具调用（`tool/call`）每一步都实时更新运行中通知，若同属于一个通道会导致手机高频弹横幅与震动打扰；
+2. 原先 `HttpShellService.java` 中包含前台防打扰逻辑：`if (TaskNotifier.appInForeground) { Toast... return "FOREGROUND_SKIP"; }`。这导致当任务报错（如 fetch failed、token 超限）或正常完成时，只要用户正开着 App 前台，通知就会被直接拦截只弹 Toast，通知栏被完全清空且丢失了带有 `RemoteInput` 原生输入框的交互卡片；
+3. 任务在 Web 端点击停止或外部中断（`reason === 'aborted'`）时，插件原先简单一刀切 `return`，导致非通知栏触发的中断没有任何通知提示。
+
+**改动实现**：
+- **新增独立通知渠道**：在 `Constants.java` 中新增 `CHANNEL_TASK_RESULT = "dsh_task_result_channel"`（“任务结果与交互”，高优先级 `IMPORTANCE_HIGH`），将生命周期完成通知（2002）、报错/异常通知（2002）与紧急终止通知（2004）全部迁入该独立通道；`dsh_agent_channel` 仅保留纯运行中状态（2003，带停止按钮）；
+- **先走通知，再走 Toast**：`HttpShellService.appNotify` 调整逻辑时序，无论 App 在前台还是后台，第一时间向系统通知栏写入带 `RemoteInput` 的高优先级结果卡片，随后在前台额外弹出友好 Toast 提示，彻底移除 `return "FOREGROUND_SKIP"` 截断；`ConfirmReceiver` 同步优化为先发通知再弹 Toast；
+- **全链路中断事件捕获**：`dsh-task-notifier` 插件完善 `turn/end` 逻辑，识别通知栏制动与外部中断，对 Web 端停止和模型异常中断主动补发 `DSHA · 任务已中断` 结果卡片。
+
 ---
 
 ## C. 元素定位与静默截屏

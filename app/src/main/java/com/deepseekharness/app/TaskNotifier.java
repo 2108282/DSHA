@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class TaskNotifier {
 
-    public static final String CHANNEL_ID = "dsh_task_channel";
+    public static final String CHANNEL_ID = Constants.CHANNEL_TASK_RESULT;
     private static final int NOTIF_ID = 2002;
     private static final long POLL_MS = 4000;
     private static final long IDLE_MS = 90000;      // 静默 90 秒判定完成（容忍 agent 长思考）
@@ -127,9 +127,9 @@ public class TaskNotifier {
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
-                    CHANNEL_ID, "任务完成提醒",
+                    CHANNEL_ID, "任务结果与交互",
                     NotificationManager.IMPORTANCE_HIGH);
-            ch.setDescription("智能体任务完成时通知");
+            ch.setDescription("智能体任务完成、异常结束或终止时的结果通知");
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.createNotificationChannel(ch);
         }
