@@ -96,7 +96,7 @@
             android:finishOnTaskLaunch="true"
             android:launchMode="singleInstance"
             android:windowSoftInputMode="adjustResize"
-            android:theme="@style/Theme.DeepseekHarness.Sheet" />
+            android:theme="@style/Theme.AppCompat.Dialog" />
 
         <service
             android:name=".HarnessService"

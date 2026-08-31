@@ -74,22 +74,4 @@
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">@dimen/radius_card</item>
     </style>
-
-    <!-- 底部对话弹层 Activity 专用透明半屏主题 -->
-    <style name="Theme.DeepseekHarness.Sheet" parent="Theme.DeepseekHarness">
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:colorBackground">@android:color/transparent</item>
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:windowDimEnabled">true</item>
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:windowContentOverlay">@null</item>
-        <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowAnimationStyle">@style/Animation.DSHA.BottomSheet</item>
-    </style>
-
-    <style name="Animation.DSHA.BottomSheet" parent="@android:style/Animation">
-        <item name="android:windowEnterAnimation">@anim/slide_in_bottom</item>
-        <item name="android:windowExitAnimation">@anim/slide_out_bottom</item>
-    </style>
 </resources>
