@@ -13,6 +13,7 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
 ---
 
 ## A. 模拟点击授权租约：10 分钟双通道临时租约授权
+<img width="2160" height="2880" alt="image" src="https://github.com/user-attachments/assets/b524ec1d-f7e6-4c11-a05e-dbaeb43c6a57" />
 
 **动机**：跑一个自动化任务要连续用到 `am start`、`screencap`、`input keyevent`，每一条都被守卫拦下弹一次确认框。用户点到第五次就不想用了。而 Java 侧的 `uiAuthorized`（无障碍点击授权）和容器侧的 Python 守卫是两套互不知情的判据，导致同一个任务要在两个通道各自被打断。
 
@@ -72,6 +73,8 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
 `keepInbox: true` 是有意的：保住收件箱，用户才能接着在通知栏打字续上对话，而不是被清空重开。
 
 ### B3. 通知交互与 Active 快捷抽屉弹层架构 (`QuickChatSheetActivity`)
+点击通知栏常驻通知或者交互按钮即可调出
+<img width="1200" height="2541" alt="image" src="https://github.com/user-attachments/assets/5763d70c-6121-4b94-9a88-489517ac0424" />
 
 通知交互全面升级为 **`QuickChatSheetActivity` 全局快捷悬浮抽屉弹层**（取代原本局限狭窄的通知栏 `RemoteInput` 打字输入框）：
 
