@@ -21,6 +21,8 @@
 
 ---
 
+## DSHA目前正在进行大规模重构，更新较慢
+
 ## 这是什么
 
 DeepSeek Harness（`@deepseek-ai/dsh`）是 DeepSeek 官方的 agent harness，类 Claude Code。
