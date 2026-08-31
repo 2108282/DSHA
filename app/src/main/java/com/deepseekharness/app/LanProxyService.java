@@ -399,7 +399,15 @@ public final class LanProxyService {
             if (b < 0) break;
             if (size < 0 || size > MAX_CHUNK) break; // 非法/超大块：中止透传（客户端可重新提交）
             out.write(line.toByteArray());
-            if (size == 0) { out.flush(); break; }
+            if (size == 0) {
+                // 读末尾 0 块之后的 CRLF (\r\n) 并转发给客户端，确保 chunked 流完整结束
+                int c1 = in.read();
+                int c2 = in.read();
+                if (c1 >= 0) out.write(c1);
+                if (c2 >= 0) out.write(c2);
+                out.flush();
+                break;
+            }
             if (size > 0) {
                 pipeBytes(in, out, size);
                 // 块尾必须 CRLF（EOF 时 -1 不写入，防脏字节 0xff）
@@ -473,51 +481,47 @@ public final class LanProxyService {
     }
 
     /** 重写请求 Host 头为 127.0.0.1:<backendPort>（后端 Host 校验放行） */
-        private static String rewriteHost(String head) {
-                StringBuilder sb = new StringBuilder();
-                boolean hostDone = false;
-                boolean first = true;
-                for (String l : head.split("\\r?\\n")) {
-                    if (l.isEmpty()) { sb.append("\r\n"); continue; }
-                    int i = l.indexOf(':');
-                    String key = i > 0 ? l.substring(0, i).trim() : "";
-                    if (first) {
-                        first = false;
-                        // 请求行：剥离 token 查询参数（LAN 鉴权 token 不转发给后端）
-                        sb.append(LanAuth.stripTokenFromRequestLine(l)).append("\r\n");
-                        continue;
-                    }
-                    if (key.equalsIgnoreCase("Host")) {
-                    sb.append("Host: 127.0.0.1:").append(backendPort).append("\r\n");
-                    hostDone = true;
-                } else if (key.equalsIgnoreCase("Origin")) {
-                    // 关键：dsh /api trust fence 要求 Origin.host === Host（严格含端口）。
-                    // 桥把 Host 重写成 loopback，但局域网浏览器的 Origin 是
-                    // http://<手机IP>:3081 → 不匹配 → 403 → ERR_HTTP_RESPONSE_CODE_FAILURE。
-                    // 把 Origin 也重写成 loopback 同源，让后端 trust fence 放行。
-                    sb.append("Origin: http://127.0.0.1:").append(backendPort).append("\r\n");
-                } else if (key.equalsIgnoreCase("sec-fetch-site")) {
-                                // cross-site 标记被 trust fence 直接拒绝 → 改 same-origin
-                                sb.append("Sec-Fetch-Site: same-origin\r\n");
-                            } else {
-                                // 普通头 / 请求行：保留（token 只作为本站鉴权，不回传后端）
-                                sb.append(l).append("\r\n");
-                            }
+    private static String rewriteHost(String head) {
+        StringBuilder sb = new StringBuilder();
+        boolean hostDone = false;
+        boolean first = true;
+        for (String l : head.split("\\r?\\n")) {
+            if (l.isEmpty()) continue;
+            int i = l.indexOf(':');
+            String key = i > 0 ? l.substring(0, i).trim() : "";
+            if (first) {
+                first = false;
+                // 请求行：剥离 token 查询参数（LAN 鉴权 token 不转发给后端）
+                sb.append(LanAuth.stripTokenFromRequestLine(l)).append("\r\n");
+                continue;
             }
-            if (!hostDone) sb.insert(0, "Host: 127.0.0.1:" + backendPort + "\r\n");
-            // 后端 dsh 现在要求 token（webserver-auth-patch.sh）。局域网来的请求
-            // 自带的是本代理的鉴权 token（已在上面剥离），这里补上后端要的那个。
-            String bt = HttpShellService.currentToken();
-            if (!bt.isEmpty() && !containsIgnoreCase(sb.toString(), "X-Dsha-Token")) {
-                int end = sb.lastIndexOf("\r\n\r\n");
-                if (end >= 0) {
-                    sb.insert(end + 2, "X-Dsha-Token: " + bt + "\r\n");
-                } else {
-                    sb.append("X-Dsha-Token: ").append(bt).append("\r\n");
-                }
+            if (key.equalsIgnoreCase("Host")) {
+                sb.append("Host: 127.0.0.1:").append(backendPort).append("\r\n");
+                hostDone = true;
+            } else if (key.equalsIgnoreCase("Origin")) {
+                // 关键：dsh /api trust fence 要求 Origin.host === Host（严格含端口）。
+                // 桥把 Host 重写成 loopback，但局域网浏览器的 Origin 是
+                // http://<手机IP>:3081 → 不匹配 → 403 → ERR_HTTP_RESPONSE_CODE_FAILURE。
+                // 把 Origin 也重写成 loopback 同源，让后端 trust fence 放行。
+                sb.append("Origin: http://127.0.0.1:").append(backendPort).append("\r\n");
+            } else if (key.equalsIgnoreCase("sec-fetch-site")) {
+                // cross-site 标记被 trust fence 直接拒绝 → 改 same-origin
+                sb.append("Sec-Fetch-Site: same-origin\r\n");
+            } else {
+                // 普通头 / 请求行：保留（token 只作为本站鉴权，不回传后端）
+                sb.append(l).append("\r\n");
             }
-            return sb.toString();
         }
+        if (!hostDone) sb.append("Host: 127.0.0.1:").append(backendPort).append("\r\n");
+        // 后端 dsh 现在要求 token（webserver-auth-patch.sh）。局域网来的请求
+        // 自带的是本代理的鉴权 token（已在上面剥离），这里补上后端要的那个。
+        String bt = HttpShellService.currentToken();
+        if (!bt.isEmpty() && !containsIgnoreCase(sb.toString(), "X-Dsha-Token")) {
+            sb.append("X-Dsha-Token: ").append(bt).append("\r\n");
+        }
+        sb.append("\r\n"); // 关键：HTTP 请求头必须以空行（\r\n\r\n）结束，通知后端请求头已发完
+        return sb.toString();
+    }
 
             /** 响应头里 Location 重写：127.0.0.1:<backendPort> → 局域网IP:3081（防跳回本机）。
              *  每次实时取 IP（WiFi 切换后 IP 变化也能正确重写，不缓存旧值）。 */
