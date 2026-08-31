@@ -71,13 +71,40 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
 
 `keepInbox: true` 是有意的：保住收件箱，用户才能接着在通知栏打字续上对话，而不是被清空重开。
 
-### B3. 通知交互升级：直达 Active 快捷抽屉弹层
+### B3. 通知交互与 Active 快捷抽屉弹层架构 (`QuickChatSheetActivity`)
 
 通知交互全面升级为 **`QuickChatSheetActivity` 全局快捷悬浮抽屉弹层**（取代原本局限狭窄的通知栏 `RemoteInput` 打字输入框）：
 
-- **交互体验**：点击完成通知的 `[💬 继续对话]` 或终止通知的 `[💬 重新开始]` 按钮，直接从屏幕底部顺滑滑出半透明毛玻璃抽屉卡片，免切应用就地开启多模态与富文本交互；
-- **全链路状态保活**：采用静态 `WebView` 内存单例 + `FLAG_ACTIVITY_REORDER_TO_FRONT` 唤醒，0 秒网络加载、0 秒白屏、对话草稿不丢；
-- 详细设计与手势规范参见 **[Active 快捷抽屉弹层设计指南](docs/active-dialog-readme.md)**。
+#### 核心特性与技术规范：
+1. **物理边缘 100% 满屏贴合与零留白**：
+   - 彻底摆脱 Dialog 边距约束：配置 `Theme.DeepseekHarness.SheetTransparent`（`windowIsTranslucent=true`、`windowIsFloating=false`、`statusBarColor=@android:color/transparent`）；
+   - 消除系统浮动边框，左右两侧 **100% 贴满手机物理屏幕边缘**，呈现沉浸式宽屏视觉。
+2. **15% 多档智能阶梯吸附停靠（35% ~ 95%）**：
+   - 内置基于 `screenHeight` 的 15% 步长阶梯锚点算法（**35%、50%、65%、80%、95%**）；
+   - 默认初始高度为 **78%**（大开阔视野），可拉升至 **95%**（全屏展开态）；
+   - 拖拽松手时自动吸附到最近的 15% 档位；仅当在半屏继续用力向下拉动、高度低于安全下限（`< 25%`）时才触发向下滑出退出，**彻底杜绝从全屏拉回半屏时误退出**。
+3. **毛玻璃半透明质感与 CSS 变量透光**：
+   - 动态绘制 24dp 顶部大圆角与 `#EBF5F8FC`（浅色）/ `#EB161B24`（深色）半透明背景与细微描边；
+   - 页面加载时注入动态 CSS 样式，强制覆写 DSH 前端的 `--dsw-alias-bg-base`、`--dsw-alias-bg-layer-1`、`--dsw-specific-sidebar-fill` 为 `transparent !important`；
+   - 显式关闭 `FORCE_DARK` 与 `setAlgorithmicDarkeningAllowed(false)`，**100% 保持 DSHA 浅色原貌，透出底层桌面壁纸与应用**。
+4. **键盘自适应与同色底板覆盖（顶栏绝对固定）**：
+   - 卡片顶边物理锚定在原处，键盘弹出时顶栏、关闭与设置按钮绝对不被顶飞出屏幕；
+   - 卡片底板延伸覆盖到屏幕物理最底端，键盘覆盖在卡片上方，**透过键盘半透明缝隙看到的依然是纯净浅色底板，彻底消灭黑块与漏桌面现象**；
+   - WebView 可用视口等额收缩，网页底部的输入框自动精准吸附在输入法正上方。
+5. **内存单例保活秒开（0 秒加载、0 网络请求）**：
+   - 采用内存静态 `WebView` 常驻缓存；
+   - 用户下滑或点击 ✕ 退出时，平滑滑出后调用 `moveTaskToBack(true)` 挂起保活，不销毁 WebView 与 WebSocket 连接；
+   - 再次点击通知或发送命令时，通过 `FLAG_ACTIVITY_REORDER_TO_FRONT` 与 `onNewIntent()` 毫秒级滑出，**会话状态不丢、输入框草稿不丢、零重新加载**。
+
+#### 命令行直接调出方法：
+```bash
+# 1. DSHA 容器内执行（推荐）：
+/root/dsh-bin/adb-shell "am start -n com.dsh.client/com.deepseekharness.app.QuickChatSheetActivity"
+
+# 2. Android 设备终端（Termux / Shizuku / ADB）：
+am start -n com.dsh.client/com.deepseekharness.app.QuickChatSheetActivity
+```
+> *注：输出 `Warning: Activity not started, its current task has been brought to the front` 属于正常现象，表明系统成功将后台常驻保活的弹层直接置顶唤醒（Brought to front）。*
 
 ### B4. 点通知直达抽屉弹层
 
@@ -86,6 +113,13 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
 - `HarnessService.java`（常驻保活 1001）/ `TaskNotifier.java`（任务完成 2002）/ `HttpShellService.java`（实时运行 2003）/ `ConfirmReceiver.java`（任务终止 2004）的所有通知点击主体均统一指向 `QuickChatSheetActivity`；
 - 配置 `FLAG_ACTIVITY_REORDER_TO_FRONT | FLAG_ACTIVITY_SINGLE_TOP`，复用后台常驻实例秒开；
 - 弹层顶部配备 `[⚙ 容器控制台]` 与 `[◫ 全屏聊天]` 按钮，随时可一键转入全屏 App。
+
+| 通知类型 | 触发场景 | 点击行为 |
+| :--- | :--- | :--- |
+| **常驻保活通知** (1001) | DSHA 后台服务运行中 | 点击通知主体直接从屏幕底部顺滑唤起抽屉弹层 |
+| **任务实时运行通知** (2003) | 智能体执行多步骤自动化任务中 | 点击通知主体直达抽屉弹层（实时查阅步骤与日志），带 `[🛑 停止任务]` 动作按钮 |
+| **任务完成通知** (2002) | 智能体完成单轮/多轮任务 | 点击通知主体或点击 `[💬 继续对话]` 按钮，直接唤起抽屉弹层 |
+| **任务终止通知** (2004) | 用户紧急制动或外部异常中断 | 点击通知主体或点击 `[💬 重新开始]` 按钮，直接唤起抽屉弹层 |
 
 ### B5. `/app/ask` 双通道
 
