@@ -12,7 +12,7 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
 
 ---
 
-## A. 授权租约：一次同意，10 分钟双通道免打扰
+## A. 模拟点击授权租约：10 分钟双通道临时租约授权
 
 **动机**：跑一个自动化任务要连续用到 `am start`、`screencap`、`input keyevent`，每一条都被守卫拦下弹一次确认框。用户点到第五次就不想用了。而 Java 侧的 `uiAuthorized`（无障碍点击授权）和容器侧的 Python 守卫是两套互不知情的判据，导致同一个任务要在两个通道各自被打断。
 
@@ -46,7 +46,7 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
 
 ---
 
-## B. 通知栏全生命周期闭环
+## B. 任务过程接入交互通知栏
 
 **动机**：手机上跑长任务，人不会一直盯着 WebUI。原先通知栏只有一条「任务完成」，且点了没反应——`setContentIntent` 没绑，点击卡片什么都不发生。更要紧的是任务跑飞了没有刹车。
 
@@ -59,7 +59,7 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
 
 配套 `showRunningNotification(title, text)` / `cancelRunningNotification()`，通知挂 `[🛑 停止任务]` 按钮。新通知 ID 见 `Constants.java`：`NOTIF_TASK_RUNNING=2003`、`NOTIF_TASK_STOPPED=2004`、`NOTIF_ASK_QUESTION=3007`。
 
-### B2. 停止要真的停下来
+### B2. 修复通知栏点击按钮不生效
 
 这是踩坑最深的一处。第一版 `handleStopTask` 只清租约、收通知、弹一条「已终止」——**但后台 DSH 完全不知情，继续往下跑**，用户看到通知说停了、实际还在操作手机。
 
@@ -149,7 +149,7 @@ am start -n com.dsh.client/com.deepseekharness.app.QuickChatSheetActivity
 
 ---
 
-## C. 元素定位与静默截屏
+## C. 模拟点击 修复元素定位逻辑与静默截屏权限
 
 ### C1. 两阶段候选池消歧（`device-shell-guide/lib/index.js`）
 
