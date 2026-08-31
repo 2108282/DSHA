@@ -11,6 +11,7 @@ import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -23,9 +24,12 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -47,7 +51,7 @@ import android.widget.TextView;
  * 5. 全局静态 WebView 单例保活，再次弹出零转圈、零重新加载；
  * 6. 1:1 精准字体还原（移除 OverviewMode，设置 textZoom 100）；
  * 7. 注入透明全局 CSS 变量与 DOM 背景，100% 透出毛玻璃半透明卡片与桌面壁纸；
- * 8. 键盘弹出时：系统 SOFT_INPUT_ADJUST_RESIZE 原生视口压缩，输入框顺畅上浮，下方保持卡片底色垫板。
+ * 8. 键盘弹出时：卡片顶部与底板绝对锁死在原位，底部全量铺满浅色底板（彻底杜绝漏出桌面壁纸），内部 WebView 视口等额收缩，输入框精准停靠在键盘正上方。
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
 public class QuickChatSheetActivity extends Activity {
@@ -60,6 +64,7 @@ public class QuickChatSheetActivity extends Activity {
     private FrameLayout rootOverlay;
     private LinearLayout sheetCard;
     private FrameLayout webContainer;
+    private View keyboardSpacer;
     private ProgressBar progressBar;
     private TextView errorHint;
     private HarnessController controller;
@@ -75,11 +80,14 @@ public class QuickChatSheetActivity extends Activity {
     private float initialTouchY = 0f;
     private int initialHeightOnTouch = 0;
 
+    // 键盘监听：仅为底部 keyboardSpacer 动态更新高度，确保卡片外壳纹丝不动
+    private ViewTreeObserver.OnGlobalLayoutListener keyboardLayoutListener;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // 窗口基础配置：全屏铺满、底部对齐（彻底锁死底部）、半透明遮罩、点击外部退出、键盘原生调整
+        // 窗口基础配置：全屏铺满、底部对齐（彻底锁死底部）、半透明遮罩、点击外部退出
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         setFinishOnTouchOutside(true);
 
@@ -90,8 +98,8 @@ public class QuickChatSheetActivity extends Activity {
             window.setDimAmount(0.42f);
             window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
             window.setGravity(Gravity.BOTTOM);
-            // 恢复标准的 ADJUST_RESIZE：让系统原生调整可用高度，使网页输入框自动浮在键盘上方
-            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            // 采用 ADJUST_NOTHING：避免 Window 整体与卡片顶边被系统向上顶飞
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
             if (window.getDecorView() != null) {
                 window.getDecorView().setPadding(0, 0, 0, 0);
             }
@@ -104,6 +112,7 @@ public class QuickChatSheetActivity extends Activity {
         calculateDimensions();
         setContentView(buildUi());
         setupGesture();
+        setupKeyboardObserver();
         attachChatWeb();
         animateIn();
     }
@@ -165,7 +174,7 @@ public class QuickChatSheetActivity extends Activity {
         sheetCard.setElevation(dpToPx(16));
         sheetCard.setClipChildren(true);
 
-        // 24dp 顶部圆角毛玻璃半透背景 + 细微描边
+        // 24dp 顶部圆角毛玻璃半透背景 + 细微描边（一直覆盖到底部，键盘下方完全拥有同色垫板）
         GradientDrawable cardBg = new GradientDrawable();
         cardBg.setShape(GradientDrawable.RECTANGLE);
         float r = dpToPx(24);
@@ -262,7 +271,7 @@ public class QuickChatSheetActivity extends Activity {
         divider.setBackgroundColor(lineColor);
         sheetCard.addView(divider);
 
-        // 6. WebView 主体容器（裁剪防漏字）
+        // 6. WebView 主体容器（自适应伸缩，防漏字）
         webContainer = new FrameLayout(this);
         LinearLayout.LayoutParams webLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f);
@@ -289,6 +298,14 @@ public class QuickChatSheetActivity extends Activity {
         webContainer.addView(errorHint);
 
         sheetCard.addView(webContainer);
+
+        // 7. 键盘底部占位底板（垫在键盘下方，具有与卡片一致的同色毛玻璃底色，绝不漏桌面壁纸）
+        keyboardSpacer = new View(this);
+        keyboardSpacer.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0));
+        keyboardSpacer.setBackgroundColor(Color.TRANSPARENT);
+        sheetCard.addView(keyboardSpacer);
+
         rootOverlay.addView(sheetCard);
 
         return rootOverlay;
@@ -315,6 +332,38 @@ public class QuickChatSheetActivity extends Activity {
         tv.setBackground(ripple);
 
         return tv;
+    }
+
+    /** 键盘精准监听：卡片整体位置与高度绝对不动，仅动态调整键盘底部占位块，使输入框自然上浮 */
+    private void setupKeyboardObserver() {
+        if (getWindow() == null || getWindow().getDecorView() == null) return;
+        View decorView = getWindow().getDecorView();
+
+        keyboardLayoutListener = () -> {
+            int keyboardHeight = 0;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && decorView.getRootWindowInsets() != null) {
+                keyboardHeight = decorView.getRootWindowInsets().getInsets(WindowInsets.Type.ime()).bottom;
+            }
+            if (keyboardHeight <= 0) {
+                Rect r = new Rect();
+                decorView.getWindowVisibleDisplayFrame(r);
+                int totalHeight = decorView.getRootView().getHeight();
+                if (totalHeight <= 0) totalHeight = screenHeight;
+                int diff = totalHeight - r.bottom;
+                if (diff > dpToPx(100)) {
+                    keyboardHeight = diff;
+                }
+            }
+
+            if (keyboardSpacer != null) {
+                ViewGroup.LayoutParams lp = keyboardSpacer.getLayoutParams();
+                if (lp != null && lp.height != keyboardHeight) {
+                    lp.height = keyboardHeight;
+                    keyboardSpacer.setLayoutParams(lp);
+                }
+            }
+        };
+        decorView.getViewTreeObserver().addOnGlobalLayoutListener(keyboardLayoutListener);
     }
 
     private void setupGesture() {
@@ -534,6 +583,14 @@ public class QuickChatSheetActivity extends Activity {
         if (isDismissing) return;
         isDismissing = true;
 
+        // 退出前顺带隐藏键盘
+        try {
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null && getCurrentFocus() != null) {
+                imm.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), 0);
+            }
+        } catch (Throwable ignored) {}
+
         if (sheetCard != null) {
             sheetCard.animate()
                     .translationY(sheetCard.getHeight() + dpToPx(30))
@@ -570,6 +627,9 @@ public class QuickChatSheetActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (keyboardLayoutListener != null && getWindow() != null && getWindow().getDecorView() != null) {
+            getWindow().getDecorView().getViewTreeObserver().removeOnGlobalLayoutListener(keyboardLayoutListener);
+        }
         super.onDestroy();
         if (sCachedWebView != null && sCachedWebView.getParent() == webContainer) {
             webContainer.removeView(sCachedWebView);
