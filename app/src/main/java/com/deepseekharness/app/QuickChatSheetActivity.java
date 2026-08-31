@@ -10,8 +10,12 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -45,16 +49,25 @@ import android.widget.TextView;
 /**
  * 快捷对话底部抽屉弹层（纯代码动态构建，零外部 XML 依赖）：
  * 1. 左右 100% 铺满物理屏幕（Theme.DeepseekHarness.SheetTransparent + Decor 零边距）；
- * 2. 多档 15% 阶梯智能吸附停靠（35%/50%/65%/80%/95%），低于 25% 安全退出；
- * 3. 底部严格锁定在屏幕最底端，拖拽仅顶部上下伸缩；
- * 4. 标题物理绝对居中，顶部留白紧凑；
+ * 2. 顶栏 4 按钮像素级规格统一（36x36dp 触摸区、1.85dp 中等线宽、圆角对齐、绝对对称居中）；
+ *    - ① [ ✕ ] 关闭弹层
+ *    - ② [ ⚙ ] 容器控制台主界面
+ *    - ③ [ 💬➕ ] 开启新对话（毫秒级 DOM 触发 / 路由重置）
+ *    - ④ [ ⬒ ] 顺时针旋转 90° 的全屏展开聊天按钮
+ * 3. 多档 15% 阶梯智能吸附停靠（35%/50%/65%/80%/95%），低于 25% 安全退出；
+ * 4. 底部严格锁定在屏幕最底端，拖拽仅顶部上下伸缩；
  * 5. 全局静态 WebView 单例保活，再次弹出零转圈、零重新加载；
  * 6. 1:1 精准字体还原（移除 OverviewMode，设置 textZoom 100）；
  * 7. 注入透明全局 CSS 变量与 DOM 背景，100% 透出毛玻璃半透明卡片与桌面壁纸；
- * 8. 键盘弹出时：卡片顶部与底板绝对锁死在原位，底部全量铺满浅色底板（彻底杜绝漏出桌面壁纸），内部 WebView 视口等额收缩，输入框精准停靠在键盘正上方。
+ * 8. 键盘弹出时：卡片顶部与底板绝对锁死在原位，底部全量铺满浅色底板，内部 WebView 视口等额收缩，输入框精准停靠在键盘正上方。
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
 public class QuickChatSheetActivity extends Activity {
+
+    public static final int ICON_CLOSE = 1;
+    public static final int ICON_SETTINGS = 2;
+    public static final int ICON_NEW_CHAT = 3;
+    public static final int ICON_FULLSCREEN = 4;
 
     // 全局静态保活单例，彻底解决再次进入重新转圈加载问题
     @SuppressLint("StaticFieldLeak")
@@ -202,13 +215,13 @@ public class QuickChatSheetActivity extends Activity {
         dragArea.addView(handle);
         sheetCard.addView(dragArea);
 
-        // 4. 顶部操作栏（RelativeLayout 保证标题绝对居中）
+        // 4. 顶部操作栏（RelativeLayout 保证标题绝对对称居中）
         RelativeLayout headerBar = new RelativeLayout(this);
         headerBar.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(42)));
-        headerBar.setPadding(dpToPx(12), 0, dpToPx(12), dpToPx(2));
+        headerBar.setPadding(dpToPx(10), 0, dpToPx(10), dpToPx(2));
 
-        // 左侧按钮组：[✕] + [⚙]
+        // 左侧按钮组：[① ✕ 关闭] + [② ⚙ 容器设置]
         LinearLayout leftGroup = new LinearLayout(this);
         RelativeLayout.LayoutParams leftLp = new RelativeLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT);
@@ -218,13 +231,16 @@ public class QuickChatSheetActivity extends Activity {
         leftGroup.setOrientation(LinearLayout.HORIZONTAL);
         leftGroup.setGravity(Gravity.CENTER_VERTICAL);
 
-        // [✕ 关闭按钮]
-        View btnClose = createHeaderButton("✕", textColor);
+        // [① ✕ 关闭按钮]
+        View btnClose = createHeaderIconButton(ICON_CLOSE, textColor, "关闭弹层");
         btnClose.setOnClickListener(v -> dismissSheet());
         leftGroup.addView(btnClose);
 
-        // [⚙ 容器设置按钮]
-        View btnSettings = createHeaderButton("⚙", textColor);
+        // [② ⚙ 容器设置按钮]
+        View btnSettings = createHeaderIconButton(ICON_SETTINGS, textColor, "进入容器主页面");
+        LinearLayout.LayoutParams settingsLp = (LinearLayout.LayoutParams) btnSettings.getLayoutParams();
+        settingsLp.setMarginStart(dpToPx(4));
+        btnSettings.setLayoutParams(settingsLp);
         btnSettings.setOnClickListener(v -> {
             Intent intent = new Intent(this, MainActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -234,7 +250,7 @@ public class QuickChatSheetActivity extends Activity {
         leftGroup.addView(btnSettings);
         headerBar.addView(leftGroup);
 
-        // 中间标题（物理绝对居中）
+        // 中间标题（物理绝对对称居中）
         TextView title = new TextView(this);
         RelativeLayout.LayoutParams titleLp = new RelativeLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -246,13 +262,39 @@ public class QuickChatSheetActivity extends Activity {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         headerBar.addView(title);
 
-        // 右侧按钮：[◫ 全屏聊天]
-        View btnFullscreen = createHeaderButton("◫", textColor);
+        // 右侧按钮组：[③ 💬➕ 新建对话] + [④ ⬒ 全屏进入App]
+        LinearLayout rightGroup = new LinearLayout(this);
         RelativeLayout.LayoutParams rightLp = new RelativeLayout.LayoutParams(
-                dpToPx(36), dpToPx(36));
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT);
         rightLp.addRule(RelativeLayout.ALIGN_PARENT_END);
         rightLp.addRule(RelativeLayout.CENTER_VERTICAL);
-        btnFullscreen.setLayoutParams(rightLp);
+        rightGroup.setLayoutParams(rightLp);
+        rightGroup.setOrientation(LinearLayout.HORIZONTAL);
+        rightGroup.setGravity(Gravity.CENTER_VERTICAL);
+
+        // [③ 💬➕ 新建对话按钮]
+        View btnNewChat = createHeaderIconButton(ICON_NEW_CHAT, textColor, "开启新对话");
+        btnNewChat.setOnClickListener(v -> {
+            if (sCachedWebView != null) {
+                String js = "(function() {" +
+                        "  var btn = document.querySelector('[class*=\"newSession\"], [aria-label*=\"新会话\"], [aria-label*=\"新建\"], button[title*=\"新会话\"], button[title*=\"New session\"], button[title*=\"New Chat\"]');" +
+                        "  if (btn) {" +
+                        "    btn.click();" +
+                        "  } else {" +
+                        "    window.location.hash = '';" +
+                        "    window.location.reload();" +
+                        "  }" +
+                        "})();";
+                sCachedWebView.evaluateJavascript(js, null);
+            }
+        });
+        rightGroup.addView(btnNewChat);
+
+        // [④ ⬒ 全屏聊天按钮]
+        View btnFullscreen = createHeaderIconButton(ICON_FULLSCREEN, textColor, "全屏打开聊天页面");
+        LinearLayout.LayoutParams fullscreenLp = (LinearLayout.LayoutParams) btnFullscreen.getLayoutParams();
+        fullscreenLp.setMarginStart(dpToPx(4));
+        btnFullscreen.setLayoutParams(fullscreenLp);
         btnFullscreen.setOnClickListener(v -> {
             Intent intent = new Intent(this, MainActivity.class);
             intent.putExtra("open_web", true);
@@ -260,7 +302,8 @@ public class QuickChatSheetActivity extends Activity {
             startActivity(intent);
             dismissSheet();
         });
-        headerBar.addView(btnFullscreen);
+        rightGroup.addView(btnFullscreen);
+        headerBar.addView(rightGroup);
 
         sheetCard.addView(headerBar);
 
@@ -311,27 +354,106 @@ public class QuickChatSheetActivity extends Activity {
         return rootOverlay;
     }
 
-    private View createHeaderButton(String text, int textColor) {
-        TextView tv = new TextView(this);
+    private View createHeaderIconButton(int iconType, int iconColor, String contentDescription) {
+        HeaderIconButton btn = new HeaderIconButton(this, iconType, iconColor);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dpToPx(36), dpToPx(36));
-        lp.setMargins(dpToPx(1), 0, dpToPx(1), 0);
-        tv.setLayoutParams(lp);
-        tv.setText(text);
-        tv.setTextColor(textColor);
-        tv.setTextSize(16);
-        tv.setGravity(Gravity.CENTER);
-        tv.setClickable(true);
-        tv.setFocusable(true);
+        btn.setLayoutParams(lp);
+        btn.setContentDescription(contentDescription);
+        btn.setClickable(true);
+        btn.setFocusable(true);
 
         // 圆形水波纹反馈
         GradientDrawable mask = new GradientDrawable();
         mask.setShape(GradientDrawable.OVAL);
         mask.setColor(Color.WHITE);
         RippleDrawable ripple = new RippleDrawable(
-                ColorStateList.valueOf(Color.parseColor("#203D6FD4")), null, mask);
-        tv.setBackground(ripple);
+                ColorStateList.valueOf(Color.parseColor("#253D6FD4")), null, mask);
+        btn.setBackground(ripple);
 
-        return tv;
+        return btn;
+    }
+
+    /** 4 按钮高精度矢量绘制 View（统一 36x36dp 容器、1.85dp 规范线宽、圆倒角与对称视觉） */
+    private static class HeaderIconButton extends View {
+        private final int iconType;
+        private final Paint paint;
+        private final RectF rectF = new RectF();
+
+        public HeaderIconButton(Context context, int iconType, int color) {
+            super(context);
+            this.iconType = iconType;
+            float density = context.getResources().getDisplayMetrics().density;
+            float strokeWidthPx = 1.85f * density;
+
+            paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setColor(color);
+            paint.setStrokeWidth(strokeWidthPx);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float w = getWidth();
+            float h = getHeight();
+            float cx = w / 2f;
+            float cy = h / 2f;
+            float s = 8.5f * getResources().getDisplayMetrics().density; // 17dp visual size (perfect inside 36dp button)
+
+            switch (iconType) {
+                case ICON_CLOSE: { // ① [ ✕ ] 关闭 (对角交叉细线)
+                    canvas.drawLine(cx - s, cy - s, cx + s, cy + s, paint);
+                    canvas.drawLine(cx - s, cy + s, cx + s, cy - s, paint);
+                    break;
+                }
+                case ICON_SETTINGS: { // ② [ ⚙ ] 容器设置 (镂空六齿轮)
+                    // 中心圆孔
+                    canvas.drawCircle(cx, cy, s * 0.35f, paint);
+                    // 齿轮外圈基准圆
+                    canvas.drawCircle(cx, cy, s * 0.72f, paint);
+                    // 6 个突出的机械齿
+                    for (int i = 0; i < 6; i++) {
+                        double angle = Math.toRadians(i * 60.0);
+                        float cos = (float) Math.cos(angle);
+                        float sin = (float) Math.sin(angle);
+                        float x1 = cx + cos * (s * 0.65f);
+                        float y1 = cy + sin * (s * 0.65f);
+                        float x2 = cx + cos * s;
+                        float y2 = cy + sin * s;
+                        canvas.drawLine(x1, y1, x2, y2, paint);
+                    }
+                    break;
+                }
+                case ICON_NEW_CHAT: { // ③ [ 💬➕ ] 新建会话 (圆角对话气泡 + 内部十字加号)
+                    float r = 2.5f * getResources().getDisplayMetrics().density;
+                    rectF.set(cx - s, cy - s * 0.95f, cx + s, cy + s * 0.45f);
+                    canvas.drawRoundRect(rectF, r, r, paint);
+                    // 气泡小尾巴
+                    Path path = new Path();
+                    path.moveTo(cx - s * 0.35f, cy + s * 0.45f);
+                    path.lineTo(cx - s * 0.75f, cy + s * 0.95f);
+                    path.lineTo(cx - s * 0.75f, cy + s * 0.45f);
+                    canvas.drawPath(path, paint);
+                    // 内部加号
+                    float plusR = s * 0.32f;
+                    float plusCy = cy - s * 0.25f;
+                    canvas.drawLine(cx, plusCy - plusR, cx, plusCy + plusR, paint);
+                    canvas.drawLine(cx - plusR, plusCy, cx + plusR, plusCy, paint);
+                    break;
+                }
+                case ICON_FULLSCREEN: { // ④ [ ⬒ ] 全屏展开 (90度顺时针旋转后的顶栏+下展开视口)
+                    float r = 3.2f * getResources().getDisplayMetrics().density;
+                    rectF.set(cx - s, cy - s, cx + s, cy + s);
+                    canvas.drawRoundRect(rectF, r, r, paint);
+                    // 顶栏水平分割线
+                    float dividerY = cy - s * 0.30f;
+                    canvas.drawLine(cx - s, dividerY, cx + s, dividerY, paint);
+                    break;
+                }
+            }
+        }
     }
 
     /** 键盘精准监听：卡片整体位置与高度绝对不动，仅动态调整键盘底部占位块，使输入框自然上浮 */
