@@ -40,25 +40,27 @@ import android.widget.TextView;
 
 /**
  * 快捷对话底部抽屉弹层（纯代码动态构建，零外部 XML 依赖）：
- * - 点击常驻通知或任务完成通知，直接从屏幕底部顺滑滑出；
- * - 顶部横条（Drag Handle）支持手势上下拉伸调节高度、下滑快速关闭；
- * - 底部锁定（Gravity.BOTTOM），拖拽时仅顶部上下伸展；
- * - 标题物理绝对居中（RelativeLayout 居中），横条与标题间距紧凑精致；
- * - 半透明毛玻璃质感底色（#EBF5F8FC），显式禁用 WebView 强制反色算法；
- * - 退出转入后台保活（moveTaskToBack），再次呼出秒开、零加载、状态不丢；
- * - 左上角 ✕ 关闭按钮、⚙ 容器设置按钮（直达 App 容器控制台）；
- * - 右上角 ◫ 分栏面板按钮（直达 App 完整全屏聊天页）；
- * - 独立单例栈运行，关闭后不在系统多任务/最近任务列表残留卡片。
+ * 1. 左右 100% 铺满屏幕（消除 Dialog Decor 默认 Padding/Margin）；
+ * 2. 初始高度 78%，可上拉至 95% 全屏，两档平滑吸附；
+ * 3. 底部严格锁定，拖拽仅顶部伸缩；
+ * 4. 标题绝对居中，顶部留白紧凑；
+ * 5. 全局静态 WebView 单例保活，再次弹出零转圈、零重新加载；
+ * 6. 1:1 精准字体还原（移除 OverviewMode，设置 textZoom 100）；
+ * 7. 注入透明 CSS 消除暗色遮罩，透出高质感毛玻璃半透明背景。
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
 public class QuickChatSheetActivity extends Activity {
+
+    // 全局静态保活单例，彻底解决再次进入重新转圈加载问题
+    @SuppressLint("StaticFieldLeak")
+    private static WebView sCachedWebView = null;
+    private static boolean sWebLoaded = false;
 
     private FrameLayout rootOverlay;
     private LinearLayout sheetCard;
     private FrameLayout webContainer;
     private ProgressBar progressBar;
     private TextView errorHint;
-    private WebView webView;
     private HarnessController controller;
 
     private int screenHeight = 0;
@@ -68,10 +70,10 @@ public class QuickChatSheetActivity extends Activity {
     private int currentHeight = 0;
     private boolean isDismissing = false;
     private boolean isDarkMode = false;
-    private boolean webLoaded = false;
 
     private float initialTouchY = 0f;
     private int initialHeightOnTouch = 0;
+    private boolean isExpandedState = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -89,6 +91,10 @@ public class QuickChatSheetActivity extends Activity {
             window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
             window.setGravity(Gravity.BOTTOM);
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            // 消除 Dialog 系统默认内边距，确保左右 100% 铺满屏幕无留白
+            if (window.getDecorView() != null) {
+                window.getDecorView().setPadding(0, 0, 0, 0);
+            }
         }
 
         controller = HarnessController.get(this);
@@ -98,7 +104,7 @@ public class QuickChatSheetActivity extends Activity {
         calculateDimensions();
         setContentView(buildUi());
         setupGesture();
-        loadChatWeb();
+        attachChatWeb();
         animateIn();
     }
 
@@ -112,9 +118,10 @@ public class QuickChatSheetActivity extends Activity {
     private void calculateDimensions() {
         DisplayMetrics dm = getResources().getDisplayMetrics();
         screenHeight = dm.heightPixels;
-        defaultHeight = (int) (screenHeight * 0.68f);
-        maxHeight = (int) (screenHeight * 0.94f);
-        minHeight = (int) (screenHeight * 0.38f);
+        // 初始高度提升至 78%，全屏态提升至 95%，最小退出阈值 42%
+        defaultHeight = (int) (screenHeight * 0.78f);
+        maxHeight = (int) (screenHeight * 0.95f);
+        minHeight = (int) (screenHeight * 0.42f);
         currentHeight = defaultHeight;
     }
 
@@ -126,11 +133,12 @@ public class QuickChatSheetActivity extends Activity {
         int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");
         int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
 
-        // 1. 根全屏透明遮罩容器
+        // 1. 根全屏透明遮罩容器（左右 100% 撑满）
         rootOverlay = new FrameLayout(this);
         rootOverlay.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         rootOverlay.setBackgroundColor(Color.TRANSPARENT);
+        rootOverlay.setPadding(0, 0, 0, 0);
 
         // 点击外部空白区域退出
         rootOverlay.setOnTouchListener((v, event) -> {
@@ -146,14 +154,16 @@ public class QuickChatSheetActivity extends Activity {
             return false;
         });
 
-        // 2. 底部卡片主体（Gravity.BOTTOM 彻底锁定底部）
+        // 2. 底部卡片主体（Gravity.BOTTOM 彻底锁定底部，左右铺满）
         sheetCard = new LinearLayout(this);
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, defaultHeight);
         cardLp.gravity = Gravity.BOTTOM;
+        cardLp.setMargins(0, 0, 0, 0);
         sheetCard.setLayoutParams(cardLp);
         sheetCard.setOrientation(LinearLayout.VERTICAL);
         sheetCard.setElevation(dpToPx(16));
+        sheetCard.setClipChildren(true);
 
         // 24dp 顶部圆角毛玻璃半透背景 + 细微描边
         GradientDrawable cardBg = new GradientDrawable();
@@ -208,7 +218,7 @@ public class QuickChatSheetActivity extends Activity {
         View btnSettings = createHeaderButton("⚙", textColor);
         btnSettings.setOnClickListener(v -> {
             Intent intent = new Intent(this, MainActivity.class);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             startActivity(intent);
             dismissSheet();
         });
@@ -237,7 +247,7 @@ public class QuickChatSheetActivity extends Activity {
         btnFullscreen.setOnClickListener(v -> {
             Intent intent = new Intent(this, MainActivity.class);
             intent.putExtra("open_web", true);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             startActivity(intent);
             dismissSheet();
         });
@@ -252,16 +262,19 @@ public class QuickChatSheetActivity extends Activity {
         divider.setBackgroundColor(lineColor);
         sheetCard.addView(divider);
 
-        // 6. WebView 主体容器
+        // 6. WebView 主体容器（裁剪防漏字）
         webContainer = new FrameLayout(this);
         LinearLayout.LayoutParams webLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f);
         webContainer.setLayoutParams(webLp);
+        webContainer.setClipChildren(true);
+        webContainer.setClipToPadding(true);
 
         progressBar = new ProgressBar(this);
         FrameLayout.LayoutParams pbLp = new FrameLayout.LayoutParams(dpToPx(36), dpToPx(36));
         pbLp.gravity = Gravity.CENTER;
         progressBar.setLayoutParams(pbLp);
+        progressBar.setVisibility(sWebLoaded ? View.GONE : View.VISIBLE);
         webContainer.addView(progressBar);
 
         errorHint = new TextView(this);
@@ -310,6 +323,7 @@ public class QuickChatSheetActivity extends Activity {
                 case MotionEvent.ACTION_DOWN:
                     initialTouchY = event.getRawY();
                     initialHeightOnTouch = sheetCard.getHeight();
+                    isExpandedState = initialHeightOnTouch > (defaultHeight + maxHeight) / 2;
                     return true;
 
                 case MotionEvent.ACTION_MOVE:
@@ -328,13 +342,17 @@ public class QuickChatSheetActivity extends Activity {
 
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    float totalDy = event.getRawY() - initialTouchY;
-                    if (totalDy > dpToPx(90) || currentHeight < minHeight) {
+                    // 两档吸附与安全退出逻辑：
+                    // 1. 如果之前是全屏态，向下拉动时吸附回半屏态，不误退
+                    // 2. 只有当前高度低于半屏安全阈值 minHeight 时才退出
+                    if (currentHeight < minHeight) {
                         dismissSheet();
                     } else if (currentHeight > (defaultHeight + maxHeight) / 2) {
                         animateHeightTo(maxHeight);
+                        isExpandedState = true;
                     } else {
                         animateHeightTo(defaultHeight);
+                        isExpandedState = false;
                     }
                     return true;
             }
@@ -368,71 +386,95 @@ public class QuickChatSheetActivity extends Activity {
         anim.start();
     }
 
-    private void loadChatWeb() {
-        if (webLoaded && webView != null) return;
-        webLoaded = true;
+    /** 挂载常驻单例 WebView，实现 100% 零转圈秒开与 1:1 原生字体 */
+    private void attachChatWeb() {
+        if (sCachedWebView == null) {
+            sCachedWebView = new WebView(getApplicationContext());
+            WebSettings ws = sCachedWebView.getSettings();
+            ws.setJavaScriptEnabled(true);
+            ws.setDomStorageEnabled(true);
+            ws.setDatabaseEnabled(true);
+            ws.setSupportMultipleWindows(false);
+            ws.setUseWideViewPort(true);
+            // 移除 setLoadWithOverviewMode(true)，设置 100% 原始字体比例
+            ws.setLoadWithOverviewMode(false);
+            ws.setTextZoom(100);
+            ws.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+            ws.setAllowFileAccess(false);
+            ws.setAllowContentAccess(false);
+            ws.setCacheMode(WebSettings.LOAD_DEFAULT);
 
-        String base = "http://127.0.0.1:" + (controller != null ? controller.getPort() : "3080") + "/";
-        String token = HttpShellService.currentToken();
-        String url = token.isEmpty() ? base : base + "?dsha_t=" + Uri.encode(token);
-
-        webView = new WebView(this);
-        WebSettings ws = webView.getSettings();
-        ws.setJavaScriptEnabled(true);
-        ws.setDomStorageEnabled(true);
-        ws.setDatabaseEnabled(true);
-        ws.setSupportMultipleWindows(false);
-        ws.setLoadWithOverviewMode(true);
-        ws.setUseWideViewPort(true);
-        ws.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
-        ws.setAllowFileAccess(false);
-        ws.setAllowContentAccess(false);
-        ws.setCacheMode(WebSettings.LOAD_DEFAULT);
-
-        // 显式禁用 Android 系统算法强制变暗/反色（保持浅白原色，不被误反相）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            try {
-                ws.setForceDark(WebSettings.FORCE_DARK_OFF);
-            } catch (Throwable ignored) {}
-        }
-        if (Build.VERSION.SDK_INT >= 33) {
-            try {
-                ws.setAlgorithmicDarkeningAllowed(false);
-            } catch (Throwable ignored) {}
-        }
-
-        webView.setBackgroundColor(Color.TRANSPARENT);
-
-        boolean desktop = getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
-                .getBoolean("desktop_mode", false);
-        if (desktop) {
-            ws.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
-        }
-
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                super.onPageFinished(view, url);
-                if (progressBar != null) progressBar.setVisibility(View.GONE);
+            // 禁用系统自动算法反色
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    ws.setForceDark(WebSettings.FORCE_DARK_OFF);
+                } catch (Throwable ignored) {}
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                try {
+                    ws.setAlgorithmicDarkeningAllowed(false);
+                } catch (Throwable ignored) {}
             }
 
-            @Override
-            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                super.onReceivedError(view, request, error);
-                if (request != null && request.isForMainFrame() && errorHint != null) {
+            sCachedWebView.setBackgroundColor(Color.TRANSPARENT);
+
+            boolean desktop = getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
+                    .getBoolean("desktop_mode", false);
+            if (desktop) {
+                ws.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+            }
+
+            sCachedWebView.setWebViewClient(new WebViewClient() {
+                @Override
+                public void onPageFinished(WebView view, String url) {
+                    super.onPageFinished(view, url);
+                    sWebLoaded = true;
                     if (progressBar != null) progressBar.setVisibility(View.GONE);
-                    errorHint.setVisibility(View.VISIBLE);
-                    errorHint.setText("DSHA 服务未就绪，请先在控制台启动");
+                    // 注入透明背景 CSS，消除纯黑遮罩，透出底层半透明毛玻璃卡片
+                    injectTransparentBackground(view);
                 }
+
+                @Override
+                public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                    super.onReceivedError(view, request, error);
+                    if (request != null && request.isForMainFrame() && errorHint != null) {
+                        if (progressBar != null) progressBar.setVisibility(View.GONE);
+                        errorHint.setVisibility(View.VISIBLE);
+                        errorHint.setText("DSHA 服务未就绪，请先在控制台启动");
+                    }
+                }
+            });
+
+            sCachedWebView.setWebChromeClient(new WebChromeClient());
+
+            String base = "http://127.0.0.1:" + (controller != null ? controller.getPort() : "3080") + "/";
+            String token = HttpShellService.currentToken();
+            String url = token.isEmpty() ? base : base + "?dsha_t=" + Uri.encode(token);
+            sCachedWebView.loadUrl(url);
+        } else {
+            if (sCachedWebView.getParent() instanceof ViewGroup) {
+                ((ViewGroup) sCachedWebView.getParent()).removeView(sCachedWebView);
             }
-        });
+            if (progressBar != null) {
+                progressBar.setVisibility(sWebLoaded ? View.GONE : View.VISIBLE);
+            }
+            injectTransparentBackground(sCachedWebView);
+        }
 
-        webView.setWebChromeClient(new WebChromeClient());
-
-        webContainer.addView(webView, new FrameLayout.LayoutParams(
+        webContainer.addView(sCachedWebView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        webView.loadUrl(url);
+    }
+
+    private void injectTransparentBackground(WebView view) {
+        if (view == null) return;
+        try {
+            view.evaluateJavascript(
+                    "(function() {" +
+                    "  if (document.documentElement) document.documentElement.style.backgroundColor = 'transparent';" +
+                    "  if (document.body) document.body.style.backgroundColor = 'transparent';" +
+                    "})();", null);
+        } catch (Throwable ignored) {}
     }
 
     /** 从底部顺滑滑入展开 */
@@ -484,8 +526,8 @@ public class QuickChatSheetActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
+        if (sCachedWebView != null && sCachedWebView.canGoBack()) {
+            sCachedWebView.goBack();
         } else {
             dismissSheet();
         }
@@ -494,14 +536,8 @@ public class QuickChatSheetActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (webView != null) {
-            try {
-                webContainer.removeView(webView);
-                webView.stopLoading();
-                webView.destroy();
-                webView = null;
-            } catch (Throwable ignored) {
-            }
+        if (sCachedWebView != null && sCachedWebView.getParent() == webContainer) {
+            webContainer.removeView(sCachedWebView);
         }
     }
 }
