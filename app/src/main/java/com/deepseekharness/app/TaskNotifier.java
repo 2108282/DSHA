@@ -93,23 +93,18 @@ public class TaskNotifier {
             nm.cancel(Constants.NOTIF_TASK_RUNNING);
         }
 
-        Intent intent = new Intent(ctx, MainActivity.class)
-                .putExtra("open_web", true)
+        Intent intent = new Intent(ctx, QuickChatSheetActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent pi = PendingIntent.getActivity(ctx, 0, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        // 挂载 RemoteInput 继续对话组件
-        androidx.core.app.RemoteInput remoteInput = new androidx.core.app.RemoteInput.Builder(ConfirmReceiver.EXTRA_TASK_REPLY_TEXT)
-                .setLabel("输入新指令继续对话...")
-                .build();
-        Intent replyIntent = new Intent(ctx, ConfirmReceiver.class)
-                .setAction(ConfirmReceiver.ACTION_TASK_REPLY);
-        PendingIntent replyPi = PendingIntent.getBroadcast(ctx, 26, replyIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0));
+        // 点击「💬 继续对话」直接从屏幕底部唤起抽屉弹层
+        Intent actionIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent actionPi = PendingIntent.getActivity(ctx, 26, actionIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
-                R.drawable.ic_launch, "💬 继续对话", replyPi)
-                .addRemoteInput(remoteInput)
+                R.drawable.ic_launch, "💬 继续对话", actionPi)
                 .build();
 
         Notification n = new NotificationCompat.Builder(ctx, CHANNEL_ID)

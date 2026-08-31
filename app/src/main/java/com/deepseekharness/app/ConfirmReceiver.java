@@ -189,31 +189,26 @@ public class ConfirmReceiver extends BroadcastReceiver {
             if (nm != null) nm.createNotificationChannel(ch);
         }
 
-        Intent openAppIntent = new Intent(ctx, MainActivity.class)
-                .putExtra("open_web", true)
-                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent contentPi = PendingIntent.getActivity(ctx, 201, openAppIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        // 挂载 RemoteInput 重新输入组件
-        RemoteInput remoteInput = new RemoteInput.Builder(EXTRA_TASK_REPLY_TEXT)
-                .setLabel("输入新指令重新开始...")
-                .build();
-        Intent replyIntent = new Intent(ctx, ConfirmReceiver.class)
-                .setAction(ACTION_TASK_REPLY);
-        PendingIntent replyPi = PendingIntent.getBroadcast(ctx, 202, replyIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0));
+        // 点击「💬 重新开始」直接从屏幕底部唤起抽屉弹层
+        Intent actionIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent actionPi = PendingIntent.getActivity(ctx, 202, actionIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
-                R.drawable.ic_launch, "💬 重新输入", replyPi)
-                .addRemoteInput(remoteInput)
+                R.drawable.ic_launch, "💬 重新开始", actionPi)
                 .build();
 
         NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_TASK_RESULT)
                 .setSmallIcon(R.drawable.ic_launch)
                 .setContentTitle("⚠️ DSHA · 任务已终止")
-                .setContentText("已按指令停止操作。如需调整，可直接在下方回复新指令。")
-                .setStyle(new NotificationCompat.BigTextStyle().bigText("已按指令停止操作。如需调整，可直接在下方回复新指令。"))
+                .setContentText("已按指令停止操作。点击查看或继续对话。")
+                .setStyle(new NotificationCompat.BigTextStyle().bigText("已按指令停止操作。点击查看或继续对话。"))
                 .setContentIntent(contentPi)
                 .addAction(replyAction)
                 .setAutoCancel(true)

@@ -532,23 +532,18 @@ public final class HttpShellService {
                     nm.createNotificationChannel(ch);
                 }
 
-                Intent openAppIntent = new Intent(ctx, MainActivity.class)
-                        .putExtra("open_web", true)
-                        .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
                 PendingIntent contentPi = PendingIntent.getActivity(ctx, 20, openAppIntent,
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-                // 挂载 RemoteInput 继续对话输入组件
-                androidx.core.app.RemoteInput remoteInput = new androidx.core.app.RemoteInput.Builder(ConfirmReceiver.EXTRA_TASK_REPLY_TEXT)
-                        .setLabel("输入新指令继续对话...")
-                        .build();
-                Intent replyIntent = new Intent(ctx, ConfirmReceiver.class)
-                        .setAction(ConfirmReceiver.ACTION_TASK_REPLY);
-                PendingIntent replyPi = PendingIntent.getBroadcast(ctx, 25, replyIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0));
+                // 点击「💬 继续对话」直接从屏幕底部唤起抽屉弹层
+                Intent actionIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                PendingIntent actionPi = PendingIntent.getActivity(ctx, 25, actionIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
                 NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
-                        R.drawable.ic_launch, "💬 继续对话", replyPi)
-                        .addRemoteInput(remoteInput)
+                        R.drawable.ic_launch, "💬 继续对话", actionPi)
                         .build();
 
                 NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, Constants.CHANNEL_TASK_RESULT)
