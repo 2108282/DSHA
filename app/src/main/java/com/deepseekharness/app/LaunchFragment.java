@@ -409,7 +409,7 @@ public class LaunchFragment extends Fragment {
         webView.loadUrl(uiUrl());
     }
 
-    private void closeWeb() {
+    public void closeWeb() {
         if (!insideWeb) return;
         insideWeb = false;
         webPane.setVisibility(View.GONE);
