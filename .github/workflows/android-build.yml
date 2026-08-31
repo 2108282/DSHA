@@ -72,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           sed -i '/aapt2FromMavenOverride/d' gradle.properties
-          gradle :app:assembleDebug --no-daemon --stacktrace
+          gradle :app:assembleDebug --no-daemon --info --stacktrace
           ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK
