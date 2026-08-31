@@ -11,7 +11,6 @@ import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
-import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -24,7 +23,6 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
@@ -49,7 +47,7 @@ import android.widget.TextView;
  * 5. 全局静态 WebView 单例保活，再次弹出零转圈、零重新加载；
  * 6. 1:1 精准字体还原（移除 OverviewMode，设置 textZoom 100）；
  * 7. 注入透明全局 CSS 变量与 DOM 背景，100% 透出毛玻璃半透明卡片与桌面壁纸；
- * 8. 键盘弹出时：弹层卡片整体（顶栏、高度与底边）绝对稳固不动，仅内部输入框上浮。
+ * 8. 键盘弹出时：系统 SOFT_INPUT_ADJUST_RESIZE 原生视口压缩，输入框顺畅上浮，下方保持卡片底色垫板。
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
 public class QuickChatSheetActivity extends Activity {
@@ -77,14 +75,11 @@ public class QuickChatSheetActivity extends Activity {
     private float initialTouchY = 0f;
     private int initialHeightOnTouch = 0;
 
-    // 键盘监听：仅为内部 webContainer 添加 paddingBottom，绝对不压缩 sheetCard 整体
-    private ViewTreeObserver.OnGlobalLayoutListener keyboardLayoutListener;
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // 窗口基础配置：全屏铺满、底部对齐（彻底锁死底部）、半透明遮罩、点击外部退出
+        // 窗口基础配置：全屏铺满、底部对齐（彻底锁死底部）、半透明遮罩、点击外部退出、键盘原生调整
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         setFinishOnTouchOutside(true);
 
@@ -95,8 +90,8 @@ public class QuickChatSheetActivity extends Activity {
             window.setDimAmount(0.42f);
             window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
             window.setGravity(Gravity.BOTTOM);
-            // 采用 ADJUST_NOTHING：避免 Window 整体被系统粗暴向上推
-            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
+            // 恢复标准的 ADJUST_RESIZE：让系统原生调整可用高度，使网页输入框自动浮在键盘上方
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
             if (window.getDecorView() != null) {
                 window.getDecorView().setPadding(0, 0, 0, 0);
             }
@@ -109,7 +104,6 @@ public class QuickChatSheetActivity extends Activity {
         calculateDimensions();
         setContentView(buildUi());
         setupGesture();
-        setupKeyboardObserver();
         attachChatWeb();
         animateIn();
     }
@@ -321,31 +315,6 @@ public class QuickChatSheetActivity extends Activity {
         tv.setBackground(ripple);
 
         return tv;
-    }
-
-    /** 键盘监听：卡片整体位置尺寸绝对不动，仅让内部 webContainer 底部抬起，输入框精准上移 */
-    private void setupKeyboardObserver() {
-        if (getWindow() == null || getWindow().getDecorView() == null) return;
-        View decorView = getWindow().getDecorView();
-
-        keyboardLayoutListener = () -> {
-            Rect r = new Rect();
-            decorView.getWindowVisibleDisplayFrame(r);
-            int rootHeight = decorView.getRootView().getHeight();
-            if (rootHeight == 0) rootHeight = screenHeight;
-
-            int keyboardHeight = rootHeight - r.bottom;
-            if (keyboardHeight > dpToPx(100)) { // 键盘弹出
-                if (webContainer != null && webContainer.getPaddingBottom() != keyboardHeight) {
-                    webContainer.setPadding(0, 0, 0, keyboardHeight);
-                }
-            } else { // 键盘收起
-                if (webContainer != null && webContainer.getPaddingBottom() != 0) {
-                    webContainer.setPadding(0, 0, 0, 0);
-                }
-            }
-        };
-        decorView.getViewTreeObserver().addOnGlobalLayoutListener(keyboardLayoutListener);
     }
 
     private void setupGesture() {
@@ -601,9 +570,6 @@ public class QuickChatSheetActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        if (keyboardLayoutListener != null && getWindow() != null && getWindow().getDecorView() != null) {
-            getWindow().getDecorView().getViewTreeObserver().removeOnGlobalLayoutListener(keyboardLayoutListener);
-        }
         super.onDestroy();
         if (sCachedWebView != null && sCachedWebView.getParent() == webContainer) {
             webContainer.removeView(sCachedWebView);
