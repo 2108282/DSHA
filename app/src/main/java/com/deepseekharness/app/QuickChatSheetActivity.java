@@ -400,56 +400,62 @@ public class QuickChatSheetActivity extends Activity {
             float h = getHeight();
             float cx = w / 2f;
             float cy = h / 2f;
-            float s = 8.5f * getResources().getDisplayMetrics().density; // 17dp visual size (perfect inside 36dp button)
+            float dp = getResources().getDisplayMetrics().density;
 
             switch (iconType) {
-                case ICON_CLOSE: { // ① [ ✕ ] 关闭 (对角交叉细线)
+                case ICON_CLOSE: { // ① [ ✕ ] 关闭 (光学收敛，端点半长 6.6dp，避免视觉膨胀)
+                    float s = 6.6f * dp;
                     canvas.drawLine(cx - s, cy - s, cx + s, cy + s, paint);
                     canvas.drawLine(cx - s, cy + s, cx + s, cy - s, paint);
                     break;
                 }
-                case ICON_SETTINGS: { // ② [ ⚙ ] 容器设置 (镂空六齿轮)
-                    // 中心圆孔
-                    canvas.drawCircle(cx, cy, s * 0.35f, paint);
-                    // 齿轮外圈基准圆
-                    canvas.drawCircle(cx, cy, s * 0.72f, paint);
-                    // 6 个突出的机械齿
-                    for (int i = 0; i < 6; i++) {
-                        double angle = Math.toRadians(i * 60.0);
-                        float cos = (float) Math.cos(angle);
-                        float sin = (float) Math.sin(angle);
-                        float x1 = cx + cos * (s * 0.65f);
-                        float y1 = cy + sin * (s * 0.65f);
-                        float x2 = cx + cos * s;
-                        float y2 = cy + sin * s;
-                        canvas.drawLine(x1, y1, x2, y2, paint);
-                    }
+                case ICON_SETTINGS: { // ② [ >_ 容器控制台 ] (方案2：圆角窗口外框 + 内部命令行提示符 > _)
+                    float halfW = 8.5f * dp;
+                    float halfH = 7.0f * dp;
+                    float r = 2.8f * dp;
+                    rectF.set(cx - halfW, cy - halfH, cx + halfW, cy + halfH);
+                    canvas.drawRoundRect(rectF, r, r, paint);
+
+                    // 命令行提示符 >
+                    Path path = new Path();
+                    path.moveTo(cx - 4.5f * dp, cy - 2.8f * dp);
+                    path.lineTo(cx - 1.2f * dp, cy);
+                    path.lineTo(cx - 4.5f * dp, cy + 2.8f * dp);
+                    canvas.drawPath(path, paint);
+
+                    // 光标下划线 _
+                    canvas.drawLine(cx + 0.8f * dp, cy + 2.8f * dp, cx + 4.8f * dp, cy + 2.8f * dp, paint);
                     break;
                 }
                 case ICON_NEW_CHAT: { // ③ [ 💬➕ ] 新建会话 (圆角对话气泡 + 内部十字加号)
-                    float r = 2.5f * getResources().getDisplayMetrics().density;
-                    rectF.set(cx - s, cy - s * 0.95f, cx + s, cy + s * 0.45f);
+                    float halfW = 8.2f * dp;
+                    float topH = 7.2f * dp;
+                    float botH = 3.5f * dp;
+                    float r = 2.5f * dp;
+                    rectF.set(cx - halfW, cy - topH, cx + halfW, cy + botH);
                     canvas.drawRoundRect(rectF, r, r, paint);
                     // 气泡小尾巴
                     Path path = new Path();
-                    path.moveTo(cx - s * 0.35f, cy + s * 0.45f);
-                    path.lineTo(cx - s * 0.75f, cy + s * 0.95f);
-                    path.lineTo(cx - s * 0.75f, cy + s * 0.45f);
+                    path.moveTo(cx - 2.8f * dp, cy + botH);
+                    path.lineTo(cx - 6.2f * dp, cy + botH + 4.2f * dp);
+                    path.lineTo(cx - 6.2f * dp, cy + botH);
                     canvas.drawPath(path, paint);
                     // 内部加号
-                    float plusR = s * 0.32f;
-                    float plusCy = cy - s * 0.25f;
+                    float plusR = 2.8f * dp;
+                    float plusCy = cy - 1.8f * dp;
                     canvas.drawLine(cx, plusCy - plusR, cx, plusCy + plusR, paint);
                     canvas.drawLine(cx - plusR, plusCy, cx + plusR, plusCy, paint);
                     break;
                 }
-                case ICON_FULLSCREEN: { // ④ [ ⬒ ] 全屏展开 (90度顺时针旋转后的顶栏+下展开视口)
-                    float r = 3.2f * getResources().getDisplayMetrics().density;
-                    rectF.set(cx - s, cy - s, cx + s, cy + s);
+                case ICON_FULLSCREEN: { // ④ [ ⬒ ] 全屏展开 (顺时针旋转90°后的顶栏+主视口分栏)
+                    float halfW = 8.0f * dp;
+                    float halfH = 8.0f * dp;
+                    float r = 2.8f * dp;
+                    rectF.set(cx - halfW, cy - halfH, cx + halfW, cy + halfH);
                     canvas.drawRoundRect(rectF, r, r, paint);
                     // 顶栏水平分割线
-                    float dividerY = cy - s * 0.30f;
-                    canvas.drawLine(cx - s, dividerY, cx + s, dividerY, paint);
+                    float dividerY = cy - 2.8f * dp;
+                    canvas.drawLine(cx - halfW, dividerY, cx + halfW, dividerY, paint);
                     break;
                 }
             }
