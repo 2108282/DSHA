@@ -95,7 +95,7 @@
             android:excludeFromRecents="true"
             android:launchMode="singleInstance"
             android:windowSoftInputMode="adjustResize"
-            android:theme="@style/Theme.AppCompat.Dialog" />
+            android:theme="@style/Theme.DeepseekHarness" />
 
         <service
             android:name=".HarnessService"
