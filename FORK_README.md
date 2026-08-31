@@ -76,7 +76,8 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
 
 ### B3. 通知交互与 Active 快捷抽屉弹层架构 (`QuickChatSheetActivity`)
 点击通知栏常驻通知或者交互按钮即可调出
-<img width="510" height="1138" alt="image" src="https://github.com/user-attachments/assets/e8ff2bb5-0090-416a-b12d-7b9885be50d7" />
+<img width="1200" height="2670" alt="image" src="https://github.com/user-attachments/assets/eacf404b-9017-4535-b8b3-7c474f072ca5" />
+
 
 （弹层高度过低时输入法有bug，懒得修了）
 通知交互全面升级为 **`QuickChatSheetActivity` 全局快捷悬浮抽屉弹层**（取代原本局限狭窄的通知栏 `RemoteInput` 打字输入框）：
