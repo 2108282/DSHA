@@ -15,6 +15,7 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
 ## A. 模拟点击授权租约：10 分钟双通道临时租约授权
 <img width="2160" height="2880" alt="image" src="https://github.com/user-attachments/assets/b524ec1d-f7e6-4c11-a05e-dbaeb43c6a57" />
 
+(仅加入了原生通知和按钮，演示通知样式为其他lsposed模块实现)
 **动机**：跑一个自动化任务要连续用到 `am start`、`screencap`、`input keyevent`，每一条都被守卫拦下弹一次确认框。用户点到第五次就不想用了。而 Java 侧的 `uiAuthorized`（无障碍点击授权）和容器侧的 Python 守卫是两套互不知情的判据，导致同一个任务要在两个通道各自被打断。
 
 **做法**：引入单一事实来源 `/root/.dsh/.auth_lease`，内容是一个到期 Unix 时间戳。任意一侧授权后写入，两侧都读它。
