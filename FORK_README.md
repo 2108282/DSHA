@@ -71,26 +71,21 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
 
 `keepInbox: true` 是有意的：保住收件箱，用户才能接着在通知栏打字续上对话，而不是被清空重开。
 
-### B3. 就地打字继续对话
+### B3. 通知交互升级：直达 Active 快捷抽屉弹层
 
-`TaskNotifier.java` 与 `ConfirmReceiver.java` 给完成 / 终止通知都挂上 `RemoteInput`：
+通知交互全面升级为 **`QuickChatSheetActivity` 全局快捷悬浮抽屉弹层**（取代原本局限狭窄的通知栏 `RemoteInput` 打字输入框）：
 
-- 新增 action：`ACTION_TASK_REPLY`、`ACTION_STOP_TASK`、`ACTION_ASK_ANSWER`、`ACTION_ASK_REPLY`
-- 新增 extra：`EXTRA_TASK_REPLY_TEXT`、`EXTRA_REPLY_TEXT`、`EXTRA_ANSWER`
-- `handleTaskReply()` 取出用户输入写进 `/root/.dsh/.pending_prompt`
-- 插件侧轮询该文件，找到目标 agent（优先 `agents.roots()`，退回 `agents.list()`）后调 `targetAgent.followup(msg)` 开启新一轮
+- **交互体验**：点击完成通知的 `[💬 继续对话]` 或终止通知的 `[💬 重新开始]` 按钮，直接从屏幕底部顺滑滑出半透明毛玻璃抽屉卡片，免切应用就地开启多模态与富文本交互；
+- **全链路状态保活**：采用静态 `WebView` 内存单例 + `FLAG_ACTIVITY_REORDER_TO_FRONT` 唤醒，0 秒网络加载、0 秒白屏、对话草稿不丢；
+- 详细设计与手势规范参见 **[Active 快捷抽屉弹层设计指南](docs/active-dialog-readme.md)**。
 
-PendingIntent 必须用 `FLAG_MUTABLE`（Android 12+），否则 RemoteInput 的文字传不进来。
+### B4. 点通知直达抽屉弹层
 
-### B4. 点通知回到对话界面
+原先点通知只能全屏切到 App 首页或全屏 WebView。现已全链路统一收拢至抽屉弹层：
 
-原先点通知只能回到 App 首页。改成全链路透传 `open_web` extra：
-
-- `HarnessService.java` / `TaskNotifier.java` / `HttpShellService.java` / `ConfirmReceiver.java` 的所有 `PendingIntent` 统一 `.putExtra("open_web", true)` 并加 `FLAG_ACTIVITY_SINGLE_TOP | FLAG_ACTIVITY_CLEAR_TOP`
-- `MainActivity.java` 新增 `onNewIntent()` + `handleNotificationEnterWeb()`，切到启动页并调 `LaunchFragment.enterWebDirectly()`
-- `LaunchFragment.java` 新增 `enterWebDirectly()`：Web 已就绪直接进，没就绪则置 `enterWhenReady` 并自动触发启动
-
-`onNewIntent` 那一半容易漏——App 已在前台时 `onCreate` 不会再走一遍，少了它「App 开着时点通知没反应」。
+- `HarnessService.java`（常驻保活 1001）/ `TaskNotifier.java`（任务完成 2002）/ `HttpShellService.java`（实时运行 2003）/ `ConfirmReceiver.java`（任务终止 2004）的所有通知点击主体均统一指向 `QuickChatSheetActivity`；
+- 配置 `FLAG_ACTIVITY_REORDER_TO_FRONT | FLAG_ACTIVITY_SINGLE_TOP`，复用后台常驻实例秒开；
+- 弹层顶部配备 `[⚙ 容器控制台]` 与 `[◫ 全屏聊天]` 按钮，随时可一键转入全屏 App。
 
 ### B5. `/app/ask` 双通道
 
@@ -115,7 +110,7 @@ PendingIntent 必须用 `FLAG_MUTABLE`（Android 12+），否则 RemoteInput 的
 
 **改动实现**：
 - **新增独立通知渠道**：在 `Constants.java` 中新增 `CHANNEL_TASK_RESULT = "dsh_task_result_channel"`（“任务结果与交互”，高优先级 `IMPORTANCE_HIGH`），将生命周期完成通知（2002）、报错/异常通知（2002）与紧急终止通知（2004）全部迁入该独立通道；`dsh_agent_channel` 仅保留纯运行中状态（2003，带停止按钮）；
-- **先走通知，再走 Toast**：`HttpShellService.appNotify` 调整逻辑时序，无论 App 在前台还是后台，第一时间向系统通知栏写入带 `RemoteInput` 的高优先级结果卡片，随后在前台额外弹出友好 Toast 提示，彻底移除 `return "FOREGROUND_SKIP"` 截断；`ConfirmReceiver` 同步优化为先发通知再弹 Toast；
+- **先走通知，再走 Toast**：`HttpShellService.appNotify` 调整逻辑时序，无论 App 在前台还是后台，第一时间向系统通知栏写入直达抽屉弹层的高优先级结果卡片，随后在前台额外弹出友好 Toast 提示，彻底移除 `return "FOREGROUND_SKIP"` 截断；`ConfirmReceiver` 同步优化为先发通知再弹 Toast；
 - **全链路中断事件捕获**：`dsh-task-notifier` 插件完善 `turn/end` 逻辑，识别通知栏制动与外部中断，对 Web 端停止和模型异常中断主动补发 `DSHA · 任务已中断` 结果卡片。
 
 ---
