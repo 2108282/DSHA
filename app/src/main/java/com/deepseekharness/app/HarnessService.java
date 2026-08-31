@@ -302,9 +302,9 @@ public class HarnessService extends Service {
     }
 
     private Notification buildNotification(String title, String text) {
-        Intent intent = new Intent(this, MainActivity.class)
-                .putExtra("open_web", true)
-                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        // 点击常驻通知直接从屏幕底部弹出快捷对话抽屉
+        Intent intent = new Intent(this, QuickChatSheetActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent pi = PendingIntent.getActivity(this, 0, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Intent stop = new Intent(this, HarnessService.class).setAction(ACTION_STOP);

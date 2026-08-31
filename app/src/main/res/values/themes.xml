@@ -74,4 +74,33 @@
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">@dimen/radius_card</item>
     </style>
+
+    <!-- 底部对话弹层 Activity 专用透明半屏主题（对标 Box / BottomSheet） -->
+    <style name="Theme.DeepseekHarness.Sheet" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorOnPrimary">@color/accent_on</item>
+        <item name="colorSurface">@color/card</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="colorSurfaceVariant">@color/raised</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorOutline">@color/line</item>
+        <item name="colorOutlineVariant">@color/line</item>
+
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowDimEnabled">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowAnimationStyle">@style/Animation.DSHA.BottomSheet</item>
+        <item name="materialButtonStyle">@style/Widget.DSHA.Button</item>
+    </style>
+
+    <style name="Animation.DSHA.BottomSheet">
+        <item name="android:windowEnterAnimation">@anim/slide_in_bottom</item>
+        <item name="android:windowExitAnimation">@anim/slide_out_bottom</item>
+    </style>
 </resources>

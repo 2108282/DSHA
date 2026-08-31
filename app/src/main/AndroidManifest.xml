@@ -87,6 +87,17 @@
             android:label="ADB 无线配对"
             android:theme="@style/Theme.AppCompat.Dialog" />
 
+        <!-- 快捷对话底部抽屉弹层（点击常驻通知直达） -->
+        <activity
+            android:name=".QuickChatSheetActivity"
+            android:exported="false"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:finishOnTaskLaunch="true"
+            android:launchMode="singleInstance"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.DeepseekHarness.Sheet" />
+
         <service
             android:name=".HarnessService"
             android:exported="false"

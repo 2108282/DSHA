@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root_overlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/transparent"
+    android:fitsSystemWindows="true">
+
+    <!-- 底部抽屉卡片主体 -->
+    <LinearLayout
+        android:id="@+id/sheet_card"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="bottom"
+        android:background="@drawable/bg_bottom_sheet_surface"
+        android:elevation="16dp"
+        android:orientation="vertical">
+
+        <!-- 顶部拖拽横条（Drag Handle）：支持上下拖拽调节高度与向下滑动关闭 -->
+        <FrameLayout
+            android:id="@+id/drag_handle_area"
+            android:layout_width="match_parent"
+            android:layout_height="24dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingTop="8dp"
+            android:paddingBottom="4dp">
+
+            <View
+                android:id="@+id/drag_handle"
+                android:layout_width="36dp"
+                android:layout_height="4dp"
+                android:layout_gravity="center_horizontal"
+                android:background="@drawable/bg_sheet_drag_handle" />
+        </FrameLayout>
+
+        <!-- 顶部统一线框图标控制栏 -->
+        <LinearLayout
+            android:id="@+id/sheet_header"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="4dp">
+
+            <!-- 左上角 ✕ 关闭按钮 -->
+            <ImageButton
+                android:id="@+id/btn_close"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_sheet_icon_btn"
+                android:contentDescription="关闭弹层"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_sheet_close" />
+
+            <!-- 左侧 ⚙ 容器设置按钮（进入 APP 容器主页面） -->
+            <ImageButton
+                android:id="@+id/btn_settings"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="4dp"
+                android:background="@drawable/bg_sheet_icon_btn"
+                android:contentDescription="进入容器主页面"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_sheet_settings" />
+
+            <!-- 中间标题 -->
+            <TextView
+                android:id="@+id/sheet_title"
+                style="@style/DshaText.Title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:gravity="center"
+                android:maxLines="1"
+                android:text="DSHA 对话"
+                android:textColor="@color/text"
+                android:textSize="17sp" />
+
+            <!-- 右上角 ◫ 分栏面板按钮（进入 APP 的完整全屏聊天页面） -->
+            <ImageButton
+                android:id="@+id/btn_fullscreen"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_sheet_icon_btn"
+                android:contentDescription="全屏打开聊天页面"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_sheet_fullscreen" />
+        </LinearLayout>
+
+        <!-- 分割细线 -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/line" />
+
+        <!-- 聊天对话 WebView 主体区域 -->
+        <FrameLayout
+            android:id="@+id/web_container"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <ProgressBar
+                android:id="@+id/sheet_progress"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_gravity="center"
+                android:indeterminateTint="@color/primary" />
+
+            <TextView
+                android:id="@+id/sheet_error_hint"
+                style="@style/DshaText.Label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:gravity="center"
+                android:padding="24dp"
+                android:text="正在连接 DSHA 服务…"
+                android:visibility="gone" />
+        </FrameLayout>
+    </LinearLayout>
+
+</FrameLayout>
