@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-01T15:48:50Z",
+  "generated": "2026-09-01T16:24:31Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -28,8 +28,8 @@
     {
       "path": "app/src/main/assets/adb-shell.py",
       "asset": "adb-shell.py",
-      "size": 13132,
-      "sha256": "931970701d5f63bb917946459f90ec8f3d3724177ed2a8732696fc7098d9ef51",
+      "size": 13902,
+      "sha256": "d451a0f3a6458b4b9519c7df3588fdee420363f20a52ba4a0c30cdccd7c88a48",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/adb-shell.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/adb-shell.py",

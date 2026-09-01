@@ -262,8 +262,18 @@ def request_confirm(cmd, reason=''):
         pass
     # 命令 + 理由一起发给确认弹窗
     display = cmd if not reason else cmd + '\n\n[理由] ' + reason
+    # 这里**不带 force=1**：带上就是「无条件弹确认」，于是经 ADB 通道执行的每一条
+    # 命令都要用户点一次 —— 连 `am start` 打开应用、`monkey`、`ls` 都拦。用户实测
+    # 「危险 shell 拦截会拦所有操作」就是这么来的。
+    #
+    # 后果比麻烦更严重：DangerShellGuard 自己的注释里写过这条教训 —— 每次都弹，
+    # 用户几次之后就学会无脑点允许，那时真正危险的命令也拦不住了。
+    #
+    # 桥端 DangerShellGuard.isDangerous() 本来就有一段专门处理这条路径的判据：
+    # 认出 `adb … shell/exec-out/exec-in` 之后对**后面那截真实命令**判危。
+    # force=1 一直把它短路掉，那段代码从写下来就没生效过。
     q = ('/confirm?cmd=' + urllib.parse.quote(display)
-         + '&token=' + urllib.parse.quote(token) + '&force=1')
+         + '&token=' + urllib.parse.quote(token))
     # 桥的监听地址取决于 App 版本：新版绑 127.0.0.1（并附加 ::1），
     # 老版 getLoopbackAddress() 在 Android 上只绑 [::1] → IPv4 连不上。两个都试。
     for host in ('127.0.0.1', '[::1]'):
