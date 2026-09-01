@@ -142,6 +142,7 @@ public class LaunchFragment extends Fragment {
             starting = true;
             enterWhenReady = true;
             startingAt = System.currentTimeMillis();
+            prewarmWebCore();
             applyRunUi(false);
             statusText.setText("正在启动，起来后直接进入…");
             Intent i = new Intent(requireContext(), HarnessService.class);
@@ -158,6 +159,7 @@ public class LaunchFragment extends Fragment {
             starting = true;
             enterWhenReady = true; // 重启完成后自动回到预览页
             startingAt = System.currentTimeMillis();
+            prewarmWebCore();
             applyRunUi(false);
             statusText.setText("正在重启…");
             Intent i = new Intent(requireContext(), HarnessService.class)
@@ -281,6 +283,33 @@ public class LaunchFragment extends Fragment {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
+    /** 启动等待期先把 Web 内核热起来。
+     *
+     *  <p>{@code GeckoRuntime.getDefault()} 首次调用要起 Gecko 引擎和 profile，几百毫秒到
+     *  一秒多。它现在发生在 {@link #openWeb()} 里 —— 也就是端口都 UP 了才开始，整整串在
+     *  用户等待的最尾巴上。点下启动就先热引擎：那几秒用户本来在看读秒，正好用掉。
+     *
+     *  <p>只在用户明确开了 {@code gecko_core} 时做。没开的话主内核是系统 WebView，
+     *  白起一个 Gecko 引擎是纯浪费内存和电 —— openWeb 里那套「系统 WebView 太旧就自动切
+     *  Gecko」的判断留在原处，那种情况少见，不值得为它提前占资源。
+     */
+    private void prewarmWebCore() {
+        try {
+            if (!isAdded()) return;
+            boolean useGecko = requireContext()
+                    .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                    .getBoolean("gecko_core", false);
+            if (!useGecko) return;
+            mainHandler.post(() -> {
+                try {
+                    if (isAdded()) GeckoRuntime.getDefault(requireContext());
+                } catch (Throwable ignored) {
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+    }
+
     private void openWeb() {
         if (insideWeb) return;
         insideWeb = true;
