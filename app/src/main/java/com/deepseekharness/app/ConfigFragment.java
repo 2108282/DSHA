@@ -142,7 +142,7 @@ public class ConfigFragment extends Fragment {
         repoLink = view.findViewById(R.id.config_repo_link);
         SubPageBack.bind(this, view);
         setupCommonControls(); // 模式 spinner / 保存 / 关于
-        // 工作区（文件/备份恢复/环境管理）→ 二级页面
+        // 数据与备份（文件/备份恢复/环境管理）→ 二级页面
         TextView workspaceEntry = view.findViewById(R.id.config_workspace_entry);
         if (workspaceEntry != null) {
             workspaceEntry.setOnClickListener(v ->
@@ -170,7 +170,8 @@ public class ConfigFragment extends Fragment {
                     DeviceBridgeService.apply(requireContext());
                     showAdbPairNotification();
                 } catch (Throwable t) {
-                    Toast.makeText(requireContext(), "无法打开 ADB 配对：" + t.getMessage(), Toast.LENGTH_LONG).show();
+                    Toast.makeText(requireContext(), "无法打开 ADB 配对："
+                            + SensitiveData.redact(String.valueOf(t)), Toast.LENGTH_LONG).show();
                 }
             });
         }
@@ -222,7 +223,8 @@ public class ConfigFragment extends Fragment {
                 // 探测 adb 是否真实可用（用 rootfs 里的 adb-shell 实际跑一下，最准）
                 String r = c.getProot().execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py id 2>&1 | head -2");
                 final boolean connected = r != null && r.contains("uid=");
-                final String detail = r == null ? "" : r.replace("\n", " ").trim();
+                final String detail = SensitiveData.redact(
+                        r == null ? "" : r.replace("\n", " ").trim());
                 // 轮询线程每隔几秒回来一次，而 requireActivity() 在 Fragment detach 后
                 // 抛 IllegalStateException —— 抛在这个后台线程上就是整个进程崩。
                 // isAdded() 与 requireActivity() 之间还有窗口，所以直接取 getActivity()。
@@ -242,7 +244,8 @@ public class ConfigFragment extends Fragment {
                     String bridgeErr = HttpShellService.bindError();
                     if (bridgeErr != null && !bridgeErr.isEmpty()) {
                         tv.setTextColor(tv.getContext().getColor(R.color.err));
-                        tv.setText(tv.getText() + "\n⚠ 命令桥未启动：" + bridgeErr);
+                        tv.setText(tv.getText() + "\n⚠ 命令桥未启动："
+                                + SensitiveData.redact(bridgeErr));
                     }
                 });
             } catch (Throwable ignored) {
@@ -314,6 +317,14 @@ public class ConfigFragment extends Fragment {
     private void bindRuntimeUpdate(View view) {
         Button btn = view == null ? null : view.findViewById(R.id.config_runtime_update);
         if (btn == null) return;
+        if (c != null && c.isAlphaRuntime()) {
+            // Alpha uses the verified APK asset set; do not expose a remote
+            // code-update control that could replace it with legacy scripts.
+            btn.setVisibility(View.GONE);
+            TextView status = view.findViewById(R.id.config_runtime_status);
+            if (status != null) status.setVisibility(View.GONE);
+            return;
+        }
         btn.setOnClickListener(v -> {
             Toast.makeText(requireContext(), "正在检查脚本更新…", Toast.LENGTH_SHORT).show();
             final android.content.Context appCtx = requireContext().getApplicationContext();
@@ -325,20 +336,26 @@ public class ConfigFragment extends Fragment {
                 android.app.Activity act = getActivity();
                 if (act == null || !isAdded()) return;
                 act.runOnUiThread(() -> {
+                    // RuntimeUpdater messages may include a remote URL or an
+                    // exception carrying request credentials. They are only
+                    // for UI diagnostics; keep the network/update values
+                    // untouched and sanitize this display copy.
+                    final String probeMessage = SensitiveData.redact(
+                            probe.message == null ? "" : probe.message);
                     if (probe.updated == 0) {
-                        Toast.makeText(appCtx, probe.message, Toast.LENGTH_LONG).show();
+                        Toast.makeText(appCtx, probeMessage, Toast.LENGTH_LONG).show();
                         refreshRuntimeStatus();
                         return;
                     }
                     StringBuilder sb = new StringBuilder();
-                    sb.append(probe.message).append("\n\n将更新：\n");
+                    sb.append(probeMessage).append("\n\n将更新：\n");
                     int n = 0;
                     for (String f : probe.changed) {
                         if (n++ >= 12) {
                             sb.append("  … 还有 ").append(probe.changed.size() - 12).append(" 个\n");
                             break;
                         }
-                        sb.append("  ").append(f).append('\n');
+                        sb.append("  ").append(SensitiveData.redact(f)).append('\n');
                     }
                     sb.append("\n只更新脚本，不动 rootfs 与应用本体；");
                     sb.append("每个文件都会校验 sha256，不符就保留原版本。");
@@ -346,7 +363,7 @@ public class ConfigFragment extends Fragment {
                     // 不能让「有更新」这件事被静默吞掉。
                     android.app.Activity a2 = getActivity();
                     if (a2 == null || a2.isFinishing() || !isAdded()) {
-                        Toast.makeText(appCtx, probe.message, Toast.LENGTH_LONG).show();
+                        Toast.makeText(appCtx, probeMessage, Toast.LENGTH_LONG).show();
                         return;
                     }
                     new androidx.appcompat.app.AlertDialog.Builder(a2)
@@ -595,26 +612,29 @@ public class ConfigFragment extends Fragment {
     }
 
     private void doRuntimeUpdate(final android.content.Context appCtx) {
+        if (c != null && c.isAlphaRuntime()) return;
         Toast.makeText(requireContext(), "下载中…", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
             RuntimeUpdater.Result r = RuntimeUpdater.checkAndApply(appCtx, c, false);
+            final String resultMessage = SensitiveData.redact(
+                    r.message == null ? "" : r.message);
             // 这里是真正的下载，耗时更长，用户离开页面的概率更高。
             android.app.Activity act = getActivity();
             if (act == null || !isAdded()) {
                 // 结果不能悄悄丢掉：更新已经落盘了，至少让用户看到一次
                 new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
-                        Toast.makeText(appCtx, r.message, Toast.LENGTH_LONG).show());
+                        Toast.makeText(appCtx, resultMessage, Toast.LENGTH_LONG).show());
                 return;
             }
             act.runOnUiThread(() -> {
                 android.app.Activity a2 = getActivity();
                 if (a2 == null || a2.isFinishing() || !isAdded()) {
-                    Toast.makeText(appCtx, r.message, Toast.LENGTH_LONG).show();
+                    Toast.makeText(appCtx, resultMessage, Toast.LENGTH_LONG).show();
                     return;
                 }
                 new androidx.appcompat.app.AlertDialog.Builder(a2)
                         .setTitle(r.ok ? "更新完成" : "部分失败")
-                        .setMessage(r.message)
+                        .setMessage(resultMessage)
                         .setPositiveButton("知道了", null)
                         .show();
                 refreshRuntimeStatus();
@@ -626,6 +646,10 @@ public class ConfigFragment extends Fragment {
         View v = getView();
         TextView tv = v == null ? null : v.findViewById(R.id.config_runtime_status);
         if (tv == null) return;
+        if (c != null && c.isAlphaRuntime()) {
+            tv.setVisibility(View.GONE);
+            return;
+        }
         int n = RuntimeUpdater.overlayCount(requireContext());
         if (n <= 0) {
             tv.setTextColor(requireContext().getColor(R.color.text_secondary));
@@ -674,7 +698,8 @@ public class ConfigFragment extends Fragment {
                             startActivity(new android.content.Intent(
                                     android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));
                         } catch (Throwable t) {
-                            Toast.makeText(requireContext(), "打不开无障碍设置：" + t.getMessage(),
+                            Toast.makeText(requireContext(), "打不开无障碍设置："
+                                    + SensitiveData.redact(String.valueOf(t)),
                                     Toast.LENGTH_LONG).show();
                         }
                     })
@@ -872,7 +897,8 @@ public class ConfigFragment extends Fragment {
                     .setPriority(NotificationCompat.PRIORITY_HIGH);
             nm.notify(Constants.NOTIF_ADB_PAIR_CARD, b.build());
         } catch (Throwable t) {
-            Toast.makeText(requireContext(), "通知创建失败（可先到系统设置允许通知权限）：" + t.getMessage(),
+            Toast.makeText(requireContext(), "通知创建失败（可先到系统设置允许通知权限）："
+                    + SensitiveData.redact(String.valueOf(t)),
                     Toast.LENGTH_LONG).show();
         }
     }
@@ -881,22 +907,23 @@ public class ConfigFragment extends Fragment {
         loadConfig();
         if (rootShellCb != null) rootShellCb.setChecked(c.isRootShellAllowed());
         if (backupKeyCb != null) {
-            // 默认开：这是别人为「离线包用户恢复后 key 为空」加的功能，不能默默关掉
+            // 默认关闭：公共 Downloads 备份不应携带 API Key，用户可显式开启
             backupKeyCb.setChecked(requireContext()
                     .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
-                    .getBoolean("backup_include_key", true));
+                    .getBoolean("backup_include_key", false));
         }
 
         saveBtn.setOnClickListener(v -> {
             c.setApiKey(apiKeyEdit.getText().toString().trim());
             c.setPort(portEdit.getText().toString().trim());
+            boolean lanEnabled = lanModeCb != null && lanModeCb.isChecked();
             requireContext().getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                     .edit().putBoolean("confirm_shell", confirmShellCb.isChecked())
                     .putBoolean("check_update", checkUpdateCb.isChecked())
                     .putBoolean("desktop_mode", desktopModeCb.isChecked())
                     .putBoolean("backup_include_key",
                             backupKeyCb == null || backupKeyCb.isChecked())
-                    .putBoolean("lan_mode", lanModeCb.isChecked())
+                    .putBoolean("lan_mode", lanEnabled)
                     .putBoolean("overlay_stream",
                             overlayStreamCb != null && overlayStreamCb.isChecked())
                     // 传感器/手电没有隐私风险，缺控件时按开启算（与 DeviceSense 的默认一致）
@@ -915,6 +942,23 @@ public class ConfigFragment extends Fragment {
                     .putBoolean(DeviceBridgeService.PREF_ADB, adbCb != null && adbCb.isChecked())
                     .putInt("auto_backup_launches", parseAutoBackup())
                     .apply();
+            // LAN is an optional listener, independent from dsh itself.  Make
+            // this switch effective immediately without clearing the current
+            // loopback BrowserAuth state or waiting for a full Web restart.
+            if (!lanEnabled) {
+                LanProxyService.stopLanListener();
+            } else {
+                HarnessController.WebLaunchInfo info = c.getWebLaunchInfo();
+                if (info != null && c.isWebRunning() && c.isBrowserAuthExchanged()) {
+                    LanProxyService.start(c.getRootfsDirPath(),
+                            requireContext().getApplicationContext(),
+                            Constants.DSH_WEB_PORT, info.generation);
+                }
+            }
+            // The alpha runtime intentionally ignores the historical port
+            // preference.  Reflect the fixed loopback port after save without
+            // modifying the old preference key.
+            portEdit.setText(c.getPort());
             c.setRootShellAllowed(rootShellCb != null && rootShellCb.isChecked());
             applyRootShellMark();
             applyConfirmShellMark();
@@ -950,6 +994,9 @@ public class ConfigFragment extends Fragment {
     private void loadConfig() {
         apiKeyEdit.setText(c.getApiKey());
         portEdit.setText(c.getPort());
+        boolean alphaRuntime = HarnessController.EXPECTED_RUNTIME_ID.equals(c.runtimeId());
+        portEdit.setEnabled(!alphaRuntime);
+        portEdit.setAlpha(alphaRuntime ? 0.55f : 1f);
         confirmShellCb.setChecked(requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("confirm_shell", true));

@@ -1,5 +1,7 @@
 package com.deepseekharness.app;
 
+import android.system.Os;
+
 import android.content.Context;
 
 import java.io.ByteArrayOutputStream;
@@ -8,6 +10,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.ExecutorService;
@@ -63,6 +66,10 @@ public class ProotBootstrap {
     private final File tmpDir;
     private final String nativeLibDir;
     private final File markerFile;
+    /** Dedicated first-run gate; keep the historical .installed marker separate. */
+    private final File offlineMarkerFile;
+    /** Old web profile state is retained here during the Alpha rootfs swap. */
+    private static final String ALPHA_LEGACY_ROOT = "root/.dsha-alpha-legacy-";
 
     public ProotBootstrap(Context c) {
         ctx = c.getApplicationContext();
@@ -72,6 +79,7 @@ public class ProotBootstrap {
         tmpDir = new File(baseDir, "tmp");
         nativeLibDir = ctx.getApplicationInfo().nativeLibraryDir;
         markerFile = new File(baseDir, ".installed");
+        offlineMarkerFile = new File(baseDir, ".offline-extracted");
     }
 
     public File getRootfsDir() { return rootfsDir; }
@@ -110,20 +118,24 @@ public class ProotBootstrap {
                 if (!ok) detail = "link 成功但目标不可读";
             } catch (Throwable e) {
                 ok = false;
-                detail = e.getClass().getSimpleName() + ": " + e.getMessage();
-                android.util.Log.w("DSHA", "硬链接探测失败，保留 --link2symlink: " + e);
+                detail = SensitiveData.redact(e.getClass().getSimpleName() + ": "
+                        + e.getMessage());
+                android.util.Log.w("DSHA", "硬链接探测失败，保留 --link2symlink: "
+                        + SensitiveData.redact(String.valueOf(e)));
             } finally {
                 src.delete();
                 dst.delete();
             }
             hardlinkOk = ok;
-            android.util.Log.i("DSHA", "硬链接支持=" + ok + (detail.isEmpty() ? "" : "（" + detail + "）"));
+            android.util.Log.i("DSHA", SensitiveData.redact("硬链接支持=" + ok
+                    + (detail.isEmpty() ? "" : "（" + detail + "）")));
             // 结果落盘，容器里 cat /root/.dsha-hardlink 就能看到判定依据（否则只能抓 logcat）
             try {
                 File mark = new File(rootfsDir, "root/.dsha-hardlink");
                 if (mark.getParentFile() != null) mark.getParentFile().mkdirs();
                 java.nio.file.Files.write(mark.toPath(),
-                        ((ok ? "ok" : "no") + (detail.isEmpty() ? "" : " " + detail) + "\n")
+                        SensitiveData.redact((ok ? "ok" : "no")
+                                + (detail.isEmpty() ? "" : " " + detail) + "\n")
                                 .getBytes(java.nio.charset.StandardCharsets.UTF_8));
             } catch (Throwable ignored) {
             }
@@ -196,19 +208,20 @@ public class ProotBootstrap {
             android.content.SharedPreferences sp = ctx.getSharedPreferences(
                     "deepseekharness", Context.MODE_PRIVATE);
             if (!"proroot".equals(sp.getString("container_runtime", "proroot"))) return false;
+            String safeWhy = SensitiveData.redact(why == null ? "" : why);
             int n = sp.getInt("proroot_fail_streak", 0) + 1;
             if (n >= PROROOT_FAIL_LIMIT) {
                 sp.edit().putString("container_runtime", "proot")
                         .putInt("proroot_fail_streak", 0)
-                        .putString("proroot_last_error", why == null ? "" : why)
+                        .putString("proroot_last_error", safeWhy)
                         .apply();
-                android.util.Log.w("DSHA", "proroot 连续失败 " + n + " 次，已强制切回 proot：" + why);
+                android.util.Log.w("DSHA", "proroot 连续失败 " + n + " 次，已强制切回 proot：" + safeWhy);
                 HarnessController.get(ctx).logActivity(
-                        "运行时强制回退：proroot 连续失败 " + n + " 次已切回 proot —— " + why);
+                        "运行时强制回退：proroot 连续失败 " + n + " 次已切回 proot —— " + safeWhy);
                 return true;
             }
             sp.edit().putInt("proroot_fail_streak", n)
-                    .putString("proroot_last_error", why == null ? "" : why).apply();
+                    .putString("proroot_last_error", safeWhy).apply();
         } catch (Throwable ignored) {
         }
         return false;
@@ -240,13 +253,15 @@ public class ProotBootstrap {
                     pr.prepare();
                     return pr;
                 }
+                String unavailable = SensitiveData.redact(pr.unavailableReason());
                 android.util.Log.w("DSHA", "proroot 不可用，本次降回 proot: "
-                        + pr.unavailableReason());
+                        + unavailable);
                 HarnessController.get(ctx).logActivity(
-                        "运行时降级：proroot 不可用，本次用 proot —— " + pr.unavailableReason());
+                        "运行时降级：proroot 不可用，本次用 proot —— " + unavailable);
             }
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "选择运行时失败，降回 proot: " + e);
+            android.util.Log.w("DSHA", "选择运行时失败，降回 proot: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
         return new ContainerRuntime.Proot(ctx, findNativeLib("libproot.so"));
     }
@@ -322,7 +337,100 @@ public class ProotBootstrap {
 
     /** 内置包是否已经解压成功过（和「网上分步装了一半」区分开） */
     public boolean isOfflineExtracted() {
-        return new File(baseDir, ".offline-extracted").isFile() && hasBash();
+        return offlineMarkerFile.isFile() && hasBash();
+    }
+
+    /**
+     * Check the immutable identity of the local 1.2 Alpha runtime.
+     *
+     * <p>A historical rootfs can have an old success marker and still contain
+     * a different dsh.  The marker therefore proves only that an extraction
+     * once completed; it must never be used as the Alpha runtime identity.
+     * This check reads the files directly from the app-private rootfs and does
+     * not execute dsh, mutate the rootfs, or contact the network.</p>
+     */
+    public boolean hasExpectedAlphaOfflineRuntime() {
+        // APK asset extraction on Android can drop tar symlink entries. Repair the
+        // immutable builtin plugin copies before the normal identity check so an
+        // otherwise valid v5 rootfs does not get needlessly re-extracted.
+        try {
+            if (rootfsDir.isDirectory()) ensureBuiltinPluginLinks(rootfsDir);
+        } catch (Throwable ignored) {
+        }
+        return alphaRuntimeProblem().isEmpty();
+    }
+
+    /** Human-readable, credential-free reason used by the install/start gate. */
+    public String alphaRuntimeProblem() {
+        if (!isOfflineExtracted()) return "内置环境标记或 bash 缺失";
+        return alphaRuntimeProblem(rootfsDir);
+    }
+
+    /** Validate a candidate rootfs before it is allowed to replace the live one. */
+    private String alphaRuntimeProblem(File candidate) {
+        if (candidate == null || !candidate.isDirectory()) return "rootfs 目录缺失";
+        File manifest = new File(candidate, "usr/local/share/dsha-dsh-runtime.json");
+        File packageJson = new File(candidate,
+                "usr/local/lib/node_modules/@deepseek-ai/dsh/package.json");
+        File command = new File(candidate, "usr/local/bin/dsh");
+        if (!manifest.isFile()) return "缺少 dsh runtime manifest";
+        if (!packageJson.isFile() || !command.isFile()) return "缺少固定 dsh 生产运行时";
+        try {
+            validateBuiltinPluginLinks(candidate);
+        } catch (IOException e) {
+            return "内置插件链接缺失";
+        }
+        try {
+            org.json.JSONObject runtime = new org.json.JSONObject(readSmallText(manifest));
+            if (!Constants.DSH_ALPHA_RUNTIME_ID.equals(runtime.optString("runtimeId"))
+                    || !Constants.DSH_ALPHA_VERSION.equals(runtime.optString("dshVersion"))
+                    || !Constants.DSH_ALPHA_RUNTIME_ID.equals(runtime.optString("upstreamTag"))
+                    || !Constants.DSH_ALPHA_UPSTREAM_COMMIT.equals(runtime.optString("upstreamCommit"))) {
+                return "dsh runtime manifest 与固定上游不匹配";
+            }
+            org.json.JSONObject pkg = new org.json.JSONObject(readSmallText(packageJson));
+            if (!Constants.DSH_ALPHA_VERSION.equals(pkg.optString("version"))) {
+                return "dsh package 版本与固定上游不匹配";
+            }
+        } catch (Throwable e) {
+            return "dsh runtime manifest 不可读";
+        }
+        // The Alpha rootfs is a packed production closure, never a source checkout
+        // or a development pnpm store.  Refuse an old/partial rootfs rather than
+        // letting it pass based only on the old extraction marker.
+        String[] forbidden = {
+                "root/.pnpm-store",
+                "usr/local/lib/node_modules/.pnpm",
+                "usr/local/lib/node_modules/@deepseek-ai/dsh/.git",
+                "usr/local/lib/node_modules/@deepseek-ai/dsh/packages",
+                "usr/local/lib/node_modules/@deepseek-ai/dsh/apps",
+        };
+        for (String relative : forbidden) {
+            if (new File(candidate, relative).exists()) {
+                return "dsh rootfs 混入源码或开发依赖";
+            }
+        }
+        // The legacy workdir name is still retained in SharedPreferences for
+        // rollback compatibility, and an empty directory with that name is a
+        // harmless cwd for an upstream install.  Reject it only when it is
+        // actually a source checkout; checking directory existence alone would
+        // make the first Alpha start fail after it creates its cwd.
+        File legacySource = new File(candidate, "root/deepseek-harness");
+        if (legacySource.isDirectory()
+                && (new File(legacySource, "apps/cli/lib/bin.js").isFile()
+                || new File(legacySource, "lib/bin.js").isFile())) {
+            return "dsh rootfs 混入源码或开发依赖";
+        }
+        return "";
+    }
+
+    private static String readSmallText(File file) throws IOException {
+        final long max = 1024L * 1024L;
+        if (!file.isFile() || file.length() < 2 || file.length() > max) {
+            throw new IOException("runtime metadata 文件大小异常");
+        }
+        return new String(java.nio.file.Files.readAllBytes(file.toPath()),
+                java.nio.charset.StandardCharsets.UTF_8);
     }
 
     public void markOfflineExtracted() {
@@ -371,7 +479,7 @@ public class ProotBootstrap {
         } catch (Exception e) {
             sb.append("assetsErr=").append(e.getMessage()).append('\n');
         }
-        return sb.toString();
+        return SensitiveData.redact(sb.toString());
     }
 
     private String versionName() {
@@ -505,7 +613,7 @@ public class ProotBootstrap {
             }
             return out;
         } catch (Throwable e) {
-            return "ERROR: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+            return "ERROR: " + SensitiveData.redact(String.valueOf(e));
         }
     }
 
@@ -637,6 +745,15 @@ public class ProotBootstrap {
 
     /** 阻塞读取进程输出，保持长驻进程存活；进程退出时返回最后一段输出 */
     public String drainOutput(Process p) throws IOException {
+        return drainOutput(p, null);
+    }
+
+    /**
+     * Drain a long-running process and optionally observe output chunks while
+     * it is still alive.  The observer is used only for the official dsh
+     * BrowserAuth line; callers must not persist the unredacted chunks.
+     */
+    public String drainOutput(Process p, java.util.function.Consumer<String> observer) throws IOException {
         InputStream in = p.getInputStream();
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         byte[] buf = new byte[8192];
@@ -644,6 +761,12 @@ public class ProotBootstrap {
         int kept = 0;
         final int MAX = 64 * 1024;
         while ((n = in.read(buf)) != -1) {
+            if (observer != null && n > 0) {
+                try {
+                    observer.accept(new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8));
+                } catch (Throwable ignored) {
+                }
+            }
             if (kept < MAX) {
                 int w = Math.min(n, MAX - kept);
                 bos.write(buf, 0, w);
@@ -655,11 +778,11 @@ public class ProotBootstrap {
 
     /** 冒烟测试：proot 能否直接 exec + 进 rootfs */
     public String smokeTest() {
-        ensureRuntimeFiles();
-        StringBuilder diag = new StringBuilder();
-        diag.append("proot 路径: ").append(prootPath()).append("\n");
-        diag.append("nativeLibDir: ").append(nativeLibDir).append("\n");
         try {
+            ensureRuntimeFiles();
+            StringBuilder diag = new StringBuilder();
+            diag.append("proot 路径: ").append(prootPath()).append("\n");
+            diag.append("nativeLibDir: ").append(nativeLibDir).append("\n");
             ProcessBuilder pb = new ProcessBuilder(prootPath(), "--version")
                     .redirectErrorStream(true);
             pb.environment().put("LD_LIBRARY_PATH", libDir.getAbsolutePath() + ":" + findNativeLib("libproot.so").getParent());
@@ -667,12 +790,20 @@ public class ProotBootstrap {
             String v = readStream(p.getInputStream());
             p.waitFor();
             diag.append("[1] proot --version: ").append(v == null ? "" : v.trim().split("\n")[0]).append("\n");
+            try {
+                String out = execAndRead("/bin/echo SMOKE_OK");
+                diag.append("[2] rootfs exec: ").append(out == null ? "" : out.trim()).append("\n");
+            } catch (Throwable e) {
+                // Return a diagnostic instead of leaking the raw exception to a
+                // UI caller; the absence of SMOKE_OK still marks the probe bad.
+                diag.append("[2] rootfs exec failed: ")
+                        .append(SensitiveData.redact(String.valueOf(e))).append("\n");
+            }
+            return SensitiveData.redact(diag.toString());
         } catch (Throwable e) {
-            return "PROOT_FAIL: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+            return SensitiveData.redact("PROOT_FAIL: " + e.getClass().getSimpleName()
+                    + ": " + e.getMessage());
         }
-        String out = execAndRead("/bin/echo SMOKE_OK");
-        diag.append("[2] rootfs exec: ").append(out == null ? "" : out.trim()).append("\n");
-        return diag.toString();
     }
 
     /** HEAD 请求测下载源延迟；可用返回耗时毫秒，失败返回 -1 */
@@ -826,13 +957,32 @@ public class ProotBootstrap {
     }
 
     public void setupResolvConf() {
-        File rc = new File(rootfsDir, "etc/resolv.conf");
-        rc.getParentFile().mkdirs();
-        if (rc.exists()) rc.delete();
+        try {
+            setupResolvConf(rootfsDir);
+        } catch (IOException e) {
+            android.util.Log.w("DSHA", "写 resolv.conf 失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
+        }
+    }
+
+    /**
+     * 在指定 rootfs 中写入 resolv.conf。离线包事务会先对 stage 调用这个重载，
+     * 这样旧 rootfs 在提交前完全不被触碰。
+     */
+    private void setupResolvConf(File targetRootfs) throws IOException {
+        File rc = new File(targetRootfs, "etc/resolv.conf");
+        File parent = rc.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
+            throw new IOException("无法创建 resolv.conf 父目录: " + parent);
+        }
+        if (rc.exists() && !rc.delete() && rc.exists()) {
+            throw new IOException("无法替换 resolv.conf");
+        }
         try (FileOutputStream o = new FileOutputStream(rc)) {
             // 国内 DNS 优先保证基础解析（墙内 8.8.8.8/1.1.1.1 常被污染/不可达）
-            o.write("nameserver 223.5.5.5\nnameserver 119.29.29.29\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n".getBytes());
-        } catch (IOException ignored) {
+            o.write("nameserver 223.5.5.5\nnameserver 119.29.29.29\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n"
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            o.getFD().sync();
         }
     }
 
@@ -879,12 +1029,25 @@ public class ProotBootstrap {
     /** 解压完成后记录离线包版本标记（供启动时对比，发现新包可提示升级） */
     private void writeOfflineVersion() {
         try {
-            java.io.File f = new java.io.File(rootfsDir, "root/.dsh/offline-rootfs.version");
-            if (f.getParentFile() != null) f.getParentFile().mkdirs();
-            java.nio.file.Files.write(f.toPath(), bundledOfflineVersion().getBytes(
-                    java.nio.charset.StandardCharsets.UTF_8));
-        } catch (Throwable e) {
-            android.util.Log.w("DSHA", "离线包版本标记写入失败，升级提示可能重复出现: " + e);
+            writeOfflineVersion(rootfsDir);
+        } catch (IOException e) {
+            android.util.Log.w("DSHA", "离线包版本标记写入失败，升级提示可能重复出现: "
+                    + SensitiveData.redact(String.valueOf(e)));
+        }
+    }
+
+    /** 在候选 rootfs 内写版本标记；失败必须让整个候选事务失败。 */
+    private void writeOfflineVersion(File targetRootfs) throws IOException {
+        File f = new File(targetRootfs, "root/.dsh/offline-rootfs.version");
+        File parent = f.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
+            throw new IOException("无法创建离线版本标记目录: " + parent);
+        }
+        byte[] value = bundledOfflineVersion().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        // 版本标记在候选目录里先写完并 force，提交时才会被外部看到。
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+            out.write(value);
+            out.getFD().sync();
         }
     }
 
@@ -987,82 +1150,75 @@ public class ProotBootstrap {
             }
         };
 
+        File stage = null;
+        File dataBak = null;
+        File oldBackup = null;
+        File offlineMarkerBackup = null;
+        boolean offlineMarkerMoved = false;
+        boolean oldMoved = false;
+        boolean candidateMoved = false;
+        boolean successMarkerPublished = false;
         try {
-            // ===== 数据保护：重解压前备份用户数据（.dsh 配置/对话 + 所有工作目录 .env），解压后自动还原 =====
-            // 旧 rootfs 存在但 isOfflineExtracted() 判定失败（标记丢失/bash 路径变化）会走到这里，
-            // 直接删整个 rootfs 会连对话记录一起丢掉（issue#9 第1条）——必须先备份再删。
-            // .env 遍历 /root 下所有子目录（兼容用户自定义 workdir，不只默认 deepseek-harness）。
-            java.io.File dataBak = null;
+            // ===== P0 事务边界 =====
+            // 所有解压、校验和用户数据还原都发生在同父目录的独立 stage；旧 rootfs
+            // 只有在候选完整可用后才会被 rename 到备份名并原子切换。
+            dataBak = preserveUserData();
+            stage = uniqueSibling(".ubuntu.stage-");
+            if (!stage.mkdirs() && !stage.isDirectory()) {
+                throw new IOException("无法创建离线包 stage: " + stage);
+            }
+            TarGzipExtractor.extractAuto(counted, stage, 0);
+            installBundledPython(stage);
+            ensureBuiltinPluginLinks(stage);
+            validateOfflineRootfs(stage);
+            setupResolvConf(stage);
+            if (dataBak != null) restoreUserData(dataBak, stage);
+            writeOfflineVersion(stage);
+
+            // 旧离线成功标记先移到同父目录备份，避免切换窗口中 stale marker 误判半成品。
+            // .installed 是历史分步安装标记，保留其独立语义；成功提交后再刷新它。
+            if (offlineMarkerFile.exists()) {
+                offlineMarkerBackup = uniqueSibling(".offline-extracted.pre-");
+                moveAtomic(offlineMarkerFile, offlineMarkerBackup);
+                offlineMarkerMoved = true;
+            }
             if (rootfsDir.exists()) {
-                // 用户数据保护：把 /root 下的东西**整体挪走**，而不是挑几样复制。
-                //
-                // 原先只保 .dsh、plugin-src 和各工作区的 .env —— 于是工作区目录里其它所有
-                // 东西（用户写的代码、agent 的产出、下载的文件）随 rootfs 一起被删。
-                // 真机反馈的原话是「确实，工作区域的内容全部丢失了」。
-                // **「挑哪些文件要保」这个判断只要存在，就一定会漏掉某样东西**；
-                // 整目录挪走之后这个问题从根上没有了。
-                //
-                // 为什么用 rename 而不是复制：dataBak 与 rootfs 在同一个文件系统里
-                //（都在 files/linux 下），rename 是 O(1)、不占额外空间、瞬间完成；
-                // 复制要付「数据大小 ×2」的空间和好几分钟 —— 对话几个 GB 的用户正是在
-                // 这一步空间不够，而那时 rootfs 已经删了。rename 失败才退回复制（保留软链）。
-                java.io.File rootHome = new java.io.File(rootfsDir, "root");
-                java.io.File[] kids = rootHome.isDirectory() ? rootHome.listFiles() : null;
-                if (kids != null && kids.length > 0) {
-                    dataBak = new java.io.File(baseDir, ".data-preserve-" + System.currentTimeMillis());
-                    //noinspection ResultOfMethodCallIgnored
-                    dataBak.mkdirs();
-                    int moved = 0, copied = 0, failed = 0;
-                    for (java.io.File k : kids) {
-                        // 内置插件实体（/root/dsha-*）不必保：新 APK 会按
-                        // BUILTIN_ASSET_VERSION 重新注入，而且新版往往就是要换掉它们
-                        if (k.getName().startsWith("dsha-")) continue;
-                        java.io.File dst = new java.io.File(dataBak, k.getName());
-                        if (k.renameTo(dst)) {
-                            moved++;
-                        } else {
-                            try {
-                                copyRecursively(k, dst);
-                                copied++;
-                            } catch (Throwable e) {
-                                failed++;
-                                android.util.Log.w("DSHA", "保护 " + k.getName() + " 失败: " + e);
-                            }
-                        }
-                    }
-                    android.util.Log.i("DSHA", "用户数据已保护：挪走 " + moved + " 项、复制 "
-                            + copied + " 项、失败 " + failed + " 项 → " + dataBak.getName());
-                }
+                oldBackup = uniqueSibling(".ubuntu.pre-offline-");
+                moveAtomic(rootfsDir, oldBackup);
+                oldMoved = true;
             }
-            // 空间预检：**必须在删 rootfs 之前**。删完才发现装不回来是这条路上最坏的结果
-            //（用户环境没了，而且他手上没有别的办法恢复）。解出来大约是包的 3.5 倍，
-            // 这里按 4 倍加 200MB 余量估；估不出包大小（total=0）时不拦，避免误伤。
-            if (tot > 0) {
-                long need = tot * 4 + 200L * 1024 * 1024;
-                long free = baseDir.getUsableSpace();
-                if (free > 0 && free < need) {
-                    throw new IOException("空间不够，已中止升级（rootfs 未改动）\n"
-                            + "需要约 " + (need >> 20) + " MB，当前可用 " + (free >> 20) + " MB。\n"
-                            + "清点一下空间再试 —— 现在停下来比删掉环境又装不回来好。");
-                }
-            }
-            if (rootfsDir.exists()) deleteRecursively(rootfsDir);
-            rootfsDir.mkdirs();
-            TarGzipExtractor.extractAuto(counted, rootfsDir, 0);
-            if (!hasBash()) {
-                throw new IOException("解压后 rootfs 不完整（缺少 bash）\n" + diagnoseRootfs());
-            }
-            setupResolvConf();
-            // 解压完成后还原用户数据（.dsh + 所有工作目录 .env）
+            moveAtomic(stage, rootfsDir);
+            candidateMoved = true;
+
+            // 最后一步发布 marker；写失败会在 catch 中撤回 rootfs 和 marker。
+            writeOfflineSuccessMarker();
+            successMarkerPublished = true;
+            // 3090 bridge token 只在候选已经通过 marker 提交后重建，避免提交失败
+            // 时把旧 rootfs 恢复回来却留下新内存凭据。
             if (dataBak != null) {
-                // 还原逻辑与「事后兜底恢复」共用同一份实现（restorePreservedData）——
-                // 「解压完还原」和「上次没走完、事后补救」是同一件事，分成两份写必然分家。
-                String rr = restorePreservedData(dataBak, true);
-                android.util.Log.i("DSHA", "重解压还原用户数据：" + rr);
+                HttpShellService.resetTokenAfterRestore();
+                android.util.Log.i("DSHA", "重解压已还原用户数据 (.dsh + 工作区 .env)");
             }
-            markOfflineExtracted();
-            // 记录离线包版本（启动时对比，发现新版可提示升级）
-            writeOfflineVersion();
+            markInstalled();
+
+            // 新 rootfs 和 marker 都成功后再删除旧副本。删除失败时保留副本供排查。
+            if (oldBackup != null && oldBackup.exists()) {
+                deleteRecursively(oldBackup);
+                if (oldBackup.exists()) {
+                    android.util.Log.w("DSHA", "旧 rootfs 副本清理失败，保留于: " + oldBackup);
+                }
+            }
+            if (offlineMarkerBackup != null && offlineMarkerBackup.exists()) {
+                deleteRecursively(offlineMarkerBackup);
+            }
+            if (dataBak != null && dataBak.exists()) deleteRecursively(dataBak);
+        } catch (Throwable failure) {
+            rollbackOfflineSwap(stage, dataBak, oldBackup, offlineMarkerBackup,
+                    offlineMarkerMoved, oldMoved, candidateMoved, successMarkerPublished);
+            if (failure instanceof IOException) throw (IOException) failure;
+            if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+            if (failure instanceof Error) throw (Error) failure;
+            throw new IOException("离线包切换失败", failure);
         } finally {
             try { counted.close(); } catch (Exception ignored) {}
             if (apk != null) {
@@ -1143,7 +1299,8 @@ public class ProotBootstrap {
                     }
                 } catch (Throwable e) {
                     failed++;
-                    android.util.Log.w("DSHA", "还原 " + n + " 失败: " + e);
+                    android.util.Log.w("DSHA", "还原 " + SensitiveData.redact(n) + " 失败: "
+                            + SensitiveData.redact(String.valueOf(e)));
                 }
             }
             log.append("挪回 ").append(moved).append(" 项");
@@ -1172,10 +1329,12 @@ public class ProotBootstrap {
             } else {
                 log.append("保护目录保留在 ").append(dataBak.getName());
             }
-            return log.toString();
+            return SensitiveData.redact(log.toString());
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "还原用户数据失败: " + e);
-            return "还原过程出错：" + e + "（保护目录没有删，可以再试一次）";
+            android.util.Log.w("DSHA", "还原用户数据失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
+            return "还原过程出错：" + SensitiveData.redact(String.valueOf(e))
+                    + "（保护目录没有删，可以再试一次）";
         }
     }
 
@@ -1263,7 +1422,7 @@ public class ProotBootstrap {
             if (envs != null && envs.length > 0) sb.append("工作区配置：").append(envs.length).append(" 份\n");
         } catch (Throwable ignored) {
         }
-        return sb.toString().trim();
+        return SensitiveData.redact(sb.toString().trim());
     }
 
     /** 用户选择「不要了」：把残留整个删掉（只有用户明确点删才走这里）。 */
@@ -1275,6 +1434,441 @@ public class ProotBootstrap {
         } catch (Throwable e) {
             return false;
         }
+    }
+
+    /** 在 baseDir 下生成不会与现有事务目录冲突的名字。 */
+    private File uniqueSibling(String prefix) throws IOException {
+        if (!baseDir.isDirectory() && !baseDir.mkdirs() && !baseDir.isDirectory()) {
+            throw new IOException("无法创建离线环境父目录: " + baseDir);
+        }
+        long seed = System.currentTimeMillis();
+        for (int i = 0; i < 100; i++) {
+            File f = new File(baseDir, prefix + seed + "-" + i);
+            if (!f.exists()) return f;
+        }
+        throw new IOException("无法生成离线环境事务目录名");
+    }
+
+    private boolean hasBash(File candidate) {
+        return new File(candidate, "usr/bin/bash").isFile()
+                || new File(candidate, "bin/bash").isFile();
+    }
+
+    /** 候选包的最小完整性检查；这里只检查启动必需结构，不解析 dsh 会话格式。 */
+    private void validateOfflineRootfs(File candidate) throws IOException {
+        if (!candidate.isDirectory()) {
+            throw new IOException("离线包 stage 不是目录");
+        }
+        if (!new File(candidate, "root").isDirectory()) {
+            throw new IOException("解压后 rootfs 不完整（缺少 root 目录）");
+        }
+        if (!hasBash(candidate)) {
+            throw new IOException("解压后 rootfs 不完整（缺少 bash）");
+        }
+        validateBuiltinPluginLinks(candidate);
+        String runtimeProblem = alphaRuntimeProblem(candidate);
+        if (!runtimeProblem.isEmpty()) {
+            throw new IOException("解压后 Alpha rootfs 校验失败（" + runtimeProblem + "）");
+        }
+    }
+
+    /** 在切换旧 rootfs 前复制必须保留的用户数据；任何复制失败都不进入切换阶段。 */
+    private File preserveUserData() throws IOException {
+        if (!rootfsDir.exists()) return null;
+        File dshDir = new File(rootfsDir, "root/.dsh");
+        File rootHome = new File(rootfsDir, "root");
+        if (rootHome.exists() && !rootHome.isDirectory()) {
+            throw new IOException("旧 rootfs 的 root 不是目录，拒绝覆盖以保护用户数据");
+        }
+        if (dshDir.exists() && !dshDir.isDirectory()) {
+            throw new IOException("旧 rootfs 的 .dsh 不是目录，拒绝覆盖以保护用户数据");
+        }
+        File[] workDirs = rootHome.isDirectory()
+                ? rootHome.listFiles(File::isDirectory) : null;
+        if (rootHome.isDirectory() && workDirs == null) {
+            throw new IOException("无法读取旧 rootfs 的 root 目录，拒绝覆盖以保护用户数据");
+        }
+        boolean hasData = dshDir.isDirectory() || (workDirs != null && workDirs.length > 0);
+        if (!hasData) return null;
+
+        File dataBak = uniqueSibling(".data-preserve-");
+        if (!dataBak.mkdirs() && !dataBak.isDirectory()) {
+            throw new IOException("无法创建用户数据备份目录: " + dataBak);
+        }
+        if (dshDir.isDirectory()) {
+            copyRecursively(dshDir, new File(dataBak, "dsh"));
+        }
+        if (workDirs != null) {
+            for (File d : workDirs) {
+                File env = new File(d, ".env");
+                if (env.exists() && !env.isFile()) {
+                    throw new IOException("旧工作目录的 .env 不是文件: " + env);
+                }
+                if (env.isFile()) copyFile(env, new File(dataBak, "env-" + d.getName()));
+            }
+        }
+        return dataBak;
+    }
+
+    /** 将备份数据恢复到候选 rootfs；候选未提交前绝不修改当前 rootfs。 */
+    private void restoreUserData(File dataBak, File targetRootfs) throws IOException {
+        File dshDst = new File(targetRootfs, "root/.dsh");
+        File dshBak = new File(dataBak, "dsh");
+        if (dshBak.isDirectory()) {
+            if (!dshDst.exists() && !dshDst.mkdirs() && !dshDst.isDirectory()) {
+                throw new IOException("无法创建候选 .dsh 目录: " + dshDst);
+            }
+            restoreAlphaDshData(dshBak, dshDst, targetRootfs);
+        }
+        File[] envBaks = dataBak.listFiles((d, n) -> n.startsWith("env-"));
+        if (envBaks == null) throw new IOException("读取用户数据备份失败: " + dataBak);
+        for (File envBak : envBaks) {
+            String dirName = envBak.getName().substring("env-".length());
+            if (dirName.isEmpty()) throw new IOException("用户数据备份目录名为空");
+            File envDst = new File(targetRootfs, "root/" + dirName + "/.env");
+            if (envDst.getParentFile() != null && !envDst.getParentFile().isDirectory()
+                    && !envDst.getParentFile().mkdirs() && !envDst.getParentFile().isDirectory()) {
+                throw new IOException("无法创建候选工作目录: " + envDst.getParentFile());
+            }
+            copyFile(envBak, envDst);
+        }
+
+        // 这些文件属于本机而非用户数据；删除失败必须让候选事务失败，避免留下旧凭据。
+        for (String rel : UserDataPolicy.purgeAfterRestore()) {
+            File stale = new File(targetRootfs, rel);
+            if (stale.isFile() && !stale.delete() && stale.exists()) {
+                throw new IOException("无法清理候选本机文件: " + rel);
+            }
+        }
+    }
+
+    /** Install the small, offline Python runtime used by restore/self-test scripts.
+     * The archive is sourced from the verified Termux arm64 runtime and unpacked
+     * into the candidate stage before validation, so a failed swap cannot affect
+     * the previously running rootfs. */
+    private void installBundledPython(File stage) throws IOException {
+        File py = new File(stage, "bin/python3");
+        File stdlib = new File(stage,
+                "data/data/com.termux/files/usr/lib/python3.14/os.py");
+        File support = new File(stage,
+                "data/data/com.termux/files/usr/lib/libandroid-support.so");
+        if (py.isFile() && py.length() > 0 && stdlib.isFile() && support.isFile()) return;
+        File bundle = new File(tmpDir, "python-runtime.tgz");
+        tmpDir.mkdirs();
+        try (java.io.InputStream in = ctx.getAssets().open("runtime-python/python-runtime.tgz");
+             java.io.OutputStream out = new java.io.BufferedOutputStream(new java.io.FileOutputStream(bundle))) {
+            byte[] b = new byte[64 * 1024]; int n;
+            while ((n = in.read(b)) >= 0) { if (n > 0) out.write(b, 0, n); }
+        }
+        try (InputStream in = new FileInputStream(bundle)) {
+            TarGzipExtractor.extractAuto(in, stage, 0);
+        }
+        File src = new File(stage, "bin/python3.14");
+        if (!src.isFile()) throw new IOException("bundled Python runtime missing");
+        // The Termux runtime is laid out under /bin and /lib; keep that prefix
+        // intact so Python can locate its adjacent standard library.
+        File target = new File(stage, "bin/python3");
+        target.getParentFile().mkdirs();
+        try { java.nio.file.Files.createSymbolicLink(target.toPath(), java.nio.file.Paths.get("python3.14")); }
+        catch (Exception ignored) { java.nio.file.Files.copy(src.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING); }
+        // Keep a deterministic marker for diagnostics; no network or package manager involved.
+        java.nio.file.Files.write(new File(stage, "root/.dsha-python-version").toPath(),
+                "3.14-termux-arm64\n".getBytes(StandardCharsets.UTF_8));
+        //noinspection ResultOfMethodCallIgnored
+        bundle.delete();
+    }
+
+    /** Ensure an already-installed (including upgraded) rootfs has the offline
+     * Python interpreter needed by restore-merge.py. This is idempotent and
+     * repairs incomplete runtime files; it never removes user data. */
+    boolean ensureBundledPython() {
+        if (!rootfsDir.isDirectory()) return false;
+        File py = new File(rootfsDir, "bin/python3");
+        File stdlib = new File(rootfsDir,
+                "data/data/com.termux/files/usr/lib/python3.14/os.py");
+        File support = new File(rootfsDir,
+                "data/data/com.termux/files/usr/lib/libandroid-support.so");
+        // A previous alpha build unpacked the verified runtime one level below
+        // the rootfs (root/bin + root/data).  Keep those files for diagnosis,
+        // but materialize the same immutable runtime at the actual rootfs
+        // prefix so proot can resolve /bin/python3 and /data/... correctly.
+        File misplacedPy = new File(rootfsDir, "root/bin/python3.14");
+        File misplacedStdlib = new File(rootfsDir,
+                "root/data/data/com.termux/files/usr/lib/python3.14/os.py");
+        File misplacedSupport = new File(rootfsDir,
+                "root/data/data/com.termux/files/usr/lib/libandroid-support.so");
+        if ((!py.isFile() || !stdlib.isFile() || !support.isFile())
+                && misplacedPy.isFile() && misplacedStdlib.isFile() && misplacedSupport.isFile()) {
+            try {
+                copyRuntimeTree(new File(rootfsDir, "root/bin"), new File(rootfsDir, "bin"));
+                copyRuntimeTree(new File(rootfsDir, "root/data"), new File(rootfsDir, "data"));
+                File canonical = new File(rootfsDir, "bin/python3");
+                File source = new File(rootfsDir, "bin/python3.14");
+                if (!canonical.exists()) {
+                    try { java.nio.file.Files.createSymbolicLink(canonical.toPath(), java.nio.file.Paths.get("python3.14")); }
+                    catch (Exception ignored) { java.nio.file.Files.copy(source.toPath(), canonical.toPath()); }
+                }
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "修复离线 Python3 路径失败: "
+                        + SensitiveData.redact(String.valueOf(e)));
+            }
+        }
+        if (py.isFile() && py.length() > 0 && stdlib.isFile() && support.isFile()) return true;
+        try {
+            installBundledPython(rootfsDir);
+            return new File(rootfsDir, "bin/python3").isFile()
+                    && new File(rootfsDir,
+                    "data/data/com.termux/files/usr/lib/python3.14/os.py").isFile()
+                    && new File(rootfsDir,
+                    "data/data/com.termux/files/usr/lib/libandroid-support.so").isFile();
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "离线 Python3 安装失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
+            return false;
+        }
+    }
+
+    private static void copyRuntimeTree(File source, File target) throws IOException {
+        if (!source.isDirectory()) return;
+        if (!target.isDirectory() && !target.mkdirs() && !target.isDirectory()) {
+            throw new IOException("无法创建 Python 运行时目录: " + target);
+        }
+        File[] entries = source.listFiles();
+        if (entries == null) throw new IOException("无法读取 Python 运行时目录: " + source);
+        for (File entry : entries) {
+            File dst = new File(target, entry.getName());
+            if (entry.isDirectory()) {
+                copyRuntimeTree(entry, dst);
+            } else if (entry.isFile() && (!dst.isFile() || dst.length() != entry.length())) {
+                java.nio.file.Files.copy(entry.toPath(), dst.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+    }
+
+    /** Android 的 Os.symlink 对 tar 内绝对链接可能静默失败；在候选 rootfs 内
+     * 显式补齐 profile 可解析的相对链接，确保 dsh loader 真正能找到内置插件。 */
+    private void ensureBuiltinPluginLinks(File rootfs) throws IOException {
+        File profileNm = new File(rootfs, "root/.dsh/profiles/web/node_modules");
+        File globalNm = new File(rootfs, "usr/local/lib/node_modules");
+        if (!profileNm.isDirectory() && !profileNm.mkdirs() && !profileNm.isDirectory()) {
+            throw new IOException("无法创建内置插件 profile node_modules");
+        }
+        if (!globalNm.isDirectory() && !globalNm.mkdirs() && !globalNm.isDirectory()) {
+            throw new IOException("无法创建内置插件 global node_modules");
+        }
+        String[] names = {"dsh-device-shell-guide", "dsh-task-notifier",
+                "dsh-status-overlay", "dsh-web-mobile"};
+        for (String name : names) {
+            File entity = new File(rootfs, "root/dsha-" + name.substring("dsh-".length()));
+            File pkg = new File(entity, "package.json");
+            File entry = new File(entity, "lib/index.js");
+            if (!entity.isDirectory() || !pkg.isFile() || !entry.isFile()) {
+                throw new IOException("内置插件实体不完整: " + name);
+            }
+            materializeBuiltin(profileNm, name, entity);
+            materializeBuiltin(globalNm, name, entity);
+        }
+    }
+
+    private void materializeBuiltin(File parent, String name, File target) throws IOException {
+        File dst = new File(parent, name);
+        if (dst.isDirectory() && !java.nio.file.Files.isSymbolicLink(dst.toPath())
+                && new File(dst, "package.json").isFile()
+                && new File(dst, "lib/index.js").isFile()) return;
+        if (dst.exists() || java.nio.file.Files.isSymbolicLink(dst.toPath())) deleteRecursively(dst);
+        copyRecursively(target, dst);
+    }
+
+    private void linkInside(File rootfs, File parent, String name, File target)
+            throws IOException {
+        File link = new File(parent, name);
+        if (link.exists() || java.nio.file.Files.isSymbolicLink(link.toPath())) {
+            if (link.isDirectory() && !java.nio.file.Files.isSymbolicLink(link.toPath())) {
+                deleteRecursively(link);
+            } else if (!link.delete() && link.exists()) {
+                throw new IOException("无法替换内置插件链接: " + name);
+            }
+        }
+        try {
+            java.nio.file.Path rel = parent.toPath().toAbsolutePath().normalize()
+                    .relativize(target.toPath().toAbsolutePath().normalize());
+            Os.symlink(rel.toString(), link.getAbsolutePath());
+        } catch (Throwable e) {
+            throw new IOException("无法创建内置插件链接: " + name, e);
+        }
+    }
+
+    private void validateBuiltinPluginLinks(File rootfs) throws IOException {
+        File profileNm = new File(rootfs, "root/.dsh/profiles/web/node_modules");
+        for (String name : new String[]{"dsh-device-shell-guide", "dsh-task-notifier",
+                "dsh-status-overlay", "dsh-web-mobile"}) {
+            File link = new File(profileNm, name);
+            if (!link.isDirectory() || !new File(link, "package.json").isFile()
+                    || !new File(link, "lib/index.js").isFile()) {
+                throw new IOException("内置插件链接不可解析: " + name);
+            }
+        }
+    }
+
+    /**
+     * Restore user-owned dsh data without activating the legacy web profile.
+     * Sessions, settings, credentials and non-web profiles remain unchanged;
+     * old web/plugin state is retained in a timestamped quarantine.
+     */
+    private void restoreAlphaDshData(File srcDsh, File dstDsh, File targetRootfs)
+            throws IOException {
+        File[] children = srcDsh.listFiles();
+        if (children == null) throw new IOException("无法读取用户 .dsh 数据: " + srcDsh);
+        File quarantine = null;
+        for (File child : children) {
+            String name = child.getName();
+            if ("cordis.patch.yml".equals(name)) {
+                if (quarantine == null) quarantine = createAlphaQuarantine(targetRootfs);
+                copyRecursively(child, new File(quarantine, "cordis.patch.yml"));
+                continue;
+            }
+            if ("profiles".equals(name) && java.nio.file.Files.isSymbolicLink(child.toPath())) {
+                if (quarantine == null) quarantine = createAlphaQuarantine(targetRootfs);
+                copyRecursively(child, new File(quarantine, "profiles"));
+                continue;
+            }
+            if ("profiles".equals(name) && child.isDirectory()) {
+                File[] profiles = child.listFiles();
+                if (profiles == null) throw new IOException("无法读取旧 dsh profiles: " + child);
+                File dstProfiles = new File(dstDsh, "profiles");
+                for (File profile : profiles) {
+                    if ("web".equals(profile.getName()) || "node_modules".equals(profile.getName())) {
+                        if (quarantine == null) quarantine = createAlphaQuarantine(targetRootfs);
+                        copyRecursively(profile, new File(quarantine,
+                                "profiles-" + profile.getName()));
+                    } else {
+                        copyRecursively(profile, new File(dstProfiles, profile.getName()));
+                    }
+                }
+                continue;
+            }
+            copyRecursively(child, new File(dstDsh, name));
+        }
+        if (quarantine != null) {
+            android.util.Log.i("DSHA", "Alpha 已隔离旧 web profile 与 home patch: "
+                    + quarantine.getName());
+        }
+    }
+
+    /** Create a collision-free, timestamped quarantine directory inside candidate rootfs. */
+    private File createAlphaQuarantine(File targetRootfs) throws IOException {
+        File root = new File(targetRootfs, "root");
+        if (!root.isDirectory() && !root.mkdirs() && !root.isDirectory()) {
+            throw new IOException("无法创建 Alpha 旧 profile 隔离目录父级: " + root);
+        }
+        long seed = System.currentTimeMillis();
+        for (int i = 0; i < 100; i++) {
+            File candidate = new File(root, ALPHA_LEGACY_ROOT + seed + "-" + i);
+            if (!java.nio.file.Files.exists(candidate.toPath())
+                    && !java.nio.file.Files.isSymbolicLink(candidate.toPath())
+                    && candidate.mkdirs()) {
+                return candidate;
+            }
+        }
+        throw new IOException("无法生成 Alpha 旧 profile 隔离目录");
+    }
+
+    /** 同父目录原子移动；不允许用复制+删除冒充提交。 */
+    private void moveAtomic(File source, File target) throws IOException {
+        if (!source.exists()) throw new IOException("源路径不存在: " + source);
+        File parent = target.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
+            throw new IOException("目标父目录不存在: " + parent);
+        }
+        if (target.exists()) throw new IOException("目标路径已存在: " + target);
+        try {
+            java.nio.file.Files.move(source.toPath(), target.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException | UnsupportedOperationException e) {
+            // Android 私有目录通常是 ext4/f2fs；renameTo 在同一父目录上仍是原子操作。
+            if (!source.renameTo(target)) {
+                throw new IOException("原子移动不受支持且 rename 失败: " + source + " -> " + target, e);
+            }
+        }
+        if (source.exists() || !target.exists()) {
+            throw new IOException("原子移动结果校验失败: " + source + " -> " + target);
+        }
+    }
+
+    /** 用临时文件发布离线成功 marker，避免直接截断旧 marker。 */
+    private void writeOfflineSuccessMarker() throws IOException {
+        File parent = offlineMarkerFile.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
+            throw new IOException("无法创建离线成功标记目录: " + parent);
+        }
+        File tmp = uniqueSibling(".offline-extracted.stage-");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            out.write(("ok=" + System.currentTimeMillis() + "\n")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            out.getFD().sync();
+        }
+        moveAtomic(tmp, offlineMarkerFile);
+    }
+
+    /** 失败回滚只触碰本轮候选；旧 rootfs/marker 始终保留，异常也不抛二次错误。 */
+    private void rollbackOfflineSwap(File stage, File dataBak, File oldBackup,
+                                     File offlineMarkerBackup, boolean offlineMarkerMoved,
+                                     boolean oldMoved, boolean candidateMoved,
+                                     boolean successMarkerPublished) {
+        boolean oldRestored = !oldMoved && rootfsDir.exists();
+        if (candidateMoved && rootfsDir.exists()) {
+            try {
+                File failed = uniqueSibling(".ubuntu.failed-");
+                moveAtomic(rootfsDir, failed);
+                oldRestored = false;
+            } catch (Throwable moveFailure) {
+                // 候选移走失败时也绝不能删除当前路径：它可能仍是唯一
+                // 可启动副本。旧 rootfs 继续留在 oldBackup，失败现场交给
+                // 后续人工恢复，而不是用 rm -rf 把证据和数据一起抹掉。
+                android.util.Log.e("DSHA", SensitiveData.redact(
+                        "回滚候选 rootfs 失败，候选保留于: " + rootfsDir
+                                + "；旧副本保留于: " + oldBackup + "：" + moveFailure));
+                oldRestored = false;
+            }
+        }
+        if (oldMoved && oldBackup != null && oldBackup.exists() && !rootfsDir.exists()) {
+            try {
+                moveAtomic(oldBackup, rootfsDir);
+                oldRestored = true;
+            } catch (Throwable restoreFailure) {
+                android.util.Log.e("DSHA", SensitiveData.redact(
+                        "回滚旧 rootfs 失败，旧副本仍保留于: " + oldBackup + "：" + restoreFailure));
+                oldRestored = false;
+            }
+        }
+        if (successMarkerPublished && offlineMarkerFile.exists()) {
+            if (!offlineMarkerFile.delete() && offlineMarkerFile.exists()) {
+                // 尽力把伪成功标记挪开；若文件系统拒绝删除/移动，下面的旧 marker
+                // 也不能覆盖它，否则会把候选 rootfs 误报成成功。
+                try {
+                    File failedMarker = uniqueSibling(".offline-extracted.failed-");
+                    moveAtomic(offlineMarkerFile, failedMarker);
+                } catch (Throwable markerFailure) {
+                    android.util.Log.e("DSHA", SensitiveData.redact(
+                            "回滚时无法移除新离线成功标记: " + offlineMarkerFile + "：" + markerFailure));
+                }
+            }
+        }
+        // 旧 marker 只有在旧 rootfs 已确认回到原路径时才可恢复。候选 rootfs
+        // 仍占据 rootfsDir 或旧副本恢复失败时，宁可保持 marker 缺失，也不能
+        // 让启动门误把未知候选当作可用环境。
+        if (oldRestored && offlineMarkerMoved && offlineMarkerBackup != null
+                && offlineMarkerBackup.exists() && !offlineMarkerFile.exists()) {
+            try {
+                moveAtomic(offlineMarkerBackup, offlineMarkerFile);
+            } catch (Throwable restoreFailure) {
+                android.util.Log.e("DSHA", SensitiveData.redact(
+                        "回滚离线成功标记失败，旧标记仍保留于: " + offlineMarkerBackup
+                                + "：" + restoreFailure));
+            }
+        }
+        // stage/dataBak 故意不清理：它们是失败现场，供用户导出诊断与后续恢复。
     }
 
     /** 诊断 rootfs 关键路径状态 */
@@ -1289,7 +1883,7 @@ public class ProotBootstrap {
         File etc = new File(rootfsDir, "etc/os-release");
         sb.append("etc/os-release 存在=").append(etc.exists()).append("\n");
         sb.append("已安装标记=").append(markerFile.exists());
-        return sb.toString();
+        return SensitiveData.redact(sb.toString());
     }
 
     public void uninstall() {
@@ -1302,6 +1896,12 @@ public class ProotBootstrap {
     }
 
     private void deleteRecursively(File f) {
+        // rootfs 中常见的库/命令是符号链接；删除事务副本时不能跟随链接跑出副本目录。
+        if (java.nio.file.Files.isSymbolicLink(f.toPath())) {
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+            return;
+        }
         if (f.isDirectory()) {
             File[] children = f.listFiles();
             if (children != null) for (File c : children) deleteRecursively(c);
@@ -1319,11 +1919,7 @@ public class ProotBootstrap {
      * 下次启动 migrate 脚本又在公开侧留一份 {@code *.conflict-<ts>}。
      */
     private void copyRecursively(File src, File dst) throws IOException {
-        int fallbacks = FileCopy.copyPreservingLinks(src, dst);
-        if (fallbacks > 0) {
-            android.util.Log.w("DSHA", "有 " + fallbacks
-                    + " 根软链没能原样重建，已退回按内容复制（会多占空间）: " + src);
-        }
+        FileCopy.copyPreservingLinks(src, dst);
     }
 
     /** 拷贝单个文件 */
@@ -1336,6 +1932,9 @@ public class ProotBootstrap {
             byte[] buf = new byte[8192];
             int n;
             while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+            if (out instanceof java.io.FileOutputStream) {
+                ((java.io.FileOutputStream) out).getFD().sync();
+            }
         }
     }
 

@@ -10,11 +10,13 @@ import android.provider.MediaStore;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.UUID;
 
 /**
  * 全量备份到外部存储（Download/DSHA/）：
@@ -30,55 +32,37 @@ public final class BackupManager {
      *  并发会互相覆盖 → 加锁串行（防备份损坏）。 */
     private static final Object BACKUP_LOCK = new Object();
 
-    /** 自动备份固定文件名（槽位 1）。 */
-    public static final String AUTO_BACKUP_NAME = "DSHA-backup-auto.tar.gz";
-    /** 自动备份固定文件名（槽位 2）—— 与槽位 1 交替使用，见 {@link #backupToExternalAuto}。 */
-    public static final String AUTO_BACKUP_NAME_2 = "DSHA-backup-auto-2.tar.gz";
-
-    private static boolean isAutoName(String n) {
-        return AUTO_BACKUP_NAME.equals(n) || AUTO_BACKUP_NAME_2.equals(n);
-    }
-    /** 手动备份最多保留份数（超出删最旧，防 Download/DSHA 无限膨胀） */
-    private static final int MAX_MANUAL_KEEP = 10;
+    /** Alpha 唯一的新建备份名。旧版自动/时间戳文件仍只读兼容，不再新建。 */
+    public static final String LATEST_BACKUP_NAME = "DSHA-backup-latest.tar.gz";
 
     /** 执行全量备份并导出，返回外部存储中的完整路径；失败返回 null */
     public static String backupToExternal(Context ctx, HarnessController c) {
-        return backup(ctx, c, null, BackupScope.FULL);
+        return backup(ctx, c, LATEST_BACKUP_NAME, BackupScope.FULL);
     }
 
-    /** 按范围备份（全量 / 只对话 / 只插件），见 {@link BackupScope}。 */
+    /**
+     * 按用户选择的范围创建备份。文件名仍固定为 latest，范围写入包内清单，
+     * 恢复端以清单为准，避免固定文件名掩盖部分备份语义。
+     */
     public static String backupToExternal(Context ctx, HarnessController c, int scope) {
-        return backup(ctx, c, null, scope);
-    }
-
-    /** 自动备份：两个固定名**交替**使用，永远留着上一次那份完整的。
-     *
-     *  <p>原来是一个固定名反复覆盖。两个坏处：这次备份的如果是已经坏掉的环境
-     *  （会话文件被写坏、用户误删了数据），上一份好的就被盖没了；写入中途失败
-     *  （空间不足）还可能留下一个截断文件，而旧的那份已经不在了。手动备份有 10 份轮换，
-     *  偏偏「用户没意识到自己需要它」的自动备份只有一份 —— 顺序反了。
-     *
-     *  <p>交替选名字而不是改名轮转：MediaStore 上改名要多一次 update、多一处可能失败，
-     *  而交替只是换个字符串。自动恢复那边按 {@code DSHA-backup-} 前缀扫描，两个槽都认。 */
-    public static String backupToExternalAuto(Context ctx, HarnessController c) {
-        android.content.SharedPreferences sp =
-                ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE);
-        boolean useSlot2 = !sp.getBoolean("auto_backup_slot2", false);
-        String path = backup(ctx, c, useSlot2 ? AUTO_BACKUP_NAME_2 : AUTO_BACKUP_NAME,
-                BackupScope.FULL);
-        // 只有成功才翻转：失败时下次仍写这一槽，不会白白牺牲掉另一槽里的好备份
-        if (path != null) {
-            sp.edit().putBoolean("auto_backup_slot2", useSlot2).apply();
+        if (scope != BackupScope.FULL && scope != BackupScope.SESSIONS
+                && scope != BackupScope.SETTINGS && scope != BackupScope.PLUGINS) {
+            scope = BackupScope.FULL;
         }
-        return path;
+        return backup(ctx, c, LATEST_BACKUP_NAME, scope);
     }
 
-    /** 内部实现。name=null 表示手动备份（时间戳命名，每次独立保留）；否则固定名覆盖。 */
+    /** 自动备份与手动备份共用同一个 latest 文件，发布过程保持原子性。 */
+    public static String backupToExternalAuto(Context ctx, HarnessController c) {
+        return backupToExternal(ctx, c);
+    }
+
+    /** 内部实现。固定名先写入临时目标，完整成功后才发布。 */
     /** 最近一次备份失败的原因（UI 直接展示，别再让用户看「环境可能未安装」这种猜测） */
     private static volatile String lastError = "";
 
     public static String lastError() {
-        return lastError;
+        return SensitiveData.redact(lastError);
     }
 
     /** 失败原因落到 rootfs（/root/.dsh/backup-last-error），自检直接读它 —— 
@@ -86,8 +70,9 @@ public final class BackupManager {
     private static void recordError(HarnessController c, String why) {
         try {
             if (c == null || c.getProot() == null) return;
+            String safeWhy = SensitiveData.redact(why);
             File f = new File(c.getProot().getRootfsDir(), "root/.dsh/backup-last-error");
-            if (why == null || why.isEmpty()) {
+            if (safeWhy == null || safeWhy.isEmpty()) {
                 //noinspection ResultOfMethodCallIgnored
                 f.delete();
                 return;
@@ -97,7 +82,7 @@ public final class BackupManager {
                 return;
             }
             String body = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date())
-                    + "  " + why.replace("\n", " ") + "\n";
+                    + "  " + safeWhy.replace("\n", " ") + "\n";
             java.nio.file.Files.write(f.toPath(), body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         } catch (Throwable ignored) {
         }
@@ -117,13 +102,19 @@ public final class BackupManager {
             //  · 生成 .dsha-backup-manifest.json（App/dsh 版本、workdir、bundles、link 依赖）
             //  · 把 link:/file: 本机路径插件的源码内联到 .dsha-plugin-src/
             // 目的：换设备/换版本恢复时不再因「link:/root/plugin-src/x 不存在」起不来。
-            // 顺序要紧：先把 .l2s 链摊平（不然下面的 tar 直接失败），再生成清单
-            runFlattenL2s(c);
-            boolean prepared = runBackupPrepare(c, wd, scope);
+            // Alpha 会话格式由上游 dsh 独占；旧版 flatten/prepare 会遍历、改写
+            // profile 或 session 链，可能破坏 zstd/packed 数据。因此 Alpha 只做
+            // 透明打包，保留这些整理步骤给 legacy runtime。
+            boolean prepared = false;
+            if (!c.isAlphaRuntime()) {
+                // 顺序要紧：先把 .l2s 链摊平（不然下面的 tar 直接失败），再生成清单
+                runFlattenL2s(c);
+                prepared = runBackupPrepare(c, wd, scope);
+            }
             // 部分备份**必须**带清单：恢复端靠清单里的 scope 决定「只合并某个子树」还是
             // 「整个 .dsh 挪走再替换」。清单缺了就会被当成全量恢复 —— 一个只含对话的包
             // 会把用户的配置与插件整个换掉。这种包宁可不生成。
-            if (scope != BackupScope.FULL && !prepared) {
+            if (scope != BackupScope.FULL && !prepared && !c.isAlphaRuntime()) {
                 lastError = "备份清单没生成，" + BackupScope.label(scope)
                         + "无法安全恢复（会被当成全量），已中止。请改用全量备份";
                 recordError(c, lastError);
@@ -138,24 +129,14 @@ public final class BackupManager {
             // 备份落在 Download/DSHA（公共目录）：任何拿到存储权限的应用都读得到，
             // 而备份里有全部会话历史。把 key 也塞进去是方便，但也是把凭据摊在公共区，
             // 所以给用户一个关掉的开关（默认开，保持原有行为不变）。
-            boolean includeKey = ctx
+            boolean includeKey = (scope == BackupScope.FULL || scope == BackupScope.SETTINGS)
+                    && ctx
                     .getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
-                    .getBoolean("backup_include_key", true);
+                    .getBoolean("backup_include_key", false);
             // 备份时的 key 处理：includeKey 才带。写进 rootfs 的 .dsh/.dsha-apikey，
             // 但**加密存储**（参考 dsh-mobile 的 Keystore 思路）—— 这份 key 会随备份
             // 进 Download/DSHA（公共目录，任何有存储权限的 App 都读得到），明文等于裸奔。
             String bkKey = includeKey ? c.getApiKey() : "";
-            if (!includeKey) {
-                // 上次备份可能留过这个文件，关掉开关后要真的清掉，否则形同没关
-                try {
-                    File old = new File(c.getProot().getRootfsDir(), "root/.dsh/.dsha-apikey");
-                    if (old.isFile()) {
-                        //noinspection ResultOfMethodCallIgnored
-                        old.delete();
-                    }
-                } catch (Throwable ignored) {
-                }
-            }
             if (bkKey != null && !bkKey.isEmpty()) {
                 try {
                     File kf = new File(c.getProot().getRootfsDir(), "root/.dsh/.dsha-apikey");
@@ -172,10 +153,12 @@ public final class BackupManager {
                         java.nio.file.Files.setPosixFilePermissions(kf.toPath(),
                                 java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
                     } catch (Throwable e) {
-                        android.util.Log.w("DSHA", "API key 备份权限设置失败（不影响）: " + e);
+                        android.util.Log.w("DSHA", "API key 备份权限设置失败（不影响）: "
+                                + SensitiveData.redact(String.valueOf(e)));
                     }
                 } catch (Throwable e) {
-                    android.util.Log.w("DSHA", "写 API key 备份文件失败（备份继续）: " + e);
+                    android.util.Log.w("DSHA", "写 API key 备份文件失败（备份继续）: "
+                            + SensitiveData.redact(String.valueOf(e)));
                 }
             }
             // 文件清单用位置参数（set --）攒，不要攒进字符串再无引号展开 ——
@@ -248,7 +231,10 @@ public final class BackupManager {
               //   维护另一份判断，两边定义一分裂就出过桥 token 401（现象是悬浮窗不显示
               //   + agent 工具调用失败，完全看不出是 token）。详见 UserDataPolicy 类注释。
               .append("tar -czf .dsha-backup.tar.gz --ignore-failed-read ")
-              .append(UserDataPolicy.tarExcludeArgs()).append("\"$@\" ")
+              .append(UserDataPolicy.tarExcludeArgs())
+              // API key 是可选凭据：默认不进公共备份，但也不能为此删除当前数据。
+              .append(includeKey ? "" : "--exclude='.dsh/.dsha-apikey' ")
+              .append("\"$@\" ")
               .append("|| { echo TAR_FAIL; exit 1; }\n")
               .append("test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n")
               // 快照只是打包中转，别留在 rootfs 里占一份对话的空间
@@ -259,8 +245,32 @@ public final class BackupManager {
             // /sdcard/Documents/dshdata 的软链；用户若删了 Documents 目录，
             // 链接悬空，tar 会因 Cannot stat 失败）。先检查并重建：
             // 若公开侧数据还在就重建软链，否则把私有副本扶正（用残留数据）。
-            repairDshaSymlinks(c);
-            c.getProot().execChecked(script);
+            if (!c.isAlphaRuntime()) repairDshaSymlinks(c);
+            boolean alphaManifest = c.isAlphaRuntime();
+            File alphaManifestFile = new File(c.getProot().getRootfsDir(),
+                    "root/.dsha-backup-manifest.json");
+            if (alphaManifest) {
+                try {
+                    String json = "{\"formatVersion\":3,\"createdAt\":\""
+                            + new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(new Date())
+                            + "\",\"scope\":\""
+                            + BackupScope.id(scope)
+                            + "\",\"appVersion\":\"1.2.0-alpha.2\",\"dshVersion\":\"dsh-v0.1.2-alpha.2\"}";
+                    java.nio.file.Files.write(alphaManifestFile.toPath(),
+                            json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                } catch (Throwable e) {
+                    lastError = "备份范围清单写入失败";
+                    recordError(c, lastError);
+                    return null;
+                }
+            }
+            try {
+                c.getProot().execChecked(script);
+            } finally {
+                if (alphaManifest) {
+                    try { alphaManifestFile.delete(); } catch (Throwable ignored) { }
+                }
+            }
             File tmp = new File(c.getProot().getRootfsDir(), "root/.dsha-backup.tar.gz");
             if (!tmp.isFile() || tmp.length() == 0) {
                 lastError = "打包文件没生成（rootfs 内 tar 未产出 .dsha-backup.tar.gz）";
@@ -268,11 +278,7 @@ public final class BackupManager {
                 return null;
             }
 
-            String name = fixedName != null
-                    ? fixedName
-                    : BackupScope.fileNamePrefix(scope)
-                            + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
-                            .format(new Date()) + ".tar.gz";
+            String name = fixedName == null ? LATEST_BACKUP_NAME : fixedName;
             String path = null;
             try {
                 path = Build.VERSION.SDK_INT >= 29
@@ -287,9 +293,6 @@ public final class BackupManager {
                 recordError(c, lastError);
                 return null; // 导出失败：不残留 half 备份
             }
-            // 手动备份保留最近 MAX_MANUAL_KEEP 份，删最旧（防无限膨胀）。
-            // 按前缀各自轮换：对话备份不该挤掉全量备份的配额，反之同理。
-            if (fixedName == null) pruneOldManual(ctx, name, BackupScope.fileNamePrefix(scope));
             recordError(c, null); // 成功：清掉历史错误
             return path;
         } catch (Exception e) {
@@ -306,7 +309,7 @@ public final class BackupManager {
             } else {
                 lastError = tail(msg, 300);
             }
-            android.util.Log.w("DSHA", "备份失败: " + lastError);
+            android.util.Log.w("DSHA", "备份失败: " + SensitiveData.redact(lastError));
             recordError(c, lastError);
             return null;
         }
@@ -328,6 +331,10 @@ public final class BackupManager {
      * 后两者 dsh 自己维护、且公开 FUSE 禁止软链。
      */
     private static void repairDshaSymlinks(HarnessController c) {
+        // Alpha sessions may use an upstream-owned packed/zstd layout.  This
+        // legacy repair can rewrite links, so keep the guard here as well as
+        // at the backup call site to make accidental future calls harmless.
+        if (c != null && c.isAlphaRuntime()) return;
         try {
             String script = "cd /root/.dsh 2>/dev/null || exit 0\n"
                     + "PUB=/sdcard/Documents/dshdata\n"
@@ -346,7 +353,8 @@ public final class BackupManager {
             c.getProot().execChecked(script);
         } catch (Throwable e) {
             // 修软链失败不该让备份整体失败，只是回到「可能备份不到公开侧数据」的旧行为
-            android.util.Log.w("DSHA", "修复 .dsh 软链失败（备份继续）: " + e);
+            android.util.Log.w("DSHA", "修复 .dsh 软链失败（备份继续）: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
     }
 
@@ -364,7 +372,8 @@ public final class BackupManager {
                     ? writeViaMediaStore(ctx, src, name, true)
                     : writeDirect(src, name);
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "导出到 Download 失败: " + e);
+            android.util.Log.w("DSHA", "导出到 Download 失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
             return null;
         }
     }
@@ -382,6 +391,9 @@ public final class BackupManager {
      *  写入侧已由 fs-write-patch.sh 治本（一律 rename，不再产生新链），这里处理存量。
      *  返回机器可读的一行结果，仅用于日志。 */
     private static void runFlattenL2s(HarnessController c) {
+        // Never traverse or rewrite Alpha session data.  The method remains
+        // available for the legacy runtime only.
+        if (c != null && c.isAlphaRuntime()) return;
         try {
             String script = c.readAsset("flatten-l2s.py");
             if (script == null || script.isEmpty()) return;
@@ -392,15 +404,20 @@ public final class BackupManager {
             String out = c.getProot().execAndRead(
                     "python3 /root/.dsha-flatten-l2s.py --root /root/.dsh 2>&1 | tail -20; "
                             + "rm -f /root/.dsha-flatten-l2s.py", 180_000);
-            android.util.Log.i("DSHA", "l2s 实体化: " + (out == null ? "无输出" : out.trim()));
+            android.util.Log.i("DSHA", "l2s 实体化: "
+                    + SensitiveData.redact(out == null ? "无输出" : out.trim()));
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "l2s 实体化失败（备份可能因此失败）: " + e);
+            android.util.Log.w("DSHA", "l2s 实体化失败（备份可能因此失败）: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
     }
 
     /** 备份前置整理。返回清单（.dsha-backup-manifest.json）是否真的落地 ——
      *  部分备份靠它标记范围，没有清单就不能出包（见调用点）。 */
     private static boolean runBackupPrepare(HarnessController c, String workdir, int scope) {
+        // backup-prepare.py inspects and may rewrite legacy profiles/session
+        // links.  Alpha backups are deliberately transparent snapshots.
+        if (c != null && c.isAlphaRuntime()) return false;
         try {
             String script = c.readAsset("backup-prepare.py");
             if (script == null || script.isEmpty()) return false;
@@ -416,7 +433,8 @@ public final class BackupManager {
                             + " --scope " + BackupScope.id(scope)
                             + " 2>&1; rm -f /root/.dsha-backup-prepare.py",
                     120_000);
-            android.util.Log.i("DSHA", "备份前置整理: " + (out == null ? "无输出" : out.trim()));
+            String safeOut = SensitiveData.redact(out == null ? "无输出" : out.trim());
+            android.util.Log.i("DSHA", "备份前置整理: " + safeOut);
             // 验证清单是否真的落地。这一步以前只写 logcat，清单没生成也照样打包，
             // 用户拿到的是「老格式」备份 —— 要等到换设备恢复时才发现插件全缺，
             // 那时原设备往往已经不在手边。现在至少让日志能一眼看出问题在哪。
@@ -425,49 +443,72 @@ public final class BackupManager {
                 c.logActivity("备份清单未生成，这次是老格式（能恢复，但跨设备可能缺插件）");
                 android.util.Log.w("DSHA", "备份清单未生成 —— 这次备份会是老格式"
                         + "（能恢复，但跨设备可能缺插件）。前置整理输出："
-                        + (out == null ? "无" : out.trim()));
+                        + SensitiveData.redact(out == null ? "无" : out.trim()));
                 return false;
             }
             return true;
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "备份前置整理失败（不影响全量备份）: " + e);
+            android.util.Log.w("DSHA", "备份前置整理失败（不影响全量备份）: "
+                    + SensitiveData.redact(String.valueOf(e)));
             return false;
         }
     }
 
-    /** Android 10+：MediaStore Downloads 集合，无需存储权限。overwrite=true 时先删同名旧条目。 */
+    /**
+     * Android 10+：MediaStore Downloads 集合，无需存储权限。
+     *
+     * <p>覆盖 latest 时先写唯一临时条目，关闭输出流后再改名发布，最后才删除旧条目。
+     * 因此插入、写入或改名失败都只会留下可清理的临时条目，旧备份保持可读。
+     */
+    @android.annotation.TargetApi(29)
     private static String writeViaMediaStore(Context ctx, File src, String name, boolean overwrite) throws Exception {
         final String base = Environment.DIRECTORY_DOWNLOADS;
-        if (overwrite) {
-            // 删除同名的旧自动备份（MediaStore 同名会新建条目，必须先清旧的）。
-            // **新老两个目录都要清**：老版本的自动备份落在 DSHA/ 根下，只清新目录的话
-            // 那一份会永远留着 —— 用户看到两个同名备份，还以为自动备份有两套。
-            for (String sub : PublicDirs.archiveSubdirs()) {
-                deleteSameName(ctx, name, PublicDirs.relativeSlash(base, sub));
-                deleteSameName(ctx, name, PublicDirs.relative(base, sub));
-            }
-        }
+        final String relPath = PublicDirs.relative(base, PublicDirs.ARCHIVES);
+        final String tempName = overwrite
+                ? "." + name + ".tmp-" + UUID.randomUUID().toString()
+                : name;
         ContentValues values = new ContentValues();
-        values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+        values.put(MediaStore.MediaColumns.DISPLAY_NAME, tempName);
         values.put(MediaStore.MediaColumns.MIME_TYPE, "application/gzip");
         // 写入只用新目录（存档）；读取仍然兼容老目录，见 PublicDirs.archiveSubdirs()
-        values.put(MediaStore.MediaColumns.RELATIVE_PATH,
-                PublicDirs.relative(base, PublicDirs.ARCHIVES));
+        values.put(MediaStore.MediaColumns.RELATIVE_PATH, relPath);
+        if (overwrite) values.put(MediaStore.MediaColumns.IS_PENDING, 1);
         Uri uri = ctx.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-        if (uri == null) return null;
-        try (InputStream in = new FileInputStream(src);
-             OutputStream out = ctx.getContentResolver().openOutputStream(uri)) {
-            if (out == null) return null;
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+        if (uri == null) throw new IOException("MediaStore 无法创建备份条目");
+        boolean published = false;
+        try {
+            try (InputStream in = new FileInputStream(src);
+                 OutputStream out = ctx.getContentResolver().openOutputStream(uri)) {
+                if (out == null) throw new IOException("MediaStore 无法打开备份输出");
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                out.flush();
+            }
+            if (overwrite) {
+                ContentValues publish = new ContentValues();
+                publish.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                publish.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                if (ctx.getContentResolver().update(uri, publish, null, null) != 1) {
+                    throw new IOException("MediaStore 无法发布最新备份");
+                }
+                // 新条目已经完整可读后，才清理同目录下旧的 latest 副本。
+                deleteSameNameExcept(ctx, name, PublicDirs.relativeSlash(base, PublicDirs.ARCHIVES), uri);
+                deleteSameNameExcept(ctx, name, relPath, uri);
+            }
+            published = true;
+            return PublicDirs.display(Environment.getExternalStorageDirectory().getAbsolutePath(),
+                    base, PublicDirs.ARCHIVES) + "/" + name;
+        } finally {
+            if (!published) {
+                try { ctx.getContentResolver().delete(uri, null, null); } catch (Throwable ignored) { }
+            }
         }
-        return PublicDirs.display(Environment.getExternalStorageDirectory().getAbsolutePath(),
-                base, PublicDirs.ARCHIVES) + "/" + name;
     }
 
-    /** 删掉某个相对目录下的同名条目（MediaStore 允许同名共存，不先删就会堆两份）。 */
-    private static void deleteSameName(Context ctx, String name, String relPath) {
+    /** 删掉某个相对目录下的同名条目，但保留刚刚发布的 URI。 */
+    @android.annotation.TargetApi(29)
+    private static void deleteSameNameExcept(Context ctx, String name, String relPath, Uri keep) {
         try {
             Uri collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
             String sel = MediaStore.MediaColumns.DISPLAY_NAME + "=? AND "
@@ -477,16 +518,17 @@ public final class BackupManager {
                     new String[]{MediaStore.MediaColumns._ID}, sel, args, null)) {
                 if (cur == null) return;
                 while (cur.moveToNext()) {
-                    ctx.getContentResolver().delete(
-                            android.content.ContentUris.withAppendedId(collection, cur.getLong(0)),
-                            null, null);
+                    Uri candidate = android.content.ContentUris.withAppendedId(collection, cur.getLong(0));
+                    if (!candidate.equals(keep)) {
+                        ctx.getContentResolver().delete(candidate, null, null);
+                    }
                 }
             }
         } catch (Throwable ignored) {
         }
     }
 
-    /** Android 9-：直接写公共下载目录（需要 WRITE_EXTERNAL_STORAGE 权限） */
+    /** Android 9-：先写同目录临时文件，成功后原子替换 latest（需要存储权限）。 */
     @SuppressWarnings("deprecation")
     private static String writeDirect(File src, String name) throws Exception {
         File dir = new File(Environment.getExternalStoragePublicDirectory(
@@ -494,94 +536,32 @@ public final class BackupManager {
                 PublicDirs.ROOT + "/" + PublicDirs.ARCHIVES);
         if (!dir.exists() && !dir.mkdirs()) return null;
         File dst = new File(dir, name);
-        try (FileInputStream in = new FileInputStream(src);
-             FileOutputStream out = new FileOutputStream(dst)) {
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+        File tmp = new File(dir, "." + name + ".tmp-" + UUID.randomUUID().toString());
+        boolean published = false;
+        try {
+            try (FileInputStream in = new FileInputStream(src);
+                 FileOutputStream out = new FileOutputStream(tmp)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                out.getFD().sync();
+            }
+            try {
+                java.nio.file.Files.move(tmp.toPath(), dst.toPath(),
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException
+                     | java.nio.file.FileAlreadyExistsException unsupported) {
+                java.nio.file.Files.move(tmp.toPath(), dst.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            published = true;
+        } finally {
+            if (!published) {
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+            }
         }
         return dst.getAbsolutePath();
-    }
-
-    /** 清理旧手动备份：保留最近 MAX_MANUAL_KEEP 份（不含自动备份文件），删最旧。 */
-    /** 手动备份轮换：只在<b>同前缀</b>内部轮换（全量 / 对话 / 插件各留 10 份，互不挤占）。
-     *
-     *  <p>prefix 过滤原先只加在第一段收集上，第二段（MediaStore 按时间排序删旧）
-     *  只排除了自动备份名 —— 也就是说 Download/DSHA 下**任何**别的文件都会被算进
-     *  这轮删除，包括 3090 桥 {@code /app/export} 导出的 agent 报告和 {@code .sha256}
-     *  校验文件。现在两段用同一个前缀判据。 */
-    private static void pruneOldManual(Context ctx, String justCreated, String prefix) {
-        try {
-            java.util.List<android.net.Uri> all = new java.util.ArrayList<>();
-            // 查 MediaStore（Android 10+）或直接列目录（Android 9-）
-            if (Build.VERSION.SDK_INT >= 29) {
-                Uri collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
-                try (android.database.Cursor cur = ctx.getContentResolver().query(collection,
-                        new String[]{MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME,
-                                MediaStore.MediaColumns.DATE_MODIFIED},
-                        MediaStore.MediaColumns.RELATIVE_PATH + "=?",
-                        new String[]{PublicDirs.relativeSlash(
-                                Environment.DIRECTORY_DOWNLOADS, PublicDirs.ARCHIVES)}, null)) {
-                    if (cur != null) {
-                        while (cur.moveToNext()) {
-                            String dn = cur.getString(1);
-                            if (dn == null || !dn.startsWith(prefix) || !dn.endsWith(".tar.gz")) continue;
-                            if (isAutoName(dn)) continue; // 自动备份的两个槽都不动
-                            all.add(android.content.ContentUris.withAppendedId(collection, cur.getLong(0)));
-                        }
-                    }
-                }
-            } else {
-                File dir = new File(Environment.getExternalStoragePublicDirectory(
-                        Environment.DIRECTORY_DOWNLOADS),
-                PublicDirs.ROOT + "/" + PublicDirs.ARCHIVES);
-                File[] fs = dir.listFiles((d, n) -> n.startsWith(prefix) && n.endsWith(".tar.gz")
-                        && !isAutoName(n));
-                if (fs != null) {
-                    java.util.Arrays.sort(fs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
-                    for (int i = MAX_MANUAL_KEEP; i < fs.length; i++) {
-                        //noinspection ResultOfMethodCallIgnored
-                        fs[i].delete();
-                    }
-                }
-                return;
-            }
-            // MediaStore：按 DATE_MODIFIED 降序，超出保留数的删最旧
-            if (all.size() > MAX_MANUAL_KEEP) {
-                java.util.List<Long> times = new java.util.ArrayList<>();
-                try (android.database.Cursor cur = ctx.getContentResolver().query(
-                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                        new String[]{MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATE_MODIFIED},
-                        MediaStore.MediaColumns.RELATIVE_PATH + "=?",
-                        new String[]{PublicDirs.relativeSlash(
-                                Environment.DIRECTORY_DOWNLOADS, PublicDirs.ARCHIVES)}, null)) {
-                    if (cur != null) {
-                        java.util.Map<Long, Long> id2t = new java.util.HashMap<>();
-                        while (cur.moveToNext()) {
-                            long id = cur.getLong(0);
-                            String dn = null;
-                            try (android.database.Cursor c2 = ctx.getContentResolver().query(
-                                    android.content.ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id),
-                                    new String[]{MediaStore.MediaColumns.DISPLAY_NAME}, null, null, null)) {
-                                if (c2 != null && c2.moveToFirst()) dn = c2.getString(0);
-                            } catch (Throwable ignored) {
-                            }
-                            if (dn == null || isAutoName(dn)) continue;
-                            if (!dn.startsWith(prefix) || !dn.endsWith(".tar.gz")) continue;
-                            id2t.put(id, cur.getLong(1));
-                        }
-                        java.util.List<java.util.Map.Entry<Long, Long>> sorted = new java.util.ArrayList<>(id2t.entrySet());
-                        sorted.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
-                        for (int i = MAX_MANUAL_KEEP; i < sorted.size(); i++) {
-                            ctx.getContentResolver().delete(
-                                    android.content.ContentUris.withAppendedId(
-                                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, sorted.get(i).getKey()),
-                                    null, null);
-                        }
-                    }
-                }
-            }
-        } catch (Throwable ignored) {
-        }
     }
 }

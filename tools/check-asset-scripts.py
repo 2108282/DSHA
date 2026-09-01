@@ -36,6 +36,25 @@ problems = []
 checked = {"py": 0, "sh": 0, "js": 0, "regex": 0}
 
 
+def preferred_bash():
+    """Prefer a real POSIX bash over Windows' WSL launcher shim."""
+    override = os.environ.get("BASH_BIN", "").strip()
+    if override and os.path.isfile(override):
+        return override
+    candidates = [
+        shutil.which("bash"),
+        r"C:\\Program Files\\Git\\bin\\bash.exe",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        normalized = os.path.normcase(os.path.abspath(candidate))
+        if ("windows" + os.sep + "system32" + os.sep + "bash.exe") in normalized:
+            continue
+        return candidate
+    return None
+
+
 def walk(exts):
     for root, dirs, files in os.walk(ASSETS):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
@@ -76,14 +95,24 @@ def check_python(path):
 
 def check_with(cmd, path, kind):
     r = subprocess.run(cmd + [path], stdout=subprocess.PIPE,
-                       stderr=subprocess.STDOUT, text=True)
+                       stderr=subprocess.STDOUT)
     checked[kind] += 1
+    # Git Bash on Windows may emit the localized shell diagnostic in the
+    # system code page.  Decode for display without turning an encoding detail
+    # into a false test failure; the process return code remains authoritative.
+    output = (r.stdout or b"").decode("utf-8", "replace")
     if r.returncode != 0:
         problems.append("%s 检查失败：\n      %s"
-                        % (path, (r.stdout or "").strip().replace("\n", "\n      ")))
+                        % (path, output.strip().replace("\n", "\n      ")))
 
 
 def main():
+    try:
+        # Diagnostics can contain localized shell output; force a loss-tolerant
+        # UTF-8 stream so Windows' GBK console cannot abort the checker itself.
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
     if not os.path.isdir(ASSETS):
         print("请在仓库根目录运行（找不到 %s）" % ASSETS)
         return 2
@@ -91,9 +120,10 @@ def main():
     for p in walk((".py",)):
         check_python(p)
 
-    if shutil.which("bash"):
+    bash = preferred_bash()
+    if bash:
         for p in walk((".sh",)):
-            check_with(["bash", "-n"], p, "sh")
+            check_with([bash, "-n"], p, "sh")
     else:
         print("（没有 bash，跳过 .sh 检查）")
 
@@ -108,7 +138,9 @@ def main():
     if problems:
         print("")
         for p in problems:
-            print("  ✗ %s" % p)
+            # Keep the diagnostic ASCII at the prefix so Windows GBK stdout
+            # can render it even when the rest of the message is localized.
+            print("  FAIL %s" % p)
         print("")
         print("共 %d 个问题。这些文件会通过 runtime 增量更新推给所有用户，"
               "坏的不能发。" % len(problems))

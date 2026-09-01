@@ -111,6 +111,13 @@ public class DeviceBridgeService extends Service {
             new HttpShellService(this).start();
         } catch (Throwable ignored) {
         }
+        // Keep the token-gated loopback bridge available in Alpha, but do not
+        // turn an old persisted ADB setting into a startup-time injection of
+        // legacy adb scripts, wheels, or self-healing behavior.  Explicit
+        // pairing remains handled by the user-triggered pairing activities.
+        if (isAlphaRuntime()) {
+            return;
+        }
         // Shizuku 只在 ADB 开关打开时绑定：3090 桥本身还要给悬浮条与设备能力用，
         // 但 shell 执行权限不该因为「顺手开了悬浮条」就一起给出去
         if (!isAdbEnabled(this)) {
@@ -181,6 +188,15 @@ public class DeviceBridgeService extends Service {
                 }
             }, "dsha-adb-prewarm").start();
         } catch (Throwable ignored) {
+        }
+    }
+
+    private boolean isAlphaRuntime() {
+        try {
+            HarnessController controller = HarnessController.get(this);
+            return controller != null && controller.isAlphaRuntime();
+        } catch (Throwable ignored) {
+            return false;
         }
     }
 
@@ -255,7 +271,8 @@ public class DeviceBridgeService extends Service {
             try {
                 runProbe(reason);
             } catch (Throwable e) {
-                android.util.Log.w("DSHA-ADB", "保活探测异常: " + e);
+                android.util.Log.w("DSHA-ADB", "保活探测异常: "
+                        + SensitiveData.redact(String.valueOf(e)));
             } finally {
                 probing.set(false);
             }
@@ -305,6 +322,7 @@ public class DeviceBridgeService extends Service {
     }
 
     private void runProbe(String reason) {
+        if (isAlphaRuntime()) return;
         // 3090 桥自愈：HarnessService 也会 new 一个 HttpShellService，谁抢到端口谁持有；
         // 它在停止 Web 时把桥关掉后，ADB 开关还开着，agent 的确认请求就会全部
         // fail-closed 被拒。这里补起来（start() 内部有跨实例互斥，重复调用安全）。
@@ -436,7 +454,8 @@ public class DeviceBridgeService extends Service {
             if (ShizukuShell.isAvailable()) {
                 String out = ShizukuShell.exec(
                         "settings put global adb_wifi_enabled 1 2>&1; adb tcpip 5555 2>&1");
-                android.util.Log.i("DSHA-ADB", "保活：Shizuku 重开无线调试 → " + out);
+                android.util.Log.i("DSHA-ADB", "保活：Shizuku 重开无线调试 → "
+                        + SensitiveData.redact(out));
                 return out != null && !out.contains("[NO_") && !out.contains("ERROR");
             }
         } catch (Throwable ignored) {
@@ -489,7 +508,8 @@ public class DeviceBridgeService extends Service {
             };
             cm.registerDefaultNetworkCallback(netCallback);
         } catch (Throwable e) {
-            android.util.Log.w("DSHA-ADB", "网络监听注册失败: " + e);
+            android.util.Log.w("DSHA-ADB", "网络监听注册失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
     }
 
@@ -507,7 +527,8 @@ public class DeviceBridgeService extends Service {
             f.addAction(Intent.ACTION_SCREEN_ON);
             registerReceiver(screenReceiver, f);
         } catch (Throwable e) {
-            android.util.Log.w("DSHA-ADB", "屏幕广播注册失败: " + e);
+            android.util.Log.w("DSHA-ADB", "屏幕广播注册失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
     }
 

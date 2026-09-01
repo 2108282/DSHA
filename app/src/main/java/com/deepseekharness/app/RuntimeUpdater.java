@@ -115,6 +115,14 @@ public final class RuntimeUpdater {
     /** 拉清单 → 比对 → 下载有差异的。返回给 UI 直接展示的结果。 */
     public static Result checkAndApply(Context ctx, HarnessController c, boolean dryRun) {
         Result r = new Result();
+        // The pinned Alpha runtime is intentionally immutable after packaging.
+        // Keep this guard here as well as in the UI so future callers cannot
+        // turn the remote script channel back on accidentally.
+        if (c != null && c.isAlphaRuntime()) {
+            r.ok = true;
+            r.message = "Alpha 官方运行时不启用远端脚本更新";
+            return r;
+        }
         byte[] raw = null;
         String json = null;
         String from = "";
@@ -287,7 +295,8 @@ public final class RuntimeUpdater {
             v.update(manifestBytes);
             return v.verify(android.util.Base64.decode(sigBase64, android.util.Base64.DEFAULT));
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "清单验签失败: " + e);
+            android.util.Log.w("DSHA", "清单验签失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
             return false;
         }
     }

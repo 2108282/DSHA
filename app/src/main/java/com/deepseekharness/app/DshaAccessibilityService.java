@@ -139,7 +139,7 @@ public class DshaAccessibilityService extends AccessibilityService {
             Log.i(TAG, "已从配对弹窗读到配对码（端口 " + (port.isEmpty() ? "未识别" : port) + "）");
             if (l != null) l.onPairInfo(code, ip, port);
         } catch (Throwable t) {
-            Log.w(TAG, "读配对码失败：" + t);
+            Log.w(TAG, "读配对码失败：" + SensitiveData.redact(String.valueOf(t)));
         } finally {
             if (root != null) {
                 try {
@@ -238,7 +238,7 @@ public class DshaAccessibilityService extends AccessibilityService {
             if (n[0] == 0) sb.append("（没有可读节点）\n");
             return sb.toString();
         } catch (Throwable t) {
-            return "[ERR] 读屏失败：" + t;
+            return "[ERR] 读屏失败：" + SensitiveData.redact(String.valueOf(t));
         }
     }
 
@@ -310,7 +310,7 @@ public class DshaAccessibilityService extends AccessibilityService {
             }
             return ok ? "OK 已点击「" + text + "」" : "[ERR] 点击被系统拒绝（控件可能不可用）";
         } catch (Throwable t) {
-            return "[ERR] 点击失败：" + t;
+            return "[ERR] 点击失败：" + SensitiveData.redact(String.valueOf(t));
         } finally {
             if (root != null) {
                 try {
@@ -377,7 +377,7 @@ public class DshaAccessibilityService extends AccessibilityService {
             }
             return ok ? "OK 已输入 " + text.length() + " 个字符" : "[ERR] 输入被系统拒绝";
         } catch (Throwable t) {
-            return "[ERR] 输入失败：" + t;
+            return "[ERR] 输入失败：" + SensitiveData.redact(String.valueOf(t));
         } finally {
             if (root != null) {
                 try {
@@ -428,7 +428,7 @@ public class DshaAccessibilityService extends AccessibilityService {
         try {
             return s.performGlobalAction(action) ? "OK 已发送 " + k : "[ERR] 系统拒绝了 " + k;
         } catch (Throwable t) {
-            return "[ERR] 按键失败：" + t;
+            return "[ERR] 按键失败：" + SensitiveData.redact(String.valueOf(t));
         }
     }
 
@@ -478,13 +478,14 @@ public class DshaAccessibilityService extends AccessibilityService {
             }
             return ok[0] ? "OK 已" + what : "[ERR] 手势被取消（" + what + "，可能被其它手势打断）";
         } catch (Throwable t) {
-            return "[ERR] 手势失败：" + t;
+            return "[ERR] 手势失败：" + SensitiveData.redact(String.valueOf(t));
         }
     }
 
     /** 截屏（Android 11+）。存成 PNG 落到 Download/DSHA 并返回路径 ——
      *  直接回 base64 会把一张几百 KB 的图塞进会话，把上下文撑爆。
      *  agent 拿到路径后可以走附件机制看图，或让用户自己打开。 */
+    @android.annotation.TargetApi(30)
     public static String uiScreenshot() {
         DshaAccessibilityService s = instance;
         if (s == null) return NOT_READY;
@@ -510,7 +511,8 @@ public class DshaAccessibilityService extends AccessibilityService {
                                     bmp.recycle();
                                 }
                             } catch (Throwable t) {
-                                out[0] = "[ERR] 保存截屏失败：" + t;
+                                out[0] = "[ERR] 保存截屏失败："
+                                        + SensitiveData.redact(String.valueOf(t));
                             } finally {
                                 try {
                                     result.getHardwareBuffer().close();
@@ -533,7 +535,7 @@ public class DshaAccessibilityService extends AccessibilityService {
             }
             return out[0];
         } catch (Throwable t) {
-            return "[ERR] 截屏失败：" + t;
+            return "[ERR] 截屏失败：" + SensitiveData.redact(String.valueOf(t));
         }
     }
 
@@ -555,7 +557,7 @@ public class DshaAccessibilityService extends AccessibilityService {
             return "OK 截屏已保存：" + f.getAbsolutePath()
                     + "（" + bmp.getWidth() + "x" + bmp.getHeight() + "）";
         } catch (Throwable t) {
-            return "[ERR] 写截屏文件失败：" + t;
+            return "[ERR] 写截屏文件失败：" + SensitiveData.redact(String.valueOf(t));
         }
     }
 

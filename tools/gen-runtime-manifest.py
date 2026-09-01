@@ -25,6 +25,15 @@ import os
 import sys
 import time
 
+# Windows may default stdout to a legacy code page.  The generator emits a
+# warning after writing the manifest; keep that warning from turning a
+# successful write into a false failure on GBK consoles.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ASSETS = "app/src/main/assets"
 OUT = "runtime-manifest.json"
 # 只有这些后缀进清单：脚本是纯文本、幂等注入、出问题也能被下一次覆盖修好。
@@ -34,6 +43,13 @@ EXTS = (".py", ".sh", ".js", ".json")
 # 这些不发：要么是本地缓存，要么体积巨大
 SKIP_DIRS = ("__pycache__",)
 SKIP_NAMES = ("offline-rootfs.bin",)
+RUNTIME_METADATA = {
+    "runtimeId": "dsh-v0.1.2-alpha.2",
+    "dshVersion": "0.1.2-alpha.2",
+    "upstreamTag": "dsh-v0.1.2-alpha.2",
+    "upstreamCommit": "0a53fb55bea101816fa226bb964ae2bed71c343b",
+    "offlineVersion": 5,
+}
 # 下载源：raw 直连 + 两个常用镜像。客户端按顺序试，任一成功即止。
 URL_TEMPLATES = (
     "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/{path}",
@@ -77,6 +93,7 @@ def main():
     items = collect()
     manifest = {
         "schema": 1,
+        **RUNTIME_METADATA,
         "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
         "files": items,
@@ -117,7 +134,9 @@ def main():
         try:
             with open(OUT, encoding="utf-8") as f:
                 old = json.load(f)
-            if {i["asset"]: (i["sha256"], i["size"]) for i in old.get("files", [])} \
+            old_meta = {key: old.get(key) for key in RUNTIME_METADATA}
+            if old_meta == RUNTIME_METADATA and \
+                    {i["asset"]: (i["sha256"], i["size"]) for i in old.get("files", [])} \
                     == {i["asset"]: (i["sha256"], i["size"]) for i in items}:
                 print("MANIFEST_UNCHANGED %s：%d 个文件与清单一致，未改写"
                       % (OUT, len(items)))

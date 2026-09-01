@@ -189,7 +189,7 @@ public class AdbPairActivity extends Activity {
     }
 
     private void setStatus(String s) {
-        if (statusText != null) statusText.setText(s);
+        if (statusText != null) statusText.setText(SensitiveData.redact(s));
     }
 
     private void startPair() {
@@ -209,7 +209,8 @@ public class AdbPairActivity extends Activity {
                 startBtn.setEnabled(true);
                 startBtn.setText("⚡ 开始配对");
                 boolean ok = out.contains("PAIR_OK");
-                setStatus(ok ? "🎉 配对成功！agent 可用：/root/dsh-bin/adb-shell \"id\"\n" + out : "\n" + out);
+                setStatus(ok ? "🎉 配对成功！agent 可用：/root/dsh-bin/adb-shell \"id\"\n" + out
+                        : "\n" + out);
                 if (!ok) {
                     Toast.makeText(AdbPairActivity.this,
                             "配对未成功（可能是码已失效，回到无线调试重新点「使用配对码配对设备」）",
@@ -234,7 +235,7 @@ public class AdbPairActivity extends Activity {
             String cp = discoveredConnPort > 0 ? String.valueOf(discoveredConnPort) : "";
             return AdbBridge.pair(c.getProot(), code, pp, cp, DeviceBridgeService.pairHost);
         } catch (Throwable e) {
-            return "ERROR: " + e;
+            return "ERROR: " + SensitiveData.redact(String.valueOf(e));
         }
     }
 

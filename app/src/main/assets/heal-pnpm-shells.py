@@ -3,9 +3,9 @@
 """修复 pnpm 装一半留下的「空壳插件」（GitHub 议题 #36 Bug 3）。
 
 现象（用户实测）：
-    node_modules/@dsh-external/dsh-mobile-nav/
+    node_modules/dsh-device-shell-guide/
         └── package.json      内容是 pnpm 的 _pnpmPlaceholder 占位
-    node_modules/.ignored_@dsh-external/dsh-mobile-nav/
+    node_modules/.ignored_dsh-device-shell-guide/
         └── （完整的插件文件都在这里）
 
 成因：pnpm 装 GitHub 来源的插件时，tarball 下载成功但 prepare/build 脚本失败

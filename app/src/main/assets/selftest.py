@@ -457,7 +457,7 @@ GUIDE_TARGET_PATTERNS = (
 )
 # 模块级 inject 数组里含 systemPrompt（行首声明，不含 apply 里的 ctx.inject）
 HARD_INJECT_RE = re.compile(
-    r"^[ \t]*export\s+const\s+inject\s*=\s*\[[^\]]*['\"]systemPrompt['\"][^\]]*\][ \t]*;?[ \t]*$",
+    r"^[ \t]*export\s+const\s+inject\s*=\s*\[[^\]]*['\"]systemPrompt['\"][^\]]*\][ \t]*;?[ \t]*\r?$",
     re.M)
 HARD_INJECT_NOTE = (
     "// [DSHA 自检修补] 这里原来有一行模块级 inject 声明（硬依赖 systemPrompt）。\n"
@@ -689,14 +689,7 @@ def scan_boot_blockers(log_text):
 
 
 def check_web_auth():
-    """dsh 的 Web 服务（3080）必须有 token 鉴权。
-
-    上游只做了「绑定 127.0.0.1」，请求处理里没有任何鉴权 —— 它自己在
-    client-connection 里写明 /api 那层 browser-trust fence「is not an auth layer」，
-    非浏览器客户端经回环即可通过。而 Android 上任何应用访问 localhost 都不需要
-    声明权限，于是随便一个 App 就能读走全部会话、建会话让 agent 执行 bash。
-    补丁由 webserver-auth-patch.sh 在每次启动 Web 前打。
-    """
+    """dsh 的 Web 服务（3080）必须使用上游 BrowserAuth。"""
     import glob
     cands = glob.glob("/usr/local/lib/node_modules/@deepseek-ai/**/dsh-host-webserver/lib/index.js",
                       recursive=True)
@@ -711,12 +704,11 @@ def check_web_auth():
     except OSError as e:
         add("SKIP", "Web 服务鉴权", "读不到 webserver：%s" % e)
         return
-    if "DSHA_WEB_AUTH" in src:
-        add("PASS", "Web 服务鉴权", "已启用 token 校验（URL / Cookie / X-Dsha-Token 三种放行）")
+    if "dsh-auth-" in src and "authorizeIndex" in src:
+        add("PASS", "Web 服务鉴权", "已启用上游 BrowserAuth（loopback URL 交换 HttpOnly Cookie）")
     else:
         add("FAIL", "Web 服务鉴权",
-            "未启用 —— 本机任意应用都能读会话、让 agent 执行命令；"
-            "在 App 里「重启 Web」会自动补上（dsh 升级后补丁可能失配）")
+            "未发现上游 BrowserAuth —— 请重新解压匹配的离线 dsh 运行时")
 
 
 # ===================== 5.7 @deepseek-ai 双副本 =====================
@@ -858,8 +850,8 @@ def check_sanitize_log():
         try:
             _pkg = json.loads(read(os.path.join(DSH_HOME, "profiles", "web", "package.json"), 200000))
             _b = (((_pkg.get("dsh") or {}).get("profile") or {}).get("bundles")) or []
-            for _n in ("dsh-device-shell-guide", "@dsh-external/dsh-mobile-nav", "dsh-task-notifier",
-                       "dsh-status-overlay"):
+            for _n in ("dsh-device-shell-guide", "dsh-task-notifier",
+                       "dsh-status-overlay", "dsh-web-mobile"):
                 if _n not in _b:
                     still_missing.append(_n)
         except Exception:

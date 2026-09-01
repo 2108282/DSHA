@@ -37,6 +37,17 @@ public final class HttpShellService {
     private static final int CONFIRM_NOTIF_ID = Constants.NOTIF_SHELL_CONFIRM;
     private static final long CONFIRM_TIMEOUT_S = 60;
 
+    /** Error text can echo a URL/header supplied by the caller; responses and
+     * diagnostics must never expose credentials. This only sanitizes text for
+     * display/logging and is never used for the command or network request. */
+    private static String safeError(Throwable e) {
+        return SensitiveData.redact(String.valueOf(e));
+    }
+
+    private static String safeDisplay(String value) {
+        return SensitiveData.redact(value == null ? "" : value);
+    }
+
     private static volatile HttpShellService instance;
     /** 全局「已有桥在监听」标志。HarnessService 与 DeviceBridgeService 各自 new 一个
      *  实例并都调 start()，实例字段 running 挡不住跨实例的重复启动 —— 第二个实例会
@@ -174,10 +185,10 @@ public final class HttpShellService {
                         java.nio.file.Files.setPosixFilePermissions(tf.toPath(),
                                 java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
                     } catch (Throwable e) {
-            android.util.Log.w("DSHA", "token 文件写入失败，3090 桥将无法鉴权: " + e);
+            android.util.Log.w("DSHA", "token 文件写入失败，3090 桥将无法鉴权: " + safeError(e));
         }
                 } catch (Throwable e) {
-            android.util.Log.w("DSHA", "token 文件读取/清理失败: " + e);
+            android.util.Log.w("DSHA", "token 文件读取/清理失败: " + safeError(e));
         }
             }
             return authToken;
@@ -200,8 +211,9 @@ public final class HttpShellService {
 
     private void noteBindError(String why) {
         bindError = why;
-        android.util.Log.e("DSHA", "3090 桥绑定失败：" + why);
-        writeBridgeStatus("fail " + why);
+        String safe = safeDisplay(why);
+        android.util.Log.e("DSHA", "3090 桥绑定失败：" + safe);
+        writeBridgeStatus("fail " + safe);
     }
 
     /** 桥状态落到 rootfs 的 /root/.dsh/.bridge_status，容器里 cat 一下就知道桥为什么不通 */
@@ -248,10 +260,10 @@ public final class HttpShellService {
                 noteBindOk();
                 acceptLoop(server);
             } catch (java.net.BindException e) {
-                noteBindError("端口 " + PORT + " 已被其它应用占用（" + e.getMessage()
+                noteBindError("端口 " + PORT + " 已被其它应用占用（" + safeError(e)
                         + "）—— 关掉占用它的应用，或重启手机后重开 DSHA");
             } catch (IOException e) {
-                noteBindError(e.getClass().getSimpleName() + ": " + e.getMessage());
+                noteBindError(e.getClass().getSimpleName() + ": " + safeError(e));
             }
         }, "http-shell-accept");
         t.setDaemon(true);
@@ -267,7 +279,7 @@ public final class HttpShellService {
                 acceptLoop(server6);
             } catch (Throwable e) {
                 // IPv6 绑不上不算故障（有些设备没有 IPv6 栈），IPv4 那条是主通道
-                android.util.Log.i("DSHA", "3090 的 [::1] 附加监听未启用: " + e);
+                android.util.Log.i("DSHA", "3090 的 [::1] 附加监听未启用: " + safeError(e));
             }
         }, "http-shell-accept6");
         t6.setDaemon(true);
@@ -349,7 +361,7 @@ public final class HttpShellService {
      *  排除了）。恢复出来之后 rootfs 里是旧 token，而 App 进程内的 {@link #authToken}
      *  还是当前那个 —— 它是静态字段，{@link #ensureToken()} 只在缓存为空时才读文件。
      *  于是 App 用自己的 token 拼 WebView 首帧 URL，dsh 后端却按恢复出来的旧 token 校验，
-     *  用户看到的就是「DSHA：需要 token，请在 DSHA 应用内打开，或在 URL 后加 ?dsha_t=…」。
+     *  用户看到的就是「DSHA：需要 token，请在 DSHA 应用内打开」。
      *
      *  <p>处理：删掉恢复出来的 token 文件、清空内存缓存，再让 ensureToken 重新生成并写回，
      *  两侧重新对齐。dsh 后端自己也缓存了 token（webserver-auth-patch 里的
@@ -365,7 +377,7 @@ public final class HttpShellService {
             ensureToken();
             android.util.Log.i("DSHA", "恢复后已重置 3090 桥 token（老备份里带的是别的机器的）");
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "恢复后重置桥 token 失败: " + e);
+            android.util.Log.w("DSHA", "恢复后重置桥 token 失败: " + safeError(e));
         }
     }
 
@@ -496,7 +508,6 @@ public final class HttpShellService {
             String head = "HTTP/1.1 200 OK\r\n"
                     + "Content-Type: application/json; charset=utf-8\r\n"
                     + "Content-Length: " + bodyBytes.length + "\r\n"
-                    + "Access-Control-Allow-Origin: *\r\n"
                     + "Connection: close\r\n\r\n";
             c.getOutputStream().write(head.getBytes("UTF-8"));
             c.getOutputStream().write(bodyBytes);
@@ -516,6 +527,8 @@ public final class HttpShellService {
             String title = getParam(q, "title", "DSHA 通知");
             String text = getParam(q, "text", "");
             if (text.isEmpty()) return "NO_TEXT";
+            title = safeDisplay(title);
+            text = safeDisplay(text);
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return "NO_SERVICE";
             if (Build.VERSION.SDK_INT >= 26) {
@@ -535,7 +548,7 @@ public final class HttpShellService {
             nm.notify(2002, b.build());
             return "OK";
         } catch (Throwable e) {
-            return "ERROR: " + e.getMessage();
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -654,7 +667,7 @@ public final class HttpShellService {
             }
             return "[ERR] 未知端点（可用：dump/tap/input/key/swipe）";
         } catch (Throwable t) {
-            return "[ERR] " + t;
+            return "[ERR] " + SensitiveData.redact(String.valueOf(t));
         }
     }
 
@@ -800,6 +813,8 @@ public final class HttpShellService {
             String q = queryOf(path);
             String loaded = getParam(q, "loaded", null);
             String failed = getParam(q, "failed", null);
+            String safeLoaded = loaded == null ? null : safeDisplay(loaded.trim());
+            String safeFailed = failed == null ? null : safeDisplay(failed.trim());
             android.content.SharedPreferences sp =
                     ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE);
             if (loaded == null && failed == null) {
@@ -808,20 +823,20 @@ public final class HttpShellService {
                         + "\nAT:" + sp.getLong("plugin_report_ts", 0L);
             }
             sp.edit()
-                    .putString("plugin_loaded", loaded == null ? "" : loaded.trim())
-                    .putString("plugin_failed", failed == null ? "" : failed.trim())
+                    .putString("plugin_loaded", safeLoaded == null ? "" : safeLoaded)
+                    .putString("plugin_failed", safeFailed == null ? "" : safeFailed)
                     .putLong("plugin_report_ts", System.currentTimeMillis())
                     .apply();
             // 有加载失败的就写进活动日志 —— 那是用户唯一能看到「插件为什么没反应」的地方
             if (failed != null && !failed.trim().isEmpty()) {
                 try {
-                    HarnessController.get(ctx).logActivity("插件加载失败：" + failed.trim());
+                    HarnessController.get(ctx).logActivity("插件加载失败：" + safeFailed);
                 } catch (Throwable ignored) {
                 }
             }
             return "OK";
         } catch (Throwable e) {
-            return "ERROR: " + e;
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -831,16 +846,17 @@ public final class HttpShellService {
             String kind = getParam(q, "kind", "delta");
             String text = getParam(q, "text", "");
             String session = getParam(q, "session", "");
+            String displayText = safeDisplay(text);
             if (!OverlayController.enabled(ctx)) return "DISABLED";
             if (!OverlayController.permitted(ctx)) return "NO_PERMISSION";
             // 让插件知道用户想不想看这两类内容，省得白发一路 HTTP
             if ("reasoning".equals(kind) && !OverlayController.showReasoning(ctx)) {
                 return "SKIP_REASONING";
             }
-            OverlayController.push(ctx, session, kind, text);
+            OverlayController.push(ctx, session, kind, displayText);
             return OverlayController.showCommand(ctx) ? "OK" : "OK_NO_CMD";
         } catch (Throwable e) {
-            return "ERROR: " + e.getMessage();
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -848,15 +864,16 @@ public final class HttpShellService {
         try {
             final String text = getParam(queryOf(path), "text", "");
             if (text.isEmpty()) return "NO_TEXT";
+            final String displayText = safeDisplay(text);
             new Handler(Looper.getMainLooper()).post(() -> {
                 try {
-                    android.widget.Toast.makeText(ctx, text, android.widget.Toast.LENGTH_LONG).show();
+                    android.widget.Toast.makeText(ctx, displayText, android.widget.Toast.LENGTH_LONG).show();
                 } catch (Throwable ignored) {
                 }
             });
             return "OK";
         } catch (Throwable e) {
-            return "ERROR: " + e.getMessage();
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -902,7 +919,7 @@ public final class HttpShellService {
             }
             return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Throwable e) {
-            return "ERROR: " + e.getMessage();
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -971,7 +988,7 @@ public final class HttpShellService {
             } catch (Throwable ignored) {
             }
         } catch (Throwable e) {
-            return "ERROR: " + e;
+            return "ERROR: " + safeError(e);
         }
         return sb.toString().trim();
     }
@@ -1006,7 +1023,7 @@ public final class HttpShellService {
             if (n == 0) return "（没有匹配的应用）";
             return sb.append("共 ").append(n).append(" 个").toString();
         } catch (Throwable e) {
-            return "ERROR: " + e;
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -1021,7 +1038,7 @@ public final class HttpShellService {
             ctx.startActivity(i);
             return "OK: 已启动 " + pkg;
         } catch (Throwable e) {
-            return "ERROR: " + e;
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -1053,7 +1070,7 @@ public final class HttpShellService {
             if (s.length() > 8192) s = s.substring(0, 8192) + "…（已截断）";
             return s;
         } catch (Throwable e) {
-            return "ERROR: " + e;
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -1086,7 +1103,7 @@ public final class HttpShellService {
             ctx.startActivity(chooser);
             return "OK: 已弹出分享面板";
         } catch (Throwable e) {
-            return "ERROR: " + e;
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -1106,9 +1123,9 @@ public final class HttpShellService {
                     android.net.Uri.parse(url));
             i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
             ctx.startActivity(i);
-            return "OK: 已打开 " + url;
+            return "OK: 已打开 " + safeDisplay(url);
         } catch (Throwable e) {
-            return "ERROR: " + e;
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -1133,7 +1150,7 @@ public final class HttpShellService {
                     android.os.VibrationEffect.DEFAULT_AMPLITUDE));
             return "OK: 震动 " + ms + "ms";
         } catch (Throwable e) {
-            return "ERROR: " + e;
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -1148,6 +1165,9 @@ public final class HttpShellService {
         }
         String[] parts = optRaw.isEmpty() ? new String[] { "好" } : optRaw.split("\\|");
         final String[] opts = parts.length <= 3 ? parts : new String[] { parts[0], parts[1], parts[2] };
+        final String displayQuestion = safeDisplay(q);
+        final String[] displayOptions = new String[opts.length];
+        for (int i = 0; i < opts.length; i++) displayOptions[i] = safeDisplay(opts[i]);
         // 检查与置位必须原子（见 askBusy 声明处）。CAS 成功之后立刻进 try，
         // 保证任何返回路径都会在 finally 里放开它。
         if (!askBusy.compareAndSet(false, true)) {
@@ -1163,19 +1183,19 @@ public final class HttpShellService {
                     if (act.isFinishing() || act.isDestroyed()) return;
                     androidx.appcompat.app.AlertDialog.Builder b =
                             new androidx.appcompat.app.AlertDialog.Builder(act)
-                                    .setTitle("助手提问").setMessage(q);
-                    b.setPositiveButton(opts[0], (d, w) -> {
+                                    .setTitle("助手提问").setMessage(displayQuestion);
+                    b.setPositiveButton(displayOptions[0], (d, w) -> {
                         askAnswer = opts[0];
                         latch.countDown();
                     });
                     if (opts.length > 1) {
-                        b.setNegativeButton(opts[1], (d, w) -> {
+                        b.setNegativeButton(displayOptions[1], (d, w) -> {
                             askAnswer = opts[1];
                             latch.countDown();
                         });
                     }
                     if (opts.length > 2) {
-                        b.setNeutralButton(opts[2], (d, w) -> {
+                        b.setNeutralButton(displayOptions[2], (d, w) -> {
                             askAnswer = opts[2];
                             latch.countDown();
                         });
@@ -1221,14 +1241,15 @@ public final class HttpShellService {
                 } catch (Throwable ignored) {
                 }
             }
-            if (!f.isFile()) return "NOT_FOUND: " + src;
+            if (!f.isFile()) return "NOT_FOUND: " + SensitiveData.redact(src);
             if (f.length() > 64L * 1024 * 1024) return "TOO_LARGE: " + f.length();
             if (name.isEmpty()) name = f.getName();
             if (name.contains("/") || name.contains("..")) return "BAD_NAME";
             String out = BackupManager.exportToDownloads(ctx, f, name);
-            return out == null ? "ERROR: 导出失败（存储权限或空间不足）" : "OK: " + out;
+            return out == null ? "ERROR: 导出失败（存储权限或空间不足）"
+                    : "OK: " + SensitiveData.redact(out);
         } catch (Throwable e) {
-            return "ERROR: " + e;
+            return "ERROR: " + safeError(e);
         }
     }
 
@@ -1272,12 +1293,12 @@ public final class HttpShellService {
             // 第三条渠道：悬浮条上就地批准。agent 干活时用户往往并不在 App 里 ——
             // 拉下通知栏找那条通知、或者切回 App，都比点一下已经浮在最上层的按钮慢。
             // 三条渠道共用同一个 epoch + latch，谁先点谁生效。
-            OverlayController.askConfirm(ctx, cmd,
+            OverlayController.askConfirm(ctx, safeDisplay(cmd),
                     () -> resolveConfirm(true, myEpoch),
                     () -> resolveConfirm(false, myEpoch));
             final MainActivity act = MainActivity.current;
             if (act != null) {
-                final String prompt = "模型试图在设备上执行：\n" + cmd + "\n\n是否允许？";
+                final String prompt = "模型试图在设备上执行：\n" + safeDisplay(cmd) + "\n\n是否允许？";
                 act.runOnUiThread(() -> {
                     // 正在 finishing 的 Activity 上 show() 会抛 BadTokenException，
                     // 而这里是主线程，异常不在 handle() 的 catch 范围内 → 会崩 App
@@ -1294,13 +1315,14 @@ public final class HttpShellService {
                                 .setNegativeButton("拒绝", (d, w) -> resolveConfirm(false, myEpoch))
                                 .show();
                     } catch (Throwable t) {
-                        android.util.Log.w("DSHA", "确认弹窗弹出失败，仍可从通知确认：" + t);
+                        android.util.Log.w("DSHA", "确认弹窗弹出失败，仍可从通知确认：" + safeError(t));
                     }
                 });
             } else if (!notificationsEnabled()) {
                 // 后台 + 通知被拒 = 用户看不到任何提示，只能干等 60s 超时被拒。
                 // 至少留下日志，别让这变成无从排查的「命令莫名被拒」。
-                android.util.Log.w("DSHA", "无前台界面且通知权限被拒，确认必然超时拒绝：" + cmd);
+                android.util.Log.w("DSHA", "无前台界面且通知权限被拒，确认必然超时拒绝："
+                        + safeDisplay(cmd));
             }
 
             try {
@@ -1368,7 +1390,8 @@ public final class HttpShellService {
 
     private void showConfirmNotification(String cmd, long epoch) {
         createConfirmChannel();
-        String shortCmd = cmd.length() > 100 ? cmd.substring(0, 100) + "…" : cmd;
+        String displayCmd = safeDisplay(cmd);
+        String shortCmd = displayCmd.length() > 100 ? displayCmd.substring(0, 100) + "…" : displayCmd;
         // epoch 随 Intent 带回：残留通知上的旧按钮会因 epoch 过期被丢弃
         Intent allowI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_ALLOW)
                 .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
@@ -1383,7 +1406,7 @@ public final class HttpShellService {
                 .setContentTitle("⚠️ DSHA 安全确认")
                 .setContentText("模型试图执行：" + shortCmd)
                 .setStyle(new NotificationCompat.BigTextStyle()
-                        .bigText("模型试图在设备上执行：\n" + cmd + "\n\n是否允许？"))
+                        .bigText("模型试图在设备上执行：\n" + displayCmd + "\n\n是否允许？"))
                 .addAction(0, "允许", allowPi)
                 .addAction(0, "拒绝", denyPi)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)

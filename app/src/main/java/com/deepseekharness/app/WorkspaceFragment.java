@@ -50,6 +50,8 @@ public class WorkspaceFragment extends Fragment {
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         c = HarnessController.get(requireContext());
+        android.widget.TextView appTitle = requireActivity().findViewById(R.id.app_title);
+        if (appTitle != null) appTitle.setText("数据与备份");
         prefs = requireContext().getSharedPreferences("deepseekharness", 0);
         workdirEdit = view.findViewById(R.id.workspace_path);
         infoText = view.findViewById(R.id.workspace_info);
@@ -60,6 +62,7 @@ public class WorkspaceFragment extends Fragment {
         Button clearBtn = view.findViewById(R.id.workspace_clear);
         Button backupBtn = view.findViewById(R.id.workspace_backup);
         Button restoreBtn = view.findViewById(R.id.workspace_restore);
+        Button locationBtn = view.findViewById(R.id.workspace_location);
         Button cleanSessionsBtn = view.findViewById(R.id.workspace_clean_sessions);
         Button resetBtn = view.findViewById(R.id.workspace_reset);
         SubPageBack.bind(this, view);
@@ -91,23 +94,32 @@ public class WorkspaceFragment extends Fragment {
             Toast.makeText(requireContext(), "已清除环境", Toast.LENGTH_SHORT).show();
         });
 
-        backupBtn.setOnClickListener(v -> promptBackupScope());
+        backupBtn.setOnClickListener(v -> confirmAndBackup());
 
         resetBtn.setOnClickListener(v -> new AlertDialog.Builder(requireContext())
                 .setTitle("重置配置？")
                 .setMessage("将删除 settings.yaml 和 .env（对话记录保留），并重新写入 .env。")
                 .setPositiveButton("重置", (d, w) -> {
                     String r = c.resetConfig();
-                    Toast.makeText(requireContext(), r, Toast.LENGTH_LONG).show();
+                    Toast.makeText(requireContext(), SensitiveData.redact(r), Toast.LENGTH_LONG).show();
                 })
                 .setNegativeButton("取消", null)
                 .show());
 
         restoreBtn.setOnClickListener(v ->
                 pickBackup.launch(new String[]{"*/*"}));
+        if (locationBtn != null) locationBtn.setOnClickListener(v ->
+                Toast.makeText(requireContext(),
+                        "保存位置：Download/DSHA/（公共下载目录）", Toast.LENGTH_LONG).show());
 
         // 清理损坏会话（dsh 双进程写导致 seq 重复损坏，官方 #420）
         if (cleanSessionsBtn != null) {
+            if (HarnessController.EXPECTED_RUNTIME_ID.equals(c.runtimeId())) {
+                // Alpha sessions can be packed/zstd and must remain opaque to
+                // DSHA.  Keep the legacy control out of this runtime entirely.
+                cleanSessionsBtn.setVisibility(View.GONE);
+                return;
+            }
             cleanSessionsBtn.setOnClickListener(v -> new AlertDialog.Builder(requireContext())
                     .setTitle("清理损坏会话？")
                     .setMessage("将把无法解码/极小的会话文件移到 .dsh/corrupt-backup/\n"
@@ -125,7 +137,7 @@ public class WorkspaceFragment extends Fragment {
                                     actC != null ? actC.getApplicationContext() : null;
                             if (actC != null && ctxC != null) {
                                 actC.runOnUiThread(() -> Toast.makeText(ctxC,
-                                        r, Toast.LENGTH_LONG).show());
+                                        SensitiveData.redact(r), Toast.LENGTH_LONG).show());
                             }
                         }).start();
                     })
@@ -134,56 +146,67 @@ public class WorkspaceFragment extends Fragment {
         }
     }
 
-    /** 备份入口：先选范围（全量 / 只对话 / 只插件），再走「Web 在跑要不要先停」那一步。
-     *
-     *  <p>刻意做成弹一次选择而不是在页面上摆三个按钮 —— 备份一年用几次，不该占常驻位置。
-     *  范围的定义、文案、文件名前缀全在 {@link BackupScope} 一处。 */
-    private void promptBackupScope() {
-        final int[] scopes = BackupScope.ALL;
-        String[] items = new String[scopes.length];
-        for (int i = 0; i < scopes.length; i++) {
-            items[i] = BackupScope.label(scopes[i]) + "\n" + BackupScope.describe(scopes[i]);
+    /** 新建入口先选择范围；所有新包仍统一原子发布为 latest。 */
+    private void confirmAndBackup() {
+        final CharSequence[] choices = new CharSequence[BackupScope.ALL.length];
+        for (int i = 0; i < BackupScope.ALL.length; i++) {
+            int scope = BackupScope.ALL[i];
+            choices[i] = BackupScope.label(scope) + "\n" + BackupScope.describe(scope);
         }
+        final int[] selected = {0};
         new AlertDialog.Builder(requireContext())
-                .setTitle("备份范围")
-                .setItems(items, (d, w) -> confirmAndBackup(scopes[w]))
+                .setTitle("选择备份范围")
+                .setSingleChoiceItems(choices, 0, (dialog, which) -> selected[0] = which)
+                .setPositiveButton("下一步", (dialog, which) ->
+                        confirmBackupScope(BackupScope.ALL[selected[0]]))
                 .setNegativeButton("取消", null)
                 .show();
     }
 
-    /** Web UI 正在运行时会实时写对话文件，直接 tar 可能拿到半截数据，所以先问一句。
-     *  只备份插件时不问 —— 插件声明不会被会话写入影响，多一次确认纯属打扰。 */
-    private void confirmAndBackup(int scope) {
-        if (c.isWebRunning() && scope != BackupScope.PLUGINS) {
+    private void confirmBackupScope(final int scope) {
+        final String summary = "即将备份：" + BackupScope.label(scope)
+                + "\n" + BackupScope.describe(scope)
+                + "\n\n新备份固定保存为 DSHA-backup-latest.tar.gz。默认不包含 API Key，不删除当前数据。";
+        if (c.isWebRunning()) {
             new AlertDialog.Builder(requireContext())
-                    .setTitle("Web UI 正在运行")
-                    .setMessage("对话记录可能正在写入。建议先停止 Web UI 再备份，避免备份到半截文件。\n\n仍要继续备份吗？")
+                    .setTitle("确认备份")
+                    .setMessage(summary + "\n\nWeb UI 正在运行，对话可能正在写入。建议先停止 Web UI 再备份。")
                     .setPositiveButton("停止后备份", (d, w) -> {
                         // 用同步深停（等端口关透）再备份，避免异步 stopWeb 期间 tar 到写入中的文件
                         Toast.makeText(requireContext(), "正在停止 Web 并备份…", Toast.LENGTH_SHORT).show();
+                        final Context appCtx = requireContext().getApplicationContext();
                         new Thread(() -> {
                             try {
                                 c.stopWebAndWait();
                             } catch (Throwable ignored) {
                             }
-                            doBackup(scope);
+                            doBackup(appCtx, scope);
                         }).start();
                     })
                     .setNegativeButton("直接备份", (d, w) -> {
                         Toast.makeText(requireContext(), "正在备份（可能含写入中的会话）…", Toast.LENGTH_SHORT).show();
-                        new Thread(() -> doBackup(scope)).start();
+                        final Context appCtx = requireContext().getApplicationContext();
+                        new Thread(() -> doBackup(appCtx, scope)).start();
                     })
                     .setNeutralButton("取消", null)
                     .show();
         } else {
-            Toast.makeText(requireContext(), "正在备份，请稍候…", Toast.LENGTH_SHORT).show();
-            new Thread(() -> doBackup(scope)).start();
+            new AlertDialog.Builder(requireContext())
+                    .setTitle("确认备份")
+                    .setMessage(summary)
+                    .setPositiveButton("开始备份", (d, w) -> {
+                        Toast.makeText(requireContext(), "正在备份，请稍候…", Toast.LENGTH_SHORT).show();
+                        final Context appCtx = requireContext().getApplicationContext();
+                        new Thread(() -> doBackup(appCtx, scope)).start();
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
         }
     }
 
-    /** 执行备份并展示结果（独立方法，供直接备份/停止后备份复用） */
-    private void doBackup(int scope) {
-        String path = BackupManager.backupToExternal(requireContext(), c, scope);
+    /** 执行选定范围的 latest 备份并展示结果。 */
+    private void doBackup(Context appCtx, int scope) {
+        String path = BackupManager.backupToExternal(appCtx, c, scope);
         if (!isAdded() || getActivity() == null) return;
         getActivity().runOnUiThread(() -> {
             // 弹窗必须用 Activity context，而这一刻 Fragment 可能已经 detach ——
@@ -193,19 +216,22 @@ public class WorkspaceFragment extends Fragment {
                 String why = BackupManager.lastError();
                 new AlertDialog.Builder(requireContext())
                         .setTitle("备份失败")
-                        .setMessage(why.isEmpty() ? "未知原因，请查看 logcat" : why)
+                        .setMessage(SensitiveData.redact(
+                                why.isEmpty() ? "未知原因，请查看 logcat" : why))
                         .setPositiveButton("知道了", null)
                         .show();
                 return;
             }
             new AlertDialog.Builder(requireContext())
                     .setTitle("备份完成")
-                    .setMessage(BackupScope.label(scope) + " 已导出到：\n" + path)
+                    .setMessage(SensitiveData.redact(
+                            BackupScope.label(scope) + " 已导出到：\n" + path))
                     .setPositiveButton("复制路径", (d, w) -> {
                         ClipboardManager cm = (ClipboardManager) requireContext()
                                 .getSystemService(Context.CLIPBOARD_SERVICE);
                         if (cm != null) {
-                            cm.setPrimaryClip(ClipData.newPlainText("backup", path));
+                            cm.setPrimaryClip(ClipData.newPlainText("backup",
+                                    SensitiveData.redact(path)));
                             Toast.makeText(requireContext(), "路径已复制", Toast.LENGTH_SHORT).show();
                         }
                     })
@@ -215,6 +241,8 @@ public class WorkspaceFragment extends Fragment {
     }
 
     private void restoreBackup(Uri uri) {
+        int guessedScope = BackupScope.fromFileName(uri == null ? "" : String.valueOf(uri));
+        String impact = BackupScope.restoreImpact(guessedScope);
         // Web 在跑时恢复会覆盖正在写入的 .dsh（对话可能损坏/丢失）：
         // 先深停再恢复，比"建议"更可靠（弹窗文案已说明）
         if (c.isWebRunning()) {
@@ -228,7 +256,7 @@ public class WorkspaceFragment extends Fragment {
         }
         new AlertDialog.Builder(requireContext())
                 .setTitle("恢复备份？")
-                .setMessage("将用备份文件覆盖当前的配置和对话记录。\n\n确认恢复？")
+                .setMessage("将用备份文件恢复数据。预计影响：" + impact + "。\n\n确认恢复？")
                 .setPositiveButton("恢复", (d, w) -> doRestore(uri))
                 .setNegativeButton("取消", null)
                 .show();
@@ -286,48 +314,10 @@ public class WorkspaceFragment extends Fragment {
                 final String result = c.restoreFromBackup(tmp);
                 //noinspection ResultOfMethodCallIgnored
                 tmp.delete();
-                // 同步 API key：恢复的 .env 写回 App 配置，避免下次启动被覆盖
-                String env = c.getProot().execAndRead(
-                        "cat /root/" + c.getWorkdir() + "/.env 2>/dev/null");
-                boolean keySynced = false;
-                if (env != null) {
-                    for (String line : env.split("\n")) {
-                        if (line.startsWith("DEEPSEEK_API_KEY=")) {
-                            String key = line.substring("DEEPSEEK_API_KEY=".length()).trim();
-                            if (!key.isEmpty()) {
-                                c.setApiKey(key);
-                                keySynced = true;
-                            }
-                            break;
-                        }
-                    }
-                }
-                if (getActivity() == null) return;
-                // .env 读不到就找 .dsha-apikey（离线包安装用户走这条 —— issue #22）
-                boolean keyUndecryptable = false;
-                if (!keySynced) {
-                    String k2 = c.getProot().execAndRead("cat /root/.dsh/.dsha-apikey 2>/dev/null");
-                    if (k2 != null) {
-                        k2 = k2.trim();
-                        if (!k2.isEmpty() && !k2.contains(" ") && !k2.contains("\n") && k2.length() >= 8) {
-                            // 备份里那份是加过密的：不解密就把 base64(iv):base64(ct)
-                            // 当 key 写进配置，对话必然鉴权失败而界面看着「已填」
-                            String plain = c.decryptKeyFromBackup(k2);
-                            if (plain != null) {
-                                c.setApiKey(plain);
-                                keySynced = true;
-                            } else {
-                                keyUndecryptable = true;
-                            }
-                        }
-                    }
-                }
-                // 读不到就如实说，别再无条件提示「已同步」（issue #22 的第二个问题）
-                final String msg = result + (keySynced
-                        ? "\n· API key 已同步到配置页"
-                        : keyUndecryptable
-                                ? "\n· 备份里的 API key 无法解密（换了设备或清过 App 数据），请到「配置」页重新填写"
-                                : "\n· 备份里没有 API key，请到「配置」页手动填写");
+                // API key 同步由 HarnessController.restoreFromBackup 统一负责，且只在
+                // restore-merge.py 明确输出 RESTORE_DSH_COMMITTED 后执行；这里仅展示结果，
+                // 避免校验/rename 失败时再次读取或改写旧 .dsh。
+                final String msg = SensitiveData.redact(result);
                 // 恢复是耗时操作，用户很容易在等待期间切走页面或退出 ——
                 // 那时 Fragment 已 detach，getActivity() 返回 null，
                 // 这里原来直接解引用，正是「操作到一半闪退」的来源。
@@ -344,7 +334,8 @@ public class WorkspaceFragment extends Fragment {
             } catch (Exception e) {
                 if (getActivity() != null) {
                     getActivity().runOnUiThread(() -> Toast.makeText(appCtx,
-                            "恢复失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
+                            "恢复失败：" + SensitiveData.redact(e.getMessage()),
+                            Toast.LENGTH_LONG).show());
                 }
             }
         }).start();
@@ -356,21 +347,31 @@ public class WorkspaceFragment extends Fragment {
         if (c != null) refreshInfo();
     }
 
+    @Override
+    public void onDestroyView() {
+        android.app.Activity activity = getActivity();
+        if (activity != null) {
+            android.widget.TextView appTitle = activity.findViewById(R.id.app_title);
+            if (appTitle != null) appTitle.setText("设置");
+        }
+        super.onDestroyView();
+    }
+
     private void refreshInfo() {
         String envState = c.isHarnessInstalled() ? "✅ 已安装"
                 : c.getProot().isInstalled() ? "🔄 环境已就绪" : "📦 未安装";
-        infoText.setText("环境状态：" + envState
+        infoText.setText(SensitiveData.redact("环境状态：" + envState
                 + "\n\n工作区（rootfs 内）：/root/" + c.getWorkdir()
-                + "\n\n安装完成后该目录即为 deepseek-harness 源码。");
+                + "\n\n安装完成后该目录即为 deepseek-harness 源码。"));
         refreshShareStatus();
     }
 
     private void refreshShareStatus() {
-        shareStatusText.setText("文件提供器已就绪（MT 官方注入，无需 ROOT）\n\n"
+        shareStatusText.setText(SensitiveData.redact("文件提供器已就绪（MT 官方注入，无需 ROOT）\n\n"
                 + "用法：MT 管理器 → 侧拉栏 → 添加本地存储 → 选择「DSHA」\n\n"
                 + "工作区在：data → files → linux → ubuntu → root → " + c.getWorkdir() + "\n"
                 + "配置在：data → files → linux → ubuntu → root → .dsh\n\n"
-                + "（若 MT 里看不到内容，先打开本 App 保持进程运行）");
+                + "（若 MT 里看不到内容，先打开本 App 保持进程运行）"));
         refreshShizukuStatus();
     }
 

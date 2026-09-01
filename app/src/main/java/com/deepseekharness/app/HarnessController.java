@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 核心控制器：分步安装（rootfs / 基础工具 / Node / deepseek-harness，每步可单独
@@ -90,6 +91,57 @@ public class HarnessController {
     private static final long BUSY_STALE_MS = 10 * 60 * 1000L;
     private volatile int currentStep = 0;
     private volatile Process webProcess;
+    /** Fixed upstream runtime identity for the local 1.2 alpha. */
+    public static final String EXPECTED_RUNTIME_ID = Constants.DSH_ALPHA_RUNTIME_ID;
+    public static final String EXPECTED_DSH_VERSION = Constants.DSH_ALPHA_VERSION;
+
+    /** In-memory BrowserAuth handoff; never persisted or printed. */
+    public static final class WebLaunchInfo {
+        public final String loopbackBaseUrl;
+        public final String authUrl;
+        public final long generation;
+
+        private WebLaunchInfo(String loopbackBaseUrl, String authUrl, long generation) {
+            this.loopbackBaseUrl = loopbackBaseUrl;
+            this.authUrl = authUrl;
+            this.generation = generation;
+        }
+    }
+
+    private final Object launchInfoLock = new Object();
+    private volatile WebLaunchInfo launchInfo;
+    private volatile long launchGeneration;
+    private volatile boolean browserAuthExchanged;
+    /** Alpha HMR recovery is deliberately limited to one automatic retry per app lifetime. */
+    private final AtomicBoolean hmrRetryUsed = new AtomicBoolean(false);
+    private volatile StartupTiming startupTiming;
+    private static final class StartupTiming {
+        final long requested = android.os.SystemClock.elapsedRealtime();
+        long rootfs, process, auth, cookie, webview;
+        boolean reported;
+        String report() {
+            return "启动计时(ms): 请求启动=0, rootfs校验=" + (rootfs - requested)
+                    + ", 进程创建=" + (process - requested)
+                    + ", 拿到 auth URL=" + (auth - requested)
+                    + ", Cookie 交换=" + (cookie - requested)
+                    + ", WebView 首次可用=" + (webview - requested);
+        }
+    }
+
+    private void timingRootfs() { StartupTiming t = startupTiming; if (t != null) t.rootfs = android.os.SystemClock.elapsedRealtime(); }
+    private void timingProcess() { StartupTiming t = startupTiming; if (t != null) t.process = android.os.SystemClock.elapsedRealtime(); }
+    private void timingAuth() { StartupTiming t = startupTiming; if (t != null) t.auth = android.os.SystemClock.elapsedRealtime(); }
+    private void timingCookie() { StartupTiming t = startupTiming; if (t != null) t.cookie = android.os.SystemClock.elapsedRealtime(); }
+
+    /** Called by the preview after the first WebView/GeckoView load is scheduled. */
+    public void noteWebViewReady() {
+        StartupTiming t = startupTiming;
+        if (t == null || t.reported) return;
+        t.webview = android.os.SystemClock.elapsedRealtime();
+        t.reported = true;
+        android.util.Log.i("DSHA", t.report());
+    }
+    private final Object webLogLock = new Object();
     /** Web 进程“代际”/硬重启计数：让启动页感知重启并刷新预览（拿到最新 manifest/插件） */
     private volatile long webEpoch = System.currentTimeMillis();
     private volatile long hardRestartEpoch = 0;
@@ -159,6 +211,22 @@ public class HarnessController {
         return false;
     }
 
+    /** dsh is ready only after the loopback port and BrowserAuth cookie exchange both succeed. */
+    private boolean waitWebAuthenticated(long maxMs, long generation) {
+        long deadline = System.currentTimeMillis() + maxMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (generation == launchGeneration && isWebPortUp(300)
+                    && isBrowserAuthExchanged()) return true;
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
+    }
+
     private void destroyAllWebProcesses() {
         for (Process p : webProcesses) {
             try { p.destroy(); } catch (Throwable ignored) {
@@ -208,13 +276,16 @@ public class HarnessController {
                 try {
                     android.os.Process.killProcess(pid);
                     killed++;
-                    android.util.Log.w("DSHA", "已杀 web 进程 pid=" + pid + " cmd=" + tail(cmd, 80));
+                    android.util.Log.w("DSHA", "已杀 web 进程 pid=" + pid + " cmd="
+                            + SensitiveData.redact(tail(cmd, 80)));
                 } catch (Throwable e) {
-                    android.util.Log.w("DSHA", "杀 pid=" + pid + " 失败: " + e);
+                    android.util.Log.w("DSHA", "杀 pid=" + pid + " 失败: "
+                            + SensitiveData.redact(String.valueOf(e)));
                 }
             }
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "Android 侧扫进程失败: " + e);
+            android.util.Log.w("DSHA", "Android 侧扫进程失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
         return killed;
     }
@@ -275,8 +346,8 @@ public class HarnessController {
             }
             if (!cmd.contains(it[1])) {
                 // pid 会回卷复用，长相对不上就当这个文件过期了 —— 宁可少杀，不能杀错
-                log.append(it[2]).append("：pid ").append(pid).append(" 长相对不上（")
-                   .append(tail(cmd, 60)).append("），当过期忽略\n");
+                 log.append(it[2]).append("：pid ").append(pid).append(" 长相对不上（")
+                    .append(SensitiveData.redact(tail(cmd, 60))).append("），当过期忽略\n");
                 continue;
             }
             try {
@@ -285,7 +356,7 @@ public class HarnessController {
                    .append(" 给 pid ").append(pid).append("\n");
             } catch (Throwable e) {
                 log.append(it[2]).append("：送信号给 pid ").append(pid)
-                   .append(" 失败 ").append(e).append("\n");
+                   .append(" 失败 ").append(SensitiveData.redact(String.valueOf(e))).append("\n");
             }
         }
         return log.toString().trim();
@@ -323,6 +394,7 @@ public class HarnessController {
 
     public void stopWebAndWait() {
         try {
+            clearWebLaunchInfo();
             destroyAllWebProcesses();
             // 与 stopWeb 同一条链路：先按 pid 文件在 App 侧精确送 TERM（不受容器 /proc 视图
             // 限制）。这里同样**不能**用 KILL —— 重启也要让 dsh 有机会 flush SQLite，
@@ -349,6 +421,7 @@ public class HarnessController {
     public void restartAppProcess(final android.content.Context ctx) {
         new Thread(() -> {
             try {
+                clearWebLaunchInfo();
                 destroyAllWebProcesses();
                 proot.execAndRead(stopWebCommand());
                 waitPortClosed(6000);
@@ -401,7 +474,10 @@ public class HarnessController {
                     off += n;
                 }
             }
-            String log = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            // Logs written by an older runtime may still contain credentials.
+            // Redact before matching or returning any diagnostic text.
+            String log = SensitiveData.redact(new String(bytes,
+                    java.nio.charset.StandardCharsets.UTF_8));
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("Cannot find module '([^']+)'").matcher(log);
             if (m.find()) {
                 String mod = m.group(1);
@@ -414,14 +490,10 @@ public class HarnessController {
             // cordis-plugin-hmr（热重载），而那个插件要求 node 带 --expose-internals。
             // 用户在 WebUI 里手一点启用，重启后整个 profile 加载失败 → Web 起不来
             // → 进不去 WebUI → 也就没法把它关掉。自动在 patch 层禁用它。
-            if (log.contains("--expose-internals is required")
-                    || (log.contains("failed to apply loader entry") && log.contains("plugin-hmr"))) {
+            if (isKnownHmrFailure(log)) {
                 String heal = runHealProfileBoot();
                 if (heal != null && heal.contains("HEAL_PROFILE_OK: 禁用")) {
-                    return "已自动关闭热重载插件（cordis-plugin-hmr）—— 它需要 Node 的 "
-                            + "--expose-internals 启动参数，缺了会让整个 profile 加载失败。\n"
-                            + "点「重启」即可正常进入。普通使用不需要热重载；想恢复可编辑 "
-                            + "~/.dsh/profiles/web/cordis.patch.yml 删掉那几行。";
+                    return "已隔离不兼容热重载插件，Web 已恢复";
                 }
                 return "WebUI 启动失败：启用了需要 Node --expose-internals 的插件"
                         + "（cordis-plugin-hmr 热重载）。\n自动关闭没成功，可手动编辑 "
@@ -457,7 +529,7 @@ public class HarnessController {
             }
             return tail.isEmpty() ? "WebUI 异常退出（日志为空）" : "WebUI 异常退出：\n" + tail;
         } catch (Exception e) {
-            return "无法解析 WebUI 日志：" + e.getMessage();
+            return "无法解析 WebUI 日志：" + SensitiveData.redact(String.valueOf(e.getMessage()));
         }
     }
     /** 启动失败自愈：把「启用了却跑不起来」的 loader entry 在 profile 的 patch 层禁用。
@@ -472,13 +544,71 @@ public class HarnessController {
                     script.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             String out = proot.execAndRead(
                     "python3 /root/.dsha-heal-profile.py --log /root/dsh-web.log"
-                            + " --profile /root/.dsh/profiles/web 2>&1; "
-                            + "rm -f /root/.dsha-heal-profile.py", 60_000);
-            android.util.Log.i("DSHA", "profile 启动自愈: " + (out == null ? "无输出" : out.trim()));
+                    + " --profile /root/.dsh/profiles/web 2>&1; "
+                    + "rm -f /root/.dsha-heal-profile.py", 60_000);
+            if (out == null || !out.contains("HEAL_PROFILE_OK: 禁用")) {
+                // Alpha rootfs intentionally omits Python. Keep the recovery
+                // path available with a tiny Java fallback that only changes
+                // the known mobile-incompatible HMR profile setting.
+                String direct = disableAlphaHmrProfile();
+                if (direct != null) out = direct;
+            }
+            android.util.Log.i("DSHA", "profile 启动自愈: "
+                    + (out == null ? "无输出" : SensitiveData.redact(out.trim())));
             return out;
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "profile 启动自愈失败: " + e);
+            android.util.Log.w("DSHA", "profile 启动自愈失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
             return null;
+        }
+    }
+
+    /**
+     * Disable live profile reload on Alpha after the known HMR startup error.
+     * The upstream web template enables the Cordis HMR service for
+     * {@code patchReload: live}; mobile launches must use the supported
+     * startup-only watcher. The manifest is replaced atomically and no
+     * session, credential, or user plugin data is touched.
+     */
+    private String disableAlphaHmrProfile() {
+        if (!isAlphaRuntime()) return null;
+        try {
+            java.io.File pf = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/package.json");
+            if (!pf.isFile()) return null;
+            org.json.JSONObject root = new org.json.JSONObject(
+                    new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8));
+            org.json.JSONObject dsh = root.optJSONObject("dsh");
+            org.json.JSONObject profile = dsh == null ? null : dsh.optJSONObject("profile");
+            if (profile == null) return null;
+            if (!"live".equalsIgnoreCase(profile.optString("patchReload", ""))) {
+                return "HEAL_PROFILE_OK: 禁用（profile 已为移动端安全模式）";
+            }
+            profile.put("patchReload", "startup");
+            byte[] data = root.toString(2).concat("\n").getBytes(StandardCharsets.UTF_8);
+            java.io.File tmp = new java.io.File(pf.getParentFile(), "package.json.dsha-tmp");
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
+                out.write(data);
+                out.flush();
+                out.getFD().sync();
+            }
+            java.nio.file.Files.move(tmp.toPath(), pf.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            return "HEAL_PROFILE_OK: 禁用（移动端安全模式）";
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "profile HMR 回退失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
+            return null;
+        }
+    }
+
+    /** Alpha profiles must not start the live Cordis HMR service on mobile. */
+    private void prepareAlphaProfile() {
+        if (!isAlphaRuntime()) return;
+        try {
+            disableAlphaHmrProfile();
+        } catch (Throwable ignored) {
         }
     }
 
@@ -523,6 +653,13 @@ public class HarnessController {
     private HarnessController(Context ctx) {
         this.appContext = ctx;
         this.prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        // Runtime identity is deliberately independent from the legacy use_rc6
+        // preference.  This APK has one pinned Alpha runtime, so stale/absent
+        // values cannot re-enable an old phone-side install path after upgrade.
+        String storedRuntime = this.prefs.getString(Constants.KEY_RUNTIME_ID, "");
+        if (!EXPECTED_RUNTIME_ID.equals(storedRuntime)) {
+            this.prefs.edit().putString(Constants.KEY_RUNTIME_ID, EXPECTED_RUNTIME_ID).apply();
+        }
         this.proot = new ProotBootstrap(ctx);
         this.plugins = new PluginController(this, ctx, this.proot);
     }
@@ -560,22 +697,27 @@ public class HarnessController {
     public int getCurrentStep() { return currentStep; }
 
     private void setState(String stage, int percent, String msg, String err, boolean b) {
-        this.stage = stage;
+        // Stage text is persisted and rendered by install/launch screens too;
+        // keep it behind the same defensive boundary as message/error.
+        this.stage = SensitiveData.redact(stage == null ? "" : stage);
         this.percent = percent;
-        this.message = msg;
-        this.error = err;
+        // State text is persisted in SharedPreferences and shown by the UI.
+        // Keep this final boundary defensive: a new caller must not accidentally
+        // persist a token/API key merely because it forgot to redact its input.
+        this.message = SensitiveData.redact(msg == null ? "" : msg);
+        this.error = SensitiveData.redact(err == null ? "" : err);
         this.busy = b;
         this.busySince = b ? System.currentTimeMillis() : 0;
         // 持久化进度，闪退后下次启动可定位中断步骤（节流：最多 2 秒写一次，避免磁盘 IO 卡顿）
-        if (!stage.isEmpty()) {
+        if (!this.stage.isEmpty()) {
             long now = System.currentTimeMillis();
             if (now - lastStageWriteTs > 2000) {
                 lastStageWriteTs = now;
-                prefs.edit().putString("last_stage", stage + " " + percent + "%").apply();
+                prefs.edit().putString("last_stage", this.stage + " " + percent + "%").apply();
             }
         }
-        if (err != null && !err.isEmpty()) {
-            prefs.edit().putString("last_error", err).apply();
+        if (!this.error.isEmpty()) {
+            prefs.edit().putString("last_error", this.error).apply();
         }
         // 状态可能在 IO 线程变更，回调需切回主线程再通知 UI
         mainHandler.post(() -> {
@@ -589,7 +731,27 @@ public class HarnessController {
     }
 
     public String getLastStage() { return prefs.getString("last_stage", ""); }
-    public String getLastError() { return prefs.getString("last_error", ""); }
+    public String getLastError() {
+        // Older installs may have persisted an unsanitized diagnostic; redact
+        // again when it is read back for UI/status consumers.
+        return SensitiveData.redact(prefs.getString("last_error", ""));
+    }
+
+    private boolean isKnownHmrFailure(String text) {
+        String low = text == null ? "" : text.toLowerCase(java.util.Locale.ROOT);
+        return low.contains("--expose-internals is required")
+                && low.contains("cordis-plugin-hmr");
+    }
+
+    private boolean healHmrAndRetry(String output) {
+        if (!isAlphaRuntime() || !isKnownHmrFailure(output)
+                || !hmrRetryUsed.compareAndSet(false, true)) return false;
+        String heal = runHealProfileBoot();
+        if (heal == null || !heal.contains("HEAL_PROFILE_OK: 禁用")) return false;
+        logActivity("已隔离不兼容热重载插件，Web 已恢复");
+        new Handler(Looper.getMainLooper()).postDelayed(this::startWeb, 250);
+        return true;
+    }
 
     private void setProgress(String stage, int percent) {
         setState(stage, percent, "", "", true);
@@ -599,12 +761,15 @@ public class HarnessController {
     /** 包级可见：{@link PluginController} 也要把异常转成人话。 */
     static String describe(Throwable e) {
         StringBuilder sb = new StringBuilder();
-        sb.append(e.getClass().getSimpleName()).append(": ").append(e.getMessage());
+        sb.append(e.getClass().getSimpleName()).append(": ")
+                .append(String.valueOf(e.getMessage()));
         StackTraceElement[] st = e.getStackTrace();
         if (st != null && st.length > 0) {
             sb.append("\n    at ").append(st[0].toString());
         }
-        return sb.toString();
+        // Stack frames and nested exception text can carry URLs or request
+        // headers even when the top-level message does not.
+        return SensitiveData.redact(sb.toString());
     }
 
     /** 报错文案统一附加 App 版本号（方便确认用户是否用新版 APK） */
@@ -691,7 +856,8 @@ public class HarnessController {
             return android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP)
                     + ":" + android.util.Base64.encodeToString(enc, android.util.Base64.NO_WRAP);
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "加密 API key 失败，回落明文: " + e);
+            android.util.Log.w("DSHA", "加密 API key 失败，回落明文: "
+                    + SensitiveData.redact(String.valueOf(e)));
             return "PLAIN:" + plain;       // 加密失败不阻断主流程，但标记明文
         }
     }
@@ -709,7 +875,8 @@ public class HarnessController {
             byte[] pt = c.doFinal(enc);
             return new String(pt, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "解密 API key 失败（Keystore 密钥可能已丢）: " + e);
+            android.util.Log.w("DSHA", "解密 API key 失败（Keystore 密钥可能已丢）: "
+                    + SensitiveData.redact(String.valueOf(e)));
             return "";
         }
     }
@@ -774,6 +941,7 @@ public class HarnessController {
 
 
     public String getPort() {
+        if (isAlphaRuntime()) return String.valueOf(Constants.DSH_WEB_PORT);
         // 兜底校验：空/非数字/越界全部回退默认 3080（否则 --port 后是空串导致启动失败）
         String p = prefs.getString("port", "3080");
         if (p == null) return "3080";
@@ -797,6 +965,10 @@ public class HarnessController {
     }
     /** 保存端口时就校验，避免 UI 显示已保存但启动时静默回退。 */
     public void setPort(String v) {
+        // Alpha dsh has a fixed loopback contract.  Leave the historical
+        // preference untouched so a rollback/older build still sees its own
+        // setting; this runtime simply refuses to reinterpret it.
+        if (isAlphaRuntime()) return;
         try {
             int n = Integer.parseInt(v == null ? "" : v.trim());
             if (n < 1 || n > 65535 || n == LanProxyService.LAN_PORT) return;
@@ -900,7 +1072,8 @@ public class HarnessController {
                 d.mkdirs();
             }
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "新工作区目录创建失败（仍已保存配置）: " + e);
+            android.util.Log.w("DSHA", "新工作区目录创建失败（仍已保存配置）: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
     }
 
@@ -956,6 +1129,199 @@ public class HarnessController {
     /** Web UI 进程是否在运行 */
     public boolean isWebRunning() {
         return webProcess != null && webProcess.isAlive();
+    }
+
+    /** Android-free diagnostic redaction entry point used by tests and UI logs. */
+    public static String redactSensitive(String value) {
+        return SensitiveData.redact(value);
+    }
+
+    /** The alpha runtime keeps the historical use_rc6 preference untouched. */
+    public String runtimeId() {
+        return prefs.getString(Constants.KEY_RUNTIME_ID, EXPECTED_RUNTIME_ID);
+    }
+
+    /** Whether this APK is running the pinned 1.2 Alpha runtime. */
+    public boolean isAlphaRuntime() {
+        return EXPECTED_RUNTIME_ID.equals(runtimeId());
+    }
+
+    /** Alpha may only use the APK's verified offline rootfs; never bootstrap from the network. */
+    private void requireAlphaOfflineRootfs() throws Exception {
+        if (!isAlphaRuntime()) return;
+        String problem = proot.alphaRuntimeProblem();
+        if (!problem.isEmpty()) {
+            throw new Exception("Alpha 运行时只接受已验证的 APK 内置 dsh 环境（" + problem + "）；"
+                    + "请重新解压内置环境，不会在手机端联网下载或 clone deepseek-harness");
+        }
+    }
+
+    /** Snapshot of the current in-memory BrowserAuth handoff, or null. */
+    public WebLaunchInfo getWebLaunchInfo() {
+        return launchInfo;
+    }
+
+    /** Authenticated URL for the current Web process; never reconstructed or guessed. */
+    public String getWebAuthUrl() {
+        WebLaunchInfo info = launchInfo;
+        return info == null || !browserAuthExchanged ? "" : info.authUrl;
+    }
+
+    public boolean isBrowserAuthExchanged() {
+        WebLaunchInfo info = launchInfo;
+        return info != null && browserAuthExchanged
+                && LanProxyService.hasDshAuth(info.generation);
+    }
+
+    private void clearWebLaunchInfo() {
+        WebLaunchInfo old;
+        synchronized (launchInfoLock) {
+            old = launchInfo;
+            launchInfo = null;
+            browserAuthExchanged = false;
+            // Invalidate callbacks from the old process before it finishes draining.
+            launchGeneration++;
+        }
+        if (old != null) {
+            LanProxyService.clearDshAuth(old.generation);
+            // A stale listener must never outlive the dsh generation it proxies,
+            // but this cleanup can race a restart.  Never stop a newer run here.
+            LanProxyService.stop(old.generation);
+        }
+    }
+
+    /** Start a new in-memory dsh generation; credentials from older runs are invalid. */
+    private long beginWebGeneration() {
+        clearWebLaunchInfo();
+        synchronized (launchInfoLock) {
+            return ++launchGeneration;
+        }
+    }
+
+    private long publishWebAuthUrl(DshAuthUrl.Parsed parsed, long generation) {
+        if (parsed == null) return 0;
+        synchronized (launchInfoLock) {
+            if (generation <= 0 || generation != launchGeneration) return 0;
+            WebLaunchInfo current = launchInfo;
+            if (current != null && current.generation == generation
+                    && current.authUrl.equals(parsed.authUrl)) return generation;
+            launchInfo = new WebLaunchInfo(parsed.loopbackBaseUrl, parsed.authUrl, generation);
+            browserAuthExchanged = false;
+            timingAuth();
+            return generation;
+        }
+    }
+
+    /**
+     * Check that a BrowserAuth exchange still belongs to the live dsh process.
+     * The HTTP request can block while stop/restart advances the generation, so
+     * callers must repeat this check while holding {@link #launchInfoLock}
+     * before publishing any credential obtained from the response.
+     */
+    private boolean isCurrentWebLaunch(DshAuthUrl.Parsed parsed, long generation) {
+        if (parsed == null || generation <= 0) return false;
+        synchronized (launchInfoLock) {
+            WebLaunchInfo current = launchInfo;
+            return generation == launchGeneration
+                    && current != null
+                    && current.generation == generation
+                    && current.authUrl.equals(parsed.authUrl);
+        }
+    }
+
+    /** Exchange the official dsh process token once and retain only its cookie. */
+    private boolean exchangeBrowserAuth(String authUrl, long generation) {
+        DshAuthUrl.Parsed parsed = DshAuthUrl.parse(authUrl);
+        if (!isCurrentWebLaunch(parsed, generation)) return false;
+        java.net.HttpURLConnection conn = null;
+        try {
+            conn = (java.net.HttpURLConnection) new java.net.URL(parsed.authUrl).openConnection();
+            conn.setInstanceFollowRedirects(false);
+            conn.setConnectTimeout(2500);
+            conn.setReadTimeout(4000);
+            conn.setRequestMethod("GET");
+            int status = conn.getResponseCode();
+            String location = conn.getHeaderField("Location");
+            String setCookie = LanProxyService.extractDshAuthCookie(conn.getHeaderFields());
+            if (status != java.net.HttpURLConnection.HTTP_SEE_OTHER
+                    || location == null || !"/".equals(location.trim())
+                    || setCookie == null) return false;
+            /*
+             * Keep the generation check and credential publication under one
+             * lock.  clearWebLaunchInfo() takes the same lock before clearing
+             * the old LAN cookie, so an exchange that finishes after a stop or
+             * restart cannot repopulate stale auth state.
+             */
+            synchronized (launchInfoLock) {
+                WebLaunchInfo current = launchInfo;
+                if (generation != launchGeneration
+                        || current == null
+                        || current.generation != generation
+                        || !current.authUrl.equals(parsed.authUrl)) return false;
+                if (browserAuthExchanged && LanProxyService.hasDshAuth(generation)) return true;
+                if (!LanProxyService.setDshAuthCookie(setCookie, generation)) return false;
+                browserAuthExchanged = true;
+                timingCookie();
+                return true;
+            }
+        } catch (Throwable ignored) {
+            return false;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private void observeWebOutput(StringBuilder scan, String chunk, long generation) {
+        if (chunk == null || chunk.isEmpty()) return;
+        scan.append(chunk);
+        if (scan.length() > 16_384) scan.delete(0, scan.length() - 16_384);
+        if (browserAuthExchanged) return;
+        DshAuthUrl.Parsed parsed = DshAuthUrl.fromStartupOutput(scan.toString());
+        if (parsed == null) return;
+        long actualGeneration = publishWebAuthUrl(parsed, generation);
+        if (actualGeneration != generation) return;
+        if (!exchangeBrowserAuth(parsed.authUrl, generation)) {
+            setState("", 0, "", "Web UI 认证交换失败（dsh 未返回有效 BrowserAuth Cookie）", false);
+        }
+    }
+
+    /** Persist only redacted dsh output; the printed BrowserAuth URL never lands on disk. */
+    private void appendWebLog(String chunk, SensitiveData.Stream redactor) {
+        if (chunk == null || chunk.isEmpty()) return;
+        if (redactor == null) return;
+        try {
+            synchronized (webLogLock) {
+                writeRedactedWebLogLocked(redactor.accept(chunk));
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Flush a final unterminated line before diagnosing an exited dsh process. */
+    private void flushWebLog(SensitiveData.Stream redactor) {
+        if (redactor == null) return;
+        try {
+            synchronized (webLogLock) {
+                writeRedactedWebLogLocked(redactor.finish());
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Write already-redacted output and keep the diagnostic file bounded. */
+    private void writeRedactedWebLogLocked(String safe) throws java.io.IOException {
+        if (safe == null || safe.isEmpty()) return;
+        File log = rootfsFile("root/dsh-web.log");
+        if (log.getParentFile() != null) log.getParentFile().mkdirs();
+        java.nio.file.Files.write(log.toPath(), safe.getBytes(StandardCharsets.UTF_8),
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.APPEND);
+        if (log.length() > 256 * 1024) {
+            byte[] all = java.nio.file.Files.readAllBytes(log.toPath());
+            int from = Math.max(0, all.length - 128 * 1024);
+            java.nio.file.Files.write(log.toPath(),
+                    java.util.Arrays.copyOfRange(all, from, all.length));
+        }
     }
 
 
@@ -1043,6 +1409,7 @@ public class HarnessController {
      *  .dsh/profile-sanitize.log，插件页与自检都能看到。
      */
     private void sanitizeProfileBundles() {
+        if (isAlphaRuntime()) return;
         try {
             java.io.File pf = new java.io.File(proot.getRootfsDir(),
                     "root/.dsh/profiles/web/package.json");
@@ -1055,7 +1422,8 @@ public class HarnessController {
             } catch (Throwable bad) {
                 // package.json 本身坏了：这里不擅自重建（会丢用户的插件配置），
                 // 交给备份恢复或 dsh 自己重建，但要留下痕迹
-                android.util.Log.w("DSHA", "profile package.json 无法解析，跳过校准: " + bad);
+                android.util.Log.w("DSHA", "profile package.json 无法解析，跳过校准: "
+                        + SensitiveData.redact(String.valueOf(bad)));
                 return;
             }
             org.json.JSONObject dshObj = root.optJSONObject("dsh");
@@ -1066,7 +1434,6 @@ public class HarnessController {
 
             // 内置插件的实体位置：解析不到时优先尝试建链接救回来
             java.util.Map<String, String> builtinReal = new java.util.LinkedHashMap<>();
-            builtinReal.put("@dsh-external/dsh-mobile-nav", "/root/dsha-mobile-nav");
             builtinReal.put("dsh-device-shell-guide", "/root/dsha-device-shell-guide");
             builtinReal.put("dsh-task-notifier", "/root/dsha-task-notifier");
             builtinReal.put("dsh-status-overlay", "/root/dsha-status-overlay");
@@ -1157,7 +1524,8 @@ public class HarnessController {
                         java.nio.file.StandardOpenOption.APPEND);
             } catch (Throwable ignored) {
             }
-            android.util.Log.w("DSHA", "profile bundles 校准: " + rec.replace("\n", " "));
+            android.util.Log.w("DSHA", "profile bundles 校准: "
+                    + SensitiveData.redact(rec.replace("\n", " ")));
             if (!dropped.isEmpty()) {
                 logActivity("启动前校准：摘掉了解析不到的插件 " + dropped
                         + "（否则 dsh 起不来）；到「插件」页或重启一次会自动补回");
@@ -1166,7 +1534,8 @@ public class HarnessController {
                 logActivity("启动前校准：补好了内置插件 " + linked);
             }
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "profile bundles 校准失败: " + e);
+            android.util.Log.w("DSHA", "profile bundles 校准失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
     }
 
@@ -1248,7 +1617,6 @@ public class HarnessController {
     /** 三个内置插件是否都已注册（bundles 与 dependencies 双在）。 */
     private boolean allBuiltinRegistered() {
         return guideRegistered("dsh-device-shell-guide")
-                && guideRegistered("@dsh-external/dsh-mobile-nav")
                 && guideRegistered("dsh-task-notifier");
     }
 
@@ -1268,6 +1636,9 @@ public class HarnessController {
     /** 按自检结论触发可以自动完成的修复。只写文件、不碰进程。
      *  返回追加到自检报告末尾的说明（没修任何东西时返回空串）。 */
     private String autoFixFromSelfTest(String out) {
+        // Alpha deliberately runs the upstream profile without DSHA's legacy
+        // plugin/bundle/patch repair layer.
+        if (isAlphaRuntime()) return "";
         StringBuilder sb = new StringBuilder();
         try {
             boolean pluginTrouble = out.contains("设备引导插件未注册")
@@ -1320,7 +1691,6 @@ public class HarnessController {
     /** 内置插件包名 → assets 目录名。方案 B 直接从 APK 写入，连中间实体都不需要。 */
     private static String builtinAssetDir(String pkgName) {
         if ("dsh-device-shell-guide".equals(pkgName)) return "device-shell-guide";
-        if ("@dsh-external/dsh-mobile-nav".equals(pkgName)) return "mobile-nav";
         if ("dsh-task-notifier".equals(pkgName)) return "task-notifier";
         if ("dsh-status-overlay".equals(pkgName)) return "status-overlay";
         return null;
@@ -1386,7 +1756,8 @@ public class HarnessController {
             tried.append("B(").append(e.getClass().getSimpleName()).append(") ");
         }
 
-        android.util.Log.w("DSHA", "安置 " + name + " 两种方式都失败: " + tried);
+        android.util.Log.w("DSHA", "安置 " + name + " 两种方式都失败: "
+                + SensitiveData.redact(tried.toString()));
         try {
             java.nio.file.Files.write(new java.io.File(proot.getRootfsDir(),
                             "root/.dsh/repair-builtin.log").toPath(),
@@ -1488,10 +1859,10 @@ public class HarnessController {
             org.json.JSONArray bundles = profObj.optJSONArray("bundles");
             if (bundles == null) return;
             String[][] builtins = {
-                    {"@dsh-external/dsh-mobile-nav", "/root/dsha-mobile-nav"},
                     {"dsh-device-shell-guide", "/root/dsha-device-shell-guide"},
                     {"dsh-task-notifier", "/root/dsha-task-notifier"},
                     {"dsh-status-overlay", "/root/dsha-status-overlay"},
+                    {"dsh-web-mobile", "/root/dsha-web-mobile"},
             };
             boolean changed = false;
             org.json.JSONObject deps = root.optJSONObject("dependencies");
@@ -1516,6 +1887,11 @@ public class HarnessController {
                 // 否则这里只会一路 return，用户看到的就是「插件没自动安装」
                 if (!dirOk && "dsh-device-shell-guide".equals(name)) {
                     ensureDeviceShellGuide();
+                    dirOk = new java.io.File(proot.getRootfsDir(),
+                        "root" + real.substring(5)).isDirectory();
+                }
+                if (!dirOk && "dsh-web-mobile".equals(name)) {
+                    ensureWebMobile();
                     dirOk = new java.io.File(proot.getRootfsDir(),
                             "root" + real.substring(5)).isDirectory();
                 }
@@ -1596,6 +1972,9 @@ public class HarnessController {
     /** 确保前端"插件失败降级"热补丁已应用（对编译产物打，幂等，RC6/源码通用）：
      *  坏插件不再卡死整个 WebUI 启动。 */
     private void ensureWebUiDegrade() {
+        // Keep the Alpha profile upstream-owned even if a future caller forgets
+        // to guard its call site. This patch rewrites legacy web assets.
+        if (isAlphaRuntime()) return;
         runAssetScript("webui-degrade-patch.sh", "dsha-degrade.sh", 60_000);
     }
 
@@ -1607,6 +1986,7 @@ public class HarnessController {
      * 在 IO 线程执行（起 proot 子进程，不能卡主线程）。
      */
     public void maybeHealDshDeps() {
+        if (isAlphaRuntime()) return;
         IO.execute(() -> {
             try {
                 if (!proot.isInstalled()) return;
@@ -1619,7 +1999,8 @@ public class HarnessController {
                 if (r != null && (r.contains("HEAL_OK") || r.contains("HEAL_DONE"))) {
                     android.util.Log.i("DSHA", "dsh 子包依赖自愈: " + (r.contains("HEAL_DONE") ? "已补装" : "已就绪"));
                 } else if (r != null && r.contains("HEAL_PARTIAL")) {
-                    android.util.Log.w("DSHA", "dsh 子包依赖部分缺失（构建期包，可忽略）: " + r.trim());
+            android.util.Log.w("DSHA", "dsh 子包依赖部分缺失（构建期包，可忽略）: "
+                    + SensitiveData.redact(r.trim()));
                 }
             } catch (Throwable ignored) {
             }
@@ -1633,6 +2014,7 @@ public class HarnessController {
     /** 后台静默补 write 发布补丁（开 App 即跑，不必等点「启动」——
      *  agent 在已运行的 WebUI 里就可能用 write 工具，等启动就晚了）。 */
     public void maybeFixFsWrite() {
+        if (isAlphaRuntime()) return;
         IO.execute(() -> {
             try {
                 if (!proot.isInstalled()) return;
@@ -1646,6 +2028,10 @@ public class HarnessController {
      *  平时这个脚本只在启动 Web 时跑，但用户授权的时机往往在那之后 ——
      *  不补这一下，就得等下次启动才生效，而用户此刻正期待「数据已经安全了」。 */
     public void migratePublicDataNow() {
+        // Alpha sessions are opaque to DSHA.  The legacy migration copies,
+        // deletes, and relinks live session trees; leave it disabled until an
+        // upstream-compatible atomic path is available.
+        if (isAlphaRuntime()) return;
         String out = runAssetScript("migrate-public-data.sh", "dsha-migrate-public.sh", 60_000);
         if (out == null) return;
         if (out.contains("已迁移") || out.contains("接回公开副本")) {
@@ -1666,13 +2052,15 @@ public class HarnessController {
      *  只留最后 200 行，避免无限增长。 */
     public void logActivity(String what) {
         try {
+            // Activity logs are user-exportable; redact before persistence and Logcat.
+            String safeWhat = SensitiveData.redact(what);
             java.io.File f = rootfsFile("root/.dsh/dsha-activity.log");
             if (f.getParentFile() != null) {
                 //noinspection ResultOfMethodCallIgnored
                 f.getParentFile().mkdirs();
             }
             String line = new java.text.SimpleDateFormat("MM-dd HH:mm:ss",
-                    java.util.Locale.US).format(new java.util.Date()) + "  " + what + "\n";
+                    java.util.Locale.US).format(new java.util.Date()) + "  " + safeWhat + "\n";
             java.nio.file.Files.write(f.toPath(), line.getBytes(StandardCharsets.UTF_8),
                     java.nio.file.StandardOpenOption.CREATE,
                     java.nio.file.StandardOpenOption.APPEND);
@@ -1684,7 +2072,7 @@ public class HarnessController {
                                     .getBytes(StandardCharsets.UTF_8));
                 }
             }
-            android.util.Log.i("DSHA", "[活动] " + what);
+            android.util.Log.i("DSHA", "[活动] " + safeWhat);
         } catch (Throwable ignored) {
         }
     }
@@ -1698,6 +2086,12 @@ public class HarnessController {
      *  都会真动文件（改前留 .bak，报告里说明改了什么）。按钮文案也已经改成
      *  「自检 &amp; 修补」—— 用户遇到起不来的 Web 才会想到点它。 */
     public String runSelfTest() {
+        // The legacy selftest.py performs profile/plugin/session repairs.  Alpha
+        // deliberately ships the upstream Web profile unchanged, so never
+        // inject or execute that mutating script through an accidental caller.
+        if (isAlphaRuntime()) {
+            return "Alpha 运行时不启用旧版自检/修补脚本；请查看启动状态或由官方 dsh 负责迁移。";
+        }
         if (!proot.isInstalled()) {
             return "环境未就绪：请先完成内置环境的解压/安装，再运行自检。";
         }
@@ -1740,7 +2134,7 @@ public class HarnessController {
             //
             // 原则：**只动文件，不动进程**。要不要重启交给用户决定，
             // 绝不在用户没预期的时候去停/起 Web。
-            return (out.trim() + autoFixFromSelfTest(out)).trim();
+            return SensitiveData.redact((out.trim() + autoFixFromSelfTest(out)).trim());
         } catch (Throwable e) {
             return "自检失败：" + describe(e);
         }
@@ -1795,6 +2189,7 @@ public class HarnessController {
             ensureDeviceShellGuide();
             ensureTaskNotifier();
             ensureStatusOverlay();
+            ensureWebMobile();
             ensureBuiltinBundles();
             boolean after = guideRegistered("dsh-device-shell-guide");
             if (!before && after && !builtinPatchedOnce) {
@@ -1808,7 +2203,8 @@ public class HarnessController {
                 android.util.Log.w("DSHA", "启动后补齐了内置插件的注册（下次启动即生效，不自动重启）");
             }
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "启动后补内置插件失败: " + e);
+            android.util.Log.w("DSHA", "启动后补内置插件失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
     }
 
@@ -1821,6 +2217,7 @@ public class HarnessController {
                 ensureDeviceShellGuide();
                 ensureTaskNotifier();
                 ensureStatusOverlay();
+                ensureWebMobile();
                 ensureBuiltinBundles();
                 // 自愈自指依赖 + 自动注册本地插件，两件事共用一个存档点
                 // （都在动 profile；拆成两份的话第二份拍到的是改了一半的状态）。
@@ -1837,7 +2234,8 @@ public class HarnessController {
                     }
                 }
             } catch (Throwable e) {
-                android.util.Log.w("DSHA", "内置插件自愈失败（不影响启动）: " + e);
+                android.util.Log.w("DSHA", "内置插件自愈失败（不影响启动）: "
+                        + SensitiveData.redact(String.valueOf(e)));
             }
         });
     }
@@ -1868,12 +2266,14 @@ public class HarnessController {
      *  （dsh 用 link(临时文件,目标) 发布 + 删临时目录，撞上 proot 的 --link2symlink）。
      *  给 fs-local 打「目标不存在改用 rename 发布」的补丁，幂等，命中已打过时 0.05 秒返回。 */
     public void ensureFsWritePatch() {
+        if (isAlphaRuntime()) return;
         noteFsWritePatchResult(
                 runAssetScript("fs-write-patch.sh", "dsha-fs-write-patch.sh", 90_000));
     }
 
     /** 启动前自愈：老 WebView 兼容补丁（AbortSignal.any/timeout polyfill，幂等） */
     private void ensureWebUiPolyfill() {
+        if (isAlphaRuntime()) return;
         // dsh 的 Web 服务本身没有鉴权（上游只绑 127.0.0.1，而 Android 上任何 App
         // 都能访问回环且不需要权限）→ 给它加 token 校验，否则随便一个应用就能读走
         // 全部会话、建会话让 agent 执行 bash。
@@ -1887,14 +2287,17 @@ public class HarnessController {
      *  导致 127.0.0.1:3080 页面所有 /api 请求被 403 拒绝，表现为外部浏览器无法连接网络。
      *  修复为只比较 hostname；失败不阻塞启动。 */
     private void ensureWebUiOriginPatch() {
+        if (isAlphaRuntime()) return;
         runAssetScript("webui-origin-port-patch.sh", "dsha-origin-port-patch.sh", 60_000);
     }
 
     public void maybePrewarmWeb() {
         if (isHealingSession()) return; // 自愈进行中不预启动（防写会话文件）
-        try {
-            ensureWebUiDegrade(); // 每次启动前置自愈（幂等秒回，防插件失败卡启动）
-        } catch (Throwable ignored) {
+        if (!isAlphaRuntime()) {
+            try {
+                ensureWebUiDegrade();
+            } catch (Throwable ignored) {
+            }
         }
         try {
             if (!proot.isInstalled() || !isHarnessInstalled()) return; // 环境/harness 未装
@@ -1993,7 +2396,7 @@ public class HarnessController {
             }
         }
         // 重算：不持锁！proot 子进程很慢（1~3 秒），持锁会把主线程 peek 一起卡死
-        boolean r1 = proot.isInstalled();
+        boolean r1 = isAlphaRuntime() ? proot.hasExpectedAlphaOfflineRuntime() : proot.isInstalled();
         // 优化：②④⑤⑥ 四项 rootfs 检查合并为【单次 proot 进程】执行，
         // 原来各起一个子进程（串行 4~12s），现在 1~3s 搞定。
         // U=EF 附加"可更新"检测：E=装了旧版 dsh（rc<8），F=守卫版本旧（.version≠当前）。
@@ -2044,18 +2447,20 @@ public class HarnessController {
             if (nl2 >= 0) vv = vv.substring(0, nl2);
             dshVer = vv.trim();
         }
-        boolean dshReady = dshVersionScore(dshVer) >= dshVersionScore("0.1.0-rc.8");
+        String requiredDsh = isAlphaRuntime() ? EXPECTED_DSH_VERSION : "0.1.0-rc.8";
+        boolean dshReady = dshVersionScore(dshVer) >= dshVersionScore(requiredDsh)
+                && (!isAlphaRuntime() || EXPECTED_DSH_VERSION.equals(dshVer));
         boolean dshOld = !dshVer.isEmpty() && !"NONE".equals(dshVer)
-                && dshVersionScore(dshVer) < dshVersionScore("0.1.0-rc.8");
-        boolean r2 = bits[0];
-        boolean r4 = bits[1];
+                && dshVersionScore(dshVer) < dshVersionScore(requiredDsh);
+        boolean r2 = isAlphaRuntime() ? r1 : bits[0];
+        boolean r4 = isAlphaRuntime() ? r1 : bits[1];
         // r5 由 dshReady 决定（不再用 bits[2]——那是 C_OK=dsh 存在位）
-        boolean r5;
-        boolean r6 = bits[3];
-        r5 = dshReady; // ⑤ dsh 已就绪（完整版本判定）
-        updatableCache[STEP_HARNESS] = dshOld; // ⑤ 装了旧版 → 可更新
+        boolean r5 = isAlphaRuntime() ? r1 && dshReady : dshReady;
+        boolean r6 = isAlphaRuntime() ? r1 : bits[3];
+        updatableCache[STEP_HARNESS] = isAlphaRuntime() ? false : dshOld;
         boolean r3 = new File(proot.getRootfsDir(), "usr/local/bin/node").exists()
                 && new File(proot.getRootfsDir(), "usr/local/bin/npm").exists();
+        if (isAlphaRuntime()) r3 = r1 && r3;
         synchronized (stepCache) {
             stepCache[STEP_ROOTFS] = r1;
             stepCache[STEP_TOOLS] = r2;
@@ -2154,6 +2559,11 @@ public class HarnessController {
     /** ④ Node 附加工具（pnpm + node-gyp）安装：独立可重跑步骤 */
     private void installPnpmExtras() throws Exception {
         requireRootfs();
+        if (isAlphaRuntime()) {
+            requireAlphaOfflineRootfs();
+            setProgress("Alpha 离线依赖已随 rootfs 预置", 100);
+            return;
+        }
         requireTools();
         setProgress("安装 Node 附加工具（pnpm / node-gyp）", 90);
         runStep("安装 pnpm", 91,
@@ -2169,6 +2579,27 @@ public class HarnessController {
     /** ⑥ 安全与补丁：守卫包装器 + bash 守卫补丁 + 运行环境补丁 + 看门狗文件（全幂等） */
     private void installGuard() throws Exception {
         requireRootfs();
+        // Alpha must validate the pinned offline runtime before touching any
+        // legacy marker/profile state.  Only the generic DSHA command guard is
+        // allowed; old plugin, bundle, WebView and watchdog repair paths stay dormant.
+        if (isAlphaRuntime()) {
+            requireAlphaOfflineRootfs();
+            setProgress("安装安全守卫（Alpha 官方 profile）", 91);
+            ensureDangerGuard();
+            try {
+                boolean confirmOn = prefs.getBoolean("confirm_shell", true);
+                proot.execAndRead(confirmOn
+                        ? "mkdir -p /root/.dsh && touch /root/.dsh/confirm-shell-enabled && echo ok"
+                        : "rm -f /root/.dsh/confirm-shell-enabled && echo ok");
+            } catch (Throwable ignored) {
+            }
+            try {
+                proot.ensureRuntimeFiles();
+            } catch (Throwable ignored) {
+            }
+            setProgress("安全守卫就绪（Alpha 官方 profile）", 100);
+            return;
+        }
         setProgress("安装安全守卫与补丁", 91);
         // 内置插件资产版本自愈：资产变更时删 marker 强制重注入（老用户拿到新 UI/引导）。
         // 注意：删 marker 与写版本分离（版本在末尾 runStep 写）——中途失败则版本未写，
@@ -2201,24 +2632,8 @@ public class HarnessController {
             ensureFsWritePatch(); // write 工具悬空链接（重装 dsh 后补丁会丢，⑥ 里补回）
         } catch (Throwable ignored) {
         }
-        // ===== 原生内置移动端 UI 适配（免第三方插件） =====
-        // 把 @dsh-external/dsh-mobile-nav 的 client 产物直接注入 web-app 前端，
-        // 手机端单栏/抽屉/汉堡/全屏设置开箱即用。幂等，失败不阻塞安装。
-        try {
-            // 布局迁移：官方版改 lib/ 子目录布局。旧 rootfs（根目录布局）marker 存在
-            // 会跳过重注入 → 检测 lib/client.js 不存在（旧布局/缺失）时删 marker 强制重注入；
-            // 新布局（含离线预置）存在则保留 marker，维持「解压即用」零注入。
-            java.io.File mobileNew = new java.io.File(proot.getRootfsDir(),
-                    "root/dsha-mobile-nav/lib/client.js");
-            if (!mobileNew.isFile()) {
-                java.io.File mobileMarker = new java.io.File(proot.getRootfsDir(),
-                        "root/dsha-mobile-nav-installed");
-                if (mobileMarker.exists()) mobileMarker.delete();
-                android.util.Log.i("DSHA", "mobile-nav 布局升级：删 marker 强制重注入官方版");
-            }
-            ensureNativeMobileNav();
-        } catch (Throwable ignored) {
-        }
+        // mobile-nav 已永久移除；只清理该插件自身的旧残留，保留用户数据。
+        removeLegacyMobileNav();
         // 设备 Shell 引导插件（rc.8 bundle 模式）：让 agent 系统提示里知道可用 ADB
         try {
             ensureDeviceShellGuide();
@@ -2249,6 +2664,24 @@ public class HarnessController {
 
 
     private void installRootfs() throws Exception {
+        if (isAlphaRuntime()) {
+            if (proot.hasExpectedAlphaOfflineRuntime()) {
+                setProgress("Alpha 内置离线环境已就绪", 59);
+                return;
+            }
+            if (!proot.hasOfflineBundle()) {
+                throw new Exception("APK 缺少 Alpha 内置离线 rootfs；不会回退到手机端联网安装");
+            }
+            setProgress("解压 Alpha 内置离线环境", 20);
+            proot.extractOfflineBundle(null);
+            String smoke = proot.smokeTest();
+            if (smoke == null || !smoke.contains("SMOKE_OK")) {
+                throw new Exception("Alpha 离线 rootfs 解压后无法启动 bash："
+                        + (smoke == null ? "" : smoke));
+            }
+            setProgress("Alpha 内置离线环境已就绪", 59);
+            return;
+        }
         setProgress("准备 proot 运行时", 2);
         proot.ensureRuntimeFiles();
 
@@ -2287,6 +2720,11 @@ public class HarnessController {
     /** ② 基础工具：apt 换国内源 + 安装 curl/git/python3/make/xz（全局进度 60~69） */
     private void installTools() throws Exception {
         requireRootfs();
+        if (isAlphaRuntime()) {
+            requireAlphaOfflineRootfs();
+            setProgress("Alpha 基础工具已随离线 rootfs 预置", 69);
+            return;
+        }
         // 先把 apt 源换成国内镜像（直连 ports.ubuntu.com 在国内常被重置）
         setProgress("替换 apt 国内源", 60);
         proot.execAndRead(
@@ -2298,7 +2736,8 @@ public class HarnessController {
             runStep("安装基础工具（curl/git/python3/make/gcc/xz）", 65,
                     "apt-get install -y --no-install-recommends curl git python3 make gcc g++ xz-utils");
         } catch (Throwable e) {
-            throw new Exception(e.getMessage() + "\n\n[环境诊断]\n" + proot.diagnoseRootfs());
+            throw new Exception(SensitiveData.redact(String.valueOf(e.getMessage()))
+                    + "\n\n[环境诊断]\n" + SensitiveData.redact(proot.diagnoseRootfs()));
         }
         // ca-certificates 的 postinst 在 proot 下必失败，装完基础工具后单独处理，
         // 强制移除避免 dpkg broken 状态阻塞后续 apt 操作
@@ -2315,6 +2754,15 @@ public class HarnessController {
     /** ③ Node.js：测速下载到 rootfs /tmp → 解压（全局进度 70~89） */
     private void installNode() throws Exception {
         requireRootfs();
+        if (isAlphaRuntime()) {
+            requireAlphaOfflineRootfs();
+            if (!new File(proot.getRootfsDir(), "usr/local/bin/node").isFile()
+                    || !new File(proot.getRootfsDir(), "usr/local/bin/npm").isFile()) {
+                throw new Exception("Alpha 离线 rootfs 缺少 Node.js 运行时；不会联网补装");
+            }
+            setProgress("Alpha Node.js 已随离线 rootfs 预置", 89);
+            return;
+        }
         requireTools();
         File nodePkg = new File(proot.getRootfsDir(), "tmp/node.tar.xz");
         // 完整性检查：大小 ≥40MB 且 xz 魔数正确（防下载中断的截断文件混过检查导致解压 EOF）
@@ -2344,6 +2792,17 @@ public class HarnessController {
     /** ④ deepseek-harness：预构建包 或 直连源码构建（全局进度 90~100） */
     private void installHarness() throws Exception {
         requireRootfs();
+        if (isAlphaRuntime()) {
+            requireAlphaOfflineRootfs();
+            String version = proot.execAndRead(
+                    "command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | head -1 || echo NONE");
+            if (version == null || !version.contains(EXPECTED_DSH_VERSION)) {
+                throw new Exception("Alpha 离线 rootfs 未包含固定 dsh " + EXPECTED_DSH_VERSION
+                        + "；不会联网 npm install 或 clone 源码");
+            }
+            setProgress("Alpha dsh " + EXPECTED_DSH_VERSION + " 已就绪", 100);
+            return;
+        }
         if (isAncoContainer()) {
             // 鸿蒙 6 对卓易通后台杀得极快（社区反馈：切换应用/锁屏即杀）。
             // 这一步要跑十几分钟，用户切出去回来就以为「卡住了」。
@@ -2539,106 +2998,26 @@ public class HarnessController {
     private void installHarnessRc6() throws Exception {
         requireRootfs();
         requireTools();
-        // 先写入依赖自愈脚本（安装末尾的"校验 dsh 子包依赖完整性"步骤要用；
-        // 若安装中途失败，启动时的 maybeHealDshDeps 也会重写）
-        try {
-            String heal = readAsset("dsh-deps-heal.sh");
-            if (heal != null && !heal.isEmpty()) {
-                java.io.File hf = new java.io.File(proot.getRootfsDir(), "root/dsha-deps-heal.sh");
-                hf.getParentFile().mkdirs();
-                java.nio.file.Files.write(hf.toPath(), heal.getBytes(StandardCharsets.UTF_8));
+        setProgress("校验离线 dsh 运行时", 92);
+        String probe = proot.execAndRead(
+                "command -v dsh >/dev/null 2>&1 && "
+                + "test -f /usr/local/lib/node_modules/@deepseek-ai/dsh/package.json && "
+                + "node -p \"require('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').version\"",
+                30_000);
+        boolean versionOk = false;
+        if (probe != null) {
+            for (String line : probe.split("\\r?\\n")) {
+                if (EXPECTED_DSH_VERSION.equals(line.trim())) {
+                    versionOk = true;
+                    break;
+                }
             }
-        } catch (Throwable ignored) {
         }
-        setProgress("安装 deepseek-harness 最新 RC（npm 全局）", 91);
-        runStep("RC 安装环境准备", 92,
-                // 先写 registry 再追加 allow-scripts：顺序反了会把前者 printf 覆盖掉
-                "echo 'registry=https://registry.npmmirror.com' > /root/.npmrc; " +
-                "npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user 2>/dev/null; " +
-                "echo '--- /root/.npmrc ---'; cat /root/.npmrc");
-        runStep("安装 @deepseek-ai/dsh 最新 RC", 95,
-                // 离线包（快照）里已经预装好了 dsh。这一步过去无条件跑 npm install，
-                // 于是第一次进安装页就开始重新下载几十 MB 的 dsh 及其依赖 ——
-                // 白等、白耗流量，网差的用户还会直接失败，而本地那份明明是好的。
-                // 现在先探本地：有可用的就跳过。想升级到更新的 RC 是另一件事，
-                // 应该由用户显式发起，而不是装机流程偷偷替换掉自带版本。
-                "if [ -f /usr/local/lib/node_modules/@deepseek-ai/dsh/package.json ] && "
-                + "command -v dsh >/dev/null 2>&1; then "
-                + "echo \"已有可用的 dsh（离线包自带 $(node -p \\\"require('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').version\\\" 2>/dev/null || echo 未知)），跳过 npm 安装\"; "
-                + "echo '如需升级到最新 RC，可在「设置」页手动更新'; "
-                + "else "
-                // npm 自己都不在了的情况要单独说清楚。真机上出过：一次全局 npm 安装中途
-                // 断了，把 /usr/local/lib/node_modules 连 npm 一起带走，于是这一步只报一个
-                // 裸 127（command not found），用户既看不懂也无路可走 —— 而这时候需要的
-                // 不是重试网络，是重解压环境。
-                + "if ! command -v npm >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then "
-                + "echo '环境已损坏：npm 或 node 不在 PATH 里 —— 这不是网络问题。'; "
-                + "echo '常见原因：上一次全局 npm 安装中途断了，把 /usr/local/lib/node_modules 连 npm 自己一起带走了。'; "
-                + "echo '修法：到「设置」页点「重新解压内置环境」，配置、API Key 与对话记录会保留，修完再回来装。'; "
-                + "echo '--- /usr/local/bin ---'; ls -la /usr/local/bin 2>&1 | head -15; "
-                + "echo '--- /usr/local/lib/node_modules ---'; ls -la /usr/local/lib/node_modules 2>&1 | head -15; "
-                + "exit 1; fi; "
-                // 优先 @next（官方最新 rc）；npmmirror 镜像同步滞后时回退 pin rc.8，再回退官方源
-                + "(npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmmirror.com 2>&1 || " +
-                "npm install -g @deepseek-ai/dsh@0.1.1-rc.2 --force --registry=https://registry.npmmirror.com 2>&1 || " +
-                "npm install -g @deepseek-ai/dsh@rc --force --registry=https://registry.npmmirror.com 2>&1 || " +
-                "npm install -g @deepseek-ai/dsh@next --force --registry=https://registry.npmjs.org 2>&1) | tail -25; " +
-                "echo \">> npm 退出码: ${PIPESTATUS[0]}\"; " +
-                // 强制 RC8/npm 路线：失败直接退出（不 fallback clone——手机 clone GitHub
-                // 几乎必失败且会留下空源码目录，用户看到"源码是空的"）
-                "if [ \"${PIPESTATUS[0]}\" != 0 ]; then echo 'RC 安装失败：npm 三个源都不通，请检查网络后重试'; exit 1; fi; "
-                + "fi");
-        // 预下载 Node headers（node-gyp 编译 node-pty 必需；否则 node-gyp 默认访问
-        // nodejs.org 下载，国内手机网络不通 → undici 报错 → 退出码 1）
-        // 新版 node-pty 自带 prebuilds/linux-arm64/pty.node，有它就不必下 headers、
-        // 也不必 node-gyp 编译 —— 那是几十 MB 加慢设备上好几分钟，全是白花的。
-        if (hasPtyNode()) {
-            setProgress("node-pty 已就绪（自带预编译产物），跳过 headers 与编译", 98);
-        } else {
-        runStep("准备 Node headers（node-gyp 编译依赖）", 96,
-                "NGV=$(node -v | sed 's/^v//'); " +
-                "if [ ! -f /root/.cache/node-gyp/$NGV/include/node/node.h ]; then " +
-                "mkdir -p /root/.cache/node-gyp/$NGV; cd /root/.cache/node-gyp/$NGV; " +
-                "(curl -kfsSL --retry 3 https://npmmirror.com/mirrors/node/v$NGV/node-v$NGV-headers.tar.gz -o headers.tar.gz || " +
-                "curl -kfsSL --retry 3 https://mirrors.huaweicloud.com/nodejs/v$NGV/node-v$NGV-headers.tar.gz -o headers.tar.gz || " +
-                "curl -kfsSL --retry 3 https://nodejs.org/dist/v$NGV/node-v$NGV-headers.tar.gz -o headers.tar.gz) && " +
-                "tar -xzf headers.tar.gz --strip-components=1 && rm -f headers.tar.gz && echo 'Node headers 已准备' || " +
-                "{ echo 'Node headers 下载失败（node-gyp 编译将无法进行）'; exit 1; }; " +
-                "else echo 'Node headers 已缓存'; fi; " +
-                "export npm_config_nodedir=/root/.cache/node-gyp/$NGV; " +
-                "export npm_config_disturl=https://npmmirror.com/mirrors/node");
-        runStep("编译 node-pty 原生模块", 98,
-                "node-gyp --version >/dev/null 2>&1 || npm install -g node-gyp --registry=https://registry.npmmirror.com 2>&1 | tail -2; " +
-                "NGV=$(node -v | sed 's/^v//'); " +
-                "export npm_config_nodedir=/root/.cache/node-gyp/$NGV; " +
-                "export npm_config_disturl=https://npmmirror.com/mirrors/node; " +
-                "npty_dir=$(find /usr/local/lib/node_modules -maxdepth 6 -path '*/node-pty' -type d 2>/dev/null | head -1); " +
-                "if [ -z \"$npty_dir\" ]; then " +
-                "echo '未找到 node-pty（说明 dsh 包没装上）'; " +
-                "echo '--- /usr/local/lib/node_modules ---'; ls /usr/local/lib/node_modules 2>&1; " +
-                "echo '--- @deepseek-ai 目录 ---'; ls /usr/local/lib/node_modules/@deepseek-ai/ 2>&1; " +
-                "echo '--- dsh 命令 ---'; command -v dsh || echo 'dsh 不存在'; " +
-                "exit 1; fi; " +
-                "if [ ! -f \"$npty_dir/build/Release/pty.node\" ] && [ ! -f \"$npty_dir/prebuilds/linux-arm64/pty.node\" ]; then " +
-                "(cd \"$npty_dir\" && node-gyp rebuild > /tmp/rc6-gyp.log 2>&1) || " +
-                "{ echo 'node-pty 编译失败：'; tail -10 /tmp/rc6-gyp.log 2>&1; exit 1; }; fi; " +
-                "{ [ -f \"$npty_dir/build/Release/pty.node\" ] || [ -f \"$npty_dir/prebuilds/linux-arm64/pty.node\" ]; } >/dev/null 2>&1 && echo 'pty.node 已就绪' && command -v dsh && echo 'RC 安装完成'");
+        if (!versionOk) {
+            throw new Exception("离线 dsh 运行时缺失或版本不匹配：期望 " + EXPECTED_DSH_VERSION
+                    + "；不会联网安装，请重新解压匹配的 offline rootfs");
         }
-        // 依赖完整性自愈：npmmirror 元数据不一致可能导致 @deepseek-ai/* 子包
-        // 声明了但没装上（Cannot find module）——安装时强制校验补装一次
-        runStep("校验 dsh 子包依赖完整性", 99,
-                "if [ -f /root/dsha-deps-heal.sh ]; then bash /root/dsha-deps-heal.sh; rm -f /root/dsha-deps-heal.sh; " +
-                "else echo 'dsha-deps-heal.sh 未就位，跳过'; fi; tail -3 /root/dsh-deps-heal.log 2>/dev/null || true");
-        // 立即打老 WebView 兼容补丁：单独重装⑤（dsh 更新）时不会走⑥，这里保证 RC6 路径也生效
-        try {
-            ensureWebUiPolyfill();
-        } catch (Throwable ignored) {
-        }
-        try {
-            ensureWebUiOriginPatch();
-        } catch (Throwable ignored) {
-        }
-        setProgress("RC 安装完成", 100);
+        setProgress("离线 dsh 运行时已就绪（" + EXPECTED_DSH_VERSION + "）", 100);
     }
 
     /** 直连 GitHub 源码构建（clone 多通道 fallback + npmmirror 依赖/headers 源） */
@@ -2741,7 +3120,8 @@ public class HarnessController {
                 runStep("WebUI 浏览器兼容补丁", 93, "bash /root/dsha-webui-polyfill.sh; rm -f /root/dsha-webui-polyfill.sh");
             }
         } catch (Exception e) {
-            android.util.Log.w("DSHA", "WebUI polyfill 注入失败（老 WebView 可能白屏）: " + e);
+            android.util.Log.w("DSHA", "WebUI polyfill 注入失败（老 WebView 可能白屏）: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
 
         // 安装危险命令确认包装器（rootfs 内 rm/dd 等先弹确认，防止 agent/终端误删）
@@ -2799,7 +3179,8 @@ public class HarnessController {
                     // pnpm 会持续打印包名，五分钟一声不吭基本就是网络挂了
                     300_000L);
         } catch (Exception e) {
-            throw new Exception(e.getMessage() + "\n\n[原生模块编译失败提示]\n"
+            throw new Exception(SensitiveData.redact(String.valueOf(e.getMessage()))
+                    + "\n\n[原生模块编译失败提示]\n"
                     + "1. Node headers 已预下载到 node-gyp 缓存（npmmirror 源），不依赖 nodejs.org\n"
                     + "2. 工具链已自动补装（gcc/g++/make/python3），可重试本步骤\n"
                     + "3. 若仍失败，可能是设备内存不足，可改选「预构建包」方式");
@@ -2829,7 +3210,8 @@ public class HarnessController {
                     "ln -sf /root/" + wd + "/apps/cli/lib/bin.js /usr/local/bin/dsh && " +
                     "chmod +x /usr/local/bin/dsh 2>/dev/null; echo 'dsh 命令已安装'");
         } catch (Exception e) {
-            android.util.Log.w("DSHA", "安装 dsh 命令这一步失败（后续 dsh 可能不可用）: " + e);
+            android.util.Log.w("DSHA", "安装 dsh 命令这一步失败（后续 dsh 可能不可用）: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
 
         runStep("验证 pty.node 产物", 97,
@@ -2885,7 +3267,7 @@ public class HarnessController {
                 ok = true;
                 break;
             } catch (Exception e) {
-                lastErr = e.getMessage();
+                lastErr = SensitiveData.redact(String.valueOf(e.getMessage()));
             }
         }
         if (!ok) {
@@ -3048,7 +3430,8 @@ public class HarnessController {
             return proot.execAndRead(
                     "bash /root/" + remoteName + "; rm -f /root/" + remoteName, timeoutMs);
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "脚本 " + assetName + " 执行失败（不影响主流程）: " + e);
+            android.util.Log.w("DSHA", "脚本 " + assetName
+                    + " 执行失败（不影响主流程）: " + SensitiveData.redact(String.valueOf(e)));
             return null;
         }
     }
@@ -3082,7 +3465,8 @@ public class HarnessController {
                 if (f.getParentFile() != null) f.getParentFile().mkdirs();
                 java.nio.file.Files.write(f.toPath(), script.getBytes(StandardCharsets.UTF_8));
             } catch (Throwable e) {
-                android.util.Log.w("DSHA", "写脚本失败（跳过）: " + sp[0] + " " + e);
+                android.util.Log.w("DSHA", "写脚本失败（跳过）: " + sp[0] + " "
+                        + SensitiveData.redact(String.valueOf(e)));
                 continue;
             }
             assetNames.add(sp[0]);
@@ -3103,7 +3487,8 @@ public class HarnessController {
 
     /** {@code fs-write-patch.sh} 的结果记账 —— 单跑与批量跑共用同一份判断。 */
     private void noteFsWritePatchResult(String r) {
-        android.util.Log.i("DSHA", "write 发布补丁: " + (r == null ? "无输出" : r.trim()));
+            android.util.Log.i("DSHA", "write 发布补丁: "
+                    + SensitiveData.redact(r == null ? "无输出" : r.trim()));
         // 只在真的打上时记账：幂等返回（ALREADY）每次启动都会有，记了就是刷屏
         if (r != null && r.contains("PATCHED")) {
             logActivity("给 dsh 打了 write / 会话发布补丁（治新建文件变悬空链接）");
@@ -3111,16 +3496,19 @@ public class HarnessController {
     }
 
     public String readAsset(String name) {
-        // 增量更新的覆盖层优先：脚本层的修复（几 KB）不必等下一个 384MB 的 APK。
-        // 覆盖层为空或读失败就回落到 APK 内置版本 —— 删掉覆盖文件即回退。
-        try {
-            java.io.File over = RuntimeUpdater.overlayFile(appContext, name);
-            if (over.isFile() && over.length() > 0) {
-                byte[] b = java.nio.file.Files.readAllBytes(over.toPath());
-                return new String(b, StandardCharsets.UTF_8);
+        // Alpha 的官方 profile/runtime 必须可复现：忽略旧版本或远端写入的
+        // runtime-overlay，只读 APK 内置资产。旧 runtime 继续保留增量更新能力。
+        if (!isAlphaRuntime()) {
+            try {
+                java.io.File over = RuntimeUpdater.overlayFile(appContext, name);
+                if (over.isFile() && over.length() > 0) {
+                    byte[] b = java.nio.file.Files.readAllBytes(over.toPath());
+                    return new String(b, StandardCharsets.UTF_8);
+                }
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "读覆盖层脚本失败，回落内置版本: " + name + " "
+                        + SensitiveData.redact(String.valueOf(e)));
             }
-        } catch (Throwable e) {
-            android.util.Log.w("DSHA", "读覆盖层脚本失败，回落内置版本: " + name + " " + e);
         }
         try (BufferedReader r = new BufferedReader(new InputStreamReader(
                 appContext.getAssets().open(name), StandardCharsets.UTF_8))) {
@@ -3172,104 +3560,7 @@ public class HarnessController {
 
 
     public String startWebCommand() {
-        // 启动前自愈：确保配置修复脚本已就位（纯文件写入，不进容器）
-        ensureConfigFixAsset();
-        // ── 启动前自愈脚本：合并成一次容器会话 ──
-        // 这四个原来是四次独立调用（webserver-auth / polyfill / origin-port 各一次，
-        // fs-write 一次），也就是四次启动器 + bash 的固定开销，而它们绝大多数时候只是
-        // 确认「补丁已经在了」。顺序保持原样，彼此本来也没有依赖（改的是不同文件）。
-        // 它们都跟 profile 无关，所以整批放在 ensureBuiltinBundles 之前，与原顺序一致。
-        lastSelfHealMs = 0;
-        lastSelfHealSessions = 0;
-        long prepStart = System.currentTimeMillis();
-        try {
-            java.util.Map<String, String> r1 = runAssetScripts(new String[][]{
-                    // dsh 的 Web 服务本身没有鉴权（上游只绑 127.0.0.1，而 Android 上任何
-                    // App 都能访问回环且不需要权限）→ 给它加 token 校验
-                    {"webserver-auth-patch.sh", "dsha-webserver-auth.sh"},
-                    // 老 WebView 兼容：AbortSignal.any/timeout + crypto.randomUUID polyfill
-                    {"webui-polyfill.sh", "dsha-webui-polyfill.sh"},
-                    // 外部浏览器 /api 403 修复（Chrome 150+ 的 Origin 省略端口）
-                    {"webui-origin-port-patch.sh", "dsha-origin-port-patch.sh"},
-                    // write 工具新建文件变悬空链接（l2s 与 dsh 的 link 发布冲突）
-                    {"fs-write-patch.sh", "dsha-fs-write-patch.sh"},
-            }, 210_000);
-            noteFsWritePatchResult(r1.get("fs-write-patch.sh"));
-        } catch (Throwable ignored) {
-        }
-        // 启动前自愈：内置插件（mobile-nav/device-shell-guide）注册校验，
-        // 被 dsh plugin reconcile 清掉/丢失时自动补回（幂等，纯 Java）
-        try {
-            ensureBuiltinBundles();
-        } catch (Throwable ignored) {
-        }
-        // ── 第二批：这两个要动 .dsh 数据与 profile 的 bundles ──
-        // **必须留在 ensureBuiltinBundles 之后**：先补回内置 bundle，再清理解析不到的，
-        // 顺序反过来会把刚补回的又清掉。所以这里单独一批，不与上面那四个合并。
-        try {
-            runAssetScripts(new String[][]{
-                    // 热数据迁移到公开目录（会话/设置/附件跨重装不丢）：
-                    // 幂等且安全，只迁纯文件目录、不碰 credentials、失败保留私有副本
-                    {"migrate-public-data.sh", "dsha-migrate-public.sh"},
-                    // 清理无法解析的 stale bundle（防 cannot resolve profile bundle 启动崩溃）
-                    {"fix-stale-bundles.sh", "dsha-fix-stale-bundles.sh"},
-            }, 120_000);
-        } catch (Throwable ignored) {
-        }
-        // 局域网访问：deepseek-harness 官方 CLI 默认拒绝 --host 0.0.0.0，
-        // 需先打 lan-bind-patch.sh 放行（失败则回落到 127.0.0.1，服务保证能起）。
-        boolean lan = appContext.getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
-                .getBoolean("lan_mode", false);
-        boolean lanReady = lan && tryEnableLanBind();
-        StringBuilder sb = new StringBuilder();
-        // 用户明确要启动：撤掉停止哨兵。这是它<b>唯一</b>的删除点（见 WebProcSel.STOP_SENTINEL 的说明）——
-        // 谁都别顺手在别处 rm 一下，那等于把「用户已停止」这个事实抹掉。
-        sb.append("rm -f ").append(WebProcSel.STOP_SENTINEL).append(" 2>/dev/null; ")
-          .append("export DSH_HOME=/root/.dsh && ")
-          .append(apiKeyExportChain())
-          .append("export DSH_PERMISSION_MODE=").append(ShellQuote.arg(getPermissionMode())).append(" && ")
-          // 危险命令确认：agent 在 rootfs 内的 rm/dd 等操作需用户确认
-          // PATH 包装器 + bash 工具 lib 补丁加载守卫（双保险；不设 BASH_ENV——它会污染
-          // RC6 插件初始化时子 shell 的环境，导致 dsh web 加载插件失败(index 24 崩溃)）
-          .append("export DSH_CONFIRM=1 && ")
-          // 不让 dsh 去拉系统浏览器（我们用 GeckoView 内嵌显示）
-          .append("export BROWSER=true && ")
-          // 预创建常见插件数据目录：只建 /root/.dsh/plugins（无副作用）。
-          // 注意：不再建 /root/.codex/pets —— deepseek-pet 插件把「空 pets 目录」
-          // 当错误（no pet packages found）→ 整个插件树加载失败！
-          // 改为：若 pets 目录存在但为空则删除（让插件走「无 pet」正常分支）。
-          .append("mkdir -p /root/.dsh/plugins 2>/dev/null; "
-                  + "[ -d /root/.codex/pets ] && [ -z \"$(ls -A /root/.codex/pets 2>/dev/null)\" ] "
-                  + "&& rmdir /root/.codex/pets 2>/dev/null; ")
-          // 局域网模式：补丁成功后绑定 0.0.0.0 并打印访问地址；失败只提示，不影响启动
-          //
-          // 这条 echo 原来是：
-          //   echo '[DSHA] 局域网访问(App桥): http://$(hostname -I ... | cut -d' ' -f1):3081'
-          // 两个毛病：① $() 在**单引号**里不展开，② `cut -d' '` 的单引号先把外层单引号
-          // 闭合了，于是 echo 拿到两个参数，用户看到的是字面
-          //   http://$(hostname -I 2>/dev/null | cut -d  -f1):3081
-          // 现在把 IP 先取到变量里（命令替换在引号外），再用「单引号段 + 变量」相邻拼接，
-          // 不出现引号嵌套。execRootfs 是 ProcessBuilder 直传 bash -c，没有二次解析。
-          //
-          // 刻意**不打印 token**：完整地址在启动页可一键复制，而这里的输出会进
-          // dsh 日志、被 agent 与第三方插件读到，没必要多一个泄漏面。
-          .append(lanReady
-                  ? "LANIP=$(hostname -I 2>/dev/null | cut -d' ' -f1); "
-                    + "echo '[DSHA] 局域网访问(App桥): http://'${LANIP:-手机IP}':"
-                    + LanProxyService.LAN_PORT + "/  完整地址含 token，请在 App 启动页复制' && "
-                  : lan ? "echo '[DSHA] 局域网未开启(官方 0.0.0.0 未放行)，仅本机可访问' && " : "")
-          // 先拉起看门狗（后台），再 exec WebUI（前台阻塞）——顺序不能反，否则看门狗永不启动
-          .append("nohup bash /root/dsh-watchdog.sh >> /root/dsh-watchdog.log 2>&1 & ")
-          // 核心命令：源码目录存在走 node，否则自动回退全局 dsh（含 exec + 日志重定向）
-          .append(runCoreCommand(lanReady));
-        // 写入看门狗（重启脚本 = 启动核心命令），并拉起看门狗守护
-        writeWatchdogFiles(runCoreCommand(lanReady), parsePort());
-        // 观测用（真机拿数据）：准备阶段总耗时，以及自愈脚本占了多少、跑了几次容器会话。
-        // 这一行是「还要不要继续合并会话」的依据 —— 没有数字就不该再动启动路径。
-        logActivity("启动准备耗时 " + (System.currentTimeMillis() - prepStart)
-                + "ms（自愈脚本 " + lastSelfHealMs + "ms / "
-                + lastSelfHealSessions + " 次容器会话）");
-        return sb.toString();
+        return runCoreCommand(false);
     }
 
     /** 依赖自愈命令片段：源码构建模式下，workspace 关键包缺失时自动重跑 pnpm install。
@@ -3288,51 +3579,26 @@ public class HarnessController {
     /** WebUI 实际启动命令核心（看门狗重启与正常启动共用）。
      *  自动判断：源码目录存在 → cd + 依赖自愈 + node apps/cli/lib/bin.js web；
      *  否则回退全局 dsh web（预构建/目录缺失场景）。含 exec 与日志重定向。 */
-    private String runCoreCommand(boolean lanReady) {
-        int port = parsePort();
-        // 默认端口(3080)不显式传 --port —— 彻底避免 commander 报 'argument missing'；
-        // 只有用户自定义端口才追加 --port
-        String opts = "";
-        if (port != 3080) opts += " --port " + port;
-        if (lanReady) opts += " --host 0.0.0.0" + lanTrustArgs(); // 0.0.0.0 + 信任本机所有 IP（Host 头校验放行）
-        String wd = detectWorkdir();
-        return
-                // Node 的模块编译缓存（v22.8+ 起支持，我们是 Node 24）：把编译后的字节码落盘，
-                // 二次启动省掉重新编译。dsh 启动要加载几百个模块，这一项对「点启动到 WebUI
-                // 可用」的体感最直接。
-                //
-                // 它是 quiet optimization —— 目录不可写、node 版本不支持时会静默跳过，
-                // 不影响启动，所以不需要兜底判断（要关就设 NODE_DISABLE_COMPILE_CACHE=1）。
-                // 先 mkdir 是因为目录不存在会被判 FAILED 而静默放弃缓存。
-                "mkdir -p /root/.cache/node-compile 2>/dev/null; "
-                + "export NODE_COMPILE_CACHE=/root/.cache/node-compile; "
-                + "node /root/dsh-config-fix.js 2>/dev/null || true; "
-                // 判定源码模式必须认启动入口 bin.js：RC6 模式下工作区目录也存在（只是没有源码），
-                // 只认 -d 会把空工作区误判成源码树 → 启动失败
-                + "if [ -f /root/" + wd + "/apps/cli/lib/bin.js ]; then cd /root/" + wd + "; "
-                // pid 落盘要在**依赖自愈之前**：源码模式下 depsSelfHeal 可能跑 pnpm install
-                // （90~180 秒），那段时间里如果用户点停止，没有 pid 文件就只能靠 cmdline 猜，
-                // 而 pnpm 的命令行既不含 bin.js web 也不该被当成目标 —— 结果是装完照样把
-                // Web 拉起来，又是一次「停不掉」。$$ 在这里写下、exec 时不变，所以一个数
-                // 覆盖「启动准备 + 运行」的全程。
-                + "echo $$ > " + WebProcSel.PID_WEB + " 2>/dev/null; " + depsSelfHeal()
-                + "exec node --expose-internals apps/cli/lib/bin.js web" + opts + " > ~/dsh-web.log 2>&1; "
-                + "else "
-                + "if command -v dsh >/dev/null 2>&1 && test -f \"$(command -v dsh)\"; then "
-                // RC6 模式没有源码树，但工作区目录必须存在并作为运行目录：
-                // 1) 否则用户在 MT/工作区页看不到 deepseek-harness 文件夹（"下载完没有工作区"）
-                // 2) agent 产物/上传文件有固定落点，备份功能才能带上
-                + "mkdir -p /root/" + wd + " && cd /root/" + wd + " && "
-                // 必须带 --expose-internals：dsh 的 profile-boot 会无条件创建
-                // @deepseek-ai/cordis-plugin-hmr（它要靠 HMR 去监听用户 patch 文件），
-                // 而那个插件第一行就检查 loader.internal，没有这个标志直接抛
-                // 「--expose-internals is required for HMR service」把整个启动带崩。
-                // NODE_OPTIONS 传不了这个标志（node 明确拒绝），只能作为命令行参数；
-                // 而 dsh 是个 wrapper，所以先 readlink 出真正的 bin.js 再交给 node。
-                + "DSH_REAL=$(readlink -f \"$(command -v dsh)\" 2>/dev/null || command -v dsh); "
+    private String runCoreCommand(boolean ignoredLanReady) {
+        // Alpha delegates cwd/profile composition to the packed upstream dsh
+        // runtime.  Keep the historical workdir preference intact for older
+        // runtimes, but do not reinterpret that key as an Alpha source tree.
+        String wd = isAlphaRuntime() ? "" : detectWorkdir();
+        String cwd = isAlphaRuntime()
+                ? "cd /root && "
+                : "mkdir -p /root/" + wd + " && cd /root/" + wd + " && ";
+        // The alpha runtime deliberately delegates authentication and profile
+        // composition to the upstream binary. DSHA only supplies its env.
+        return "rm -f " + WebProcSel.STOP_SENTINEL + " 2>/dev/null; "
+                + "export DSH_HOME=/root/.dsh && "
+                + apiKeyExportChain()
+                + "export DSH_PERMISSION_MODE=" + ShellQuote.arg(getPermissionMode()) + " && "
+                + "export DSH_CONFIRM=1 && export BROWSER=true && "
+                + cwd
+                + ": > /root/dsh-web.log 2>/dev/null; "
                 + "echo $$ > " + WebProcSel.PID_WEB + " 2>/dev/null; "
-                + "exec node --expose-internals \"$DSH_REAL\" web" + opts + " > ~/dsh-web.log 2>&1; "
-                + "else echo '[DSHA] 全局 dsh 不可用（悬空链接或未安装），请到分步安装页重装 ⑤ deepseek-harness'; exit 1; fi; fi";
+                + "exec dsh web --no-open --host 127.0.0.1 --port "
+                + Constants.DSH_WEB_PORT;
     }
 
     /** 生成 --trusted-host 参数：枚举本机所有非 loopback IPv4（WiFi/热点/有线），供 LAN Host 头校验放行 */
@@ -3358,6 +3624,7 @@ public class HarnessController {
 
     /** 用当前配置刷新看门狗文件（启动页可见时调用，确保旧坏命令被覆盖） */
     public void ensureWatchdogFiles() {
+        if (isAlphaRuntime()) return;
         // 用户主动停过就别再装看门狗。否则「停止」按下去之后，只要还停在启动页，
         // 1.5 秒后 LaunchFragment 的预热线程又把看门狗写回并拉起，它失联 3 次（约 90 秒）
         // 就把 WebUI 拽回来 —— 真机反馈的「启动页的停止没有用、后台不停拉活」正是这条路。
@@ -3436,6 +3703,7 @@ public class HarnessController {
      *  </ul>
      */
     private void migrateLegacyMobileAdapt() {
+        if (isAlphaRuntime()) return;
         final String OLD = "dsh-client-ui-mobile-adapt";
         final String NEW = "@dsh-external/dsh-mobile-nav";
         try {
@@ -3522,7 +3790,8 @@ public class HarnessController {
                     }
                 } catch (Throwable e) {
                     // 解析不了就别动文件 —— 写坏 profile 会让 Web 起不来，比留个旧插件严重得多
-                    android.util.Log.w("DSHA", "摘旧插件时 profile 解析失败，未改动: " + e);
+                    android.util.Log.w("DSHA", "摘旧插件时 profile 解析失败，未改动: "
+                            + SensitiveData.redact(String.valueOf(e)));
                 }
             }
 
@@ -3556,14 +3825,15 @@ public class HarnessController {
             logActivity("内置 UI 适配插件已更换：" + OLD + " → " + NEW
                     + (wasDisabled ? "（沿用你之前的「已禁用」设置）" : "，重启 Web 生效"));
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "旧 UI 适配插件迁移失败（不影响启动）: " + e);
+            android.util.Log.w("DSHA", "旧 UI 适配插件迁移失败（不影响启动）: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
     }
 
     private void ensureNativeMobileNav() {
         try {
             // 换插件前先把旧的下线：两个 UI 适配同时激活会互相打架
-            migrateLegacyMobileAdapt();
+            if (!isAlphaRuntime()) migrateLegacyMobileAdapt();
             final String NAME = "@dsh-external/dsh-mobile-nav";
             // 用户主动禁用（.disabled 存在）→ 只更新实体文件（assets 新版本写到
             // 实体目录，重新启用时拿到的是新版），不 touch marker / 不注册 bundle /
@@ -3733,6 +4003,108 @@ public class HarnessController {
         java.nio.file.Files.write(pf.toPath(), root.toString(2).getBytes(StandardCharsets.UTF_8));
     }
 
+    /** Ensure the upstream dsh-web-mobile package is complete before registering it.
+     *  Alpha2 consumes the package's client export directly; a package.json-only
+     *  placeholder is not a valid bundle and must never receive an installed marker. */
+    private void ensureWebMobile() {
+        try {
+            final String NAME = "dsh-web-mobile";
+            final String REAL = "/root/dsha-web-mobile";
+            java.io.File realDir = new java.io.File(proot.getRootfsDir(), "root/dsha-web-mobile");
+            java.io.File marker = new java.io.File(proot.getRootfsDir(), "root/dsha-web-mobile-installed");
+            java.io.File nmLink = new java.io.File(proot.getRootfsDir(),
+                    "root/.dsh/profiles/web/node_modules/" + NAME);
+            if (userDisabledPlugin(NAME)) {
+                writeAssetTo("web-mobile/package.json", new java.io.File(realDir, "package.json"));
+                writeAssetTo("web-mobile/cordis.patch.yml", new java.io.File(realDir, "cordis.patch.yml"));
+                writeAssetTo("web-mobile/lib/index.js", new java.io.File(realDir, "lib/index.js"));
+                writeAssetTo("web-mobile/lib/client.js", new java.io.File(realDir, "lib/client.js"));
+                writeAssetTo("web-mobile/lib/compress.js", new java.io.File(realDir, "lib/compress.js"));
+                return;
+            }
+            java.io.File[] required = {
+                    new java.io.File(realDir, "package.json"),
+                    new java.io.File(realDir, "cordis.patch.yml"),
+                    new java.io.File(realDir, "lib/index.js"),
+                    new java.io.File(realDir, "lib/client.js"),
+                    new java.io.File(realDir, "lib/compress.js")
+            };
+            boolean complete = true;
+            for (java.io.File f : required) complete &= f.isFile() && f.length() > 0;
+            if (marker.exists() && complete && nmLink.exists()) return;
+            realDir.mkdirs();
+            writeAssetTo("web-mobile/package.json", required[0]);
+            writeAssetTo("web-mobile/cordis.patch.yml", required[1]);
+            writeAssetTo("web-mobile/lib/index.js", required[2]);
+            writeAssetTo("web-mobile/lib/client.js", required[3]);
+            writeAssetTo("web-mobile/lib/compress.js", required[4]);
+            complete = true;
+            for (java.io.File f : required) complete &= f.isFile() && f.length() > 0;
+            if (!complete) {
+                marker.delete();
+                return;
+            }
+            if (nmLink.getParentFile() != null) nmLink.getParentFile().mkdirs();
+            if (!nmLink.exists()) {
+                try {
+                    java.nio.file.Files.createSymbolicLink(nmLink.toPath(), java.nio.file.Paths.get(REAL));
+                } catch (Throwable linkErr) {
+                    linkPlugin(NAME, REAL, nmLink.getParentFile());
+                }
+            }
+            registerBuiltinInProfile(NAME, REAL);
+            if (nmLink.exists()) java.nio.file.Files.write(marker.toPath(), "1".getBytes(StandardCharsets.UTF_8));
+            else marker.delete();
+        } catch (Throwable e) {
+            try { new java.io.File(proot.getRootfsDir(), "root/dsha-web-mobile-installed").delete(); }
+            catch (Throwable ignored) { }
+            android.util.Log.w("DSHA", "web-mobile 注册失败（不影响启动）: "
+                    + SensitiveData.redact(String.valueOf(e)));
+        }
+    }
+
+    /** Remove the retired mobile-nav package from upgraded rootfs profiles. */
+    private void removeLegacyMobileNav() {
+        try {
+            java.io.File root = proot.getRootfsDir();
+            java.io.File[] stale = {
+                    new java.io.File(root, "root/dsha-mobile-nav"),
+                    new java.io.File(root, "root/dsha-mobile-nav-installed"),
+                    new java.io.File(root, "root/dsha-mobile-nav.log"),
+                    new java.io.File(root, "root/dsha-mobile-inject.sh"),
+                    new java.io.File(root, "root/.dsh/profiles/web/node_modules/@dsh-external/dsh-mobile-nav"),
+                    new java.io.File(root, "usr/local/lib/node_modules/@dsh-external/dsh-mobile-nav")
+            };
+            for (java.io.File f : stale) purgeForPlace(f);
+            java.io.File pf = new java.io.File(root, "root/.dsh/profiles/web/package.json");
+            if (!pf.isFile()) return;
+            org.json.JSONObject obj = new org.json.JSONObject(new String(
+                    java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8));
+            org.json.JSONObject deps = obj.optJSONObject("dependencies");
+            if (deps != null) deps.remove("@dsh-external/dsh-mobile-nav");
+            org.json.JSONObject prof = obj.optJSONObject("dsh") == null ? null
+                    : obj.optJSONObject("dsh").optJSONObject("profile");
+            org.json.JSONArray bundles = prof == null ? null : prof.optJSONArray("bundles");
+            if (bundles != null) {
+                org.json.JSONArray keep = new org.json.JSONArray();
+                for (int i = 0; i < bundles.length(); i++) {
+                    String n = bundles.optString(i, "");
+                    if (!"@dsh-external/dsh-mobile-nav".equals(n)) keep.put(n);
+                }
+                prof.put("bundles", keep);
+            }
+            java.nio.file.Files.write(pf.toPath(), obj.toString(2).getBytes(StandardCharsets.UTF_8));
+            java.io.File snap = new java.io.File(root, "root/dsha-builtin.txt");
+            if (snap.isFile()) {
+                java.util.List<String> lines = java.nio.file.Files.readAllLines(snap.toPath(), StandardCharsets.UTF_8);
+                lines.removeIf(s -> "@dsh-external/dsh-mobile-nav".equals(s.trim()));
+                java.nio.file.Files.write(snap.toPath(), lines, StandardCharsets.UTF_8);
+            }
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "retired plugin cleanup failed: " + SensitiveData.redact(String.valueOf(e)));
+        }
+    }
+
     private void ensureStatusOverlay() {
         try {
             final String NAME = "dsh-status-overlay";
@@ -3846,6 +4218,8 @@ public class HarnessController {
 
     /** force=true 时忽略节流 —— 用户主动跑自检就是「现在就给我修」，不该被时间窗挡住。 */
     public int repairBuiltinPlugins(boolean force) {
+        // Alpha 运行时必须保持新版 dsh 官方 profile；旧版内置插件、bundle
+        // 与 package.json 自动修复尚未经过新版契约验证，任何调用都应无副作用。
         int fixed = 0;
         try {
             if (!proot.isInstalled()) return 0;
@@ -3864,8 +4238,8 @@ public class HarnessController {
             java.io.File pkg = new java.io.File(proot.getRootfsDir(),
                     "root/.dsh/profiles/web/package.json");
             if (!pkg.isFile()) return 0;   // profile 还没生成，启动一次 Web 再说
-            String[] names = {"dsh-device-shell-guide", "@dsh-external/dsh-mobile-nav",
-                    "dsh-task-notifier"};
+            String[] names = {"dsh-device-shell-guide",
+                    "dsh-task-notifier", "dsh-status-overlay", "dsh-web-mobile"};
             boolean[] before = new boolean[names.length];
             for (int i = 0; i < names.length; i++) {
                 before[i] = guideRegistered(names[i]);
@@ -3873,6 +4247,7 @@ public class HarnessController {
             ensureDeviceShellGuide();
             ensureTaskNotifier();
             ensureStatusOverlay();
+            ensureWebMobile();
             ensureBuiltinBundles();
             StringBuilder diag = new StringBuilder();
             for (int i = 0; i < names.length; i++) {
@@ -3910,14 +4285,16 @@ public class HarnessController {
                         java.nio.file.StandardOpenOption.CREATE,
                         java.nio.file.StandardOpenOption.APPEND);
             } catch (Throwable e) {
-                android.util.Log.w("DSHA", "写 repair-builtin.log 失败: " + e);
+                android.util.Log.w("DSHA", "写 repair-builtin.log 失败: "
+                        + SensitiveData.redact(String.valueOf(e)));
             }
             android.util.Log.w("DSHA", "内置插件修复结果 fixed=" + fixed + "\n" + diag);
             logActivity(fixed > 0
                     ? ("修好了 " + fixed + " 个内置插件的注册（重启 Web 生效）")
                     : ("内置插件检查完毕，本次没有需要修的（或修不上，详见 repair-builtin.log）"));
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "修内置插件失败: " + e);
+            android.util.Log.w("DSHA", "修内置插件失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
         return fixed;
     }
@@ -4171,7 +4548,8 @@ public class HarnessController {
             }
             return true;
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "safeAppendYamlBlock 失败: " + e);
+            android.util.Log.w("DSHA", "safeAppendYamlBlock 失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
             return false;
         }
     }
@@ -4202,7 +4580,8 @@ public class HarnessController {
                     + "EOF\n", 20_000);
             if (out == null) return true;              // 跑不起来就别拦
             if (out.contains("BAD:")) {
-                android.util.Log.w("DSHA", "YAML 校验失败: " + out.trim());
+                android.util.Log.w("DSHA", "YAML 校验失败: "
+                        + SensitiveData.redact(out.trim()));
                 return false;
             }
             return true;
@@ -4226,6 +4605,7 @@ public class HarnessController {
     }
 
     private boolean tryEnableLanBind() {
+        if (isAlphaRuntime()) return false;
         // 缓存只在进程内有效：dsh 重装⑤/文件被覆盖后补丁可能丢失，
         // 不能永久信任 lanBindReady —— 每次调用重新校验补丁是否还在（幂等）。
         // 优化：上次成功且文件仍带 dsha-lan 标记 → 快速返回 true（秒级）。
@@ -4395,10 +4775,6 @@ public class HarnessController {
                 : out.substring(i + begin.length(), j);
     }
 
-    private String statusCommand() {
-        return "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:" + getPort() + "/ 2>/dev/null || echo 000";
-    }
-
     // ================= Termux 模式 =================
     public boolean isTermuxInstalled() { return TermuxBridge.isInstalled(appContext); }
     public void openTermuxInstall() { TermuxBridge.openInstall(appContext); }
@@ -4411,6 +4787,10 @@ public class HarnessController {
 
     /** 通过 Termux 安装 deepseek-harness */
     public void installViaTermux() {
+        if (isAlphaRuntime()) {
+            setState("", 0, "", "Alpha 运行时固定使用内置离线 dsh，不支持 Termux 安装入口", false);
+            return;
+        }
         setProgress("提交安装任务到 Termux", 5);
         try {
             TermuxBridge.runScript(appContext, buildTermuxInstallScript(), null);
@@ -4435,6 +4815,10 @@ public class HarnessController {
 
     /** 通过 Termux 启动 Web UI */
     public void startWebViaTermux() {
+        if (isAlphaRuntime()) {
+            setState("", 0, "", "Alpha 运行时固定使用内置 dsh，不支持 Termux 启动入口", false);
+            return;
+        }
         setProgress("正在启动 Web UI", 0);
         try {
             TermuxBridge.runScript(appContext, startWebTermuxCommand(), null);
@@ -4445,6 +4829,10 @@ public class HarnessController {
     }
 
     public void stopWebViaTermux() {
+        if (isAlphaRuntime()) {
+            stopWeb();
+            return;
+        }
         try {
             // 同样不能用 pkill -f：脚本文本里带着模式串，会把执行它的 shell 一起杀掉
             TermuxBridge.runScript(appContext,
@@ -4491,7 +4879,7 @@ public class HarnessController {
             String missing = missingBuiltinEntities();
             if (sameVersion && missing.isEmpty()) return;
             proot.execAndRead(
-                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
+                    "rm -f /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
                     + "echo refreshed");
             android.util.Log.i("DSHA", "内置插件资产要重注入（版本"
                     + (sameVersion ? "一致" : "变化：" + (r == null ? "?" : r.trim()))
@@ -4504,7 +4892,7 @@ public class HarnessController {
      *  只查有 {@code -installed} marker 的那几个 —— 与上面删 marker 的范围保持一致，
      *  免得又出现「一处检查、另一处漏掉」。 */
     private String missingBuiltinEntities() {
-        String[] dirs = {"dsha-mobile-nav", "dsha-device-shell-guide", "dsha-status-overlay"};
+        String[] dirs = {"dsha-device-shell-guide", "dsha-status-overlay"};
         StringBuilder sb = new StringBuilder();
         for (String d : dirs) {
             if (!new java.io.File(proot.getRootfsDir(), "root/" + d).isDirectory()) {
@@ -4714,6 +5102,7 @@ public class HarnessController {
      *  这层保险就静默失配。所以每个分支都要 echo 到 stdout 让 Java 侧判得出成败，
      *  结果记进 prefs 供配置页展示（以前只写个用户永远看不到的日志文件）。 */
     public void ensureBashGuardPatch() {
+        if (isAlphaRuntime()) return;
         String state = "unknown";
         try {
             // RC6（npm 全局安装，依赖可能是嵌套或扁平布局，用 find 通配兼容两种）；
@@ -4755,27 +5144,26 @@ public class HarnessController {
         // 90 秒内不会自动重试 —— 而这个冷却期本来是为了「尊重用户不想让它跑」，
         // 用户都亲手把它拉起来了，它就没有存在意义了。
         prefs.edit().putBoolean("keepalive_paused", false).remove("last_web_stop").apply();
-        // ===== 会话自愈必跑点：无论 web 是否已经在运行，都先提交一次自愈（幂等，秒级）。
-        // 若把 heal 放在 IO 启动任务里，web 已存活时 startWeb 提前 return 会导致修复永不执行。
-        maybeHealSessionCorruption();
+        // Alpha keeps session files opaque; only the upstream runtime may migrate them.
+        if (!isAlphaRuntime()) maybeHealSessionCorruption();
         synchronized (webStartLock) {
             if (webProcess != null && webProcess.isAlive()) {
                 return; // 已在运行，避免重复启动
             }
             if (webStarting) return; // 已有启动在进行（防 keepAlive/手动并发起第二个实例 → EADDRINUSE）
             webStarting = true;
+            startupTiming = new StartupTiming();
         }
-        // 局域网模式：桥跟随 WebUI 启动（不依赖 HarnessService——预启动/
-        // 保活重启路径不经过 HarnessService，之前桥没起导致局域网访问不了）
-        if (isLanMode()) {
-            try {
-                LanProxyService.start(getRootfsDirPath(), appContext, getPortInt());
-            } catch (Throwable ignored) {
-            }
-        }
+        // Invalidate the previous BrowserAuth/LAN generation before doing any preparation.
+        clearWebLaunchInfo();
         IO.execute(() -> {
             boolean started = false;
             try {
+                // Alpha must revalidate the on-disk runtime at the point of use.
+                // The app process can outlive an extraction/restore operation, so
+                // a check performed only by MainActivity is not sufficient.
+                requireAlphaOfflineRootfs();
+                timingRootfs();
                 // 启动前预检：端口仍被占 → 深杀残留（根治 EADDRINUSE）
                 if (isWebPortUp(400)) {
                     destroyAllWebProcesses();
@@ -4796,17 +5184,19 @@ public class HarnessController {
                         waitPortClosed(4000);
                     }
                 }
-                // 会话损坏自愈：web 拉起前先修（无门槛全量扫描，幂等；修复后用户刷新即恢复历史）
-                doHealSessionCorruption();
+                if (!isAlphaRuntime()) doHealSessionCorruption();
                 setProgress("正在启动 Web UI", 0);
                 proot.ensureRuntimeFiles();
+                prepareAlphaProfile();
                 ensureDangerGuard(); // 安全包装器缺失则自动补装
-                ensureBashGuardPatch(); // bash 工具 lib 强制加载守卫（不依赖重装）
+                if (!isAlphaRuntime()) ensureBashGuardPatch();
                 // 校准 bundles 必须在 dsh 起来之前做完（它读到解析不到的 bundle 就直接退出），
                 // 但**不能**放在 startWebCommand() 里面 —— 那个方法只该组装命令字符串，
                 // 在里面做文件 IO、甚至再起一个 proot 进程，正撞上马上要启动的 Web 进程。
-                sanitizeProfileBundles();
+                if (!isAlphaRuntime()) sanitizeProfileBundles();
+                final long generation = beginWebGeneration();
                 Process p = proot.execRootfs(startWebCommand());
+                timingProcess();
                 webProcesses.add(p);
                 synchronized (webStartLock) {
                     webProcess = p;
@@ -4824,23 +5214,40 @@ public class HarnessController {
                 // 停止那条链路因此不能靠杀启动器传播信号，只能按 pid 精确杀。
                 // 本线程继续等待端口就绪后释放 busy 并处理退出诊断。
                 Thread drainer = new Thread(() -> {
+                    final SensitiveData.Stream logRedactor = new SensitiveData.Stream();
                     try {
-                        String out = proot.drainOutput(p);
+                        StringBuilder startupScan = new StringBuilder();
+                        String out = proot.drainOutput(p, chunk -> {
+                            observeWebOutput(startupScan, chunk, generation);
+                            appendWebLog(chunk, logRedactor);
+                        });
+                        flushWebLog(logRedactor);
                         // 进程退出：非用户主动停止 → 交给 keepAlive/自动重试。
                         // 判据统一走 shouldAutoStartWeb —— 用户停过、自愈中、刚停过的冷却期内
                         // 都不该自动重试，这几条以前在别处各写一遍。
                         if (shouldAutoStartWeb("Web 意外退出重试")) {
+                            if (healHmrAndRetry(out)) return;
                             String low = out == null ? "" : out.toLowerCase();
                             boolean configErr = low.contains("invalid api key") || low.contains("validationerror")
                                     || low.contains("api key") && low.contains("missing");
                             if (!configErr && autoRetryWebOnce()) return;
-                            String tail = out.length() > 600 ? out.substring(out.length() - 600) : out;
+                            String diagnostic = out == null ? "" : out;
+                            String tail = diagnostic.length() > 600
+                                    ? diagnostic.substring(diagnostic.length() - 600)
+                                    : diagnostic;
+                            tail = SensitiveData.redact(tail);
                             setState("", 0, "", "Web UI 意外退出：\n" + tail, false);
                         } else {
                             setState("", 0, "已停止后台服务", "", false);
                         }
                     } catch (Throwable ignored) {
                     } finally {
+                        flushWebLog(logRedactor);
+                        webProcesses.remove(p);
+                        synchronized (webStartLock) {
+                            if (webProcess == p) webProcess = null;
+                        }
+                        if (generation == launchGeneration) clearWebLaunchInfo();
                         synchronized (webStartLock) {
                             webStarting = false;
                         }
@@ -4852,19 +5259,18 @@ public class HarnessController {
                 // stopWeb/restartWeb/install 全部排队卡死（用户点停止没反应）
                 Thread waiter = new Thread(() -> {
                     try {
-                        if (waitWebPortUp(60_000)) {
+                        if (waitWebAuthenticated(60_000, generation)) {
                             setState("", 100, "Web UI 已启动", "", false);
                             proot.noteProrootSuccess();   // 这次运行时可用，清零失败计数
-                            // 全新安装的关键一步：profile 是 dsh 首次启动时才创建的，
-                            // 而 MainActivity 里那次 ensureBuiltinPluginsReady 跑在它之前 ——
-                            // 那时三个内置插件一个也注册不上。以前只在日志里写「启动一次
-                            // WebUI 后会自动补上」，却没有任何代码真的去补，于是全新安装
-                            // 的用户根本没有内置插件（除非碰巧重开一次 App）。
-                            ensureBuiltinPluginsAfterProfileReady();
+                            if (isLanMode()) {
+                                LanProxyService.start(getRootfsDirPath(), appContext,
+                                        Constants.DSH_WEB_PORT, generation);
+                            }
                         } else {
                             // 超时：释放 busy（否则一直卡灰，靠 10 分钟自愈太慢）
-                            boolean forced = proot.noteProrootFailure("Web 启动超时（60s 端口未就绪）");
-                            setState("", 0, "", "Web UI 启动超时（60s 端口未就绪）\n"
+                            if (generation == launchGeneration) stopWebAndWait();
+                            boolean forced = proot.noteProrootFailure("Web 启动超时或认证交换失败");
+                            setState("", 0, "", "Web UI 启动超时或认证交换失败（60s 内未就绪）\n"
                                     + (forced
                                     ? "proroot 连续失败已达上限，已自动切回 proot —— 再点一次「重启」"
                                     : "可稍后点「重启」，或查看启动页日志尾部"), false);
@@ -4875,6 +5281,7 @@ public class HarnessController {
                 waiter.setDaemon(true);
                 waiter.start();
             } catch (Throwable e) {
+                clearWebLaunchInfo();
                 setState("", 0, "", errMsg("启动出错：", e), false);
             } finally {
                 synchronized (webStartLock) {
@@ -4930,12 +5337,14 @@ public class HarnessController {
                    .append(r == null ? "无输出" : r.replace('\n', ' ').trim()).append('\n');
             }
             logActivity("已通过 ADB 开后台白名单（Doze + appops），息屏更不容易被冻");
-            android.util.Log.i("DSHA", "[保活] 后台加固:\n" + log);
-            return log.toString();
+            String safeLog = SensitiveData.redact(log.toString());
+            android.util.Log.i("DSHA", "[保活] 后台加固:\n" + safeLog);
+            return safeLog;
         } catch (Throwable t) {
             // 别静默：这条失败只表现为「息屏一会儿就停」，没日志根本追不到
-            android.util.Log.w("DSHA", "[保活] 后台加固失败: " + t);
-            return "后台加固失败：" + t;
+            String safe = SensitiveData.redact(String.valueOf(t));
+            android.util.Log.w("DSHA", "[保活] 后台加固失败: " + safe);
+            return "后台加固失败：" + safe;
         }
     }
 
@@ -4945,6 +5354,7 @@ public class HarnessController {
         prefs.edit().putLong("last_web_stop", stopStamp).apply();
         // 标记"用户主动停止"：keepAlive 暂停自动拉起，直到用户/预启动再次 startWeb
         prefs.edit().putBoolean("keepalive_paused", true).apply();
+        clearWebLaunchInfo();
         IO.execute(() -> {
             try {
                 // 停止这条路以前只 destroy 了「最后一个」webProcess，而重启那条走的是
@@ -5036,7 +5446,8 @@ public class HarnessController {
                     String seg = sliceBetween(rev, "REVIVE_BEGIN", "REVIVE_END");
                     logActivity("复活侦测（停止后 " + (wait >= 11000 ? "15" : "4")
                             + " 秒）：端口又活了。谁拉起来的：\n"
-                            + (seg == null || seg.trim().isEmpty() ? String.valueOf(rev) : seg.trim()));
+                            + SensitiveData.redact(seg == null || seg.trim().isEmpty()
+                            ? String.valueOf(rev) : seg.trim()));
                     proot.execAndRead(stopWebCommand());  // 哨兵已在，这轮之后拉起者会自己退出
                     killByPidFiles(9);                    // 兜底这一轮才用 KILL
                     killWebProcessesFromAndroid();
@@ -5057,9 +5468,13 @@ public class HarnessController {
     public void checkStatus() {
         IO.execute(() -> {
             try {
-                proot.ensureRuntimeFiles();
-                String out = proot.execAndRead(statusCommand());
-                setState("", 0, "状态码：" + out.trim(), "", false);
+                boolean port = isWebPortUp(400);
+                boolean auth = isBrowserAuthExchanged();
+                String status = port && auth
+                        ? "Web UI 已就绪（端口可连接且 BrowserAuth 已交换）"
+                        : "Web UI 未就绪（端口=" + (port ? "可连接" : "不可连接")
+                                + "，认证=" + (auth ? "已交换" : "未交换") + ")";
+                setState("", 0, status, "", false);
             } catch (Throwable e) {
                 setState("", 0, "", errMsg("检查失败：", e), false);
             }
@@ -5166,6 +5581,10 @@ public class HarnessController {
                 } catch (Throwable t) {
                     logActivity("升级自动备份异常：" + describe(t));
                 }
+                // Alpha keeps sessions/profile/plugin state opaque to DSHA.
+                // The transparent backup above is still useful for rollback,
+                // but legacy marker/profile migrations must never rewrite it.
+                if (isAlphaRuntime()) return;
                 // ===== 低版本安装适配：老 rootfs 结构差异集中迁移 =====
                 // 按来源版本分层，逐层升级（幂等，每层只做该层需要的事）：
                 // 老版本（versionCode<=21，即 v1.1.1 及更早）需要补适配。
@@ -5178,7 +5597,7 @@ public class HarnessController {
                                 "cat /root/.dsh/builtin-assets.version 2>/dev/null || echo NONE");
                         if (r == null || !r.trim().equals(BUILTIN_ASSET_VERSION)) {
                             proot.execAndRead(
-                                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; echo cleaned");
+                                    "rm -f /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; echo cleaned");
                             android.util.Log.i("DSHA", "迁移(≤v1.1.1)：已删内置插件 marker，等待重注入");
                         }
                         // 2) 老版本无离线包版本标记 → 写当前（避免误弹升级提示）
@@ -5192,7 +5611,7 @@ public class HarnessController {
                         // 旧版 profile 可能缺 dependencies 字段 / 用 file: 依赖，
                         // 触发一次 fix-stale-bundles 自愈（App 启动时会跑，这里显式跑一次）
                         proot.execAndRead(
-                                "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
+                                    "rm -f /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
                                 + "echo 'v1.0.x 迁移：删 marker 强制重注入'");
                         android.util.Log.i("DSHA", "迁移(v1.0.x)完成");
                     }
@@ -5210,6 +5629,9 @@ public class HarnessController {
      *  把「无法解码/极小」的会话移到 .dsh/corrupt-backup/（不删除可恢复）。
      *  返回处理结果文案。 */
     public String cleanCorruptSessions() {
+        if (isAlphaRuntime()) {
+            return "Alpha 不检查、修复或移动新版会话文件；请由官方运行时负责会话迁移";
+        }
         try {
             if (!proot.isInstalled()) return "环境未就绪";
             String out = proot.execAndRead(
@@ -5220,15 +5642,16 @@ public class HarnessController {
                     + "mkdir -p /root/.dsh/corrupt-backup/\"$id\"; "
                     + "mv \"$f\" /root/.dsh/corrupt-backup/\"$id\"/ 2>/dev/null && echo \"已隔离: $id\"; done");
             if (out == null || !out.contains("已隔离")) return "未发现损坏会话（<100字节的极小文件）";
-            return out.trim();
+            return SensitiveData.redact(out.trim());
         } catch (Throwable e) {
-            return "清理失败: " + e.getMessage();
+            return "清理失败: " + SensitiveData.redact(e.getMessage());
         }
     }
 
     /** 启动时自愈：删除空的 /root/.codex/pets（deepseek-pet 插件把空目录当错误
      *  → 整个插件树加载失败）。老版本预创建过空目录，需清理。幂等、后台静默。 */
     public void maybeCleanEmptyPets() {
+        if (isAlphaRuntime()) return;
         IO.execute(() -> {
             try {
                 if (!proot.isInstalled()) return;
@@ -5245,6 +5668,7 @@ public class HarnessController {
      *  检测到 → 备份损坏 .db 并删除（dsh 重建），老会话丢失但 App 可用。
      *  配合停止命令 SIGTERM 优雅退出（减少写入中断）。幂等、后台静默。 */
     public void maybeHealSessionCorruption() {
+        if (isAlphaRuntime()) return;
         IO.execute(this::doHealSessionCorruption);
     }
 
@@ -5264,12 +5688,20 @@ public class HarnessController {
     private void logHealResult(String out) {
         if (out == null || !out.contains("SESSION_HEALED")) return;
         android.util.Log.w("DSHA", "会话损坏自愈：已修复/隔离损坏会话（详情见 heal 输出）");
-        int i = out.indexOf("SESSION_HEALED");
-        logActivity("会话自愈：" + out.substring(i, Math.min(out.length(), i + 60)).trim()
+        // The helper output can include a session path, cookie, or API key.  Do
+        // the redaction before slicing so a future marker format cannot bypass
+        // the activity-log boundary (logActivity redacts again as a last line).
+        String safeOut = SensitiveData.redact(out);
+        int i = safeOut.indexOf("SESSION_HEALED");
+        if (i < 0) return;
+        String detail = safeOut.substring(i, Math.min(safeOut.length(), i + 120))
+                .replace('\r', ' ').replace('\n', ' ').trim();
+        logActivity("会话自愈：" + detail
                 + "（原文件留 .pre-fix 备份）");
     }
 
     private void doHealSessionCorruption() {
+        if (isAlphaRuntime()) return;
         healingSession = true;
         try {
             if (!proot.isInstalled()) return;
@@ -5320,6 +5752,7 @@ public class HarnessController {
      *  全新离线包（预置 marker 但无版本标记）首启也会重跑⑥——幂等无害，可接受
      *  （离线预置与在线⑥内容一致，重跑只是把版本标记补齐）。 */
     public void maybeRefreshStep6() {
+        if (isAlphaRuntime()) return;
         IO.execute(() -> {
             try {
                 if (!proot.isInstalled()) return;
@@ -5336,7 +5769,8 @@ public class HarnessController {
                     setState("", 100, "已自动更新安全守卫与内置插件（⑥）", "", false);
                 }
             } catch (Throwable e) {
-                android.util.Log.w("DSHA", "自动重跑⑥失败（不影响使用）: " + e);
+                android.util.Log.w("DSHA", "自动重跑⑥失败（不影响使用）: "
+                        + SensitiveData.redact(String.valueOf(e)));
                 setState("", 0, "", "", false);
             }
         });
@@ -5345,6 +5779,7 @@ public class HarnessController {
     /** 主动检测 dsh 新版本：已装版本 vs npm 最新 rc（dist-tags.next，24h 节流），
      *  npm 查询失败静默跳过（网络/镜像问题），版本比较只升不降。 */
     private String queryLatestDshRc() {
+        if (isAlphaRuntime()) return null;
         try {
             // 节流：24h 内不重复查（避免每次启动都打 registry）。
             // 注意：只在「真正执行了 npm 查询」后更新时间戳——网络故障/命令失败
@@ -5437,6 +5872,7 @@ public class HarnessController {
      *  兼容被动场景（离线包/手动重装导致已装版本变化 → 同样适配）。
      *  先装新版再适配，一气呵成；幂等、后台静默；失败不影响启动。 */
     public void maybeAutoReinstallGuardOnDshUpdate() {
+        if (isAlphaRuntime()) return;
         IO.execute(() -> {
             try {
                 if (!proot.isInstalled()) return;
@@ -5475,7 +5911,8 @@ public class HarnessController {
                     setState("", 100, "已自动升级 dsh 并完成适配（⑤+⑥）", "", false);
                 }
             } catch (Throwable e) {
-                android.util.Log.w("DSHA", "自动升级⑤+⑥失败（不影响使用）: " + e);
+                android.util.Log.w("DSHA", "自动升级⑤+⑥失败（不影响使用）: "
+                        + SensitiveData.redact(String.valueOf(e)));
                 setState("", 0, "", "", false);
             }
         });
@@ -5501,7 +5938,8 @@ public class HarnessController {
                     if (!AdbBridge.keyPresent(proot) || !AdbBridge.depsOk(proot)
                             || !AdbBridge.wrapperPresent(proot)) {
                         String setup = AdbBridge.setup(proot);
-                        android.util.Log.i("DSHA-ADB", "启动自愈 setup: " + setup);
+                        android.util.Log.i("DSHA-ADB", "启动自愈 setup: "
+                                + SensitiveData.redact(String.valueOf(setup)));
                     }
                     // 4) 有密钥有依赖 → 探一次连接（失败交给看门狗周期重连）
                     if (AdbBridge.keyPresent(proot) && AdbBridge.depsOk(proot)) {
@@ -5509,20 +5947,22 @@ public class HarnessController {
                         if (r != null && r.contains("uid=")) {
                             android.util.Log.i("DSHA-ADB", "启动体检：ADB 连接正常");
                         } else {
-                            android.util.Log.i("DSHA-ADB", "启动体检：未连接（看门狗将自动重连）" + r);
+                            android.util.Log.i("DSHA-ADB", "启动体检：未连接（看门狗将自动重连）"
+                                    + SensitiveData.redact(r));
                         }
                     }
                 } catch (Throwable e) {
-                    android.util.Log.w("DSHA-ADB", "启动自愈异常（忽略）: " + e);
+                    android.util.Log.w("DSHA-ADB", "启动自愈异常（忽略）: "
+                            + SensitiveData.redact(String.valueOf(e)));
                 }
             });
         } catch (Throwable ignored) {
         }
     }
 
-    /** 启动计数自动备份：每启动 N 次触发一次自动备份（固定名自动覆盖上一个自动备份）。
+    /** 启动计数自动备份：每启动 N 次触发一次自动备份（原子覆盖 latest）。
      *  N 从配置项 auto_backup_launches 读取（默认 5，0=关闭）。
-     *  与手动备份独立（手动每次保留时间戳文件）。幂等、后台执行、失败静默。
+     *  与手动备份共用唯一 latest 文件。幂等、后台执行、失败静默。
      *  计数器独立（backup_launch_count），不与其他启动计数功能（备份提醒）共用。 */
     public void maybeAutoBackupOnLaunch() {
         try {
@@ -5587,9 +6027,8 @@ public class HarnessController {
         }
 
         /** 弹窗里给用户看的一行描述：时间 + 大小。
-         *  自动备份用固定名 DSHA-backup-auto.tar.gz，MediaStore 同名去重又派生出
-         *  "…auto.tar (3).gz" 这种孤儿包 —— 名字里没有时间戳，只给文件名用户没法判断
-         *  这到底是哪一次的数据，所以时间和大小必须一起显示。 */
+         *  latest 备份使用固定名；旧版本自动备份可能带 MediaStore 去重后缀，
+         *  所以时间和大小仍一起显示，便于用户区分历史包。 */
         public String describe() {
             StringBuilder sb = new StringBuilder(name);
             if (time > 0) {
@@ -5652,10 +6091,8 @@ public class HarnessController {
 
     /** 备份文件名判据（宽容）。
      *
-     *  必须容忍 MediaStore 的同名去重后缀：insert 同名条目不会覆盖，而是把 DISPLAY_NAME
-     *  改成 "DSHA-backup-auto.tar (1).gz" —— 序号插在 .tar 和 .gz **中间**，于是
-     *  endsWith(".tar.gz") 永远不成立，自动备份攒下的包会被整批筛掉。这正是
-     *  「Download/DSHA 里明明有备份却从不弹恢复窗」的直接原因（issue #22）。 */
+     *  必须容忍旧版 MediaStore 的同名去重后缀：序号插在 .tar 和 .gz 中间，
+     *  endsWith(".tar.gz") 永远不成立，历史包仍须显示并可恢复。 */
     static boolean looksLikeBackupName(String name) {
         if (name == null) return false;
         String low = name.toLowerCase(java.util.Locale.US);
@@ -5833,19 +6270,33 @@ public class HarnessController {
                         + "\n\n换一份再试（「工作区」页可以手动选择备份文件），"
                         + "或者用当前环境重新导出一份。";
             }
-            // 注意这里**不拒绝**：认不出特征只是提示。备份是用户自己选的文件，
-            // 里面装着他的数据；为了一个启发式判据把一份其实能用的老备份拦在门外，
-            // 比恢复一个可疑的包糟得多 —— 尤其人往往是丢了数据才来恢复的。
-            // 真正会拒绝的只有上面那种「读都读不完整」，那种恢复只会得到半个环境。
-            String shapeWarn = info.looksLikeDsha ? ""
-                    : "\n· 注意：这个包里没找到 .dsh 之类的 DSHA 特征（共 " + info.entries
-                            + " 个条目），仍然按你的选择恢复了。如果结果不对，"
-                            + "换一份 Download/DSHA 下的 DSHA-backup-*.tar.gz 再试";
+            // 类型无法识别时直接拒绝：仅凭“是一个可读 tar”不足以证明它是 DSHA
+            // 备份，把任意归档铺进用户 rootfs 会覆盖无关配置。旧版备份都包含
+            // .dsh、sessions 或 settings.yaml 特征，因此不影响兼容恢复。
+            if (!info.looksLikeDsha) {
+                return "这份文件不是可识别的 DSHA 备份（未找到 .dsh、会话或设置数据），"
+                        + "未覆盖现有数据。请从 Download/DSHA 选择 DSHA-backup-*.tar.gz。";
+            }
             File rootDir = new File(proot.getRootfsDir(), "root");
-            File stage = new File(rootDir, ".dsha-restore-stage");
-            deleteRecursively(stage);
-            //noinspection ResultOfMethodCallIgnored
-            stage.mkdirs();
+            if (!proot.ensureBundledPython()) {
+                return "恢复失败：当前离线运行时缺少 Python3，未执行恢复合并；现有数据未改动。";
+            }
+            // Every restore gets its own stage. Failed stages remain available
+            // for diagnosis and concurrent requests cannot share a candidate.
+            File stage = null;
+            String stageName = ".dsha-restore-stage-" + System.currentTimeMillis()
+                    + "-" + java.util.UUID.randomUUID().toString().replace("-", "");
+            for (int attempt = 0; attempt < 8; attempt++) {
+                File candidate = new File(rootDir, stageName + (attempt == 0 ? "" : "-" + attempt));
+                if (candidate.exists()) continue;
+                if (candidate.mkdirs() && candidate.isDirectory()) {
+                    stage = candidate;
+                    break;
+                }
+            }
+            if (stage == null) {
+                return "恢复失败：无法创建独立阶段目录，现有数据未改动";
+            }
             File tmp = rootfsFile("root/.dsha-restore.tar.gz");
             File src = backup;
             boolean copied = false;
@@ -5868,40 +6319,85 @@ public class HarnessController {
             if (script != null && !script.isEmpty()) {
                 java.io.File sf = new java.io.File(rootDir, ".dsha-restore-merge.py");
                 java.nio.file.Files.write(sf.toPath(), script.getBytes(StandardCharsets.UTF_8));
-                out = proot.execAndRead("python3 /root/.dsha-restore-merge.py"
-                        + " --stage /root/.dsha-restore-stage --root /root --workdir "
+                // 生产 rootfs 可能没有 Python。先在容器内探测可用解释器，避免把
+                // “依赖缺失”误报成“候选未落位”；脚本失败时 stage 必须保留。
+                String restoreArgs = " --stage /root/" + stage.getName() + " --root /root --workdir "
                         + ShellQuote.arg(getWorkdir())
-                        // 范围兜底：脚本优先信包内清单，这里传的是从文件名推断的值，
-                        // 只有「清单没生成」的包才用得上（调用方有时已把包改名成
-                        // .dsha-restore.tar.gz，那时推断结果就是 full —— 与老行为一致）
-                        + " --scope " + BackupScope.id(BackupScope.fromFileName(backup.getName()))
-                        + " 2>&1; rm -f /root/.dsha-restore-merge.py", 240_000);
+                        + (isAlphaRuntime() ? " --alpha 1" : "")
+                        + " --scope " + BackupScope.id(BackupScope.fromFileName(backup.getName()));
+                out = proot.execAndRead(
+                        "P=; if [ -x /bin/python3 ]; then P=/bin/python3; "
+                        + "elif [ -x /usr/bin/python3 ]; then P=/usr/bin/python3; "
+                        + "elif [ -x /bin/python ]; then P=/bin/python; "
+                        + "else P=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true); fi; "
+                        + "if [ -n \"$P\" ]; then \"$P\" /root/.dsha-restore-merge.py"
+                        + restoreArgs + "; else echo RESTORE_SCRIPT_UNAVAILABLE; fi; "
+                        + "rm -f /root/.dsha-restore-merge.py", 240_000);
             }
             boolean ok = out != null && out.contains("RESTORE_OK");
             boolean partial = out != null && out.contains("RESTORE_PARTIAL");
+            // RESTORE_PARTIAL is intentionally ambiguous: it can mean a
+            // committed restore with a missing optional entry, or a
+            // validation/rename failure where the live .dsh was never touched.
+            // The script emits this marker only after a full .dsh candidate
+            // has passed validation and atomically landed.
+            boolean dshCommitted = out != null && out.contains("RESTORE_DSH_COMMITTED");
             if (!ok && !partial) {
-                // 兜底（宽容）：整理脚本没跑成 → 老行为，把包内容直接铺到 /root
-                proot.execAndRead("cp -a /root/.dsha-restore-stage/. /root/ 2>/dev/null; "
-                        + "rm -rf /root/.dsha-restore-stage; echo DONE");
-                deleteRecursively(stage);
-                syncApiKeyFromRootfs();
-                return "恢复完成（基础模式：整包还原）\n"
-                        + "若启动报插件缺失，可到「市场」重新安装该插件。刷新页面即可生效（多数插件热加载）";
+                // Never flatten an unverified candidate over live data. Keep the
+                // stage for diagnosis and let the caller retry after fixing it.
+                if (out != null && out.contains("RESTORE_SCRIPT_UNAVAILABLE")) {
+                    return "恢复失败：当前离线运行时缺少 Python3，未执行恢复合并；现有数据未改动。"
+                            + "\n请先更新到包含恢复依赖的运行时后重试；阶段目录 "
+                            + stage.getName() + " 已保留供排查";
+                }
+                // Expose a short, redacted execution diagnostic. The previous
+                // generic message hid proot/Python errors and made every failure
+                // look like an atomic-placement failure.
+                String detail = out == null ? "无脚本输出" : SensitiveData.redact(stripMachineLines(out));
+                detail = detail.trim();
+                if (detail.length() > 800) detail = detail.substring(detail.length() - 800);
+                return "恢复失败：恢复合并脚本执行失败，现有数据未改动；阶段目录 "
+                        + stage.getName() + " 已保留供排查"
+                        + (detail.isEmpty() ? "" : "\n· 诊断：" + detail);
             }
             String body = out.replace("RESTORE_OK", "").replace("RESTORE_PARTIAL", "")
-                    .replace("RESTORE_EMPTY", "").trim();
+                    .replace("RESTORE_EMPTY", "")
+                    .replace("RESTORE_DSH_COMMITTED", "").trim();
             // 把体检结果摆出来：用户至少能判断「恢复进来的是不是我想要的那份」，
             // 而不是只看到一句「恢复完成」。跨版本时版本号尤其有用。
-            body = "· 备份内容：" + info.sessionFiles + " 个会话文件 · 解压后约 "
+            int restoredScope = info.scope == null || info.scope.isEmpty()
+                    ? BackupScope.fromFileName(backup.getName())
+                    : BackupScope.fromId(info.scope);
+            String backupType = info.hasManifest
+                    ? BackupScope.label(restoredScope)
+                    : "旧版全量备份（无清单）";
+            String created = info.createdAt == null || info.createdAt.isEmpty()
+                    ? "未知"
+                    : info.createdAt;
+            String content = BackupScope.restoreImpact(restoredScope);
+            body = "· 备份类型：" + backupType + " · 创建时间：" + created
+                    + "\n· 包含内容：" + content
+                    + "\n· 备份内容：" + info.sessionFiles + " 个会话文件 · 解压后约 "
                     + info.humanSize()
                     + (info.appVersion.isEmpty() ? "" : " · 来自 v" + info.appVersion)
                     + (info.hasManifest ? "" : "（老格式备份，无清单）")
-                    + shapeWarn
                     + (body.isEmpty() ? "" : "\n" + body);
             // 解压阶段跳过的异常条目也如实告知（宽容 ≠ 悄悄丢东西）
             if (TarGzipExtractor.lastSkipped > 0) {
                 body += "\n· 备份里有 " + TarGzipExtractor.lastSkipped
                         + " 个异常条目已跳过：" + TarGzipExtractor.lastSkipNote;
+            }
+            // A failed full restore may still report RESTORE_PARTIAL so the
+            // caller knows why the stage was retained. Until the explicit
+            // commit marker appears, do not touch the live .dsh at all:
+            // rotating its bridge token or reading its API-key snapshot would
+            // violate the P0 guarantee that old data remains byte-for-byte
+            // intact after validation/rename failure.
+            if (!dshCommitted && !ok) {
+                body = stripMachineLines(body);
+                return "恢复未完成：现有 .dsh 未被覆盖，暂存目录 " + stage.getName()
+                        + " 已保留供排查"
+                        + (body.isEmpty() ? "" : "\n" + body);
             }
             // 缺失插件：后台静默补装（不阻塞恢复结果返回，失败无感）。
             // 已弃用的插件不在补装范围内 —— 老备份的 profile 里还注册着旧内置 UI 适配，
@@ -5918,18 +6414,20 @@ public class HarnessController {
                     body += "\n· 未补装 " + s + "：" + DeprecatedPlugins.reason(s);
                 }
             }
-            deleteRecursively(stage);
+            if (ok) deleteRecursively(stage);
             // 恢复会把整个 .dsh 换成实体目录（restore-merge.py 里 move_aside + move），
             // 指向公开目录的软链因此丢失 —— 数据分裂成「.dsh 里的新数据」和
             // 「Documents/dshdata 里的旧数据」，且没人指向后者。
             // 跑一次迁移把它归位：脚本的冲突分支会保留旧公开副本为 .conflict-<时间>，
             // 用刚恢复的数据覆盖，不会静默删任何一边。
-            try {
-                String mig = runAssetScript("migrate-public-data.sh", "dsha-migrate-public.sh", 60_000);
-                if (mig != null && mig.contains("conflict-")) {
-                    logActivity("恢复后公开数据归位：发现冲突，旧公开副本已存为 .conflict-*");
+            if (dshCommitted && !isAlphaRuntime()) {
+                try {
+                    String mig = runAssetScript("migrate-public-data.sh", "dsha-migrate-public.sh", 60_000);
+                    if (mig != null && mig.contains("conflict-")) {
+                        logActivity("恢复后公开数据归位：发现冲突，旧公开副本已存为 .conflict-*");
+                    }
+                } catch (Throwable ignored) {
                 }
-            } catch (Throwable ignored) {
             }
             invalidateSteps();
             // ===== 老备份 → 新版本的适配（恢复流程自己做，别指望「下次启动 Web 时自愈」）=====
@@ -5939,29 +6437,38 @@ public class HarnessController {
             // 「按新版语义下线旧插件」是 App 侧的事，而它们只挂在启动/安装路径上 ——
             // 恢复发生在 App 已经启动之后，不显式跑一遍的话得等用户重启 Web 才对齐。
             // 两个都是幂等且秒级的，直接在这里做完。
-            try {
-                migrateLegacyMobileAdapt();
-                ensureBuiltinBundles();
-            } catch (Throwable t) {
-                android.util.Log.w("DSHA", "恢复后内置插件适配失败（重启 Web 时会再试）: " + t);
+            if (!isAlphaRuntime()) {
+                try {
+                    migrateLegacyMobileAdapt();
+                    ensureBuiltinBundles();
+                } catch (Throwable t) {
+                    android.util.Log.w("DSHA", "恢复后内置插件适配失败（重启 Web 时会再试）: "
+                            + SensitiveData.redact(String.valueOf(t)));
+                }
             }
-            // 老备份里带着**备份那台机器**的 .bridge_token，恢复出来就和 App 内存里的
-            // 不一致 —— WebUI 会弹「需要 token，请在 DSHA 应用内打开」。删掉重新生成。
-            HttpShellService.resetTokenAfterRestore();
-            // issue #22：恢复数据落位后回读备份里的 .dsha-apikey 并回填配置页——
-            // 否则离线包用户（无 .env）走自动/迁移恢复后配置页 key 为空、启动注入空 key。
-            String keyState = syncApiKeyFromRootfs();
+            String keyState = "";
+            if (dshCommitted) {
+                // 老备份里带着**备份那台机器**的 .bridge_token，恢复出来就和 App 内存里的
+                // 不一致 —— WebUI 会弹「需要 token，请在 DSHA 应用内打开」。删掉重新生成。
+                // 只有全量 .dsh 已经提交时才允许轮换；失败路径必须保留旧 .dsh 原样。
+                HttpShellService.resetTokenAfterRestore();
+                // issue #22：恢复数据落位后回读备份里的 .dsha-apikey 并回填配置页——
+                // 否则离线包用户（无 .env）走自动/迁移恢复后配置页 key 为空、启动注入空 key。
+                keyState = syncApiKeyFromRootfs();
+            }
             if ("undecryptable".equals(keyState)) {
                 // 解不开不是错误，但必须说出来 —— 否则用户拿着一个「看起来已填」的
                 // 配置去对话，只会收到查不出原因的鉴权失败
                 body += "\n· 备份里的 API key 无法解密（换了设备或清过 App 数据），"
                         + "请到「配置」页重新填写";
             }
-            return (ok ? "恢复完成" : "恢复完成（部分内容已跳过，详见下方）")
+            return SensitiveData.redact((ok ? "恢复完成" : "恢复完成（部分内容已跳过，详见下方）")
                     + (body.isEmpty() ? "" : "\n" + body)
-                    + "\n刷新页面即可生效（多数插件热加载）";
+                    + (isAlphaRuntime()
+                    ? "\nAlpha 不自动修改插件或会话格式；刷新页面即可生效"
+                    : "\n刷新页面即可生效（多数插件热加载）"));
         } catch (Exception e) {
-            return "恢复失败: " + e.getMessage();
+        return "恢复失败: " + SensitiveData.redact(e.getMessage());
         }
     }
 
@@ -6074,6 +6581,7 @@ public class HarnessController {
      *  而这里是并发线程 —— 主线程调它的时候补装往往还没落地，它看到干净环境就退出了，
      *  等于白跑。装完再收敛一次，才能兜住清单没覆盖到的情况。 */
     private java.util.List<String> autoInstallPluginsSilently(final java.util.List<String> names) {
+        if (isAlphaRuntime()) return new java.util.ArrayList<>(names);
         final java.util.List<String> skipped = new java.util.ArrayList<>();
         final java.util.List<String> todo = new java.util.ArrayList<>();
         for (String name : names) {
@@ -6122,7 +6630,8 @@ public class HarnessController {
                             java.nio.file.StandardOpenOption.APPEND);
                 }
             } catch (Throwable e) {
-            android.util.Log.w("DSHA", "恢复报告写入失败，用户将看不到恢复结果: " + e);
+            android.util.Log.w("DSHA", "恢复报告写入失败，用户将看不到恢复结果: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
         }, "dsha-restore-plugins");
         t.setDaemon(true);

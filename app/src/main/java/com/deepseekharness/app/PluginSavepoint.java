@@ -75,10 +75,12 @@ final class PluginSavepoint {
             if (r != null && r.contains("SAVEPOINT_OK")) return id;
             // package.json 都没存下来的存档点是假的保险，不如没有 —— 删掉并说明
             proot.execAndRead("rm -rf " + s, 20_000);
-            android.util.Log.w("DSHA", "存档点没建起来（profile 可能还没初始化）: " + r);
+            android.util.Log.w("DSHA", "存档点没建起来（profile 可能还没初始化）: "
+                    + SensitiveData.redact(r));
             return null;
         } catch (Throwable t) {
-            android.util.Log.w("DSHA", "建存档点失败（不阻断安装）: " + t);
+            android.util.Log.w("DSHA", "建存档点失败（不阻断安装）: "
+                    + SensitiveData.redact(String.valueOf(t)));
             return null;
         }
     }
@@ -93,7 +95,7 @@ final class PluginSavepoint {
                     + "echo \"WHAT=$(cat $d/what.txt 2>/dev/null)\"", 30_000);
             if (r == null || r.contains("NONE")) return null;
             String id = grab(r, "ID=");
-            String what = grab(r, "WHAT=");
+            String what = SensitiveData.redact(grab(r, "WHAT="));
             if (id.isEmpty()) return null;
             String when = id.length() == 15
                     ? id.substring(4, 6) + "-" + id.substring(6, 8) + " "
@@ -131,7 +133,9 @@ final class PluginSavepoint {
             if (r == null) return "还原失败：容器没有响应";
             if (r.contains("NO_SAVEPOINT")) return "没有可用的存档点";
             if (r.contains("BAD_SAVEPOINT")) return "存档点不完整（缺 package.json），没有动任何东西";
-            if (!r.contains("RESTORED:")) return "还原失败：" + r.trim();
+            if (!r.contains("RESTORED:")) {
+                return "还原失败：" + SensitiveData.redact(r.trim());
+            }
             java.util.List<String> removed = new java.util.ArrayList<>();
             for (String line : r.split("\n")) {
                 if (line.startsWith("REMOVED:")) removed.add(line.substring(8).trim());
@@ -148,8 +152,9 @@ final class PluginSavepoint {
             host.logActivity("插件安装已撤销：" + msg);
             return msg.toString();
         } catch (Throwable t) {
-            android.util.Log.w("DSHA", "还原存档点失败: " + t);
-            return "还原失败：" + t;
+            android.util.Log.w("DSHA", "还原存档点失败: "
+                    + SensitiveData.redact(String.valueOf(t)));
+            return "还原失败：" + SensitiveData.redact(String.valueOf(t));
         }
     }
 

@@ -136,9 +136,10 @@ public final class AdbBridge {
                     + "if [ \"$M\" = \"1f8b\" ]; then tar xzf /root/.dsh/adb-wheels.tar.gz -C /root/.dsh/wheels/; "
                     + "else tar xf /root/.dsh/adb-wheels.tar.gz -C /root/.dsh/wheels/; fi && "
                     + "ls /root/.dsh/wheels/*.whl | wc -l");
-            return "WHEELS_INJECTED(" + total + "B): " + (r == null ? "?" : r.trim()) + " whl";
+            return SensitiveData.redact("WHEELS_INJECTED(" + total + "B): "
+                    + (r == null ? "?" : r.trim()) + " whl");
         } catch (Throwable t) {
-            return "WHEELS_INJECT_FAIL: " + t;
+            return "WHEELS_INJECT_FAIL: " + SensitiveData.redact(String.valueOf(t));
         }
     }
 
@@ -188,11 +189,13 @@ public final class AdbBridge {
             // pm grant 是幂等的，重复执行无害，所以不必先查一次
             String r = proot.execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py pm grant " + pkg
                     + " android.permission.WRITE_SECURE_SETTINGS 2>&1 | head -2");
-            android.util.Log.i("DSHA-ADB", "WRITE_SECURE_SETTINGS 授权结果: " + r);
+            android.util.Log.i("DSHA-ADB", "WRITE_SECURE_SETTINGS 授权结果: "
+                    + SensitiveData.redact(r));
         } catch (Throwable t) {
             // 别静默：这一步失败会让「开机自动开无线调试」整条链失效，
             // 而现象出现在很久之后，没有这条日志就无从追溯
-            android.util.Log.w("DSHA-ADB", "WRITE_SECURE_SETTINGS 授权失败: " + t);
+            android.util.Log.w("DSHA-ADB", "WRITE_SECURE_SETTINGS 授权失败: "
+                    + SensitiveData.redact(String.valueOf(t)));
         }
     }
 

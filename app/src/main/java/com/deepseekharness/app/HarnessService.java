@@ -55,11 +55,6 @@ public class HarnessService extends Service {
         ShizukuShell.ensureBound(this);
         // 任务完成通知已改为内置插件 dsh-task-notifier（turn/end 监听更准），
         // 旧 TaskNotifier 轮询停用（否则双重通知）
-        // 局域网转发桥：开启局域网模式时，App 侧 0.0.0.0:3081 → 127.0.0.1:3080
-        // （绕开官方 0.0.0.0 拦截与 Host 校验，Shizuku 式桥接思路；状态写 /root/dsh-lan.log 可终端查看）
-        if (c.isLanMode()) {
-            LanProxyService.start(c.getRootfsDirPath(), this, c.getPortInt());
-        }
     }
 
     @Override
@@ -79,7 +74,8 @@ public class HarnessService extends Service {
             startForeground(NOTIF_ID,
                     buildNotification("DSHA运行中", "Web UI 正在后台保持运行"));
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "onStartCommand 里 startForeground 失败: " + e);
+            android.util.Log.w("DSHA", "onStartCommand 里 startForeground 失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             c.stopWeb();
@@ -164,7 +160,8 @@ public class HarnessService extends Service {
                 wifiLock.acquire();
             }
         } catch (Throwable t) {
-            android.util.Log.w("DSHA", "[保活] 取锁失败（不致命，继续跑）: " + t);
+            android.util.Log.w("DSHA", "[保活] 取锁失败（不致命，继续跑）: "
+                    + SensitiveData.redact(String.valueOf(t)));
         }
     }
 
@@ -253,6 +250,7 @@ public class HarnessService extends Service {
 
     /** TCP 探测 127.0.0.1:<port> 是否可达（proot 与宿主共享网络栈） */
     private boolean isWebUp() {
+        if (!c.isBrowserAuthExchanged()) return false;
         int port;
         try {
             port = Integer.parseInt(c.getPort());

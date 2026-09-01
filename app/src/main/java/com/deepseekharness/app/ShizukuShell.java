@@ -172,7 +172,7 @@ public final class ShizukuShell {
             });
         } catch (Throwable e) {
             // 根因可见：manifest 未注册 / 组件缺失 / Shizuku 异常等都在这暴露
-            Log.e(TAG, "bindUserService failed: " + e, e);
+            Log.e(TAG, "bindUserService failed: " + SensitiveData.redact(String.valueOf(e)));
             binding = false;
         }
     }
@@ -200,7 +200,7 @@ public final class ShizukuShell {
             binderListenerAttached = true;
             Log.i(TAG, "binder received listener attached");
         } catch (Throwable e) {
-            Log.w(TAG, "attachBinderListener failed", e);
+            Log.w(TAG, "attachBinderListener failed: " + SensitiveData.redact(String.valueOf(e)));
         }
     }
 
@@ -217,7 +217,7 @@ public final class ShizukuShell {
         try {
             return s.exec(cmd);
         } catch (Throwable e) {
-            return "ERROR: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+            return "ERROR: " + SensitiveData.redact(String.valueOf(e));
         }
     }
 }

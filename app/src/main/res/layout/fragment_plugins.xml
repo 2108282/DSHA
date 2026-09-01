@@ -5,6 +5,38 @@
     android:background="@color/surface"
     android:orientation="vertical">
 
+    <!-- 独立整行输入，保证小屏上标题、关于按钮和长链接互不挤压。 -->
+    <LinearLayout
+        android:id="@+id/plugin_github_row"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/page_pad"
+        android:paddingEnd="@dimen/page_pad"
+        android:paddingTop="@dimen/gap_tight"
+        android:paddingBottom="@dimen/gap_tight">
+
+        <EditText
+            android:id="@+id/appbar_github_input"
+            android:layout_width="match_parent"
+            android:layout_height="42dp"
+            android:minWidth="220dp"
+            android:background="@drawable/bg_input"
+            android:gravity="center_vertical"
+            android:hint="GitHub 插件链接"
+            android:imeOptions="actionGo"
+            android:importantForAutofill="no"
+            android:inputType="textUri"
+            android:maxLines="1"
+            android:paddingStart="@dimen/gap_control"
+            android:paddingEnd="@dimen/gap_control"
+            android:scrollHorizontally="true"
+            android:singleLine="true"
+            android:textColor="@color/text"
+            android:textColorHint="@color/text_muted"
+            android:textSize="@dimen/text_body" />
+    </LinearLayout>
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

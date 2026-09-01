@@ -1,191 +1,148 @@
 #!/usr/bin/env bash
-# ============================================================
-# ci-make-offline-bundle.sh — 在 Linux CI（原生 arm64 或
-# x86_64 + qemu-user-static）里预装 Ubuntu rootfs，产出
-# APK 内置的 offline-rootfs.tar.gz。不依赖 Termux / Docker。
-#
-# 用法（GitHub Actions ARM runner 上）：
-#   bash scripts/ci-make-offline-bundle.sh
-# 产物：
-#   ${OUT:-$PWD/bundle/offline-rootfs.tar.gz}
-# ============================================================
+# Build the Android offline rootfs on native Linux arm64 from verified local
+# inputs. This script intentionally has no download, apt, npm, or git path.
+# Supply a preprovisioned base rootfs, a Node 24.19.0 arm64 tarball, and the
+# pinned dsh closure produced by prepare-dsh-alpha-runtime.sh.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ROOTFS_DIR="${ROOTFS_DIR:-$PWD/ci-rootfs}"
+ROOTFS_REQUESTED="${ROOTFS_DIR:-$PWD/ci-rootfs}"
 OUT="${OUT:-$PWD/bundle/offline-rootfs.tar.gz}"
-UBUNTU_VER="${UBUNTU_VER:-24.04.4}"
+BASE_ROOTFS_ARCHIVE="${BASE_ROOTFS_ARCHIVE:-}"
+BASE_ROOTFS_SHA256="${BASE_ROOTFS_SHA256:-}"
+NODE_RUNTIME_ARCHIVE="${NODE_RUNTIME_ARCHIVE:-}"
+NODE_RUNTIME_SHA256="${NODE_RUNTIME_SHA256:-}"
+DSH_RUNTIME_ARCHIVE="${DSH_RUNTIME_ARCHIVE:-}"
+DSH_RUNTIME_SHA256="${DSH_RUNTIME_SHA256:-}"
 
 log() { echo "==> $*"; }
-die() { echo "❌ $*" >&2; exit 1; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+need_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 
-need_cmd() { command -v "$1" >/dev/null 2>&1 || die "缺少命令: $1"; }
+# Termux invokes this script inside a root chroot, where sudo is intentionally
+# absent.  Workstation invocations remain sudo-backed.
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
 
-ARCH="$(uname -m)"
-NATIVE_ARM=0
-case "$ARCH" in
-  aarch64|arm64) NATIVE_ARM=1 ;;
+verify_local_input() {
+  local name="$1" path="$2" expected="$3" actual
+  [ -n "$path" ] && [ -s "$path" ] || die "set $name to a non-empty local file"
+  case "$expected" in
+    ''|*[!0-9a-fA-F]*) die "set ${name}_SHA256 to its 64-character SHA-256" ;;
+  esac
+  [ "${#expected}" -eq 64 ] || die "set ${name}_SHA256 to its 64-character SHA-256"
+  actual="$(sha256sum "$path" | awk '{print $1}')"
+  [ "$actual" = "${expected,,}" ] || die "$name SHA-256 mismatch"
+}
+
+case "$(uname -s):$(uname -m)" in
+  Linux:aarch64|Linux:arm64) ;;
+  *) die "this rootfs must be assembled on native Linux arm64" ;;
 esac
+for command in tar gzip mktemp sha256sum; do need_cmd "$command"; done
+[ -z "$SUDO" ] || need_cmd sudo
+verify_local_input BASE_ROOTFS_ARCHIVE "$BASE_ROOTFS_ARCHIVE" "$BASE_ROOTFS_SHA256"
+verify_local_input NODE_RUNTIME_ARCHIVE "$NODE_RUNTIME_ARCHIVE" "$NODE_RUNTIME_SHA256"
+verify_local_input DSH_RUNTIME_ARCHIVE "$DSH_RUNTIME_ARCHIVE" "$DSH_RUNTIME_SHA256"
 
-need_cmd curl
-need_cmd tar
-need_cmd gzip
-need_cmd sudo
+# A reusable rootfs can retain a source checkout, development dependencies, or
+# a profile. Build every output in a fresh sibling stage and retain failures.
+[ -n "$ROOTFS_REQUESTED" ] && [ "$ROOTFS_REQUESTED" != "/" ] || die "ROOTFS_DIR must be a concrete directory"
+ROOTFS_PARENT="$(dirname "$ROOTFS_REQUESTED")"
+ROOTFS_NAME="$(basename "$ROOTFS_REQUESTED")"
+[ "$ROOTFS_NAME" != "." ] && [ "$ROOTFS_NAME" != ".." ] || die "ROOTFS_DIR must be a concrete directory"
+mkdir -p "$ROOTFS_PARENT" "$(dirname "$OUT")"
+ROOTFS_PARENT="$(cd "$ROOTFS_PARENT" && pwd -P)"
+ROOTFS_DIR="$(mktemp -d "$ROOTFS_PARENT/${ROOTFS_NAME}.build.XXXXXX")"
+ROOTFS_STAGE_PREFIX="$ROOTFS_PARENT/${ROOTFS_NAME}.build."
+log "fresh rootfs stage: $ROOTFS_DIR"
 
-if [ "$NATIVE_ARM" != 1 ]; then
-  log "当前架构 $ARCH，安装 qemu-user-static 以便 chroot arm64"
-  sudo apt-get update -y
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    qemu-user-static binfmt-support
-  # 确保 aarch64 binfmt 已注册
-  if [ -x /usr/sbin/update-binfmts ]; then
-    sudo update-binfmts --enable qemu-aarch64 >/dev/null 2>&1 || true
-  fi
-  [ -x /usr/bin/qemu-aarch64-static ] || die "qemu-aarch64-static 未安装"
-fi
-
-cleanup() {
+cleanup_mounts() {
   set +e
   if [ -d "$ROOTFS_DIR" ]; then
-    sudo umount -l "$ROOTFS_DIR/dev/pts" 2>/dev/null
-    sudo umount -l "$ROOTFS_DIR/dev" 2>/dev/null
-    sudo umount -l "$ROOTFS_DIR/proc" 2>/dev/null
-    sudo umount -l "$ROOTFS_DIR/sys" 2>/dev/null
+    $SUDO umount -l "$ROOTFS_DIR/dev/pts" 2>/dev/null
+    $SUDO umount -l "$ROOTFS_DIR/dev" 2>/dev/null
+    $SUDO umount -l "$ROOTFS_DIR/proc" 2>/dev/null
+    $SUDO umount -l "$ROOTFS_DIR/sys" 2>/dev/null
   fi
 }
-trap cleanup EXIT
+trap cleanup_mounts EXIT
 
-log "[1/6] 下载 Ubuntu base ${UBUNTU_VER} arm64"
-mkdir -p "$ROOTFS_DIR" "$(dirname "$OUT")"
-TARBALL="$PWD/ubuntu-base-${UBUNTU_VER}-arm64.tar.gz"
-URLS=(
-  "https://cdimage.ubuntu.com/ubuntu-base/releases/${UBUNTU_VER}/release/ubuntu-base-${UBUNTU_VER}-base-arm64.tar.gz"
-  "https://mirror.nju.edu.cn/ubuntu-cdimage/ubuntu-base/releases/${UBUNTU_VER}/release/ubuntu-base-${UBUNTU_VER}-base-arm64.tar.gz"
-  "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/${UBUNTU_VER}/release/ubuntu-base-${UBUNTU_VER}-base-arm64.tar.gz"
-)
-if [ ! -s "$TARBALL" ]; then
-  ok=0
-  for url in "${URLS[@]}"; do
-    log "  尝试: $url"
-    if curl -fL --retry 3 --retry-delay 2 -m 300 "$url" -o "$TARBALL"; then
-      ok=1
-      break
-    fi
-    rm -f "$TARBALL"
-  done
-  [ "$ok" = 1 ] || die "下载 ubuntu-base 失败"
-fi
-ls -lh "$TARBALL"
+log "[1/6] extract verified local arm64 base rootfs"
+$SUDO tar -xzf "$BASE_ROOTFS_ARCHIVE" -C "$ROOTFS_DIR"
+[ -x "$ROOTFS_DIR/usr/bin/bash" ] || [ -x "$ROOTFS_DIR/bin/bash" ] || die "base rootfs lacks bash"
+if [ ! -e "$ROOTFS_DIR/bin" ]; then $SUDO ln -sf usr/bin "$ROOTFS_DIR/bin"; fi
 
-log "[2/6] 解压 rootfs → $ROOTFS_DIR"
-# 已有残留则清空（避免二次跑半成品）
-if [ -e "$ROOTFS_DIR/usr/bin/bash" ] || [ -e "$ROOTFS_DIR/bin/bash" ]; then
-  log "  已有 rootfs，跳过解压"
-else
-  sudo mkdir -p "$ROOTFS_DIR"
-  sudo tar -xzf "$TARBALL" -C "$ROOTFS_DIR"
-fi
-[ -x "$ROOTFS_DIR/usr/bin/bash" ] || [ -x "$ROOTFS_DIR/bin/bash" ] || die "rootfs 不完整（缺少 bash）"
-# merged-/usr：保证 /bin 存在
-if [ ! -e "$ROOTFS_DIR/bin" ]; then
-  sudo ln -sf usr/bin "$ROOTFS_DIR/bin"
-fi
+log "[2/6] inject verified Node v24.19.0 arm64"
+$SUDO mkdir -p "$ROOTFS_DIR/usr/local"
+$SUDO tar -xJf "$NODE_RUNTIME_ARCHIVE" -C "$ROOTFS_DIR/usr/local" --strip-components=1
+[ -x "$ROOTFS_DIR/usr/local/bin/node" ] || die "Node archive lacks usr/local/bin/node"
 
-log "[3/6] 挂载 /proc /sys /dev + DNS"
-sudo mkdir -p "$ROOTFS_DIR"/{proc,sys,dev,dev/pts,tmp,root}
-sudo mount -t proc proc "$ROOTFS_DIR/proc"
-sudo mount -t sysfs sysfs "$ROOTFS_DIR/sys"
-sudo mount --bind /dev "$ROOTFS_DIR/dev"
-sudo mount --bind /dev/pts "$ROOTFS_DIR/dev/pts"
-# 用宿主 DNS（GitHub runner 可达）
-if [ -f /etc/resolv.conf ]; then
-  sudo cp -L /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
-else
-  printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee "$ROOTFS_DIR/etc/resolv.conf" >/dev/null
-fi
-if [ "$NATIVE_ARM" != 1 ]; then
-  sudo mkdir -p "$ROOTFS_DIR/usr/bin"
-  sudo cp -f /usr/bin/qemu-aarch64-static "$ROOTFS_DIR/usr/bin/qemu-aarch64-static"
-  sudo chmod +x "$ROOTFS_DIR/usr/bin/qemu-aarch64-static"
-fi
+log "[3/6] mount chroot prerequisites (no DNS or network provisioning)"
+$SUDO mkdir -p "$ROOTFS_DIR"/{proc,sys,dev,dev/pts,tmp,root}
+$SUDO mount -t proc proc "$ROOTFS_DIR/proc"
+$SUDO mount -t sysfs sysfs "$ROOTFS_DIR/sys"
+$SUDO mount --bind /dev "$ROOTFS_DIR/dev"
+$SUDO mount --bind /dev/pts "$ROOTFS_DIR/dev/pts"
 
-log "[4/6] 注入预装脚本与补丁"
-sudo mkdir -p "$ROOTFS_DIR/root/patches"
-for f in webui-sidebar.patch bash-guard.patch webui-polyfill.sh webui-origin-port-patch.sh rootfs-confirm-install.sh; do
-  if [ -f "$REPO_ROOT/app/src/main/assets/$f" ]; then
-    sudo cp "$REPO_ROOT/app/src/main/assets/$f" "$ROOTFS_DIR/root/patches/$f"
-  fi
-done
-# 内置插件源码 + 预置脚本（offline-provision.sh 里调用，实现「解压即用」）
-if [ -d "$REPO_ROOT/app/src/main/assets/mobile-nav" ]; then
-  sudo mkdir -p "$ROOTFS_DIR/root/patches/builtin"
-  sudo cp -r "$REPO_ROOT/app/src/main/assets/mobile-nav" "$ROOTFS_DIR/root/patches/builtin/"
-  sudo cp -r "$REPO_ROOT/app/src/main/assets/device-shell-guide" "$ROOTFS_DIR/root/patches/builtin/"
-  sudo cp -r "$REPO_ROOT/app/src/main/assets/task-notifier" "$ROOTFS_DIR/root/patches/builtin/"
-  sudo cp -r "$REPO_ROOT/app/src/main/assets/status-overlay" "$ROOTFS_DIR/root/patches/builtin/"
-  sudo cp "$REPO_ROOT/scripts/provision-builtin-plugins.sh" "$ROOTFS_DIR/root/patches/"
-fi
-sudo cp "$REPO_ROOT/scripts/offline-provision.sh" "$ROOTFS_DIR/root/offline-provision.sh"
-sudo chmod +x "$ROOTFS_DIR/root/offline-provision.sh"
+log "[4/6] inject fixed local dsh production closure"
+$SUDO cp "$REPO_ROOT/scripts/offline-provision.sh" "$ROOTFS_DIR/root/offline-provision.sh"
+$SUDO cp "$REPO_ROOT/scripts/provision-builtin-plugins.sh" "$ROOTFS_DIR/root/provision-builtin-plugins.sh"
+$SUDO mkdir -p "$ROOTFS_DIR/root/patches/builtin"
+$SUDO cp -a "$REPO_ROOT/app/src/main/assets/device-shell-guide" \
+  "$REPO_ROOT/app/src/main/assets/task-notifier" \
+  "$REPO_ROOT/app/src/main/assets/status-overlay" \
+  "$REPO_ROOT/app/src/main/assets/web-mobile" \
+  "$ROOTFS_DIR/root/patches/builtin/"
+$SUDO chmod +x "$ROOTFS_DIR/root/offline-provision.sh"
+$SUDO chmod +x "$ROOTFS_DIR/root/provision-builtin-plugins.sh"
+$SUDO cp "$DSH_RUNTIME_ARCHIVE" "$ROOTFS_DIR/root/dsh-runtime.tar.gz"
 
-log "[5/6] chroot 预装（apt / Node / pnpm / dsh（默认 rc.8，见 offline-provision.sh）/ 守卫）"
-# CI 里走官方源；保留 ca-certificates（真 chroot 下 postinst 可用）
-sudo chroot "$ROOTFS_DIR" /usr/bin/env \
-  DEBIAN_FRONTEND=noninteractive \
-  GITHUB_ACTIONS="${GITHUB_ACTIONS:-true}" \
-  DSHA_KEEP_CA=1 \
+log "[5/6] chroot import and verify (no legacy patch or network install)"
+$SUDO chroot "$ROOTFS_DIR" /usr/bin/env \
+  DSH_RUNTIME_ARCHIVE=/root/dsh-runtime.tar.gz \
   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   /usr/bin/bash /root/offline-provision.sh
+$SUDO chroot "$ROOTFS_DIR" /usr/bin/env \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  /usr/bin/bash /root/provision-builtin-plugins.sh
 
-log "[6/6] 卸载挂载 + 打包"
-cleanup
+log "[6/6] package verified rootfs"
+cleanup_mounts
 trap - EXIT
-# 清掉仅构建期文件
-sudo rm -f "$ROOTFS_DIR/root/offline-provision.sh"
-sudo rm -f "$ROOTFS_DIR/usr/bin/qemu-aarch64-static"
-sudo rm -rf "$ROOTFS_DIR/var/lib/apt/lists" \
-            "$ROOTFS_DIR/var/cache/apt/archives" \
-            "$ROOTFS_DIR/root/.cache" \
-            "$ROOTFS_DIR/root/.npm" \
-            "$ROOTFS_DIR/tmp/"* \
-            "$ROOTFS_DIR/root/patches" 2>/dev/null || true
-# 保证空的虚拟目录存在（proot 需要）
-sudo mkdir -p "$ROOTFS_DIR"/{proc,sys,dev,dev/pts,tmp}
+$SUDO rm -f "$ROOTFS_DIR/root/offline-provision.sh" "$ROOTFS_DIR/root/provision-builtin-plugins.sh" "$ROOTFS_DIR/root/dsh-runtime.tar.gz"
+$SUDO rm -rf "$ROOTFS_DIR/root/patches"
+$SUDO rm -rf "$ROOTFS_DIR/root/.cache" "$ROOTFS_DIR/root/.npm" \
+            "$ROOTFS_DIR/tmp/"* "$ROOTFS_DIR/root/.pnpm-store" 2>/dev/null || true
+$SUDO mkdir -p "$ROOTFS_DIR"/{proc,sys,dev,dev/pts,tmp}
+$SUDO tar --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./tmp/*' \
+  -C "$ROOTFS_DIR" -czf "$OUT" .
+$SUDO chown "$(id -u):$(id -g)" "$OUT"
 
-# 不用 --absolute-names，条目为相对路径，App 的 TarGzipExtractor 才能解
-sudo tar \
-  --exclude='./proc/*' \
-  --exclude='./sys/*' \
-  --exclude='./dev/*' \
-  --exclude='./tmp/*' \
-  -C "$ROOTFS_DIR" \
-  -czf "$OUT" \
-  .
-sudo chown "$(id -u):$(id -g)" "$OUT"
-# 还原空目录进包（上面 exclude 会丢掉内容，目录本身仍在）
-ls -lh "$OUT"
-python3 -c "
-p='$OUT'
-b=open(p,'rb').read(2)
-assert b==b'\\x1f\\x8b', '不是 gzip: %r' % b
-print('gzip 魔数 OK, size=', __import__('os').path.getsize(p))
-"
-# 再确认包里有 bash 和 dsh
-python3 - <<PY
-import tarfile, sys
-need = ("usr/bin/bash", "bin/bash")
-with tarfile.open("$OUT", "r:gz") as t:
-    names = set(t.getnames())
-# tar 可能带 ./ 前缀
-flat = {n[2:] if n.startswith("./") else n for n in names}
-ok_bash = "usr/bin/bash" in flat or "bin/bash" in flat
-ok_node = "usr/local/bin/node" in flat
-ok_dsh  = "usr/local/bin/dsh" in flat
-print("entries:", len(flat), "bash=", ok_bash, "node=", ok_node, "dsh=", ok_dsh)
-if not ok_bash or not ok_node:
-    sys.exit("离线包缺关键文件")
-if not ok_dsh:
-    print("WARN: 包内未见 /usr/local/bin/dsh（可能是符号链接被记成 link 目标）")
-PY
+names="$(tar -tzf "$OUT")"
+printf '%s\n' "$names" | grep -E '(^|/)usr/local/bin/(node|dsh)$' >/dev/null \
+  || die "offline rootfs misses node or dsh"
+printf '%s\n' "$names" | grep -E '(^|/)usr/local/share/dsha-dsh-runtime.json$' >/dev/null \
+  || die "offline rootfs misses runtime metadata"
+if printf '%s\n' "$names" | grep -E '^\./(work/|packages/|apps/|\.pnpm/|pnpm-lock\.yaml|\.git(/|$))|(^|/)root/deepseek-harness|(^|/)root/\.pnpm-store|/node_modules/\.cache/' >/dev/null; then
+  die "offline rootfs contains source/development content"
+fi
+meta_tmp="$(mktemp)"
+trap 'rm -f "$meta_tmp"' RETURN
+tar -xOf "$OUT" ./usr/local/share/dsha-dsh-runtime.json >"$meta_tmp" 2>/dev/null \
+  || tar -xOf "$OUT" usr/local/share/dsha-dsh-runtime.json >"$meta_tmp"
+"$ROOTFS_DIR/usr/local/bin/node" - "$meta_tmp" <<'NODE'
+const fs = require('node:fs')
+const meta = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+const expected = { runtimeId: 'dsh-v0.1.2-alpha.2', dshVersion: '0.1.2-alpha.2', upstreamTag: 'dsh-v0.1.2-alpha.2', upstreamCommit: '0a53fb55bea101816fa226bb964ae2bed71c343b' }
+const bad = Object.keys(expected).filter(key => meta[key] !== expected[key])
+if (bad.length) throw new Error(`offline rootfs runtime metadata mismatch: ${bad.join(', ')}`)
+NODE
+rm -f "$meta_tmp"
+echo "offline rootfs verified: $OUT"
 
-log "✅ 离线包已生成: $OUT"
+case "$ROOTFS_DIR" in
+  "$ROOTFS_STAGE_PREFIX"*) $SUDO rm -rf -- "$ROOTFS_DIR" ;;
+  *) die "refusing to clean a non-stage rootfs: $ROOTFS_DIR" ;;
+esac
+sha256sum "$OUT" | tee "$OUT.sha256"
+log "offline rootfs ready: $OUT"

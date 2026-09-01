@@ -122,7 +122,8 @@ public class InstallFragment extends Fragment {
                 return;
             }
             ClipboardManager cm = (ClipboardManager) requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
-            cm.setPrimaryClip(ClipData.newPlainText("dsh_error", err));
+            cm.setPrimaryClip(ClipData.newPlainText("dsh_error",
+                    SensitiveData.redact(err)));
             Toast.makeText(requireContext(), "报错内容已复制", Toast.LENGTH_SHORT).show();
         });
         // 状态列表点击 → 手动刷新（切模块回来不自动刷，需要时点这里）
@@ -145,9 +146,12 @@ public class InstallFragment extends Fragment {
                 byte[] buf = new byte[(int) (raf.length() - start)];
                 raf.readFully(buf);
                 raf.close();
-                content = new String(buf, "UTF-8");
+                // Older installs may have written a raw stack trace before the
+                // centralized crash hook existed. Redact this read/display copy
+                // even when the on-disk file predates the current version.
+                content = SensitiveData.redact(new String(buf, "UTF-8"));
             } catch (Exception e) {
-                content = "读取失败: " + e.getMessage();
+                content = "读取失败: " + SensitiveData.redact(String.valueOf(e));
             }
             final String finalContent = content;
             new android.app.AlertDialog.Builder(requireContext())
@@ -164,7 +168,8 @@ public class InstallFragment extends Fragment {
                             fo.close();
                             Toast.makeText(requireContext(), "崩溃日志已清空", Toast.LENGTH_SHORT).show();
                         } catch (Exception e) {
-                            Toast.makeText(requireContext(), "清空失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                            Toast.makeText(requireContext(), "清空失败: "
+                                    + SensitiveData.redact(String.valueOf(e)), Toast.LENGTH_SHORT).show();
                         }
                     })
                     .setPositiveButton("关闭", null)
@@ -199,7 +204,7 @@ public class InstallFragment extends Fragment {
             errorText.setVisibility(View.VISIBLE);
             copyBtn.setVisibility(View.VISIBLE);
             crashBtn.setVisibility(View.VISIBLE);
-            errorText.setText(err);
+            errorText.setText(SensitiveData.redact(err));
             progressBar.setVisibility(View.GONE);
             progressText.setVisibility(View.GONE);
         } else {
@@ -217,7 +222,7 @@ public class InstallFragment extends Fragment {
                 String msg = c.getMessage();
                 if (msg != null && !msg.isEmpty()) {
                     progressText.setVisibility(View.VISIBLE);
-                    progressText.setText(msg);
+                    progressText.setText(SensitiveData.redact(msg));
                 } else {
                     progressText.setVisibility(View.GONE);
                 }

@@ -24,7 +24,7 @@ public class SettingsFragment extends Fragment {
     private static final TabOption[] TAB_OPTIONS = {
             new TabOption("安装", "分步安装 rootfs / 工具 / Node / harness", InstallFragment::new),
             new TabOption("配置", "API key · 端口 · 模型 · 沙箱模式", ConfigFragment::new),
-            new TabOption("工作区", "工作目录 · 文件共享 · 备份恢复 · Shizuku", WorkspaceFragment::new),
+            new TabOption("数据与备份", "备份恢复 · 保存位置 · 工作区与 Shizuku", WorkspaceFragment::new),
     };
 
     @Nullable
@@ -62,7 +62,16 @@ public class SettingsFragment extends Fragment {
         view.findViewById(R.id.settings_about).setOnClickListener(v -> AboutDialog.show(requireContext()));
         view.findViewById(R.id.settings_update).setOnClickListener(v -> checkUpdate());
         View selfTest = view.findViewById(R.id.settings_selftest);
-        if (selfTest != null) selfTest.setOnClickListener(v -> runSelfTest());
+        if (selfTest != null) {
+            // The legacy selftest.py is intentionally mutating (profile/plugin
+            // repairs). Keep it out of the Alpha surface until its checks are
+            // rewritten for the upstream session/profile contract.
+            if (c.isAlphaRuntime()) {
+                selfTest.setVisibility(View.GONE);
+            } else {
+                selfTest.setOnClickListener(v -> runSelfTest());
+            }
+        }
         View reextract = view.findViewById(R.id.settings_reextract);
         if (reextract != null) reextract.setOnClickListener(v -> confirmReextract());
     }
@@ -93,7 +102,8 @@ public class SettingsFragment extends Fragment {
                                 | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK);
                         startActivity(i);
                     } catch (Throwable t) {
-                        Toast.makeText(requireContext(), "打不开解压页：" + t, Toast.LENGTH_LONG).show();
+                        Toast.makeText(requireContext(), "打不开解压页："
+                                + SensitiveData.redact(String.valueOf(t)), Toast.LENGTH_LONG).show();
                     }
                 })
                 .setNegativeButton("算了", null)

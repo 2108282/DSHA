@@ -1,7 +1,7 @@
 package com.deepseekharness.app;
 
 /**
- * 备份范围的<b>唯一</b>定义：全量 / 只对话 / 只插件。
+ * 备份范围的<b>唯一</b>定义：全量 / 只聊天记录 / 只设置 / 只插件。
  *
  * <p>一处定义，三处派生 —— 备份时 tar 打哪些路径、恢复时合并哪些子树、文件名叫什么，
  * 全都从这里出。这三件事必须一致：备份打了 A 而恢复只合并 B，用户就会拿到一个
@@ -25,9 +25,11 @@ final class BackupScope {
     static final int SESSIONS = 1;
     /** 只插件：profile 声明 + 内联的本机插件源码。 */
     static final int PLUGINS = 2;
+    /** 只设置：upstream 的 settings.yaml，保持原字节。 */
+    static final int SETTINGS = 3;
 
     /** UI 与对话框里展示的顺序（也是选项顺序）。 */
-    static final int[] ALL = { FULL, SESSIONS, PLUGINS };
+    static final int[] ALL = { FULL, SESSIONS, SETTINGS, PLUGINS };
 
     private BackupScope() {
     }
@@ -37,6 +39,7 @@ final class BackupScope {
         switch (scope) {
             case SESSIONS: return "sessions";
             case PLUGINS:  return "plugins";
+            case SETTINGS: return "settings";
             default:       return "full";
         }
     }
@@ -47,6 +50,7 @@ final class BackupScope {
         String s = id.trim();
         if (s.equals("sessions")) return SESSIONS;
         if (s.equals("plugins")) return PLUGINS;
+        if (s.equals("settings")) return SETTINGS;
         return FULL;
     }
 
@@ -55,6 +59,7 @@ final class BackupScope {
         switch (scope) {
             case SESSIONS: return "DSHA-sessions-";
             case PLUGINS:  return "DSHA-plugins-";
+            case SETTINGS: return "DSHA-settings-";
             default:       return "DSHA-backup-";
         }
     }
@@ -63,8 +68,11 @@ final class BackupScope {
     static int fromFileName(String name) {
         if (name == null) return FULL;
         String n = name.trim();
+        int slash = Math.max(n.lastIndexOf('/'), n.lastIndexOf('\\'));
+        if (slash >= 0 && slash + 1 < n.length()) n = n.substring(slash + 1);
         if (n.startsWith("DSHA-sessions-")) return SESSIONS;
         if (n.startsWith("DSHA-plugins-")) return PLUGINS;
+        if (n.startsWith("DSHA-settings-")) return SETTINGS;
         return FULL;
     }
 
@@ -76,9 +84,10 @@ final class BackupScope {
     /** 给用户看的名字。 */
     static String label(int scope) {
         switch (scope) {
-            case SESSIONS: return "只备份对话";
-            case PLUGINS:  return "只备份插件";
-            default:       return "全量备份";
+            case SESSIONS: return "仅备份对话记录";
+            case PLUGINS:  return "仅备份插件";
+            case SETTINGS: return "仅备份设置";
+            default:       return "备份全部数据";
         }
     }
 
@@ -86,11 +95,22 @@ final class BackupScope {
     static String describe(int scope) {
         switch (scope) {
             case SESSIONS:
-                return "只打包对话，恢复时不动配置与插件";
+                return "只打包会话和消息，恢复时不动设置与插件";
             case PLUGINS:
-                return "只打包插件，恢复时不动对话";
+                return "只打包插件清单、配置和已安装插件数据";
+            case SETTINGS:
+                return "只打包设置和运行参数，默认不含 API Key";
             default:
-                return "配置 + 对话 + 插件，换机或重装用这个";
+                return "配置、对话、插件和工作区文件，换机或重装用这个";
+        }
+    }
+
+    static String restoreImpact(int scope) {
+        switch (scope) {
+            case SESSIONS: return "只覆盖聊天记录，不改设置和插件";
+            case SETTINGS: return "只覆盖 settings.yaml，不改聊天记录和插件";
+            case PLUGINS: return "只覆盖插件 profile，不改聊天记录和设置";
+            default: return "覆盖配置、聊天记录、插件和工作区文件";
         }
     }
 
@@ -103,6 +123,7 @@ final class BackupScope {
         switch (scope) {
             case SESSIONS: return new String[] { ".dsh/sessions" };
             case PLUGINS:  return new String[] { ".dsh/profiles" };
+            case SETTINGS: return new String[] { ".dsh/settings.yaml" };
             default:       return new String[0];   // 空 = 整个 .dsh
         }
     }
@@ -117,6 +138,7 @@ final class BackupScope {
         switch (scope) {
             case SESSIONS: return new String[] { "sessions" };
             case PLUGINS:  return new String[] { "profiles" };
+            case SETTINGS: return new String[] { "settings.yaml" };
             default:       return new String[0];
         }
     }
@@ -160,6 +182,7 @@ final class BackupScope {
     /** 这个范围需要快照哪些公开条目：只对话时没必要把 storages/attachments 全带上。 */
     static String[] snapshotEntries(int scope) {
         if (scope == SESSIONS) return new String[] { "sessions" };
+        if (scope == SETTINGS) return new String[] { "settings.yaml" };
         if (scope == FULL) return PUBLIC_HOT_ENTRIES.clone();
         return new String[0];
     }

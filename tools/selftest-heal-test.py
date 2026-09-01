@@ -121,7 +121,10 @@ def main():
         check("原件留了 .dsha-bak", os.path.isfile(src + ".dsha-bak"))
         check("profile 里那份也修了",
               "ctx.inject(['systemPrompt']" in open(prof, encoding="utf-8").read())
-        check("报告点名了两个路径", detail.count("/lib/index.js") >= 2)
+        # Windows paths use ``\\lib\\index.js`` while the Linux container
+        # uses ``/lib/index.js``; normalize before checking both copies.
+        normalized_detail = detail.replace("\\", "/")
+        check("报告点名了两个路径", normalized_detail.count("/lib/index.js") >= 2)
 
         # ---- 2. 幂等：再跑一次应该是 PASS，且不再写 .bak ----
         bak_before = open(src + ".dsha-bak", encoding="utf-8").read()

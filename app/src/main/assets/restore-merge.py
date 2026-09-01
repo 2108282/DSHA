@@ -14,7 +14,9 @@
 用法：
   python3 restore-merge.py --stage /root/.dsha-restore-stage \
       --root /root --workdir deepseek-harness
-输出：人话报告；最后一行 RESTORE_OK / RESTORE_PARTIAL / RESTORE_EMPTY
+输出：人话报告；最后一行 RESTORE_OK / RESTORE_PARTIAL / RESTORE_EMPTY。
+全量 .dsh 原子提交后额外输出 RESTORE_DSH_COMMITTED，供宿主决定是否可以
+轮换本机凭据；校验/rename 失败时绝不输出该标记。
 """
 import json
 import os
@@ -31,6 +33,9 @@ PLUGIN_SRC_DIRNAME = "plugin-src"
 INLINE_DIRNAME = ".dsha-plugin-src"
 report = []
 partial = False
+# 全量恢复失败时，stage 是唯一可供排查/重试的副本，绝不能在 main() 末尾清掉。
+retain_stage = False
+restore_committed = False
 
 
 def say(msg):
@@ -44,6 +49,11 @@ def arg(name, default=""):
         if i + 1 < len(sys.argv):
             return sys.argv[i + 1]
     return default
+
+
+def alpha_runtime():
+    """Alpha restores user data transparently and leaves plugin/profile repair to dsh."""
+    return arg("alpha", "") == "1"
 
 
 def local_path_dep(spec):
@@ -62,13 +72,16 @@ def local_path_dep(spec):
 DSH_PROBES = ("sessions", "profiles", "settings.yaml", "settings.json",
               "config.yaml", "config.json", "dsh.yaml", "dsh.json",
               ".env", "agents", "skills", "credentials.json", "auth.json",
-              "mcp.json", "history")
+              "mcp.json", "history", ".dsha-apikey", ".credentials.yaml",
+              ".dsha-backup-manifest.json")
 
 
 def looks_like_dsh(path):
     """目录内容像不像 .dsh 本体。判据故意放宽 —— 漏认的代价是用户配置全丢。"""
     for probe in DSH_PROBES:
-        if os.path.exists(os.path.join(path, probe)):
+        # sessions 等公开数据在跨设备恢复时可能暂时是悬空软链；软链本身仍是
+        # 有效的 dsh 布局，不能因为 exists() 跟随失败就误判整份候选为空。
+        if os.path.lexists(os.path.join(path, probe)):
             return True
     return False
 
@@ -134,46 +147,240 @@ def find_env_file(stage, workdir):
 
 
 def move_aside(path):
-    """把已存在的路径挪成 .pre-restore-<ts> 备份（恢复的安全网，不删用户数据）"""
-    if not os.path.exists(path):
+    """把已存在的路径挪成 .pre-restore-<ts> 备份。
+
+    rename 失败必须向上抛出：旧数据仍在原路径，任何调用方都不能用删除或覆盖
+    作为兜底。用 lexists 也能保护指向已删除目标的软链。
+    """
+    if not os.path.lexists(path):
         return None
     bak = "%s.pre-restore-%s" % (path, TS)
+    suffix = 0
+    while os.path.lexists(bak):
+        suffix += 1
+        bak = "%s.pre-restore-%s-%d" % (path, TS, suffix)
     try:
         os.rename(path, bak)
         return bak
-    except Exception:
+    except Exception as e:
+        # 绝不能 rm -rf path：这里失败时 path 仍是用户唯一的完整副本。
+        raise OSError("无法保留原数据（rename %s -> %s 失败）" % (path, bak)) from e
+
+
+def validate_dsh_candidate(path):
+    """在触碰旧 .dsh 之前验证候选目录确实是可读的 dsh 数据目录。
+
+    这是故意的结构校验，而不是猜测/修复会话格式：新版 dsh 可能使用 zstd/packed
+    session，恢复端只验证目录、已知探针和 profile JSON，绝不改写会话内容。
+    """
+    if not os.path.isdir(path) or os.path.islink(path):
+        raise ValueError("候选 .dsh 不是独立目录")
+    if not looks_like_dsh(path):
+        raise ValueError("候选 .dsh 缺少可识别的数据探针")
+    try:
+        def walk_error(error):
+            raise error
+
+        for base, dirs, files in os.walk(path, followlinks=False, onerror=walk_error):
+            # lstat 只验证 stage 中的条目本身；sessions 等指向公开目录的软链是合法布局，
+            # 不跟随它们，也不因换设备后暂时悬空就改写或删除。
+            for name in dirs + files:
+                entry = os.path.join(base, name)
+                os.lstat(entry)
+                if os.path.islink(entry) and not os.readlink(entry):
+                    raise ValueError("候选 .dsh 含空软链：%s" % entry)
+    except (OSError, ValueError) as e:
+        raise ValueError("候选 .dsh 不完整：%s" % e) from e
+
+    profiles = os.path.join(path, "profiles")
+    if os.path.isdir(profiles):
+        for prof in os.listdir(profiles):
+            pkg_path = os.path.join(profiles, prof, "package.json")
+            if not os.path.isfile(pkg_path):
+                continue
+            try:
+                with open(pkg_path, encoding="utf-8") as f:
+                    pkg = json.load(f)
+                if not isinstance(pkg, dict):
+                    raise ValueError("根值不是对象")
+            except (OSError, ValueError, json.JSONDecodeError) as e:
+                raise ValueError("profile %s/package.json 无法读取：%s" % (prof, e)) from e
+    return True
+
+
+def _restore_backup_at_path(backup, dst):
+    """回滚旧目录；rename 被注入失败时，以复制保留原目录和备份副本。"""
+    if not backup or os.path.lexists(dst):
+        return os.path.lexists(dst)
+    try:
+        os.rename(backup, dst)
+        return True
+    except BaseException:
+        # 这是仅用于回滚的最后一道保险，不删除 backup；即便复制不完整，
+        # 带时间戳的备份仍完整留在磁盘上供人工恢复。
         try:
-            shutil.rmtree(path)
+            if os.path.isdir(backup) and not os.path.islink(backup):
+                shutil.copytree(backup, dst, symlinks=True)
+            else:
+                shutil.copy2(backup, dst, follow_symlinks=False)
+            return True
+        except Exception:
+            return False
+
+
+def _alpha_quarantine_name(root):
+    """Return a collision-free sibling name for legacy Alpha profile data."""
+    seed = ".dsha-alpha-legacy-%s-%s" % (TS, os.getpid())
+    candidate = os.path.join(root, seed)
+    suffix = 0
+    while os.path.lexists(candidate):
+        suffix += 1
+        candidate = os.path.join(root, "%s-%d" % (seed, suffix))
+    return candidate
+
+
+def _quarantine_alpha_profile_tree(dsh, quarantine_parent):
+    """Remove legacy web/profile patch state from a disposable candidate tree.
+
+    The caller invokes this before the candidate is renamed over the live
+    ``.dsh``.  A failure therefore discards only the new copy and cannot leave
+    the existing user data without its original profile.  Renaming the profile
+    entries (rather than deleting or parsing package.json) preserves every
+    byte for manual inspection while keeping the upstream Alpha template free
+    to initialize ``profiles/web`` on first launch.
+    """
+    if not os.path.isdir(dsh) or os.path.islink(dsh):
+        return None
+    profiles = os.path.join(dsh, "profiles")
+    home_patch = os.path.join(dsh, "cordis.patch.yml")
+    entries = []
+    if os.path.islink(profiles):
+        entries.append((profiles, "profiles"))
+    elif os.path.isdir(profiles):
+        for name, label in (("web", "profiles-web"),
+                            ("node_modules", "profiles-node_modules")):
+            path = os.path.join(profiles, name)
+            if os.path.lexists(path):
+                entries.append((path, label))
+    if os.path.lexists(home_patch):
+        entries.append((home_patch, "cordis.patch.yml"))
+    if not entries:
+        return None
+    quarantine = _alpha_quarantine_name(quarantine_parent)
+    os.makedirs(quarantine)
+    for source, label in entries:
+        # The candidate is disposable, so same-filesystem rename is both
+        # atomic and faithful for regular files, directories, and symlinks.
+        os.rename(source, os.path.join(quarantine, label))
+    return quarantine
+
+
+def _copy_alpha_profile_quarantine(src, root):
+    """Copy a partial-backup profile tree into a timestamped quarantine.
+
+    Partial restore keeps the existing active ``.dsh`` untouched in Alpha;
+    this helper still retains the requested plugin/profile bytes and publishes
+    the quarantine atomically after the copy has completed.
+    """
+    if not os.path.lexists(src):
+        return None
+    final = _alpha_quarantine_name(root)
+    temp = final + ".stage"
+    try:
+        os.makedirs(temp)
+        target = os.path.join(temp, "profiles")
+        if os.path.isdir(src) and not os.path.islink(src):
+            shutil.copytree(src, target, symlinks=True)
+        else:
+            shutil.copy2(src, target, follow_symlinks=False)
+        os.rename(temp, final)
+        return final
+    except BaseException:
+        try:
+            if os.path.lexists(temp):
+                if os.path.isdir(temp) and not os.path.islink(temp):
+                    shutil.rmtree(temp)
+                else:
+                    os.unlink(temp)
         except Exception:
             pass
-        return None
+        raise
 
 
-def restore_dsh(stage, root):
-    global partial
+def _copy_candidate_to_parent(src, root, alpha=False):
+    """将 stage 中的候选复制到 root 同一文件系统，供最后一步原子 rename。"""
+    name = ".dsh.restore-stage-%s-%s" % (TS, os.getpid())
+    tmp = os.path.join(root, name)
+    suffix = 0
+    while os.path.lexists(tmp):
+        suffix += 1
+        tmp = os.path.join(root, "%s-%d" % (name, suffix))
+    try:
+        shutil.copytree(src, tmp, symlinks=True)
+        quarantine = _quarantine_alpha_profile_tree(tmp, root) if alpha else None
+        validate_dsh_candidate(tmp)
+        return tmp, quarantine
+    except BaseException:
+        # tmp 是本次新建的副本，清理它不会触及用户数据；stage 保留。
+        try:
+            if os.path.lexists(tmp):
+                if os.path.isdir(tmp) and not os.path.islink(tmp):
+                    shutil.rmtree(tmp)
+                else:
+                    os.unlink(tmp)
+        except Exception:
+            pass
+        raise
+
+
+def restore_dsh(stage, root, alpha=False):
+    global partial, retain_stage, restore_committed
     src = find_dsh_dir(stage)
     if src is None:
         say("· 备份里没找到 .dsh（配置/对话）——跳过，其余内容照常恢复")
         partial = True
+        retain_stage = True
         return False
     dst = os.path.join(root, ".dsh")
-    bak = move_aside(dst)
     try:
-        shutil.move(src, dst)
-    except Exception as e:
-        # move 失败（跨设备等）→ 退回复制
-        try:
-            shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True)
-        except Exception as e2:
-            say("· .dsh 恢复失败：%s / %s" % (e, e2))
-            if bak:
-                try:
-                    os.rename(bak, dst)
-                    say("· 已回滚到恢复前的数据")
-                except Exception:
-                    pass
-            partial = True
-            return False
+        validate_dsh_candidate(src)
+        # 最终 rename 必须发生在 root 下；直接从 stage move 会把解压暂存目录
+        # 变成半消费状态，且跨文件系统时会退化为非原子复制。
+        staged, quarantine = _copy_candidate_to_parent(src, root, alpha=alpha)
+        if quarantine:
+            say("· Alpha 已隔离旧 web profile/plugin/bundle 到 %s，未激活旧 patch"
+                % os.path.basename(quarantine))
+    except BaseException as e:
+        say("· .dsh 候选校验/暂存失败：%s（旧数据未改，暂存目录保留）" % e)
+        partial = True
+        retain_stage = True
+        # KeyboardInterrupt 等中断交给上层，不能被伪装成成功恢复。
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        return False
+
+    bak = None
+    try:
+        # 旧目录只在候选已经验证并复制完成后才离开原路径。
+        bak = move_aside(dst)
+        # dst 此时不存在，rename 是同一父目录内的原子落位。
+        os.rename(staged, dst)
+    except BaseException as e:
+        # 若新目录落位中断/失败，先恢复旧目录；失败时保留带时间戳副本并尽力复制回
+        # 原路径，绝不删除任何一份旧数据。staged 也故意不清理供排查。
+        rolled_back = _restore_backup_at_path(bak, dst)
+        retain_stage = True
+        partial = True
+        if rolled_back:
+            say("· .dsh 恢复切换失败：%s（旧数据已原样保留，暂存目录保留）" % e)
+        else:
+            say("· .dsh 恢复切换失败：%s（旧数据备份仍在 %s，暂存目录保留）"
+                % (e, os.path.basename(bak) if bak else "原路径"))
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        return False
+
+    restore_committed = True
     say("· 已恢复 .dsh（配置 + 对话记录）%s" % ("，原数据留存在 " + os.path.basename(bak) if bak else ""))
     # 健全性对比：恢复后的会话数远少于恢复前，说明这个备份很可能不完整
     # （选错文件、备份中断都会这样）。数据其实还在 .pre-restore-* 里，
@@ -204,19 +411,39 @@ def _link_target_or_self(path):
 
 
 def _land(src, dst):
-    """把 src 落到 dst，原数据先挪成 .pre-restore-<ts>（恢复的安全网）。"""
+    """把 src 原子落到 dst，失败时把旧目标恢复到原路径。
+
+    部分恢复也不能在 rename/copy 失败后把旧子树留在隐藏备份名下；先复制到同父
+    目录临时名，再用 rename 落位，和全量 .dsh 采用同一条失败安全路径。
+    """
     bak = move_aside(dst)
     parent = os.path.dirname(dst)
     if parent:
         os.makedirs(parent, exist_ok=True)
+    tmp = dst + ".dsha-land-%s-%s" % (TS, os.getpid())
+    suffix = 0
+    while os.path.lexists(tmp):
+        suffix += 1
+        tmp = dst + ".dsha-land-%s-%s-%d" % (TS, os.getpid(), suffix)
     try:
-        shutil.move(src, dst)
-    except Exception:
-        if os.path.isdir(src):
-            shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True)
+        if os.path.isdir(src) and not os.path.islink(src):
+            shutil.copytree(src, tmp, symlinks=True)
         else:
-            shutil.copy2(src, dst)
-    return bak
+            shutil.copy2(src, tmp, follow_symlinks=False)
+        os.rename(tmp, dst)
+        return bak
+    except BaseException:
+        try:
+            if os.path.lexists(tmp):
+                if os.path.isdir(tmp) and not os.path.islink(tmp):
+                    shutil.rmtree(tmp)
+                else:
+                    os.unlink(tmp)
+        except Exception:
+            pass
+        if bak and not os.path.lexists(dst):
+            _restore_backup_at_path(bak, dst)
+        raise
 
 
 def find_stage_dir(stage, name):
@@ -241,7 +468,7 @@ def restore_pub_snapshot(stage, root, only=None):
     还在那儿；换设备恢复就是悬空链接、对话全空。备份端因此额外做了一份解引用快照，
     这里把它落回去，且优先于 .dsh/ 下的同名链接。
     """
-    global partial
+    global partial, retain_stage
     src_dir = find_stage_dir(stage, ".dsha-pub")
     if not src_dir:
         return False
@@ -260,6 +487,7 @@ def restore_pub_snapshot(stage, root, only=None):
             done.append(name + ("（原数据留存 %s）" % os.path.basename(bak) if bak else ""))
         except Exception as e:
             partial = True
+            retain_stage = True
             say("· 从快照恢复 %s 失败：%s" % (name, e))
     if done:
         say("· 已从快照恢复热数据：%s" % "、".join(done))
@@ -267,14 +495,14 @@ def restore_pub_snapshot(stage, root, only=None):
     return False
 
 
-def restore_dsh_subtree(stage, root, subdirs):
+def restore_dsh_subtree(stage, root, subdirs, alpha=False):
     """部分备份：只把指定子树合并进现有 .dsh，其余内容一律不动。
 
     **绝不能走 restore_dsh** —— 那是「整个 .dsh 挪走再替换」。拿一个只含对话的包
     那么做，等于把用户的配置和插件全换掉；原数据虽然留在 .pre-restore-*，但用户
     看到 RESTORE_OK 就不会去找，等发现时已经分不清该回退哪个目录。
     """
-    global partial
+    global partial, retain_stage
     src_dsh = find_dsh_dir(stage)
     if src_dsh is None:
         return False
@@ -286,7 +514,20 @@ def restore_dsh_subtree(stage, root, subdirs):
     done = 0
     for sub in subdirs:
         src = os.path.join(src_dsh, sub)
-        if not os.path.exists(src):
+        if not os.path.lexists(src):
+            continue
+        if alpha and sub == "profiles":
+            try:
+                quarantine = _copy_alpha_profile_quarantine(src, root)
+                if quarantine:
+                    say("· Alpha 已将备份里的旧 profiles 隔离到 %s，未覆盖官方 profile"
+                        % os.path.basename(quarantine))
+                    partial = True
+                    done += 1
+            except Exception as e:
+                partial = True
+                retain_stage = True
+                say("· Alpha 隔离旧 profiles 失败：%s" % e)
             continue
         dst = _link_target_or_self(os.path.join(dst_dsh, sub))
         try:
@@ -296,35 +537,63 @@ def restore_dsh_subtree(stage, root, subdirs):
             done += 1
         except Exception as e:
             partial = True
+            retain_stage = True
             say("· 恢复 .dsh/%s 失败：%s" % (sub, e))
     return done > 0
 
 
 def restore_env(stage, root, workdir):
-    global partial
+    global partial, retain_stage
     src = find_env_file(stage, workdir)
     if src is None:
         say("· 备份里没有 .env（API Key）——跳过（可在配置页重新填）")
         return False
     dst_dir = os.path.join(root, workdir)
     dst = os.path.join(dst_dir, ".env")
+    tmp = dst + ".dsha-env-stage-%s-%s" % (TS, os.getpid())
+    suffix = 0
+    while os.path.lexists(tmp):
+        suffix += 1
+        tmp = dst + ".dsha-env-stage-%s-%s-%d" % (TS, os.getpid(), suffix)
+    bak = None
     try:
         os.makedirs(dst_dir, exist_ok=True)
-        if os.path.exists(dst):
-            try:
-                shutil.copyfile(dst, dst + ".pre-restore-" + TS)
-            except Exception:
-                pass
-        shutil.copyfile(src, dst)
+        # 完整复制到同父目录临时文件并落盘，再切走旧 .env；这样复制或
+        # rename 任一步失败都不会把旧 API key 留成半个文件。
+        with open(src, "rb") as sf, open(tmp, "xb") as tf:
+            shutil.copyfileobj(sf, tf)
+            tf.flush()
+            os.fsync(tf.fileno())
+        bak = move_aside(dst)
+        try:
+            os.rename(tmp, dst)
+        except BaseException:
+            if bak and not os.path.lexists(dst):
+                _restore_backup_at_path(bak, dst)
+            raise
         from_wd = os.path.basename(os.path.dirname(src))
         if from_wd and from_wd != workdir:
-            say("· 已恢复 .env（备份里的工作目录是「%s」，已落到本机的「%s」）" % (from_wd, workdir))
+            say("· 已恢复 .env（备份里的工作目录是「%s」，已落到本机的「%s」%s）"
+                % (from_wd, workdir,
+                   "，原数据留存在 " + os.path.basename(bak) if bak else ""))
         else:
-            say("· 已恢复 .env（API Key）")
+            say("· 已恢复 .env（API Key%s）"
+                % ("，原数据留存在 " + os.path.basename(bak) if bak else ""))
         return True
-    except Exception as e:
+    except BaseException as e:
+        try:
+            if os.path.lexists(tmp):
+                if os.path.isdir(tmp) and not os.path.islink(tmp):
+                    shutil.rmtree(tmp)
+                else:
+                    os.unlink(tmp)
+        except Exception:
+            pass
         say("· .env 恢复失败：%s" % e)
         partial = True
+        retain_stage = True
+        if isinstance(e, KeyboardInterrupt):
+            raise
         return False
 
 
@@ -510,11 +779,26 @@ def read_manifest(stage):
 
 
 def main():
+    global partial, retain_stage, restore_committed
+    # 脚本通常每次只运行一次，但测试/嵌入调用可能复用解释器；状态不能跨恢复串线。
+    report.clear()
+    partial = False
+    retain_stage = False
+    restore_committed = False
     stage = arg("stage", "/root/.dsha-restore-stage")
     root = arg("root", "/root")
     workdir = arg("workdir", "deepseek-harness") or "deepseek-harness"
+    alpha = alpha_runtime()
     if not os.path.isdir(stage):
         print("恢复失败：解压目录不存在（%s）" % stage)
+        print("RESTORE_EMPTY")
+        return 1
+    # stage 必须是独立解压目录；把 root 或现有 .dsh 当 stage 会让末尾清理误删用户数据。
+    stage_real = os.path.realpath(stage)
+    root_real = os.path.realpath(root)
+    if stage_real in (root_real, os.path.join(root_real, ".dsh")):
+        retain_stage = True
+        print("恢复失败：解压暂存目录不能指向 root 或现有 .dsh（%s）" % stage)
         print("RESTORE_EMPTY")
         return 1
     man = read_manifest(stage)
@@ -522,7 +806,20 @@ def main():
     # 推断出来的 --scope 兜底（老包没有清单，或用户重命名过文件）→ 最后缺省 full
     # （老备份的语义就是全量）。反过来让 --scope 覆盖清单是不对的：文件名可以被改，
     # 清单不会。
-    scope = ((man.get("scope") if man else "") or arg("scope", "") or "full").strip() or "full"
+    manifest_scope = (man.get("scope") if man else "")
+    if man is not None and manifest_scope is not None:
+        manifest_scope = str(manifest_scope).strip()
+        if manifest_scope and manifest_scope not in ("full", "sessions", "settings", "plugins"):
+            # A manifest is an explicit claim about the archive.  Never turn an
+            # unknown claim into a full restore, because that could overwrite
+            # unrelated user data.  Keep the isolated stage for diagnosis.
+            retain_stage = True
+            say("· 备份范围无法识别：%s；现有数据未覆盖" % manifest_scope[:64])
+            print("\n".join(report))
+            print("RESTORE_SCOPE_UNKNOWN")
+            print("RESTORE_EMPTY")
+            return 1
+    scope = ((manifest_scope if man else "") or arg("scope", "") or "full").strip() or "full"
     if man:
         say("· 备份来自 App %s / dsh %s（格式 v%s）"
             % (man.get("appVersion", "?"), man.get("dshVersion", "?"), man.get("formatVersion", "?")))
@@ -531,37 +828,66 @@ def main():
 
     if scope == "sessions":
         say("· 这是「只对话」备份：只覆盖对话记录，配置与插件保持现状")
-        ok_dsh = restore_dsh_subtree(stage, root, ["sessions"])
+        ok_dsh = restore_dsh_subtree(stage, root, ["sessions"], alpha=alpha)
         # 快照后跑：它才是真数据（.dsh/sessions 在设备上多半只是个软链）
         ok_dsh = restore_pub_snapshot(stage, root, only=["sessions"]) or ok_dsh
+    elif scope == "settings":
+        say("· 这是「只设置」备份：只覆盖 settings.yaml，聊天记录与插件保持现状")
+        ok_dsh = restore_dsh_subtree(stage, root, ["settings.yaml"], alpha=alpha)
+        ok_dsh = restore_pub_snapshot(stage, root, only=["settings.yaml"]) or ok_dsh
     elif scope == "plugins":
         say("· 这是「只插件」备份：只覆盖插件，对话与配置保持现状")
-        ok_dsh = restore_dsh_subtree(stage, root, ["profiles"])
-        landed = restore_inlined_plugins(stage, root)
-        fix_profiles(root, landed)
-        ok_dsh = ok_dsh or bool(landed)
+        ok_dsh = restore_dsh_subtree(stage, root, ["profiles"], alpha=alpha)
+        if alpha:
+            say("· Alpha 不把旧 profile/plugin/bundle 激活，已保留在隔离目录供排查")
+        else:
+            landed = restore_inlined_plugins(stage, root)
+            fix_profiles(root, landed)
+            ok_dsh = ok_dsh or bool(landed)
     else:
-        ok_dsh = restore_dsh(stage, root)
-        restore_env(stage, root, workdir)
-        landed = restore_inlined_plugins(stage, root)
-        fix_profiles(root, landed)
-        # 全量也要落快照：.dsh 里的 sessions 等可能只是软链
-        restore_pub_snapshot(stage, root)
-    try:
-        shutil.rmtree(stage, ignore_errors=True)
-    except Exception:
-        pass
+        ok_dsh = restore_dsh(stage, root, alpha=alpha)
+        if ok_dsh:
+            restore_env(stage, root, workdir)
+            if alpha:
+                say("· Alpha 保留会话/设置原字节；旧 web profile/plugin/bundle 已隔离，交由官方 dsh 初始化")
+            else:
+                landed = restore_inlined_plugins(stage, root)
+                fix_profiles(root, landed)
+            # 全量也要落快照：.dsh 里的 sessions 等可能只是软链
+            restore_pub_snapshot(stage, root)
+        else:
+            # 候选校验/切换失败时，旧 .dsh 仍是用户唯一可启动的数据；任何后续
+            # merge、插件修补或快照落位都可能改写它，所以这里必须全部跳过。
+            say("· 因 .dsh 未安全落位，跳过 .env、插件和快照合并")
+    if not retain_stage:
+        try:
+            shutil.rmtree(stage, ignore_errors=True)
+        except Exception:
+            pass
+    else:
+        say("· 恢复未完成：保留解压暂存目录 %s 供排查/重试" % stage)
     text = "\n".join(report)
-    # 报告落盘便于事后排查（宽容：写不了也不影响恢复结果）
+    # 失败时旧 .dsh 必须原样保留，不能为了写报告再改动它；把诊断写进 stage。
     try:
-        rp = os.path.join(root, ".dsh", "restore-report.txt")
-        if os.path.isdir(os.path.dirname(rp)):
+        report_dir = os.path.join(stage, ".dsha-restore-report") if retain_stage else os.path.join(root, ".dsh")
+        rp = os.path.join(report_dir, "restore-report.txt")
+        if retain_stage:
+            os.makedirs(report_dir, exist_ok=True)
+        if os.path.isdir(report_dir):
             with open(rp, "a") as f:
                 f.write("== 恢复 %s ==\n%s\n" % (TS, text))
     except Exception:
         pass
     print(text)
+    # 宿主只有在全量 .dsh 已经完成候选校验并原子落位后，才可以轮换旧设备
+    # 的本机凭据或做后续迁移。RESTORE_PARTIAL 既可能表示「已提交但部分内容
+    # 缺失」，也可能表示「根本没有提交」；不能只看结果级别判断。
+    if restore_committed:
+        print("RESTORE_DSH_COMMITTED")
     if not ok_dsh:
+        # Keep the historical result token for callers; the separate
+        # RESTORE_DSH_COMMITTED marker above tells the host whether it is safe
+        # to rotate local credentials or run post-restore migration.
         print("RESTORE_PARTIAL" if report else "RESTORE_EMPTY")
     else:
         print("RESTORE_PARTIAL" if partial else "RESTORE_OK")

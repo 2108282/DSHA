@@ -35,8 +35,6 @@ import androidx.fragment.app.Fragment;
 
 import java.io.File;
 import java.io.RandomAccessFile;
-import java.net.HttpURLConnection;
-import java.net.URL;
 
 /** 启动页：状态 + 日志。点「进入」才在本 App 的 WebView 里打开，不跳系统浏览器。 */
 public class LaunchFragment extends Fragment {
@@ -135,7 +133,7 @@ public class LaunchFragment extends Fragment {
                 return;
             }
             if (goExtractIfNeeded()) return;
-            if (!c.getProot().isOfflineExtracted()) {
+            if (!c.getProot().hasExpectedAlphaOfflineRuntime()) {
                 Toast.makeText(requireContext(), "内置环境尚未就绪，请先等解压完成", Toast.LENGTH_LONG).show();
                 return;
             }
@@ -184,7 +182,7 @@ public class LaunchFragment extends Fragment {
 
         if (goExtractIfNeeded()) {
             statusText.setText("正在打开内置环境解压页…");
-        } else if (c.getProot().isOfflineExtracted()) {
+        } else if (c.getProot().hasExpectedAlphaOfflineRuntime()) {
             statusText.setText("环境已就绪。点「启动」起来后会直接进入。");
         } else {
             statusText.setText("环境未就绪。若刚装好 APK，请杀掉进程再打开一次以进入解压页。");
@@ -208,7 +206,7 @@ public class LaunchFragment extends Fragment {
 
     private void tickOnce() {
         if (!isAdded()) return;        new Thread(() -> {
-            final boolean up = httpOk(uiUrl());
+            final boolean up = c.isWebRunning() && c.isBrowserAuthExchanged();
             final String log = readWebLogTail();
             if (!isAdded()) return;
             mainHandler.post(() -> {
@@ -275,6 +273,12 @@ public class LaunchFragment extends Fragment {
     @SuppressLint("SetJavaScriptEnabled")
     private void openWeb() {
         if (insideWeb) return;
+        final String authUrl = browserAuthUrl();
+        if (authUrl == null || authUrl.isEmpty()) {
+            Toast.makeText(requireContext(), "Web UI 尚未完成认证交换，请稍后再试",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
         insideWeb = true;
         homePane.setVisibility(View.GONE);
         webPane.setVisibility(View.VISIBLE);
@@ -323,10 +327,12 @@ public class LaunchFragment extends Fragment {
                     gv.setSession(gs);
                 }
                 attachGeckoDownload(gs);
-                gs.loadUri(uiUrl());
+                gs.loadUri(authUrl);
+                c.noteWebViewReady();
                 return; // GeckoView 加载，不走 WebView
             } catch (Throwable e) {
-                android.util.Log.w("DSHA", "GeckoView 启动失败，回退 WebView: " + e);
+                android.util.Log.w("DSHA", "GeckoView 启动失败，回退 WebView: "
+                        + SensitiveData.redact(String.valueOf(e)));
             }
         }
         if (webView == null) {
@@ -386,7 +392,8 @@ public class LaunchFragment extends Fragment {
             webBox.addView(webView, new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
-        webView.loadUrl(uiUrl());
+        webView.loadUrl(authUrl);
+        c.noteWebViewReady();
     }
 
     private void closeWeb() {
@@ -457,7 +464,8 @@ public class LaunchFragment extends Fragment {
                             path = DownloadSink.save(appCtx, response.body, name, mime);
                         }
                     } catch (Throwable t) {
-                        android.util.Log.w("DSHA", "GeckoView 下载失败: " + t);
+                        android.util.Log.w("DSHA", "GeckoView 下载失败: "
+                                + SensitiveData.redact(String.valueOf(t)));
                     }
                     final String msg = path == null ? "下载失败：" + name : "已保存到 " + path;
                     new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
@@ -479,44 +487,46 @@ public class LaunchFragment extends Fragment {
         return null;
     }
 
-    private String uiUrl() {
-        String base = "http://127.0.0.1:" + c.getPort() + "/";
-        // dsh 的 Web 服务加了 token 鉴权（本机任何 App 都能访问 127.0.0.1，
-        // 上游只绑回环、没有鉴权层）。首帧带上 token，服务端回设 Cookie，
-        // 之后的静态资源、XHR 与 WebSocket 都自动带，页面里不必到处拼。
-        String t = HttpShellService.currentToken();
-        return t.isEmpty() ? base : base + "?dsha_t=" + android.net.Uri.encode(t);
+    private String browserAuthUrl() {
+        // The only browser credential is the exact URL printed by this dsh run.
+        return c.getWebAuthUrl();
     }
 
-    /** 启动页那行可点的地址 chip。
-     *
-     *  <p>用户反馈「启动页给的 URL 用不了，AI 找出来 :3080/?dsha_t=... 才是对的」。
-     *  原因是这里<b>只显示局域网地址</b>（3081），而那条链当时是坏的 ——
-     *  {@code stripTokenFromRequestLine} 把请求行的 HTTP 版本吃掉，后端直接 400。
-     *  用手机自带浏览器打开所需要的本机地址（带 dsh 自己的 {@code dsha_t}）
-     *  从来没有在界面上出现过，用户只能让 agent 去日志里挖。
-     *
-     *  <p>现在一行 chip 收两个入口，点开再选本机 / 同 WiFi。另外它以前只在
-     *  onViewCreated 算一次 —— 局域网后来才开、或者 WiFi 换了网段都不会刷新，
-     *  现在跟着心跳走。 */
+    /** 启动页地址入口：只提供可选的 LAN 代理地址。 */
     private void updateLanAddr() {
         if (!webReady) {
             lanAddrText.setVisibility(View.GONE);
             return;
         }
-        lanAddrText.setText("在浏览器中打开 ▸ 点这里取地址（本机 / 同 WiFi）");
+        boolean lan = requireContext()
+                .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
+                .getBoolean("lan_mode", false);
+        if (!lan) {
+            lanAddrText.setVisibility(View.GONE);
+            return;
+        }
+        lanAddrText.setText(LanProxyService.isBound()
+                ? "局域网访问 ▸ 点这里复制地址"
+                : "局域网代理正在等待本轮认证");
         lanAddrText.setVisibility(View.VISIBLE);
-        lanAddrText.setOnClickListener(v -> showBrowserAddrDialog());
+        lanAddrText.setOnClickListener(LanProxyService.isBound()
+                ? v -> showBrowserAddrDialog() : null);
     }
 
-    /** 列出可用的浏览器访问地址。地址里的 token 就是凭据，所以复制后要提醒一句。 */
+    /**
+     * BrowserAuth URL is an in-process credential.  The embedded browser loads
+     * it directly, but neither the launch screen nor the clipboard may expose
+     * it.  LAN uses its separate, revocable DSHA token instead.
+     */
     private void showBrowserAddrDialog() {
-        final String local = uiUrl();
         boolean lan = requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false);
         String ip = HarnessController.getLanAddress();
-        final String lanAddr = (lan && ip != null && !ip.isEmpty())
+        // Do not expose the persistent LAN credential until the listener has
+        // completed its asynchronous bind.
+        final boolean lanBound = lan && LanProxyService.isBound();
+        final String lanAddr = (lanBound && ip != null && !ip.isEmpty())
                 ? "http://" + ip + ":" + LanProxyService.LAN_PORT + "/?token="
                         + LanProxyService.getLanToken(requireContext())
                 : null;
@@ -524,15 +534,20 @@ public class LaunchFragment extends Fragment {
         final java.util.List<String> items = new java.util.ArrayList<>();
         final java.util.List<Runnable> acts = new java.util.ArrayList<>();
 
-        items.add("用本机浏览器打开\n" + local);
-        acts.add(() -> AboutDialog.openBrowser(requireContext(), local));
-        items.add("复制本机地址");
-        acts.add(() -> copyAddr("本机地址", local));
         if (lanAddr != null) {
-            items.add("复制局域网地址（同 WiFi 的其它设备用）\n" + lanAddr);
-            acts.add(() -> copyAddr("局域网地址", lanAddr));
+            items.add("复制局域网地址（同 WiFi 的其它设备用）");
+            acts.add(() -> {
+                if (LanProxyService.isBound()) {
+                    copyAddr("局域网地址", lanAddr);
+                } else {
+                    Toast.makeText(requireContext(), "局域网代理已停止，请稍后重新获取地址",
+                            Toast.LENGTH_SHORT).show();
+                }
+            });
         } else if (lan) {
-            items.add("局域网已开启，但还没拿到 WiFi 地址（连上 WiFi 再看）");
+            items.add(LanProxyService.isBound()
+                    ? "局域网已开启，但还没拿到 WiFi 地址（连上 WiFi 再看）"
+                    : "局域网已开启，但代理尚未成功监听（稍后再看）");
             acts.add(() -> { });
         } else {
             items.add("局域网访问未开启 —— 去「配置」页打开后再来取地址");
@@ -540,7 +555,7 @@ public class LaunchFragment extends Fragment {
         }
 
         new androidx.appcompat.app.AlertDialog.Builder(requireContext())
-                .setTitle("在浏览器中打开")
+                .setTitle("局域网访问")
                 .setItems(items.toArray(new String[0]), (d, which) -> {
                     if (which >= 0 && which < acts.size()) acts.get(which).run();
                 })
@@ -557,13 +572,14 @@ public class LaunchFragment extends Fragment {
             Toast.makeText(requireContext(), label + "已复制（里面的 token 相当于密码，别外发）",
                     Toast.LENGTH_LONG).show();
         } catch (Throwable e) {
-            Toast.makeText(requireContext(), "复制失败：" + addr, Toast.LENGTH_LONG).show();
+            // The address contains a credential. Never echo it into a Toast.
+            Toast.makeText(requireContext(), "复制失败，请重试", Toast.LENGTH_LONG).show();
         }
     }
 
     private boolean goExtractIfNeeded() {
         try {
-            if (!c.getProot().isOfflineExtracted()) {
+            if (!c.getProot().hasExpectedAlphaOfflineRuntime()) {
                 startActivity(new Intent(requireContext(), ExtractActivity.class));
                 if (getActivity() != null) getActivity().finish();
                 return true;
@@ -571,19 +587,6 @@ public class LaunchFragment extends Fragment {
         } catch (Throwable ignored) {
         }
         return false;
-    }
-
-    private boolean httpOk(String url) {
-        try {
-            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-            conn.setConnectTimeout(1200);
-            conn.setReadTimeout(1200);
-            int code = conn.getResponseCode();
-            conn.disconnect();
-            return code >= 200 && code < 500;
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     private String readWebLogTail() {
@@ -611,7 +614,11 @@ public class LaunchFragment extends Fragment {
                     int nl = s.indexOf('\n');
                     if (nl >= 0 && nl + 1 < s.length()) s = s.substring(nl + 1);
                 }
-                return s;
+                // Current dsh output is redacted before persistence, but an
+                // upgrade can leave a legacy log containing BrowserAuth or
+                // API credentials. The launch screen is another diagnostic
+                // boundary, so never render those old bytes verbatim.
+                return SensitiveData.redact(s);
             }
         } catch (Exception e) {
             return "";

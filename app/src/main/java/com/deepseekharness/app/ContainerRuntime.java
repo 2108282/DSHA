@@ -92,6 +92,7 @@ public interface ContainerRuntime {
             argv.add("--rootfs=" + rootfsDir.getAbsolutePath());
             argv.add("--cwd=/root");
             for (String[] b : BINDS) {
+                if (!new File(b[0]).exists()) continue;
                 argv.add("-b");
                 argv.add(b.length == 1 ? b[0] : b[0] + ":" + b[1]);
             }
@@ -193,6 +194,7 @@ public interface ContainerRuntime {
             argv.add("-w");
             argv.add("/root");
             for (String[] b : BINDS) {
+                if (!new File(b[0]).exists()) continue;
                 argv.add("-b");
                 argv.add(b.length == 1 ? b[0] + ":" + b[0] : b[0] + ":" + b[1]);
             }
@@ -244,6 +246,11 @@ public interface ContainerRuntime {
             {"/dev/urandom", "/dev/random"},
             {"/proc"},
             {"/sys"},
+            // Bundled Termux Python uses Android's linker and APEX libraries.
+            // These host trees are required for executing it inside proot.
+            {"/system"},
+            {"/apex"},
+            {"/linkerconfig"},
             {"/proc/self/fd", "/dev/fd"},
             {"/storage/emulated/0", "/sdcard"},
             {"/storage/emulated/0", "/storage/emulated/0"},

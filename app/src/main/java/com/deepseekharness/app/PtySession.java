@@ -1,5 +1,7 @@
 package com.deepseekharness.app;
 
+import java.lang.ref.WeakReference;
+
 import com.termux.terminal.TerminalSession;
 import com.termux.terminal.TerminalSessionClient;
 
@@ -51,11 +53,23 @@ final class PtySession implements TerminalSessionClient {
         void onBell();
     }
 
-    private final Listener listener;
+    private volatile WeakReference<Listener> listener = new WeakReference<>(null);
     private volatile TerminalSession session;
 
-    private PtySession(Listener l) {
-        this.listener = l;
+    private PtySession() {
+    }
+
+    void attachListener(Listener l) {
+        listener = new WeakReference<>(l);
+    }
+
+    void detachListener(Listener l) {
+        Listener current = listener.get();
+        if (current == l) listener = new WeakReference<>(null);
+    }
+
+    private Listener listener() {
+        return listener.get();
     }
 
     /**
@@ -65,7 +79,8 @@ final class PtySession implements TerminalSessionClient {
      *             瞎给一个值会让 TUI 的边框错位。
      */
     static PtySession start(ProotBootstrap proot, int cols, int rows, Listener l) {
-        PtySession ps = new PtySession(l);
+        PtySession ps = new PtySession();
+        ps.attachListener(l);
         String[] argv = proot.ptyArgv();
         String[] env = proot.ptyEnv();
         // args 就是 argv（含 argv[0]）：查过 termux.c，Java 数组原样转成 argv 后
@@ -106,37 +121,44 @@ final class PtySession implements TerminalSessionClient {
 
     @Override
     public void onTextChanged(TerminalSession changedSession) {
-        listener.onOutput();
+        Listener l = listener();
+        if (l != null) l.onOutput();
     }
 
     @Override
     public void onTitleChanged(TerminalSession changedSession) {
-        listener.onTitle(changedSession == null ? "" : changedSession.getTitle());
+        Listener l = listener();
+        if (l != null) l.onTitle(changedSession == null ? "" : changedSession.getTitle());
     }
 
     @Override
     public void onSessionFinished(TerminalSession finishedSession) {
-        listener.onExit(finishedSession == null ? -1 : finishedSession.getExitStatus());
+        Listener l = listener();
+        if (l != null) l.onExit(finishedSession == null ? -1 : finishedSession.getExitStatus());
     }
 
     @Override
     public void onCopyTextToClipboard(TerminalSession session, String text) {
-        listener.onCopy(text);
+        Listener l = listener();
+        if (l != null) l.onCopy(text);
     }
 
     @Override
     public void onPasteTextFromClipboard(TerminalSession session) {
-        listener.onPasteRequest();
+        Listener l = listener();
+        if (l != null) l.onPasteRequest();
     }
 
     @Override
     public void onBell(TerminalSession session) {
-        listener.onBell();
+        Listener l = listener();
+        if (l != null) l.onBell();
     }
 
     @Override
     public void onColorsChanged(TerminalSession session) {
-        listener.onOutput();
+        Listener l = listener();
+        if (l != null) l.onOutput();
     }
 
     @Override
@@ -153,22 +175,22 @@ final class PtySession implements TerminalSessionClient {
 
     @Override
     public void logError(String tag, String message) {
-        android.util.Log.e(TAG, tag + ": " + message);
+        android.util.Log.e(TAG, SensitiveData.redact(tag + ": " + message));
     }
 
     @Override
     public void logWarn(String tag, String message) {
-        android.util.Log.w(TAG, tag + ": " + message);
+        android.util.Log.w(TAG, SensitiveData.redact(tag + ": " + message));
     }
 
     @Override
     public void logInfo(String tag, String message) {
-        android.util.Log.i(TAG, tag + ": " + message);
+        android.util.Log.i(TAG, SensitiveData.redact(tag + ": " + message));
     }
 
     @Override
     public void logDebug(String tag, String message) {
-        android.util.Log.d(TAG, tag + ": " + message);
+        android.util.Log.d(TAG, SensitiveData.redact(tag + ": " + message));
     }
 
     @Override
@@ -178,11 +200,12 @@ final class PtySession implements TerminalSessionClient {
 
     @Override
     public void logStackTraceWithMessage(String tag, String message, Exception e) {
-        android.util.Log.w(TAG, tag + ": " + message, e);
+        android.util.Log.w(TAG, SensitiveData.redact(tag + ": " + message
+                + " " + String.valueOf(e)));
     }
 
     @Override
     public void logStackTrace(String tag, Exception e) {
-        android.util.Log.w(TAG, tag, e);
+        android.util.Log.w(TAG, SensitiveData.redact(tag + ": " + String.valueOf(e)));
     }
 }

@@ -23,8 +23,46 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="工作区管理"
+            android:text="数据与备份"
             android:textSize="@dimen/text_display"
+            android:textStyle="bold" />
+
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
+            android:id="@+id/workspace_backup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_control"
+            android:text="选择备份范围" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_tight"
+            android:lineSpacingExtra="2dp"
+            android:text="可选全部数据、对话记录、设置或插件；每次只写入所选范围。默认不包含 API Key，不删除当前数据。新备份固定保存为 DSHA-backup-latest.tar.gz。"
+            android:textColor="@color/text_muted"
+            android:textSize="@dimen/text_caption" />
+
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
+            android:id="@+id/workspace_restore"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_tight"
+            android:text="恢复" />
+
+        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
+            android:id="@+id/workspace_location"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_tight"
+            android:text="查看保存位置" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_section"
+            android:text="环境管理"
+            android:textSize="@dimen/text_title"
             android:textStyle="bold" />
 
         <TextView
@@ -101,20 +139,6 @@
             android:lineSpacingExtra="3dp"
             android:text="授权后，助手（Web UI 里的 agent）可在设备上执行 shell 命令：\ncurl http://127.0.0.1:3090/exec?cmd=..."
             android:textSize="@dimen/text_caption" />
-
-        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
-            android:id="@+id/workspace_backup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_control"
-            android:text="备份全部数据（导出到外部存储）" />
-
-        <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
-            android:id="@+id/workspace_restore"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_tight"
-            android:text="从备份恢复（选择备份文件）" />
 
         <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
             android:id="@+id/workspace_clean_sessions"

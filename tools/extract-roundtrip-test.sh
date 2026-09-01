@@ -59,9 +59,8 @@ import java.io.File;
 public class ExtractRun {
     public static void main(String[] a) throws Exception {
         if (a.length > 2 && "copy".equals(a[2])) {
-            int fb = FileCopy.copyPreservingLinks(
-                    new File(a[0]), new File(a[1]));
-            System.out.println("FALLBACKS=" + fb);
+            FileCopy.copyPreservingLinks(new File(a[0]), new File(a[1]));
+            System.out.println("COPY_OK");
             return;
         }
         TarGzipExtractor.extract(new File(a[0]), new File(a[1]));
@@ -151,30 +150,40 @@ DSH="$WORK/fake-dsh"
 mkdir -p "$PUB/sessions" "$DSH/profiles/web"
 head -c 5000000 /dev/urandom > "$PUB/sessions/big-conversation.bin"   # 假装很多对话
 printf 'key: value\n' > "$PUB/settings.yaml"
-ln -s "$PUB/sessions" "$DSH/sessions"
-ln -s "$PUB/settings.yaml" "$DSH/settings.yaml"
 printf '{"dependencies":{}}\n' > "$DSH/profiles/web/package.json"
 printf '#!/bin/sh\necho hi\n' > "$DSH/hook.sh"; chmod +x "$DSH/hook.sh"
 
 BAK="$WORK/preserve"
-if java -cp "$WORK/cls" com.deepseekharness.app.ExtractRun "$DSH" "$BAK" copy > "$WORK/copy.log" 2>&1; then
-    ok "数据保护复制跑通（$(cat "$WORK/copy.log")）"
+if ln -s "$PUB/sessions" "$DSH/sessions" 2>/dev/null \
+        && ln -s "$PUB/settings.yaml" "$DSH/settings.yaml" 2>/dev/null \
+        && ln -s "$PUB/missing-after-device-move" "$DSH/dangling-data" 2>/dev/null \
+        && [ -L "$DSH/sessions" ] && [ -L "$DSH/settings.yaml" ] && [ -L "$DSH/dangling-data" ]; then
+    if java -cp "$WORK/cls" com.deepseekharness.app.ExtractRun "$DSH" "$BAK" copy > "$WORK/copy.log" 2>&1; then
+        ok "数据保护复制跑通（$(cat "$WORK/copy.log")）"
+    else
+        bad "数据保护复制抛异常：$(head -3 "$WORK/copy.log")"
+    fi
+    check "软链原样保留（sessions 仍是链接，不是真目录）" \
+          "$([ -L "$BAK/sessions" ] && echo yes || echo no)"
+    check "软链目标没变" \
+          "$([ "$(readlink "$BAK/sessions")" = "$PUB/sessions" ] && echo yes || echo no)"
+    check "指向单个文件的软链也保留（settings.yaml）" \
+          "$([ -L "$BAK/settings.yaml" ] && echo yes || echo no)"
+    check "悬空软链也原样保留（不能静默丢弃）" \
+          "$([ -L "$BAK/dangling-data" ] && [ "$(readlink "$BAK/dangling-data")" = "$PUB/missing-after-device-move" ] && echo yes || echo no)"
+    SZ=$(du -sk "$BAK" 2>/dev/null | cut -f1)
+    check "备份体积没被链接目标撑大（${SZ}KB；跟随复制会是 4900KB 以上）" \
+          "$([ "${SZ:-99999}" -lt 500 ] && echo yes || echo no)"
+    check "真文件照样复制到位" \
+          "$([ -f "$BAK/profiles/web/package.json" ] && echo yes || echo no)"
+    check "可执行位保留（rootfs 里的脚本丢了执行位就跑不起来）" \
+          "$([ -x "$BAK/hook.sh" ] && echo yes || echo no)"
 else
-    bad "数据保护复制抛异常：$(head -3 "$WORK/copy.log")"
+    # Windows without Developer Mode commonly refuses unprivileged symlinks.
+    # The tar round trip above still covered ordinary links where available;
+    # this platform-specific preservation scenario must be run on Linux/Android.
+    echo "  SKIP 数据保护软链往返：当前主机不允许创建测试软链"
 fi
-check "软链原样保留（sessions 仍是链接，不是真目录）" \
-      "$([ -L "$BAK/sessions" ] && echo yes || echo no)"
-check "软链目标没变" \
-      "$([ "$(readlink "$BAK/sessions")" = "$PUB/sessions" ] && echo yes || echo no)"
-check "指向单个文件的软链也保留（settings.yaml）" \
-      "$([ -L "$BAK/settings.yaml" ] && echo yes || echo no)"
-SZ=$(du -sk "$BAK" 2>/dev/null | cut -f1)
-check "备份体积没被链接目标撑大（${SZ}KB；跟随复制会是 4900KB 以上）" \
-      "$([ "${SZ:-99999}" -lt 500 ] && echo yes || echo no)"
-check "真文件照样复制到位" \
-      "$([ -f "$BAK/profiles/web/package.json" ] && echo yes || echo no)"
-check "可执行位保留（rootfs 里的脚本丢了执行位就跑不起来）" \
-      "$([ -x "$BAK/hook.sh" ] && echo yes || echo no)"
 
 echo "----------------------------------------------"
 if [ "$fail" -eq 0 ]; then echo "全部通过：$pass 条"; else echo "失败 $fail 条（通过 $pass）"; exit 1; fi

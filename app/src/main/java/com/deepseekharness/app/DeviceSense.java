@@ -108,9 +108,9 @@ final class DeviceSense {
             if (fallback != null) return format(fallback, "cached-fallback");
             return "TIMEOUT 暂时定不到位（可能在室内且定位服务关闭）";
         } catch (SecurityException e) {
-            return "NO_PERMISSION " + e.getMessage();
+            return "NO_PERMISSION " + SensitiveData.redact(e.getMessage());
         } catch (Throwable e) {
-            return "ERROR " + e;
+            return "ERROR " + SensitiveData.redact(String.valueOf(e));
         }
     }
 
@@ -352,7 +352,7 @@ final class DeviceSense {
             return "OK torch=" + (on ? "on" : "off");
         } catch (Throwable e) {
             // 相机被其它 App 占用时会抛 CameraAccessException
-            return "ERROR " + e;
+            return "ERROR " + SensitiveData.redact(String.valueOf(e));
         }
     }
 

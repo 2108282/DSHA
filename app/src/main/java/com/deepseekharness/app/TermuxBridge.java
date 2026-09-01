@@ -83,7 +83,8 @@ public final class TermuxBridge {
                 ctx.startService(intent);
             }
         } catch (Exception e) {
-            throw new IllegalStateException("无法启动 Termux 命令服务: " + e.getMessage());
+            throw new IllegalStateException("无法启动 Termux 命令服务: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
     }
 }

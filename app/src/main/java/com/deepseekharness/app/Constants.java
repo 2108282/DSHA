@@ -37,6 +37,8 @@ public final class Constants {
     // ================= 端口 =================
     /** WebUI 默认端口 */
     public static final String DEFAULT_PORT = "3080";
+    /** dsh alpha Web profile is intentionally fixed to loopback:3080. */
+    public static final int DSH_WEB_PORT = 3080;
     /** Shizuku HTTP 桥端口（rootfs 内 agent 访问设备 shell） */
     public static final int SHELL_BRIDGE_PORT = 3090;
     /** ADB 传统连接端口 */
@@ -64,4 +66,13 @@ public final class Constants {
     public static final String KEY_ALLOW_ROOT_SHELL = "allow_root_shell";
     /** 用户选择"忽略"的离线包版本（下次不弹升级提示） */
     public static final String KEY_IGNORED_OFFLINE_VER = "ignored_offline_version";
+    /** Alpha runtime selector; kept separate from the historical use_rc6 key. */
+    public static final String KEY_RUNTIME_ID = "runtime_id";
+    /** Fixed local 1.2 Alpha runtime identity; never inferred from use_rc6. */
+    public static final String DSH_ALPHA_RUNTIME_ID = "dsh-v0.1.2-alpha.2";
+    public static final String DSH_ALPHA_VERSION = "0.1.2-alpha.2";
+    public static final String DSH_ALPHA_UPSTREAM_COMMIT =
+            "0a53fb55bea101816fa226bb964ae2bed71c343b";
+    /** LAN bridge credential is intentionally independent from dsh/3090 tokens. */
+    public static final String KEY_LAN_TOKEN_V2 = "lan_token_v2";
 }

@@ -81,8 +81,11 @@ public class AdbPairReceiver extends BroadcastReceiver {
                     }
                 }
             } catch (Throwable e) {
-                out = "ERROR: " + e;
+                out = "ERROR: " + SensitiveData.redact(String.valueOf(e));
             }
+            // Pair/setup output is shown in the notification and terminal. Keep
+            // the command's real bytes intact, but redact every display copy.
+            out = SensitiveData.redact(out == null ? "" : out);
             boolean ok = out.contains("PAIR_OK");
             // 失败时把完整输出注入内置终端（通知栏有字数上限且无法复制，终端可滚动可复制）
             if (!ok) TerminalFragment.inject("========== ADB 配对失败 ==========\n" + out);

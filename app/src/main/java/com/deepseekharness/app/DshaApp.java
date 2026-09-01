@@ -23,10 +23,11 @@ public class DshaApp extends Application {
                 //noinspection ResultOfMethodCallIgnored
                 f.renameTo(prev);
             }
+            String trace = SensitiveData.redact(android.util.Log.getStackTraceString(t));
             try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f, true)) {
                 fos.write(("\n===== " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
                         .format(new java.util.Date()) + " =====\n"
-                        + android.util.Log.getStackTraceString(t) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        + trace + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
         } catch (Exception ignored) {
         }
@@ -53,7 +54,7 @@ public class DshaApp extends Application {
         try {
             text = "\n===== " + new java.text.SimpleDateFormat(
                     "yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(new java.util.Date())
-                    + " =====\n" + android.util.Log.getStackTraceString(t) + "\n";
+                    + " =====\n" + SensitiveData.redact(android.util.Log.getStackTraceString(t)) + "\n";
         } catch (Throwable ignored) {
             return;
         }
@@ -103,7 +104,7 @@ public class DshaApp extends Application {
             sb.append("     若确实闪退过，方向在别处：①内存不足被系统杀（解压内置环境时最常见）"
                     + "②native 崩溃（proot / node / 终端的 libtermux）③ANR 后强杀。"
                     + "这三种都不留 Java 堆栈。\n");
-            return sb.toString();
+            return SensitiveData.redact(sb.toString());
         }
         try {
             // 只读尾部：这文件是追加写的，可能接近 1MB
@@ -113,7 +114,7 @@ public class DshaApp extends Application {
                 raf.seek(f.length() - tail);
                 raf.readFully(buf);
             }
-            String text = new String(buf, java.nio.charset.StandardCharsets.UTF_8);
+            String text = SensitiveData.redact(new String(buf, java.nio.charset.StandardCharsets.UTF_8));
             String[] parts = text.split("\n===== ");
             int from = Math.max(1, parts.length - maxEntries);   // parts[0] 可能是被截断的半段
             sb.append("WARN crash.log 有内容（").append(f.length() >> 10).append("KB），最近 ")
@@ -130,11 +131,12 @@ public class DshaApp extends Application {
                 sb.append('\n');
             }
         } catch (Throwable e) {
-            sb.append("WARN crash.log 存在但读不出来：").append(e).append('\n');
+            sb.append("WARN crash.log 存在但读不出来：")
+                    .append(SensitiveData.redact(String.valueOf(e))).append('\n');
         }
         sb.append("     完整日志：/sdcard/Documents/dshdata/crash.log"
                 + "（文件管理器可直接打开、分享给我）\n");
-        return sb.toString();
+        return SensitiveData.redact(sb.toString());
     }
 
     @Override

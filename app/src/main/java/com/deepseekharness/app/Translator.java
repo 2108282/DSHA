@@ -116,7 +116,8 @@ final class Translator {
             put(ctx, text, out);
             return out;
         } catch (Throwable e) {
-            android.util.Log.w("DSHA-translate", "翻译失败: " + e);
+            android.util.Log.w("DSHA-translate", "翻译失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
             return null;
         } finally {
             if (conn != null) conn.disconnect();

@@ -26,11 +26,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-GRADLE_BIN="${GRADLE_BIN:-/workspace/gradle/bin/gradle}"
-export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-/workspace/android-sdk}"
+GRADLE_BIN="${GRADLE_BIN:-$ROOT/../_toolchains/gradle-8.5/bin/gradle}"
+export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ROOT/../_toolchains/android-sdk}"
 export ANDROID_HOME="$ANDROID_SDK_ROOT"
-ROOTFS_SRC="${ROOTFS_SRC:-/workspace/dl/offline-rootfs.tar.gz}"
-PUBLISH_KEYSTORE="${DSHA_PUBLISH_KEYSTORE:-/workspace/DSHA-ACTUAL-PUBLISH-KEY-debug.keystore}"
+ROOTFS_SRC="${ROOTFS_SRC:-$ROOT/offline-rootfs.tar.gz}"
+PUBLISH_KEYSTORE="${DSHA_PUBLISH_KEYSTORE:-$ROOT/../dsha/key/DSHA-ACTUAL-PUBLISH-KEY-debug.keystore}"
 # gradle 参数：本工作区是手机上的 proot 容器，daemon 与并行都会把内存拖爆。
 # GRADLE_OPTS 必须和 -Dorg.gradle.jvmargs 写成同一份值 —— 两者不一致时 gradle 会
 # 另 fork 一个 single-use daemon（等于同时吃两份堆），而仓库 gradle.properties 里
@@ -46,7 +46,7 @@ GRADLE_ARGS=(--no-daemon --no-parallel "-Dorg.gradle.jvmargs=$GRADLE_JVM")
 
 VERSION_NAME="$(sed -n 's/.*versionName "\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
 VERSION_CODE="$(sed -n 's/.*versionCode \([0-9]\+\).*/\1/p' app/build.gradle | head -1)"
-LOGDIR="${LOGDIR:-/workspace/build-logs/v${VERSION_NAME:-unknown}}"
+LOGDIR="${LOGDIR:-$ROOT/out/build-logs/v${VERSION_NAME:-unknown}}"
 mkdir -p "$LOGDIR"
 
 FROM=1; TO=7; ONLY=""; FORCE=0; STATUS_ONLY=0
@@ -136,27 +136,38 @@ s2_asset() {
   fi
   ls -la "$dst"
 
-  # 版本标记：**离线包内容的版本号，由 CI 从仓库根的 OFFLINE_VERSION 取**，不是 dsh 的
-  # 版本号。本地包一律写 0 —— 这是原设计（见 android-build.yml 那段注释），因为本地用的
-  # 离线包内容不受 OFFLINE_VERSION 管，写任何非 0 值都可能骗过 App 的比较：
-  # v1.1.9-rc1 就踩过 —— 仓库里当时跟踪着一份写着 dsh-0.1.1-rc.2 的标记，而包里烤的
-  # 是 dsh 0.1.0-rc.6，用户装上后被提示「发现新版内置环境」，点了升级反而把 dsh 降级了。
-  # 包里实际的 dsh 版本只打进日志，不参与判断 —— 它是给人看的，用来确认包对不对。
+  # 版本标记必须与仓库根 OFFLINE_VERSION 一致；它描述的是离线 rootfs
+  # 内容版本，不是 dsh 的 npm 版本。旧脚本曾把本地包一律写成 0，导致
+  # 本次 Alpha 的硬性版本要求在 APK 构建阶段被悄悄覆盖。
   local vfile=app/src/main/assets/offline-rootfs.version
+  local expected_offline
+  expected_offline="$(tr -d ' \t\r\n' < OFFLINE_VERSION 2>/dev/null || true)"
+  if [ "$expected_offline" != "5" ]; then
+    echo "OFFLINE_VERSION 必须为 5，实际为: ${expected_offline:-<missing>}"
+    return 1
+  fi
   local pkgrel=./usr/local/lib/node_modules/@deepseek-ai/dsh/package.json
   local tmpd
   tmpd="$(mktemp -d)"
   local dshver=""
   if tar -xzf "$ROOTFS_SRC" -C "$tmpd" "$pkgrel" 2>/dev/null; then
-    dshver="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
+    local pybin="${PYTHON_BIN:-python3}"
+    if ! command -v "$pybin" >/dev/null 2>&1 || ! "$pybin" -c 'import sys' >/dev/null 2>&1; then
+      pybin="python"
+    fi
+    dshver="$($pybin -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
       "$tmpd/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json" 2>/dev/null || true)"
   fi
   rm -rf "$tmpd"
-  printf '0\n' > "$vfile"
+  if [ "$dshver" != "0.1.2-alpha.2" ]; then
+    echo "离线包内 dsh 版本必须为 0.1.2-alpha.2，实际为: ${dshver:-<unknown>}"
+    return 1
+  fi
+  printf '%s\n' "$expected_offline" > "$vfile"
   if [ -n "$dshver" ]; then
-    echo "包内 dsh 版本：$dshver（仅记录；标记写 0，App 不会拿本地包去提示升级）"
+    echo "包内 dsh 版本：$dshver（标记写 ${expected_offline}）"
   else
-    echo "警告：离线包里读不出 @deepseek-ai/dsh 版本 —— 包可能不完整，标记已写 0"
+    echo "警告：离线包里读不出 @deepseek-ai/dsh 版本 —— 包可能不完整，标记仍写 ${expected_offline}"
   fi
   echo OK
 }
@@ -168,8 +179,14 @@ s3_manifest() {
     echo "拒绝执行：环境里已有 DSHA_KEYSTORE=${DSHA_KEYSTORE}，会把清单签错"
     return 1
   fi
-  command -v python3 >/dev/null 2>&1 || { echo "无 python3，跳过"; return 0; }
-  python3 tools/gen-runtime-manifest.py || { echo "清单生成失败"; return 1; }
+  local py="${PYTHON_BIN:-python3}"
+  # Windows 常见的 python3.exe 是 Microsoft Store 占位别名（返回 49），
+  # 不能只看 command -v；先实际执行一次，再回退到可用的 python。
+  if ! command -v "$py" >/dev/null 2>&1 || ! "$py" -c 'import sys' >/dev/null 2>&1; then
+    py="python"
+  fi
+  command -v "$py" >/dev/null 2>&1 || { echo "无可运行的 Python，跳过"; return 0; }
+  "$py" tools/gen-runtime-manifest.py || { echo "清单生成失败"; return 1; }
   bash tools/sign-runtime-manifest.sh || { echo "清单签名失败"; return 1; }
   git status --short runtime-manifest.json runtime-manifest.json.sig 2>/dev/null || true
   echo OK
@@ -197,7 +214,9 @@ s5_assemble() {
 s6_verify() {
   local apk=app/build/outputs/apk/debug/app-debug.apk
   [ -f "$apk" ] || { echo "没有产物 $apk"; return 1; }
-  local signer; signer="$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
+  # Linux SDK exposes `apksigner`; Windows Build Tools exposes `apksigner.bat`.
+  # Accept both so a missing executable can never silently skip the certificate gate.
+  local signer; signer="$(find "$ANDROID_SDK_ROOT"/build-tools -type f \( -name apksigner -o -name apksigner.bat \) 2>/dev/null | sort -V | tail -1)"
   [ -n "$signer" ] || { echo "找不到 apksigner，跳过核对"; return 0; }
   local apk_fp
   apk_fp="$("$signer" verify --print-certs "$apk" 2>/dev/null \
@@ -221,19 +240,42 @@ s6_verify() {
 
 s7_name() {
   local apk=app/build/outputs/apk/debug/app-debug.apk
-  local out="deepseekharness-arm64-v${VERSION_NAME}.apk"
-  cp -f "$apk" "$out"
-  sha256sum "$out" | tee "$out.sha256"
-  # 再出一份名字里带内容指纹的副本：同一个版本号本地会打很多次包，文件名一模一样，
-  # 手机上很容易点到之前下载的那一份，然后以为「新改的东西没生效」。真机上刚发生过。
-  local sha6
-  sha6="$(cut -c1-6 < "$out.sha256")"
-  local tagged="deepseekharness-arm64-v${VERSION_NAME}-${sha6}.apk"
-  rm -f "deepseekharness-arm64-v${VERSION_NAME}-"??????".apk"
-  ln -f "$out" "$tagged" 2>/dev/null || cp -f "$out" "$tagged"
-  ls -la "$out" "$tagged"
-  echo "产物：$ROOT/$tagged（内容同 $out，名字带指纹便于区分）"
+  [ -f "$apk" ] || { echo "没有产物 $apk"; return 1; }
+  local release_dir="$ROOT/release"
+  local out="$release_dir/dsha-1.2.0-alpha.2-vc104.apk"
+  mkdir -p "$release_dir"
+
+  # 先在 release 目录写临时文件，校验文件完整落地后再发布固定文件名。
+  # 这样清理旧生成物失败时也不会影响已经完成的 APK。
+  local tmp="$release_dir/.dsha-release.tmp.$$"
+  cp -f "$apk" "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$out" || { rm -f "$tmp"; return 1; }
+  # 只清理本次构建树里的中间 APK；release 中已有 alpha1/更早版本必须保留。
+  find "$ROOT/out" -maxdepth 1 -type f \( -name '*.apk' -o -name '*.apk.sha256' \
+      -o -name '*.apk.idsig' -o -name '*.idsig' -o -name 'candidate.apk' \) -delete 2>/dev/null || true
+  find "$ROOT/app/build/outputs" -type f \( -name '*.apk' -o -name '*.apk.idsig' \
+      -o -name '*.idsig' \) -delete 2>/dev/null || true
+
+  test -s "$out" || { echo "release 产物不完整"; return 1; }
+  ls -la "$out"
+  sha256sum "$out"
+  echo "产物：$out"
   echo OK
+}
+
+# 发布完成后，上一轮 pack-local/full-build 的 stage 目录只剩日志和 stamp，
+# 没有后续用途。只匹配 out 下这两个固定前缀，绝不递归清理 out 的其他诊断记录。
+cleanup_pack_stages() {
+  [ -d "$ROOT/out" ] || return 0
+  while IFS= read -r -d '' d; do
+    [ "$d" = "$LOGDIR" ] && continue
+    rm -rf -- "$d"
+  done < <(find "$ROOT/out" -mindepth 1 -maxdepth 1 -type d \
+      \( -name 'pack-local-*' -o -name 'full-build' \) -print0)
+  # 若本次日志本身也在受控的临时前缀下，所有阶段均已结束后再删它。
+  case "$LOGDIR" in
+    "$ROOT"/out/pack-local-*|"$ROOT"/out/full-build) rm -rf -- "$LOGDIR" ;;
+  esac
 }
 
 # ---------------- 主流程 ----------------
@@ -255,4 +297,5 @@ run_stage 4 s4_compile   || exit 1
 run_stage 5 s5_assemble  || exit 1
 run_stage 6 s6_verify    || exit 1
 run_stage 7 s7_name      || exit 1
-say "全部完成：deepseekharness-arm64-v${VERSION_NAME}.apk"
+cleanup_pack_stages
+say "全部完成：$ROOT/release/dsha-1.2.0-alpha.2-vc104.apk"

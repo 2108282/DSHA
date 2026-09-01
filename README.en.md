@@ -302,7 +302,7 @@ bash tools/pure-logic-test.sh   # 300 pure-logic assertions, no device needed
 
 ## Community
 
-QQ group **960636357** — test builds, bug reports, plugin talk.
+QQ group **975836806** — test builds, bug reports, plugin talk.
 
 ## License
 

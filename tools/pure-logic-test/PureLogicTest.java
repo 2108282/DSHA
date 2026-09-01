@@ -1,7 +1,7 @@
 package com.deepseekharness.app;
 
 /**
- * 无 Android 依赖的纯逻辑断言集（LanAuth + AssetPath）。用 javac 直接编译运行，
+ * 无 Android 依赖的纯逻辑断言集（LanAuth + LanProxyService 纯静态逻辑 + AssetPath）。用 javac 直接编译运行，
  * 不需要设备、SDK、网络：
  *
  * <pre>bash tools/pure-logic-test.sh</pre>
@@ -15,6 +15,70 @@ public final class PureLogicTest {
     private static int fail = 0;
 
     public static void main(String[] args) {
+        // ---------- SensitiveData ----------
+        // dsh BrowserAuth uses base64url, so both '-' and '_' must be covered;
+        // diagnostics must not retain any credential suffix after redaction.
+        String sensitiveToken = "Abc-def_01234567890123456789012345678901234";
+        String sensitive = "http://127.0.0.1:3080/?token=" + sensitiveToken
+                + " Cookie: dsh-auth-test=backend-secret"
+                + " dsha_lan=lan-secret X-Dsha-Token: header-secret"
+                + " DEEPSEEK_API_KEY=api-secret";
+        String redacted = SensitiveData.redact(sensitive);
+        ok("redact: URL token 完整移除（含 base64url -/_）",
+                !redacted.contains(sensitiveToken)
+                        && redacted.contains("?token=<redacted>"));
+        ok("redact: Cookie、LAN token、header、API key 不泄漏",
+                !redacted.contains("backend-secret")
+                        && !redacted.contains("lan-secret")
+                        && !redacted.contains("header-secret")
+                        && !redacted.contains("api-secret"));
+        String legacyCookies = "Cookie: dsha_t=legacy-secret; dsha_token=other-secret";
+        ok("redact: 旧 Cookie 凭据也不泄漏",
+                !SensitiveData.redact(legacyCookies).contains("legacy-secret")
+                        && !SensitiveData.redact(legacyCookies).contains("other-secret"));
+        String mixedSensitive = "https://host/?ToKeN=query-secret&API_Key=query-key\r\n"
+                + "sEt-CoOkIe: dsh-auth-web=cookie-secret; HttpOnly\r\n"
+                + "AuThOrIzAtIoN: BeArEr auth-secret\r\n"
+                + "X-ToKeN: bridge-secret\r\n"
+                + "Exception: Bearer bare-secret token: text-secret";
+        String mixedRedacted = SensitiveData.redact(mixedSensitive);
+        ok("redact: query、混合大小写 header、异常文本均脱敏",
+                !mixedRedacted.contains("query-secret")
+                        && !mixedRedacted.contains("query-key")
+                        && !mixedRedacted.contains("cookie-secret")
+                        && !mixedRedacted.contains("auth-secret")
+                        && !mixedRedacted.contains("bridge-secret")
+                        && !mixedRedacted.contains("bare-secret")
+                        && !mixedRedacted.contains("text-secret"));
+        String cookieEquals = "cOoKiE=dsh-auth-web=equals-secret; path=/\n"
+                + "sEt-CoOkIe=dsh-auth-web=equals-set-cookie; HttpOnly";
+        String cookieEqualsRedacted = SensitiveData.redact(cookieEquals);
+        ok("redact: Cookie/Set-Cookie 等号形式也脱敏",
+                !cookieEqualsRedacted.contains("equals-secret")
+                        && !cookieEqualsRedacted.contains("equals-set-cookie"));
+        String bareDshCookie = "dsh-auth-standalone=standalone-secret; Path=/";
+        ok("redact: 独立 dsh-auth Cookie 行也脱敏",
+                !SensitiveData.redact(bareDshCookie).contains("standalone-secret"));
+        SensitiveData.Stream redactor = new SensitiveData.Stream();
+        String splitPrefix = "dsh web: http://127.0.0.1:3080/?to";
+        String splitSuffix = "ken=" + sensitiveToken + "\n";
+        String splitRedacted = redactor.accept(splitPrefix)
+                + redactor.accept(splitSuffix) + redactor.finish();
+        ok("redact: 凭据跨输出块仍完整移除",
+                !splitRedacted.contains(sensitiveToken)
+                        && splitRedacted.contains("?token=<redacted>"));
+        String jsonSensitive = "{\"ToKeN\":\"json-token\","
+                + "\"api_key\": \"json-api\","
+                + "\"Authorization\":\"Bearer json-bearer\","
+                + "\"Set-Cookie\":\"dsh-auth-json=json-cookie; HttpOnly\"}";
+        String jsonRedacted = SensitiveData.redact(jsonSensitive);
+        ok("redact: JSON 引号字段和混合大小写字段均脱敏",
+                !jsonRedacted.contains("json-token")
+                        && !jsonRedacted.contains("json-api")
+                        && !jsonRedacted.contains("json-bearer")
+                        && !jsonRedacted.contains("json-cookie")
+                        && jsonRedacted.contains("\"ToKeN\":\"<redacted>\""));
+
         // ---------- stripTokenFromRequestLine ----------
         // 回归：token 是唯一参数时，原实现把 HTTP 版本一起吃掉（→ "GET /"），
         // 后端 Node parser 当畸形请求直接 400。这是最常见的场景：打开首页。
@@ -53,25 +117,199 @@ public final class PureLogicTest {
                 LanAuth.tokenOk(req("GET /?token=" + T, ""), ""));
         eqi("auth: query 命中 → 需回设 Cookie", LanAuth.AUTH_OK_SET_COOKIE,
                 LanAuth.tokenOk(req("GET /?token=" + T, ""), T));
-        eqi("auth: Cookie 命中", LanAuth.AUTH_OK,
+        eqi("auth: DSHA LAN Cookie 命中", LanAuth.AUTH_OK,
+                LanAuth.tokenOk(req("GET /", "Cookie: dsha_lan=" + T), T));
+        eqi("auth: LAN Cookie 与后端 dsh-auth Cookie 共存", LanAuth.AUTH_OK,
+                LanAuth.tokenOk(req("GET /", "Cookie: dsh-auth-test=backend; dsha_lan=" + T), T));
+        // dsh BrowserAuth 与 3090 bridge 凭据都不能替代本机 LAN token。
+        eqi("auth: 后端 dsh-auth Cookie 不能代替 LAN token", LanAuth.AUTH_DENY,
+                LanAuth.tokenOk(req("GET /", "Cookie: dsh-auth-test=backend"), T));
+        eqi("auth: 旧 dsha_t Cookie 一律拒绝", LanAuth.AUTH_DENY,
+                LanAuth.tokenOk(req("GET /", "Cookie: dsha_t=" + T), T));
+        eqi("auth: 旧 dsha_token Cookie 一律拒绝", LanAuth.AUTH_DENY,
                 LanAuth.tokenOk(req("GET /", "Cookie: dsha_token=" + T), T));
-        eqi("auth: Cookie 与后端 dsha_t 共存", LanAuth.AUTH_OK,
-                LanAuth.tokenOk(req("GET /", "Cookie: dsha_t=zzz; dsha_token=" + T), T));
-        eqi("auth: 显式头命中", LanAuth.AUTH_OK,
+        eqi("auth: 旧 X-DSHA-Token 头一律拒绝", LanAuth.AUTH_DENY,
                 LanAuth.tokenOk(req("GET /", "X-DSHA-Token: " + T), T));
+        eqi("auth: 旧 X-Dsha-Token 头大小写变体也拒绝", LanAuth.AUTH_DENY,
+                LanAuth.tokenOk(req("GET /", "X-Dsha-Token: " + T), T));
         // 回归：这是原实现「能用」的真正原因，也是 token 泄漏面 ——
         // 用户在 WebUI 里点任何外链，Referer 就把 token 送给对方站点。
         eqi("auth: Referer 里的 token 不算凭据", LanAuth.AUTH_DENY,
                 LanAuth.tokenOk(req("GET /api/x",
                         "Referer: http://192.168.1.5:3081/?token=" + T), T));
         eqi("auth: 换过 token 时旧 Cookie 不挡新地址", LanAuth.AUTH_OK_SET_COOKIE,
-                LanAuth.tokenOk(req("GET /?token=" + T, "Cookie: dsha_token=stale"), T));
+                LanAuth.tokenOk(req("GET /?token=" + T, "Cookie: dsha_lan=stale"), T));
         eqi("auth: 无凭据", LanAuth.AUTH_DENY, LanAuth.tokenOk(req("GET /", ""), T));
         eqi("auth: 显式头错值", LanAuth.AUTH_DENY,
                 LanAuth.tokenOk(req("GET /", "X-DSHA-Token: wrong"), T));
         eqi("auth: WebSocket 握手带 Cookie 可过", LanAuth.AUTH_OK,
                 LanAuth.tokenOk(req("GET /api/ws",
-                        "Upgrade: websocket\r\nCookie: dsha_token=" + T), T));
+                        "Upgrade: websocket\r\nCookie: dsha_lan=" + T), T));
+
+        // ---------- LAN URL cleanup ----------
+        eq("url: 只移除 LAN token", "/?x=1",
+                LanAuth.stripTokenFromUrl("/?token=" + T + "&x=1"));
+        eq("url: token 在后仍保留其它参数", "/?x=1",
+                LanAuth.stripTokenFromUrl("/?x=1&token=" + T));
+        eq("url: 不误删同后缀参数", "/?csrf_token=z",
+                LanAuth.stripTokenFromUrl("/?csrf_token=z"));
+        eq("url: 保留 fragment", "/#frag",
+                LanAuth.stripTokenFromUrl("/?token=" + T + "#frag"));
+        eq("url: 无 token 原样返回", "/?x=1#frag",
+                LanAuth.stripTokenFromUrl("/?x=1#frag"));
+
+        // ---------- BrowserAuth URL ----------
+        String dshToken = "A".repeat(43);
+        String dshAuthUrl = "http://127.0.0.1:3080/?token=" + dshToken;
+        DshAuthUrl.Parsed auth = DshAuthUrl.parse(dshAuthUrl);
+        ok("browser-auth: 接受官方 loopback URL", auth != null);
+        eq("browser-auth: 保留完整 auth URL", dshAuthUrl,
+                auth == null ? null : auth.authUrl);
+        ok("browser-auth: 错误 URL 拒绝", DshAuthUrl.parse(
+                "http://localhost:3080/?token=" + dshToken) == null);
+        try {
+            DshAuthUrl.require("http://127.0.0.1:3080/?token=%" + dshToken);
+            ok("browser-auth: 错误 URL 异常不泄漏 token", false);
+        } catch (IllegalArgumentException expected) {
+        ok("browser-auth: 错误 URL 异常不泄漏 token",
+                    !expected.getMessage().contains(dshToken));
+        }
+
+        // ---------- Alpha backup ranges / HMR policy ----------
+        eq("backup: 四种范围顺序", "0,1,3,2",
+                BackupScope.ALL[0] + "," + BackupScope.ALL[1] + ","
+                        + BackupScope.ALL[2] + "," + BackupScope.ALL[3]);
+        eq("backup: settings id round-trip", "settings",
+                BackupScope.id(BackupScope.fromId("settings")));
+        eq("backup: settings file prefix", "DSHA-settings-",
+                BackupScope.fileNamePrefix(BackupScope.SETTINGS));
+        ok("backup: settings only includes settings.yaml",
+                BackupScope.dshPaths(BackupScope.SETTINGS).length == 1
+                        && ".dsh/settings.yaml".equals(BackupScope.dshPaths(BackupScope.SETTINGS)[0])
+                        && BackupScope.mergeSubdirs(BackupScope.SETTINGS).length == 1
+                        && "settings.yaml".equals(BackupScope.mergeSubdirs(BackupScope.SETTINGS)[0]));
+        ok("backup: partial ranges exclude workdir files",
+                !BackupScope.includesWorkdirFiles(BackupScope.SESSIONS)
+                        && !BackupScope.includesWorkdirFiles(BackupScope.SETTINGS)
+                        && !BackupScope.includesWorkdirFiles(BackupScope.PLUGINS));
+        ok("backup: settings snapshot is transparent",
+                BackupScope.snapshotEntries(BackupScope.SETTINGS).length == 1
+                        && "settings.yaml".equals(BackupScope.snapshotEntries(BackupScope.SETTINGS)[0]));
+        ok("hmr: only known marker plus plugin is eligible",
+                "--expose-internals is required".toLowerCase().contains("--expose-internals is required")
+                        && "@deepseek-ai/cordis-plugin-hmr".toLowerCase().contains("cordis-plugin-hmr"));
+
+        // ---------- LanProxyService request/response boundary ----------
+        String dshCookie = "dsh-auth-test=backend-secret";
+        String externalHead = req("GET /?token=" + T + "&x=1",
+                "Host: 192.168.1.5:3081\r\n"
+                        + "Origin: http://192.168.1.5:3081\r\n"
+                        + "Sec-Fetch-Site: cross-site\r\n"
+                        + "Cookie: dsha_lan=" + T + "; dsh-auth-old=stale\r\n"
+                        + "X-Dsha-Token: " + T);
+        String forwarded = LanProxyService.rewriteRequest(externalHead, 3080, dshCookie);
+        String forwardedReferer = LanProxyService.rewriteRequest(
+                req("GET /api/x", "Referer: http://192.168.1.5:3081/?token=" + T),
+                3080, dshCookie);
+        ok("proxy: 请求行移除 LAN query token 且保留 HTTP 版本",
+                forwarded.contains("GET /?x=1 HTTP/1.1"));
+        ok("proxy: Host 强制改写为 loopback",
+                forwarded.contains("Host: 127.0.0.1:3080\r\n")
+                        && !forwarded.contains("192.168.1.5:3081"));
+        ok("proxy: Origin 强制改写为 loopback",
+                forwarded.contains("Origin: http://127.0.0.1:3080\r\n")
+                        && !forwarded.contains("Origin: http://192.168.1.5:3081"));
+        ok("proxy: Sec-Fetch-Site 改为 same-origin",
+                forwarded.contains("Sec-Fetch-Site: same-origin\r\n"));
+        ok("proxy: Referer 不向后端泄漏 LAN token",
+                !forwardedReferer.toLowerCase().contains("referer:")
+                        && !forwardedReferer.contains("token=" + T));
+        ok("proxy: 仅注入内存 dsh-auth Cookie",
+                forwarded.contains("Cookie: " + dshCookie + "\r\n")
+                        && !forwarded.contains("dsha_lan=" + T)
+                        && !forwarded.contains("dsh-auth-old=stale")
+                        && !forwarded.contains("X-Dsha-Token"));
+        String forwardedMissingBrowserHeaders = LanProxyService.rewriteRequest(
+                "GET /api/x HTTP/1.1\r\nUser-Agent: test\r\n\r\n", 3080, dshCookie);
+        ok("proxy: 缺失 Host/Origin/Sec-Fetch-Site 时补 loopback 同源头",
+                forwardedMissingBrowserHeaders.contains("Host: 127.0.0.1:3080\r\n")
+                        && forwardedMissingBrowserHeaders.contains("Origin: http://127.0.0.1:3080\r\n")
+                        && forwardedMissingBrowserHeaders.contains("Sec-Fetch-Site: same-origin\r\n"));
+        eq("proxy: 缺少内部 BrowserAuth Cookie 时不生成裸转发请求", "",
+                LanProxyService.rewriteRequest(externalHead, 3080, ""));
+
+        String backendHead = "HTTP/1.1 303 See Other\r\n"
+                + "Set-Cookie: dsh-auth-test=backend-secret; Path=/; HttpOnly\r\n"
+                + "Set-Cookie: dsha_lan=should-never-escape; Path=/\r\n"
+                + "Set-Cookie2: legacy-cookie=also-never-escape; Version=1\r\n"
+                + "Authorization: Bearer backend-secret\r\n"
+                + "X-Dsha-Token: backend-token\r\n"
+                + "dsh-auth-debug: cookie-secret\r\n"
+                + "Access-Control-Allow-Origin: *\r\n"
+                + "Access-Control-Allow-Credentials: true\r\n"
+                + "Location: http://127.0.0.1:3080/?token=" + dshToken + "&x=1\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        String clean = LanProxyService.rewriteResponse(backendHead);
+        ok("proxy: 后端 Set-Cookie 全部不向 LAN 泄漏",
+                !clean.toLowerCase().contains("set-cookie")
+                        && !clean.contains("backend-secret")
+                        && !clean.contains("should-never-escape")
+                        && !clean.contains("also-never-escape"));
+        ok("proxy: 后端认证头也不向 LAN 泄漏",
+                !clean.toLowerCase().contains("authorization:")
+                        && !clean.toLowerCase().contains("x-dsha-token:")
+                        && !clean.toLowerCase().contains("dsh-auth-debug"));
+        ok("proxy: 不向 LAN 暴露宽松 CORS",
+                !clean.toLowerCase().contains("access-control-allow-origin")
+                        && !clean.toLowerCase().contains("access-control-allow-credentials"));
+        ok("proxy: Location 移除 loopback token",
+                clean.contains("Location: /?x=1\r\n") && !clean.contains(dshToken));
+
+        // dsh BrowserAuth Cookie 只在当前 generation 有效，切代或停止立即失效。
+        // 这里还特意保留一次旧快照，模拟 worker 已通过第一次检查、随后 dsh 重启：
+        // 它不能因为全局变量换代而拿到新 Cookie，更不能继续作为有效请求发出。
+        LanProxyService.clearDshAuth(0);
+        ok("proxy-auth: 接受合法 dsh-auth Cookie", LanProxyService.setDshAuthCookie(dshCookie, 7));
+        java.util.Map<String, java.util.List<String>> cookieHeaders = new java.util.LinkedHashMap<>();
+        cookieHeaders.put("Set-Cookie", java.util.Arrays.asList(
+                "analytics=ignored; Path=/", dshCookie + "; Path=/; HttpOnly"));
+        eq("proxy-auth: 多个 Set-Cookie 取合法 dsh-auth 项", dshCookie,
+                LanProxyService.extractDshAuthCookie(cookieHeaders));
+        java.util.Map<String, java.util.List<String>> combinedCookieHeaders = new java.util.LinkedHashMap<>();
+        combinedCookieHeaders.put("set-cookie", java.util.Arrays.asList(
+                "analytics=ignored; Path=/, " + dshCookie + "; Path=/; HttpOnly"));
+        eq("proxy-auth: 合并 Set-Cookie 也只取合法 dsh-auth 项", dshCookie,
+                LanProxyService.extractDshAuthCookie(combinedCookieHeaders));
+        eq("proxy-auth: 没有合法 dsh-auth 时返回空", null,
+                LanProxyService.extractDshAuthCookie(java.util.Collections.singletonMap(
+                        "Set-Cookie", java.util.Arrays.asList("analytics=ignored; Path=/"))));
+        ok("proxy-auth: 当前 generation 可用", LanProxyService.hasDshAuth(7));
+        ok("proxy-auth: 旧 generation 不可用", !LanProxyService.hasDshAuth(6));
+        ok("proxy-auth: 拒绝伪造 LAN Cookie", !LanProxyService.setDshAuthCookie("dsha_lan=" + T, 8));
+        LanProxyService.AuthSnapshot oldRun = LanProxyService.snapshotDshAuth(7);
+        ok("proxy-auth: 可领取当前 generation 的不透明快照", oldRun != null);
+        ok("proxy-auth: 新 generation 发布", LanProxyService.setDshAuthCookie(
+                "dsh-auth-test=backend-next", 8));
+        ok("proxy-auth: 重启后旧快照立即失效", !LanProxyService.isCurrentDshAuth(oldRun));
+        ok("proxy-auth: 新 generation 不能被旧 generation 冒充", !LanProxyService.hasDshAuth(7)
+                && LanProxyService.hasDshAuth(8));
+        LanProxyService.clearDshAuth(7);
+        ok("proxy-auth: 旧 worker 的失效通知不能清掉新 generation",
+                LanProxyService.hasDshAuth(8));
+        LanProxyService.AuthSnapshot rekeyed = LanProxyService.snapshotDshAuth(8);
+        ok("proxy-auth: 当前 generation 可领取新快照", rekeyed != null);
+        ok("proxy-auth: 同 generation 重取 Cookie", LanProxyService.setDshAuthCookie(
+                "dsh-auth-test=backend-rekey", 8));
+        ok("proxy-auth: 旧 Cookie 快照不能覆盖同代新 Cookie",
+                !LanProxyService.isCurrentDshAuth(rekeyed));
+        LanProxyService.clearDshAuth(6);
+        ok("proxy-auth: 清理错误 generation 不影响当前 Cookie", LanProxyService.hasDshAuth(8));
+        LanProxyService.AuthSnapshot liveAtStop = LanProxyService.snapshotDshAuth(8);
+        LanProxyService.stop();
+        ok("proxy-auth: 停止后立即清空 Cookie、失效旧快照并关闭监听状态",
+                !LanProxyService.hasDshAuth(8)
+                        && !LanProxyService.isCurrentDshAuth(liveAtStop)
+                        && !LanProxyService.isRunning());
 
         // ---------- queryTokenFromTarget（3090 桥也用这一份）----------
         eq("target: 正常取值", "abc", LanAuth.queryTokenFromTarget("/exec?cmd=ls&token=abc"));
@@ -111,7 +349,7 @@ public final class PureLogicTest {
                     {".dsh/settings.yaml", "port: 3080\n"},
                     {".dsh/sessions/a.jsonl", "{\"x\":1}\n"},
                     {".dsh/sessions/b.jsonl", "{\"x\":2}\n"},
-                    {".dsh/.dsha-backup-manifest.json", "{\"appVersion\": \"1.1.7\"}"},
+                    {".dsh/.dsha-backup-manifest.json", "{\"appVersion\": \"1.1.7\",\"scope\":\"sessions\",\"createdAt\":\"2026-08-31T12:34:56\"}"},
             }, true);
             BackupInspector.Info gi = BackupInspector.inspect(good);
             ok("inspect: 正常包可读", gi.readable, "error=" + gi.error);
@@ -119,6 +357,8 @@ public final class PureLogicTest {
             ok("inspect: 数出会话文件", gi.sessionFiles == 2, "实际 " + gi.sessionFiles);
             ok("inspect: 认出清单", gi.hasManifest);
             eq("inspect: 读出备份方版本", "1.1.7", gi.appVersion);
+            eq("inspect: 读出备份范围", "sessions", gi.scope);
+            eq("inspect: 读出创建时间", "2026-08-31T12:34:56", gi.createdAt);
 
             // 截断：把好包砍掉后 1/3。gzip 的 CRC/长度尾部就是为这种情况准备的。
             byte[] all = java.nio.file.Files.readAllBytes(good.toPath());

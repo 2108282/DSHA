@@ -11,7 +11,7 @@ import androidx.appcompat.app.AlertDialog;
 public final class AboutDialog {
 
     public static final String GITHUB_URL = "https://github.com/qiannianhuanxiang/DSHA";
-    public static final String QQ_GROUP = "960636357";
+    public static final String QQ_GROUP = "975836806";
 
     private AboutDialog() {
     }
@@ -25,7 +25,7 @@ public final class AboutDialog {
         new AlertDialog.Builder(ctx)
                 .setTitle("DSHA v" + version)
                 .setMessage("DeepSeek Harness 安卓启动器\n\n"
-                        + "🌟 GitHub：" + GITHUB_URL + "\n"
+                        + "🌟 GitHub：" + SensitiveData.redact(GITHUB_URL) + "\n"
                         + "🐧 QQ 交流群：" + QQ_GROUP)
                 .setPositiveButton("GitHub", (d, w) -> openBrowser(ctx, GITHUB_URL))
                 .setNeutralButton("QQ 群", (d, w) -> openQQGroup(ctx))
@@ -38,7 +38,8 @@ public final class AboutDialog {
             ctx.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         } catch (Exception e) {
-            Toast.makeText(ctx, "打不开，请手动访问：" + url, Toast.LENGTH_SHORT).show();
+            Toast.makeText(ctx, "打不开，请手动访问："
+                    + SensitiveData.redact(url), Toast.LENGTH_SHORT).show();
         }
     }
 

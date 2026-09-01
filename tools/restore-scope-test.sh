@@ -6,10 +6,11 @@
 # 拿一个只含对话的包那么干，等于把配置、凭据、插件声明一起换掉。原数据虽然还在
 # .pre-restore-* 里，但用户看到 RESTORE_OK 就不会去找，等发现时已经分不清该回退哪个。
 #
-# 三个用例：
+# 四个用例：
 #   1. scope=sessions —— 只换对话，配置/插件/凭据必须原样，且不得出现 .dsh.pre-restore-*
 #   2. scope=plugins  —— 只换插件声明，对话必须原样
-#   3. 无清单的老包   —— 必须仍走全量路径（老备份的语义就是全量，行为不能变）
+#   3. scope=settings —— 只换设置， 对话/插件/凭据必须原样
+#   4. 无清单的老包   —— 必须仍走全量路径（老备份的语义就是全量，行为不能变）
 #
 # 顺带验证「软链落点」：sessions 在设备上是指向 Documents/dshdata 的软链，
 # 恢复要写进它指向的公开目录、保持软链不动，否则数据会跟着私有目录一起被卸载带走。
@@ -20,11 +21,25 @@ set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 MERGE="$REPO/app/src/main/assets/restore-merge.py"
 [ -f "$MERGE" ] || { echo "找不到 $MERGE" >&2; exit 1; }
-command -v python3 >/dev/null 2>&1 || { echo "没有 python3" >&2; exit 1; }
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "$PYTHON_BIN" ]; then
+  # Windows Git Bash may expose the Microsoft Store python3 shim, which exits
+  # with a non-zero status without running anything.  Probe the interpreter
+  # before selecting it, then fall back to the regular python executable.
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(0)' >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1 && python -c 'import sys; sys.exit(0)' >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python)"
+  else
+    echo "没有可执行的 python3/python" >&2
+    exit 1
+  fi
+fi
 
 B="$(mktemp -d)"
 trap 'rm -rf "$B"' EXIT
 fail=0
+SYMLINK_OK=0
 chk() {
   if [ "$2" = "$3" ]; then echo "  ok   $1"; else echo "  FAIL $1（期望 [$2]，实到 [$3]）"; fail=1; fi
 }
@@ -38,7 +53,10 @@ setup_device() {
   echo 'theme: dark'    > "$B/root/.dsh/settings.yaml"
   echo 'OLD-CRED'       > "$B/root/.dsh/.credentials.yaml"
   echo '{"id":"old-1"}' > "$B/pub/sessions/session.jsonl"
-  ln -s "$B/pub/sessions" "$B/root/.dsh/sessions"
+  # Relative link keeps the fixture valid under both native Linux and
+  # Windows Git Bash (where an absolute /tmp path is rewritten by MSYS).
+  ln -s "../../pub/sessions" "$B/root/.dsh/sessions"
+  [ -L "$B/root/.dsh/sessions" ] && SYMLINK_OK=1 || SYMLINK_OK=0
 }
 
 manifest() {  # $1 = scope（空则不写清单，模拟老包）
@@ -48,7 +66,7 @@ manifest() {  # $1 = scope（空则不写清单，模拟老包）
 }
 
 run_merge() {  # $1 = App 侧从文件名推断的 scope（清单存在时应当被清单压过）
-  python3 "$MERGE" --stage "$B/stage" --root "$B/root" \
+  "$PYTHON_BIN" "$MERGE" --stage "$B/stage" --root "$B/root" \
       --workdir deepseek-harness --scope "$1" 2>&1
 }
 
@@ -66,11 +84,17 @@ chk "settings.yaml 未被动" "theme: dark" "$(cat "$B/root/.dsh/settings.yaml" 
 chk "凭据未被动" "OLD-CRED" "$(cat "$B/root/.dsh/.credentials.yaml" 2>/dev/null)"
 chk "没走整目录替换（无 .dsh.pre-restore-*）" 0 \
     "$(ls -d "$B/root"/.dsh.pre-restore-* 2>/dev/null | wc -l)"
-chk "sessions 仍是软链" 1 "$([ -L "$B/root/.dsh/sessions" ] && echo 1 || echo 0)"
-chk "对话落在公开目录且已替换" 2 "$(ls "$B/pub/sessions" 2>/dev/null | wc -l)"
-chk "对话内容来自包" '{"id":"new-1"}' "$(cat "$B/pub/sessions/session.jsonl" 2>/dev/null)"
-chk "旧对话留了 .pre-restore 备份" 1 \
-    "$(ls -d "$B/pub"/sessions.pre-restore-* 2>/dev/null | wc -l)"
+if [ "$SYMLINK_OK" = 1 ]; then
+  chk "sessions 仍是软链" 1 "$([ -L "$B/root/.dsh/sessions" ] && echo 1 || echo 0)"
+  chk "对话落在公开目录且已替换" 2 "$(ls "$B/pub/sessions" 2>/dev/null | wc -l)"
+  chk "对话内容来自包" '{"id":"new-1"}' "$(cat "$B/pub/sessions/session.jsonl" 2>/dev/null)"
+  chk "旧对话留了 .pre-restore 备份" 1 \
+      "$(ls -d "$B/pub"/sessions.pre-restore-* 2>/dev/null | wc -l)"
+else
+  echo "  skip symlink/public-snapshot assertions（当前 shell 无原生 symlink 能力）"
+  chk "非 symlink 夹具的对话内容来自包" '{"id":"new-1"}' \
+      "$(cat "$B/root/.dsh/sessions/session.jsonl" 2>/dev/null)"
+fi
 
 echo "② scope=plugins：只换插件"
 setup_device
@@ -94,7 +118,20 @@ chk "对话一条没动" '{"id":"old-1"}' "$(cat "$B/pub/sessions/session.jsonl"
 chk "settings.yaml 未被动" "theme: dark" "$(cat "$B/root/.dsh/settings.yaml" 2>/dev/null)"
 chk "没走整目录替换" 0 "$(ls -d "$B/root"/.dsh.pre-restore-* 2>/dev/null | wc -l)"
 
-echo "③ 老包（无清单）：必须仍是全量行为"
+echo "③ scope=settings：只换设置"
+setup_device
+rm -rf "$B/stage"; mkdir -p "$B/stage/.dsh"
+manifest settings
+echo 'theme: light' > "$B/stage/.dsh/settings.yaml"
+out="$(run_merge settings)"
+chk "结果是 RESTORE_OK" 1 "$(printf '%s' "$out" | grep -c RESTORE_OK)"
+chk "settings.yaml 来自包" "theme: light" "$(cat "$B/root/.dsh/settings.yaml" 2>/dev/null)"
+chk "插件声明未被动" 1 "$([ -f "$B/root/.dsh/profiles/web/package.json" ] && echo 1 || echo 0)"
+chk "对话未被动" '{"id":"old-1"}' "$(cat "$B/pub/sessions/session.jsonl" 2>/dev/null)"
+chk "凭据未被动" "OLD-CRED" "$(cat "$B/root/.dsh/.credentials.yaml" 2>/dev/null)"
+chk "没走整目录替换" 0 "$(ls -d "$B/root"/.dsh.pre-restore-* 2>/dev/null | wc -l)"
+
+echo "④ 老包（无清单）：必须仍是全量行为"
 setup_device
 rm -rf "$B/stage"; mkdir -p "$B/stage/.dsh/sessions" "$B/stage/.dsh/profiles/web"
 echo '{"id":"legacy-1"}'  > "$B/stage/.dsh/sessions/session.jsonl"
@@ -106,6 +143,25 @@ chk "结果是 RESTORE_OK 或 PARTIAL" 1 \
 chk "整目录替换发生了（有 .dsh.pre-restore-*）" 1 \
     "$(ls -d "$B/root"/.dsh.pre-restore-* 2>/dev/null | wc -l)"
 chk "settings.yaml 换成了包里的" "theme: light" "$(cat "$B/root/.dsh/settings.yaml" 2>/dev/null)"
+
+echo "⑤ P0 失败注入：候选校验 / rename / 中断"
+if "$PYTHON_BIN" "$REPO/tools/restore-safety-test.py"; then
+  echo "  ok   P0 恢复事务失败安全"
+else
+  echo "  FAIL P0 恢复事务失败安全"
+  fail=1
+fi
+
+echo "⑥ 未知清单范围：必须拒绝且保留现有数据"
+setup_device
+rm -rf "$B/stage"; mkdir -p "$B/stage/.dsh"
+printf '{"formatVersion":3,"scope":"mystery"}\n' > "$B/stage/.dsha-backup-manifest.json"
+echo 'theme: should-not-land' > "$B/stage/.dsh/settings.yaml"
+out="$(run_merge full || true)"
+chk "未知范围明确拒绝" 1 "$(printf '%s' "$out" | grep -c 'RESTORE_SCOPE_UNKNOWN')"
+chk "未知范围不输出成功标记" 0 "$(printf '%s' "$out" | grep -cE 'RESTORE_OK|RESTORE_PARTIAL')"
+chk "现有 settings 保持不变" "theme: dark" "$(cat "$B/root/.dsh/settings.yaml" 2>/dev/null)"
+chk "未知范围 stage 仍在" 1 "$([ -d "$B/stage" ] && echo 1 || echo 0)"
 
 echo "----------------------------------------------"
 if [ "$fail" = 0 ]; then

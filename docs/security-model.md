@@ -152,4 +152,4 @@ gh attestation verify deepseekharness-arm64-vX.Y.Z.apk --repo qiannianhuanxiang/
 | `/sdcard` 默认可达 | agent 默认就能读相册和下载目录，目前没有开关 |
 | 签名密钥待轮换 | 线上包用的是一把 debug keystore（历史原因，换掉会让所有人无法覆盖升级）。密钥轮换按 APK Signature Scheme v3 rotation 单独排期 |
 
-发现别的问题请开 issue，或者到 QQ 群 960636357 说。安全相关的问题优先处理。
+发现别的问题请开 issue，或者到 QQ 群 975836806 说。安全相关的问题优先处理。

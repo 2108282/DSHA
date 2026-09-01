@@ -84,4 +84,4 @@ cp app/build/outputs/apk/debug/app-debug.apk ./deepseekharness-arm64-v1.1.0.apk
 ## 9. 交流反馈
 
 - 项目主页：https://github.com/qiannianhuanxiang/DSHA
-- QQ 交流群：960636357 🐧
+- QQ 交流群：975836806 🐧

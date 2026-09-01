@@ -45,6 +45,9 @@ final class BackupInspector {
         long uncompressed;
         /** 清单里记的备份方 App 版本（读不到就是空串）。 */
         String appVersion = "";
+        /** 清单里记的范围与创建时间；老备份没有时为空。 */
+        String scope = "";
+        String createdAt = "";
 
         String humanSize() {
             long v = uncompressed;
@@ -121,6 +124,9 @@ final class BackupInspector {
                     }
                     info.appVersion = extractAppVersion(
                             new String(body, java.nio.charset.StandardCharsets.UTF_8));
+                    String manifestJson = new String(body, java.nio.charset.StandardCharsets.UTF_8);
+                    info.scope = extractJsonString(manifestJson, "scope");
+                    info.createdAt = extractJsonString(manifestJson, "createdAt");
                     long rest = padded - size;
                     if (!skipExactly(in, skip, rest)) {
                         info.error = "备份文件不完整（清单后提前结束）";
@@ -169,6 +175,21 @@ final class BackupInspector {
             if (!v.isEmpty() && v.length() <= 32) return v;
         }
         return "";
+    }
+
+    private static String extractJsonString(String json, String key) {
+        if (json == null || key == null) return "";
+        String needle = "\"" + key + "\"";
+        int i = json.indexOf(needle);
+        if (i < 0) return "";
+        int c = json.indexOf(':', i + needle.length());
+        if (c < 0) return "";
+        int q1 = json.indexOf('"', c + 1);
+        if (q1 < 0) return "";
+        int q2 = json.indexOf('"', q1 + 1);
+        if (q2 < 0) return "";
+        String value = json.substring(q1 + 1, q2).trim();
+        return value.length() <= 128 ? value : value.substring(0, 128);
     }
 
     private static boolean readFully(InputStream in, byte[] buf, int len) throws IOException {

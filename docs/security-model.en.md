@@ -158,4 +158,4 @@ Not hidden:
 | `/sdcard` reachable by default | The agent can read your gallery and downloads out of the box; there's no toggle yet |
 | Signing key needs rotation | Releases are signed with a debug keystore for historical reasons — replacing it would break upgrades for every existing user. Rotation via APK Signature Scheme v3 is scheduled separately |
 
-Found something else? Open an issue, or bring it to QQ group 960636357. Security reports go first.
+Found something else? Open an issue, or bring it to QQ group 975836806. Security reports go first.

@@ -48,7 +48,8 @@ public class MainActivity extends AppCompatActivity {
             backupPicker.launch(new String[]{"application/gzip", "application/x-gzip",
                     "application/x-tar", "application/octet-stream", "*/*"});
         } catch (Throwable e) {
-            Toast.makeText(this, "无法打开文件选择器：" + e, Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "无法打开文件选择器："
+                    + SensitiveData.redact(String.valueOf(e)), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -70,7 +71,7 @@ public class MainActivity extends AppCompatActivity {
 
         if (!getIntent().getBooleanExtra("skip_extract", false)) {
             ProotBootstrap proot = new ProotBootstrap(this);
-            if (!proot.isOfflineExtracted()) {
+            if (!proot.hasExpectedAlphaOfflineRuntime()) {
                 startActivity(new Intent(this, ExtractActivity.class));
                 finish();
                 return;
@@ -83,23 +84,26 @@ public class MainActivity extends AppCompatActivity {
         HarnessController.get(this).upgradeGuard();
         // 每启动 5 次自动备份一次（固定名覆盖；与手动备份独立）
         HarnessController.get(this).maybeAutoBackupOnLaunch();
-        // 检测 dsh 新版本 → 自动重跑⑥（安全守卫/补丁/内置插件适配新版本）
-        HarnessController.get(this).maybeAutoReinstallGuardOnDshUpdate();
-        // ADB 链路自动体检+自愈（打开即用：脚本/依赖/包装命令/连接，缺啥修啥）
-        HarnessController.get(this).maybeAdbSelfHeal();
-        // dsh 子包依赖完整性自愈（npmmirror 镜像元数据不一致导致 Cannot find module）
-        HarnessController.get(this).maybeHealDshDeps();
-        // write 工具悬空链接自愈（proot l2s 与 dsh 的 link 发布冲突；幂等秒回）
-        HarnessController.get(this).maybeFixFsWrite();
-        // 空 pets 目录清理（deepseek-pet 插件空目录会崩插件树）
-        HarnessController.get(this).maybeCleanEmptyPets();
-        // 会话损坏自愈（中途强杀导致 SQLite 写一半 → 历史加载失败）
-        HarnessController.get(this).maybeHealSessionCorruption();
-        // 步骤⑥版本对比：内置插件/补丁有更新时自动重跑（无需手动重装⑥）
-        HarnessController.get(this).maybeRefreshStep6();
-        // 内置插件注册自愈：⑥ 可能跑在 profile 生成之前（那时注册会被静默跳过），
-        // 所以每次开 App 都校验一遍「设备引导插件是否真的注册进 bundles」
-        HarnessController.get(this).ensureBuiltinPluginsReady();
+        // Alpha keeps the official profile opaque. Retained ADB settings may
+        // still start the loopback-only 3090 bridge, but no legacy runtime
+        // maintenance may inspect, repair, or mutate the Alpha profile.
+        HarnessController controller = HarnessController.get(this);
+        if (!controller.isAlphaRuntime()) {
+            // 检测 dsh 新版本 → 自动重跑⑥（安全守卫/补丁/内置插件适配新版本）
+            controller.maybeAutoReinstallGuardOnDshUpdate();
+            controller.maybeAdbSelfHeal();
+            // dsh 子包依赖完整性自愈（npmmirror 镜像元数据不一致导致 Cannot find module）
+            controller.maybeHealDshDeps();
+            // write 工具悬空链接自愈（proot l2s 与 dsh 的 link 发布冲突；幂等秒回）
+            controller.maybeFixFsWrite();
+            // 空 pets 目录清理（deepseek-pet 插件空目录会崩插件树）
+            controller.maybeCleanEmptyPets();
+            // 会话损坏自愈（中途强杀导致 SQLite 写一半 → 历史加载失败）
+            controller.maybeHealSessionCorruption();
+            // 步骤⑥版本对比：内置插件/补丁/内置插件注册的 legacy 自愈。
+            controller.maybeRefreshStep6();
+            controller.ensureBuiltinPluginsReady();
+        }
         // 崩溃自愈提示：上次异常退出时读 crash.log 告知原因（不阻塞使用）
         showCrashRecoveryNotice();
         // 全新环境可恢复检测。走到这里 rootfs 一定已解压（skip_extract=true 来自
@@ -107,9 +111,6 @@ public class MainActivity extends AppCompatActivity {
         // skip_extract —— 首启那次弹窗被用户划掉/进程被杀后，下次开 App 还有机会补上
         // （issue #22）。方法内部只在 .dsh 尚无用户数据时才弹，不会覆盖已有数据。
         HarnessController.get(this).maybePromptRestore(this);
-        // 上次重解压没走完 → 数据保护目录还在，问用户要不要把数据恢复回来。
-        // **必须排在升级提示之前**：数据没归位就再提示重解压，只会把同一个失败重复一遍。
-        HarnessController.get(this).maybeOfferPreservedDataRecovery(this);
         // 离线包升级感知：APK 内置新离线包 → 提示重解压（数据自动保留）。
         // 放外面：正常启动（rootfs 已解压）也要检测，方法内部自带
         // isOfflineExtracted() 保护（首启未解压时静默）。
@@ -302,9 +303,12 @@ public class MainActivity extends AppCompatActivity {
             SharedPreferences prefs = getSharedPreferences("deepseekharness", MODE_PRIVATE);
             if (android.os.Environment.isExternalStorageManager()) {
                 // 已授予：如果之前因为没权限跳过过迁移，这里补跑一次（幂等、失败无感）
-                if (!prefs.getBoolean("public_data_migrated", false)) {
+                HarnessController hc = HarnessController.get(this);
+                // Alpha deliberately keeps session files opaque.  Do not mark
+                // the legacy migration complete when the call is a no-op.
+                if (!hc.runtimeId().equals(Constants.DSH_ALPHA_RUNTIME_ID)
+                        && !prefs.getBoolean("public_data_migrated", false)) {
                     prefs.edit().putBoolean("public_data_migrated", true).apply();
-                    final HarnessController hc = HarnessController.get(this);
                     new Thread(() -> {
                         try {
                             hc.migratePublicDataNow();
@@ -434,8 +438,10 @@ public class MainActivity extends AppCompatActivity {
      *  同一批更新只提示一次 —— 用待更新文件名的指纹记住，别每次启动都烦人。 */
     private void maybeHintRuntimeUpdate() {
         try {
+            HarnessController controller = HarnessController.get(this);
+            if (controller.isAlphaRuntime()) return;
             RuntimeUpdater.Result probe = RuntimeUpdater.checkAndApply(
-                    getApplicationContext(), HarnessController.get(this), true);
+                    getApplicationContext(), controller, true);
             if (probe.updated <= 0) return;
             StringBuilder key = new StringBuilder();
             for (String f : probe.changed) {
@@ -460,7 +466,8 @@ public class MainActivity extends AppCompatActivity {
                         .show();
             });
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "脚本更新检查失败（忽略）: " + e);
+            android.util.Log.w("DSHA", "脚本更新检查失败（忽略）: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
     }
 

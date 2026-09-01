@@ -88,7 +88,7 @@ public class TerminalFragment extends Fragment {
         });
 
         // 重绘历史（静态 buffer 切页后仍在）
-        String show = buffer.length() == 0 ? "" : buffer.toString();
+        String show = buffer.length() == 0 ? "" : SensitiveData.redact(buffer.toString());
         outputText.setText(show.isEmpty() ? "Ubuntu 24.04 · 回车执行 · 中止 · exit 退出" : show);
         scrollView.post(() -> scrollView.fullScroll(View.FOCUS_DOWN));
 
@@ -151,7 +151,8 @@ public class TerminalFragment extends Fragment {
                 }
                 mainHandler.post(() -> appendLine("\n[会话已退出]"));
             } catch (Exception e) {
-                mainHandler.post(() -> appendLine("终端启动失败：" + e.getMessage()));
+                mainHandler.post(() -> appendLine("终端启动失败："
+                        + SensitiveData.redact(String.valueOf(e))));
             } finally {
                 shellStarting = false;
             }
@@ -173,7 +174,7 @@ public class TerminalFragment extends Fragment {
             p.getOutputStream().write((cmd + "\n").getBytes(StandardCharsets.UTF_8));
             p.getOutputStream().flush();
         } catch (IOException e) {
-            appendLine("发送失败：" + e.getMessage());
+            appendLine("发送失败：" + SensitiveData.redact(String.valueOf(e)));
         }
     }
 
@@ -184,6 +185,10 @@ public class TerminalFragment extends Fragment {
     /** 始终写静态 buffer（切页后继续累积，否则历史丢）；有绑定视图才刷 UI */
     private void appendRaw(String s) {
         if (s == null || s.isEmpty()) return;
+        // Process output and entered commands are display-only here. Keep the
+        // bytes sent to the shell untouched, but never retain credentials in
+        // the transcript/UI buffer.
+        s = SensitiveData.redact(s);
         buffer.append(s);
         if (buffer.length() > 300000) {
             // 保留最近 10 万字符（不能整体清空，否则历史全丢）
@@ -237,11 +242,14 @@ public class TerminalFragment extends Fragment {
     /** 外部注入文本到终端 buffer（ADB 配对失败日志等）。跨线程安全，终端页可见可复制。 */
     public static void inject(String text) {
         if (text == null || text.isEmpty()) return;
+        // Injected diagnostics (for example ADB pairing output) are shown and
+        // retained in the static transcript; keep credentials out of both.
+        final String safeText = SensitiveData.redact(text);
         android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
         h.post(() -> {
             synchronized (TerminalFragment.class) {
-                buffer.append(text);
-                if (!text.endsWith("\n")) buffer.append('\n');
+                buffer.append(safeText);
+                if (!safeText.endsWith("\n")) buffer.append('\n');
                 // 与 appendRaw 保持一致：超限保留尾部 10 万字符（不能整体清空，否则历史全丢）
                 if (buffer.length() > 300000) {
                     buffer.delete(0, buffer.length() - 100000);

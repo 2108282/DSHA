@@ -37,9 +37,7 @@
     <uses-feature
         android:name="android.hardware.camera.flash"
         android:required="false" />
-    <!-- ADB 保活：系统休眠会冻结后台网络，加入电池优化白名单后连接才能长期在线。
-         一次性弹窗申请（本 App 不上架 Play，不受该权限的商店政策限制）。 -->
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- ADB 保活：系统休眠会冻结后台网络，加入电池优化白名单后连接才能长期在线。 -->
     <!-- agent 通过 3090 桥查已装应用/启动应用（App 层能力，不需要 ADB 或 Shizuku）。
          Android 11+ 不声明它 getInstalledPackages 只能看到极少数应用。 -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
@@ -157,6 +155,17 @@
             android:enabled="true"
             android:exported="true"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <provider
+            android:name=".DshaDocumentsProvider"
+            android:authorities="com.dsh.client.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
     </application>
 
 </manifest>

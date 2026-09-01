@@ -79,6 +79,7 @@ public final class PtyTerminalFragment extends Fragment
     private HarnessController c;
     private TerminalView view;
     private TextView title;
+    private PtySession attachedSession;
     private boolean ctrlDown;
     private boolean altDown;
     private TextView ctrlBtn;
@@ -137,6 +138,8 @@ public final class PtyTerminalFragment extends Fragment
     private void attachOrStart() {
         PtySession s = session;
         if (s != null && s.isRunning()) {
+            attachedSession = s;
+            s.attachListener(this);
             view.attachSession(s.session());
             title.setText(displayTitle(s.session()));
             return;
@@ -146,17 +149,21 @@ public final class PtyTerminalFragment extends Fragment
             // 重新算行列并通知 PTY（否则 TUI 的边框会错位）。
             PtySession ns = PtySession.start(c.getProot(), 80, 24, this);
             session = ns;
+            attachedSession = ns;
+            ns.attachListener(this);
             view.attachSession(ns.session());
             title.setText("Ubuntu · PTY");
         } catch (Throwable e) {
-            title.setText("终端启动失败：" + e);
-            android.util.Log.w("DSHA", "PTY 启动失败", e instanceof Exception ? (Exception) e : null);
+            String safe = SensitiveData.redact(String.valueOf(e));
+            title.setText("终端启动失败：" + safe);
+            android.util.Log.w("DSHA", "PTY 启动失败：" + safe);
         }
     }
 
     private String displayTitle(TerminalSession s) {
         String t = s == null ? null : s.getTitle();
-        return t == null || t.trim().isEmpty() ? "Ubuntu · PTY" : t.trim();
+        return t == null || t.trim().isEmpty()
+                ? "Ubuntu · PTY" : SensitiveData.redact(t.trim());
     }
 
     // ==================== 扩展键 ====================
@@ -275,6 +282,19 @@ public final class PtyTerminalFragment extends Fragment
 
     // ==================== PtySession.Listener ====================
 
+    @Override
+    public void onDestroyView() {
+        PtySession s = attachedSession;
+        if (s != null) s.detachListener(this);
+        attachedSession = null;
+        main.removeCallbacksAndMessages(null);
+        redrawPending.set(false);
+        view = null;
+        title = null;
+        c = null;
+        super.onDestroyView();
+    }
+
     /** PTY 每来一小段输出就回调一次（几十字节一次很常见），无节流地 post 会把主线程
      *  队列灌满 —— 「新终端越用越卡」就是这么来的。用一个 pending 标志把连续多次输出
      *  合并成一次重绘：反正屏幕只需要显示最后的状态。 */
@@ -284,35 +304,52 @@ public final class PtyTerminalFragment extends Fragment
     @Override
     public void onOutput() {
         if (!redrawPending.compareAndSet(false, true)) return;
-        main.post(() -> {
+        final TerminalView target = view;
+        if (target == null) {
             redrawPending.set(false);
-            if (view != null) view.onScreenUpdated();
+            return;
+        }
+        target.postOnAnimation(() -> {
+            redrawPending.set(false);
+            if (!isAdded() || view != target || target.getWindowToken() == null) return;
+            target.onScreenUpdated();
         });
     }
 
     @Override
     public void onTitle(String t) {
+        final TextView target = title;
         main.post(() -> {
-            if (title != null && t != null && !t.trim().isEmpty()) title.setText(t.trim());
+            if (!isAdded() || target == null || title != target) return;
+            if (t != null && !t.trim().isEmpty()) {
+                target.setText(SensitiveData.redact(t.trim()));
+            }
         });
     }
 
     @Override
     public void onExit(int status) {
+        final TextView target = title;
+        final PtySession exited = attachedSession;
         main.post(() -> {
-            if (title != null) title.setText("会话已结束（退出码 " + status + "）");
+            if (isAdded() && target != null && title == target) {
+                target.setText("会话已结束（退出码 " + status + "）");
+            }
         });
-        session = null;
+        if (session == exited) session = null;
     }
 
     @Override
     public void onCopy(String text) {
+        final TerminalView target = view;
         main.post(() -> {
             try {
+                if (!isAdded() || target == null || view != target) return;
                 android.content.ClipboardManager cm = (android.content.ClipboardManager)
                         requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
                 if (cm != null && text != null) {
-                    cm.setPrimaryClip(android.content.ClipData.newPlainText("term", text));
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("term",
+                            SensitiveData.redact(text)));
                     Toast.makeText(requireContext(), "已复制", Toast.LENGTH_SHORT).show();
                 }
             } catch (Throwable ignored) {
@@ -322,8 +359,10 @@ public final class PtyTerminalFragment extends Fragment
 
     @Override
     public void onPasteRequest() {
+        final TerminalView target = view;
         main.post(() -> {
             try {
+                if (!isAdded() || target == null || view != target) return;
                 android.content.ClipboardManager cm = (android.content.ClipboardManager)
                         requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
                 if (cm == null || cm.getPrimaryClip() == null
@@ -337,8 +376,10 @@ public final class PtyTerminalFragment extends Fragment
 
     @Override
     public void onBell() {
+        final TerminalView target = view;
         main.post(() -> {
             try {
+                if (!isAdded() || target == null || view != target) return;
                 android.os.Vibrator v = (android.os.Vibrator)
                         requireContext().getSystemService(Context.VIBRATOR_SERVICE);
                 if (v != null) v.vibrate(30);   // 响铃改成震一下：手机上「响」多半是骚扰
@@ -429,27 +470,27 @@ public final class PtyTerminalFragment extends Fragment
 
     @Override
     public void onEmulatorSet() {
-        if (view != null) view.onScreenUpdated();
+        onOutput();
     }
 
     @Override
     public void logError(String tag, String message) {
-        android.util.Log.e("DSHA-ptyview", tag + ": " + message);
+        android.util.Log.e("DSHA-ptyview", SensitiveData.redact(tag + ": " + message));
     }
 
     @Override
     public void logWarn(String tag, String message) {
-        android.util.Log.w("DSHA-ptyview", tag + ": " + message);
+        android.util.Log.w("DSHA-ptyview", SensitiveData.redact(tag + ": " + message));
     }
 
     @Override
     public void logInfo(String tag, String message) {
-        android.util.Log.i("DSHA-ptyview", tag + ": " + message);
+        android.util.Log.i("DSHA-ptyview", SensitiveData.redact(tag + ": " + message));
     }
 
     @Override
     public void logDebug(String tag, String message) {
-        android.util.Log.d("DSHA-ptyview", tag + ": " + message);
+        android.util.Log.d("DSHA-ptyview", SensitiveData.redact(tag + ": " + message));
     }
 
     @Override
@@ -458,11 +499,12 @@ public final class PtyTerminalFragment extends Fragment
 
     @Override
     public void logStackTraceWithMessage(String tag, String message, Exception e) {
-        android.util.Log.w("DSHA-ptyview", tag + ": " + message, e);
+        android.util.Log.w("DSHA-ptyview", SensitiveData.redact(tag + ": " + message
+                + " " + String.valueOf(e)));
     }
 
     @Override
     public void logStackTrace(String tag, Exception e) {
-        android.util.Log.w("DSHA-ptyview", tag, e);
+        android.util.Log.w("DSHA-ptyview", SensitiveData.redact(tag + ": " + String.valueOf(e)));
     }
 }

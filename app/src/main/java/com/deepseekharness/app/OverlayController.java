@@ -180,6 +180,9 @@ final class OverlayController {
      */
     static void push(Context ctx, String sessionKey, String kind, String text) {
         if (ctx == null || !enabled(ctx) || !permitted(ctx)) return;
+        // Overlay content is display-only. Keep any credentials in streamed
+        // diagnostics out of both the transient buffer and the window.
+        text = SensitiveData.redact(text);
         final String k = kind == null ? "delta" : kind;
         if ("reasoning".equals(k) && !showReasoning(ctx)) return;
         final String key = sessionKey == null || sessionKey.isEmpty() ? "-" : sessionKey;
@@ -274,16 +277,17 @@ final class OverlayController {
                 root.setVisibility(View.VISIBLE);
                 if (hideTask != null) mainHandler().removeCallbacks(hideTask);   // 等用户，不淡出
 
-                confirmRow.findViewById(1001).setOnClickListener(v -> {
+                confirmRow.findViewById(R.id.overlay_confirm_allow).setOnClickListener(v -> {
                     finishConfirm(ctx);
                     if (onAllow != null) onAllow.run();
                 });
-                confirmRow.findViewById(1002).setOnClickListener(v -> {
+                confirmRow.findViewById(R.id.overlay_confirm_deny).setOnClickListener(v -> {
                     finishConfirm(ctx);
                     if (onDeny != null) onDeny.run();
                 });
             } catch (Throwable e) {
-                android.util.Log.w("DSHA", "悬浮条确认显示失败: " + e);
+                android.util.Log.w("DSHA", "悬浮条确认显示失败: "
+                        + SensitiveData.redact(String.valueOf(e)));
                 confirming = false;
             }
         });
@@ -335,7 +339,8 @@ final class OverlayController {
                 }
                 scheduleHide(ctx);
             } catch (Throwable e) {
-                android.util.Log.w("DSHA", "悬浮条更新失败: " + e);
+                android.util.Log.w("DSHA", "悬浮条更新失败: "
+                        + SensitiveData.redact(String.valueOf(e)));
             }
         });
     }
@@ -411,7 +416,8 @@ final class OverlayController {
                 }
                 if (!sticky) scheduleHide(ctx);
             } catch (Throwable e) {
-                android.util.Log.w("DSHA", "悬浮条更新失败: " + e);
+                android.util.Log.w("DSHA", "悬浮条更新失败: "
+                        + SensitiveData.redact(String.valueOf(e)));
             }
         });
     }
@@ -513,8 +519,8 @@ final class OverlayController {
         LinearLayout row = new LinearLayout(app);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setVisibility(View.GONE);
-        row.addView(actionButton(app, 1001, "允许", 0xFF2E7D32));
-        row.addView(actionButton(app, 1002, "拒绝", 0xFF8E2A2A));
+        row.addView(actionButton(app, R.id.overlay_confirm_allow, "允许", 0xFF2E7D32));
+        row.addView(actionButton(app, R.id.overlay_confirm_deny, "拒绝", 0xFF8E2A2A));
         box.addView(row);
 
         // 点条子本身收起（确认时不收 —— 那两个按钮才是出口）
@@ -549,7 +555,8 @@ final class OverlayController {
             applyStyle(app);
         } catch (Throwable e) {
             // 权限被撤或某些 ROM 拒绝 → 安静降级，不影响 agent 干活
-            android.util.Log.w("DSHA", "悬浮条创建失败（权限被撤？）: " + e);
+            android.util.Log.w("DSHA", "悬浮条创建失败（权限被撤？）: "
+                    + SensitiveData.redact(String.valueOf(e)));
             root = null;
             label = null;
             confirmRow = null;

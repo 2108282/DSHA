@@ -43,7 +43,8 @@ public class BootReceiver extends BroadcastReceiver {
                         android.util.Log.i("DSHA-ADB", "已自动开启无线调试（WRITE_SECURE_SETTINGS）");
                     }
                 } catch (Throwable e) {
-                    android.util.Log.w("DSHA-ADB", "自动开无线调试失败: " + e);
+                    android.util.Log.w("DSHA-ADB", "自动开无线调试失败: "
+                            + SensitiveData.redact(String.valueOf(e)));
                 }
             } else {
                 android.util.Log.i("DSHA-ADB", "无 WRITE_SECURE_SETTINGS 权限，靠 Shizuku/看门狗兜底");

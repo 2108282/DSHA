@@ -1,158 +1,132 @@
 package com.deepseekharness.app;
 
 /**
- * 局域网桥的凭据判定与请求行改写 —— 纯字符串逻辑，<b>刻意不依赖任何 Android API</b>。
+ * Small, Android-free LAN credential and request-line helpers.
  *
- * <p>为什么从 {@link LanProxyService} 里抽出来：这几个函数全是手写的 HTTP 头/查询串
- * 切分，历史上连着栽过三次，而且每次都是「看起来对、真跑才知道错」的那种：
- * <ul>
- *   <li>token 在整个请求头里 {@code indexOf("token=")} → 实际靠 Referer 生效，
- *       token 会随外链泄漏，WebSocket 则必然 401；</li>
- *   <li>剥离 token 时把 HTTP 版本一起吃掉 → 后端收到 {@code GET /} 直接 400；</li>
- *   <li>{@code [&]?token=} 没有参数名边界 → 误删 {@code csrf_token=}。</li>
- * </ul>
- * 抽成无 Android 依赖的类之后，{@code tools/pure-logic-test.sh} 能用 javac 直接编译
- * 运行断言，不需要设备、不需要 SDK、不需要联网。这类字符串处理必须能真跑。
+ * <p>The LAN credential is deliberately separate from the dsh BrowserAuth
+ * cookie and from the 3090 bridge token. Only an exact {@code token} query
+ * parameter or the DSHA LAN cookie is accepted; arbitrary headers are not
+ * credentials for this proxy.</p>
  */
 final class LanAuth {
 
-    /** 凭据不通过。 */
     static final int AUTH_DENY = 0;
-    /** 通过，凭据来自 Cookie 或 X-DSHA-Token（无需再下发 Cookie）。 */
     static final int AUTH_OK = 1;
-    /** 通过，凭据来自 URL {@code ?token=}（调用方应回设 Cookie）。 */
     static final int AUTH_OK_SET_COOKIE = 2;
 
-    /** Cookie 名。故意与后端 auth patch 的 {@code dsha_t} 区分：那是 dsh 自己的
-     *  token，两者语义不同，混用会让「哪一层拒的」查不清楚。 */
-    static final String COOKIE_NAME = "dsha_token";
+    /** Cookie owned by the DSHA LAN proxy, never by dsh itself. */
+    static final String COOKIE_NAME = "dsha_lan";
 
     private LanAuth() {
     }
 
-    /**
-     * 校验请求凭据。只认三个来源：请求行的 {@code ?token=}、{@code X-DSHA-Token} 头、
-     * 本站 Cookie。
-     *
-     * <p><b>token 为空一律拒绝</b>（fail-closed）。原来是「无 token 配置 → 放行」，
-     * 而桥监听在 {@code 0.0.0.0}，一旦 token 因为任何原因没初始化，同一 WiFi 下的
-     * 任何设备都能无凭据打开 dsh WebUI —— 而 WebUI 里的 agent 能执行 bash。宁可
-     * 局域网用不了，也不能默认敞开。
-     *
-     * @param head  完整请求头（含请求行）
-     * @param token 本机 LAN token
-     * @return {@link #AUTH_DENY} / {@link #AUTH_OK} / {@link #AUTH_OK_SET_COOKIE}
-     */
+    /** Return the credential source for one complete request header. */
     static int tokenOk(String head, String token) {
         if (head == null || token == null || token.isEmpty()) return AUTH_DENY;
-        int nl = head.indexOf('\n');
-        String reqLine = nl >= 0 ? head.substring(0, nl) : head;
-        for (String l : head.split("\\r?\\n")) {
-            int i = l.indexOf(':');
-            if (i <= 0) continue;
-            String key = l.substring(0, i).trim();
-            String v = l.substring(i + 1).trim();
-            if (key.equalsIgnoreCase("X-DSHA-Token")) {
-                return constantTimeEquals(token, v) ? AUTH_OK : AUTH_DENY;
-            }
-            if (key.equalsIgnoreCase("Cookie")) {
-                for (String c : v.split(";")) {
-                    c = c.trim();
-                    if (c.startsWith(COOKIE_NAME + "=")
-                            && constantTimeEquals(token, c.substring(COOKIE_NAME.length() + 1))) {
-                        return AUTH_OK;
-                    }
-                    // Cookie 在但不对（换过 token / 别的实例发的）不在这里结案，
-                    // 继续看 query，否则用户拿着新地址也进不来。
+        String cookie = null;
+        for (String line : head.split("\\r?\\n")) {
+            int colon = line.indexOf(':');
+            if (colon <= 0) continue;
+            String name = line.substring(0, colon).trim();
+            String value = line.substring(colon + 1).trim();
+            if (!name.equalsIgnoreCase("Cookie")) continue;
+            for (String part : value.split(";")) {
+                String p = part.trim();
+                String prefix = COOKIE_NAME + "=";
+                if (p.startsWith(prefix)) {
+                    cookie = p.substring(prefix.length()).trim();
+                    break;
                 }
             }
         }
-        String q = queryToken(reqLine);
-        if (q != null && constantTimeEquals(token, q)) return AUTH_OK_SET_COOKIE;
-        return AUTH_DENY;
+        if (cookie != null && constantTimeEquals(token, cookie)) return AUTH_OK;
+        String query = queryToken(head);
+        return query != null && constantTimeEquals(token, query)
+                ? AUTH_OK_SET_COOKIE : AUTH_DENY;
     }
 
-    /** 从请求行（{@code GET /p?a=1&token=xxx HTTP/1.1}）取 token 参数值，没有则 null。
-     *  只看请求行的查询串，不扫其它头 —— 否则 Referer 里残留的 token 会被当成凭据。 */
-    static String queryToken(String reqLine) {
-        if (reqLine == null) return null;
-        int sp1 = reqLine.indexOf(' ');
-        if (sp1 < 0) return null;
-        int sp2 = reqLine.indexOf(' ', sp1 + 1);
-        String target = sp2 > sp1 ? reqLine.substring(sp1 + 1, sp2) : reqLine.substring(sp1 + 1);
+    /** Read only the request target, never Referer or another header. */
+    static String queryToken(String head) {
+        if (head == null) return null;
+        int nl = head.indexOf('\n');
+        String line = nl >= 0 ? head.substring(0, nl) : head;
+        int first = line.indexOf(' ');
+        if (first < 0) return null;
+        int second = line.indexOf(' ', first + 1);
+        String target = second > first
+                ? line.substring(first + 1, second)
+                : line.substring(first + 1);
         return queryTokenFromTarget(target);
     }
 
-    /** 从请求目标（{@code /p?a=1&token=xxx}）取 token 参数值，没有则 null。
-     *
-     *  <p>HttpShellService（3090 桥）也用这一份：它原来自己写了
-     *  {@code query.indexOf("token=")}，同样没有参数名边界 ——
-     *  {@code ?xtoken=junk&token=真值} 会先命中 {@code xtoken=} 取到 junk 而误拒。
-     *  两处各写一套判断正是这个项目反复栽的模式，合并到一份并配上断言。 */
+    /** Read an exact, undecoded {@code token=} parameter with a name boundary. */
     static String queryTokenFromTarget(String target) {
-        String v = Query.raw(Query.of(target), "token");
-        return v == null ? null : v.trim();
+        String raw = Query.raw(Query.of(target), "token");
+        return raw == null ? null : raw.trim();
     }
 
-    /**
-     * 剥掉请求行里的 {@code token=} 参数（只用于本站鉴权，不该转发进后端日志）。
-     *
-     * <p>原实现：
-     * <pre>
-     * int q = line.indexOf('?');
-     * String path  = line.substring(0, q);   // "GET /"
-     * String query = line.substring(q + 1);  // "token=xxx HTTP/1.1"  ← 版本号进来了
-     * String cleaned = query.replaceAll("[&]?token=[^&]*", "");  // 全被吃掉 → ""
-     * if (cleaned.isEmpty()) return path;    // "GET /"  ← HTTP 版本没了
-     * </pre>
-     * token 是唯一 query 参数时（打开首页 {@code /?token=xxx}，最常见的场景）转发给
-     * 后端的请求行退化成 {@code GET /}，Node 的 parser 当畸形请求 400。且
-     * {@code [&]?token=} 没有参数名边界，{@code csrf_token=} 会被连带剥掉。
-     *
-     * <p>现在按「方法 / 目标 / 版本」三段切开，只动中间那段的 query，逐参数精确
-     * 比较参数名，与 {@link #queryToken} 同一口径。
-     */
+    /** Remove only the LAN query credential while preserving HTTP version. */
     static String stripTokenFromRequestLine(String line) {
         if (line == null) return null;
-        int sp1 = line.indexOf(' ');
-        if (sp1 < 0) return line;
-        int sp2 = line.indexOf(' ', sp1 + 1);
-        String head = line.substring(0, sp1 + 1);                    // "GET "
-        String target = sp2 > sp1 ? line.substring(sp1 + 1, sp2) : line.substring(sp1 + 1);
-        String tail = sp2 > sp1 ? line.substring(sp2) : "";           // " HTTP/1.1"
+        int first = line.indexOf(' ');
+        if (first < 0) return line;
+        int second = line.indexOf(' ', first + 1);
+        String target = second > first
+                ? line.substring(first + 1, second)
+                : line.substring(first + 1);
+        String tail = second > first ? line.substring(second) : "";
         int q = target.indexOf('?');
         if (q < 0) return line;
         String path = target.substring(0, q);
         String query = target.substring(q + 1);
-        String frag = "";
+        String fragment = "";
         int hash = query.indexOf('#');
         if (hash >= 0) {
-            frag = query.substring(hash);
+            fragment = query.substring(hash);
             query = query.substring(0, hash);
         }
         StringBuilder kept = new StringBuilder();
-        for (String kv : query.split("&")) {
-            if (kv.isEmpty()) continue;
-            int eq = kv.indexOf('=');
-            String k = eq > 0 ? kv.substring(0, eq) : kv;
-            if (k.equals("token")) continue;
+        for (String item : query.split("&")) {
+            if (item.isEmpty()) continue;
+            int eq = item.indexOf('=');
+            String name = eq > 0 ? item.substring(0, eq) : item;
+            if ("token".equals(name)) continue;
             if (kept.length() > 0) kept.append('&');
-            kept.append(kv);
+            kept.append(item);
         }
-        String rebuilt = kept.length() > 0 ? path + "?" + kept + frag : path + frag;
-        return head + rebuilt + tail;
+        String rebuilt = kept.length() == 0 ? path + fragment
+                : path + "?" + kept + fragment;
+        return line.substring(0, first + 1) + rebuilt + tail;
     }
 
-    /** 定长比较，避免按前缀长度泄漏信息。 */
+    /** Remove only an exact LAN {@code token=} query parameter from a URL. */
+    static String stripTokenFromUrl(String url) {
+        if (url == null || url.isEmpty()) return url;
+        int hash = url.indexOf('#');
+        String fragment = hash >= 0 ? url.substring(hash) : "";
+        String base = hash >= 0 ? url.substring(0, hash) : url;
+        int q = base.indexOf('?');
+        if (q < 0) return url;
+        String path = base.substring(0, q);
+        String query = base.substring(q + 1);
+        StringBuilder kept = new StringBuilder();
+        for (String item : query.split("&", -1)) {
+            if (item.isEmpty()) continue;
+            int eq = item.indexOf('=');
+            String name = eq > 0 ? item.substring(0, eq) : item;
+            if ("token".equals(name)) continue;
+            if (kept.length() > 0) kept.append('&');
+            kept.append(item);
+        }
+        return kept.length() == 0 ? path + fragment : path + "?" + kept + fragment;
+    }
+
     static boolean constantTimeEquals(String a, String b) {
         if (a == null || b == null) return false;
-        int diff = 0;
+        int diff = a.length() ^ b.length();
         for (int i = 0; i < a.length(); i++) {
-            char ca = a.charAt(i);
-            char cb = i < b.length() ? b.charAt(i) : 0;
-            diff |= ca ^ cb;
+            diff |= a.charAt(i) ^ (i < b.length() ? b.charAt(i) : 0);
         }
-        diff |= a.length() ^ b.length();
         return diff == 0;
     }
 }

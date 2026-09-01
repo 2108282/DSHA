@@ -297,8 +297,13 @@ class PluginController {
 
     private volatile String lastToggleError = "";
 
+    static boolean isHmrPlugin(String value) {
+        String s = value == null ? "" : value.toLowerCase(java.util.Locale.ROOT);
+        return s.contains("cordis-plugin-hmr") || s.contains("plugin-hmr");
+    }
+
     public String getLastToggleError() {
-        return lastToggleError == null ? "" : lastToggleError;
+        return SensitiveData.redact(lastToggleError == null ? "" : lastToggleError);
     }
 
     /**
@@ -370,7 +375,8 @@ class PluginController {
                     java.nio.file.StandardCopyOption.ATOMIC_MOVE);
             return true;
         } catch (Throwable t) {
-            android.util.Log.w("DSHA", "写 " + f.getName() + " 失败: " + t);
+            android.util.Log.w("DSHA", "写 " + f.getName() + " 失败: "
+                    + SensitiveData.redact(String.valueOf(t)));
             //noinspection ResultOfMethodCallIgnored
             tmp.delete();
             return false;
@@ -444,7 +450,7 @@ class PluginController {
                     + "（patch 层，刷新页面即生效）");
             return true;
         } catch (Throwable t) {
-            lastToggleError = "patch 层切换失败：" + t;
+            lastToggleError = SensitiveData.redact("patch 层切换失败：" + t);
             return null;
         }
     }
@@ -542,7 +548,7 @@ class PluginController {
 
     private static String shortOf(String s) {
         if (s == null || s.isEmpty()) return "无输出";
-        String t = s.replace('\n', ' ').trim();
+        String t = SensitiveData.redact(s.replace('\n', ' ').trim());
         return t.length() > 60 ? t.substring(0, 60) + "…" : t;
     }
 
@@ -585,7 +591,8 @@ class PluginController {
             }
             return "NOT_FOUND";
         } catch (Exception e) {
-            android.util.Log.w("DSHA", "批量导出失败: " + e);
+            android.util.Log.w("DSHA", "批量导出失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
             return null;
         } finally {
             //noinspection ResultOfMethodCallIgnored
@@ -595,6 +602,10 @@ class PluginController {
 
     public boolean togglePlugin(String name, boolean enable) {
         lastToggleError = "";
+        if (isHmrPlugin(name)) {
+            lastToggleError = "cordis-plugin-hmr 不兼容当前移动端运行方式";
+            return false;
+        }
         // 首选官方 patch 层：不搬文件、HMR 约 1 秒生效、不用重启。走不通才退回搬文件。
         Boolean viaPatch = togglePluginViaPatch(name, enable);
         if (viaPatch != null) return viaPatch;
@@ -625,7 +636,8 @@ class PluginController {
                                 lastToggleError = name + " 的实体之前丢了，已从内置资源补回；"
                                         + "请再点一次开关启用";
                             } catch (Throwable t) {
-                                lastToggleError = name + " 的实体已丢失，补回失败：" + t;
+                                lastToggleError = SensitiveData.redact(
+                                        name + " 的实体已丢失，补回失败：" + t);
                             }
                         } else {
                             lastToggleError = name + " 的实体已丢失（只剩一个禁用标记），"
@@ -656,9 +668,11 @@ class PluginController {
                                     + " " + ShellQuote.arg(d + "/" + name) + " && echo OK");
                     boolean okOn = r != null && r.contains("OK");
                     if (!okOn) {
-                        lastToggleError = "启用失败：实体改名没成功（输出："
-                                + (r == null ? "无" : r.trim()) + "）";
-                        android.util.Log.w("DSHA", "启用插件失败 " + name + ": " + r);
+                        lastToggleError = SensitiveData.redact(
+                                "启用失败：实体改名没成功（输出："
+                                + (r == null ? "无" : r.trim()) + "）");
+                        android.util.Log.w("DSHA", "启用插件失败 " + name + ": "
+                                + SensitiveData.redact(r));
                     }
                     return okOn;
                 } else if (!enable) {
@@ -673,14 +687,16 @@ class PluginController {
                                     + " 2>/dev/null || touch " + ShellQuote.arg(d + "/" + name + ".disabled") + " ) && echo OK");
                     boolean ok = r != null && r.contains("OK");
                     if (!ok) {
-                        android.util.Log.w("DSHA", "禁用插件失败 " + name + " 输出: " + (r == null ? "null" : r));
+                        android.util.Log.w("DSHA", "禁用插件失败 " + name + " 输出: "
+                                + SensitiveData.redact(r == null ? "null" : r));
                     }
                     return ok;
                 }
             }
         } catch (Exception e) {
-            lastToggleError = "开关插件时出错：" + e;
-            android.util.Log.w("DSHA", "togglePlugin 异常 " + name + ": " + e);
+            lastToggleError = SensitiveData.redact("开关插件时出错：" + e);
+            android.util.Log.w("DSHA", "togglePlugin 异常 " + name + ": "
+                    + SensitiveData.redact(String.valueOf(e)));
             return false;
         }
         if (lastToggleError.isEmpty()) {
@@ -713,15 +729,13 @@ class PluginController {
 
     /** 判断是否为 App 内置插件（名称不带 dsha- 前缀！）。用于启用时依赖源兜底。 */
     private boolean isBuiltinPlugin(String name) {
-        return "@dsh-external/dsh-mobile-nav".equals(name)
-                || "dsh-device-shell-guide".equals(name);
+        return "dsh-device-shell-guide".equals(name);
     }
 
     /** 内置插件实体目录真实路径（name ≠ 目录名：
      *  @dsh-external/dsh-mobile-nav → /root/dsha-mobile-nav；
      *  旧实现 "dsha-"+name 会拼成不存在的路径）。 */
     private String builtinRealPath(String name) {
-        if ("@dsh-external/dsh-mobile-nav".equals(name)) return "/root/dsha-mobile-nav";
         if ("dsh-device-shell-guide".equals(name)) return "/root/dsha-device-shell-guide";
         return "/root/dsha-" + name;
     }
@@ -794,7 +808,8 @@ class PluginController {
             int n = in.read(head);
             kind = ArchiveProbe.kindOf(n <= 0 ? new byte[0] : java.util.Arrays.copyOf(head, n));
         } catch (Exception e) {
-            return new String[]{"ERR", "读文件失败：" + e.getMessage()};
+            return new String[]{"ERR", "读文件失败："
+                    + SensitiveData.redact(e.getMessage())};
         }
         if (!ArchiveProbe.canExtract(kind)) {
             return new String[]{"ERR", "不支持的格式（按文件头识别为 "
@@ -902,7 +917,8 @@ class PluginController {
                 // zip slip：条目名带 .. 或绝对路径就能写到目标目录外面去。
                 // 插件包是用户从网上下的，不能假设它善良。
                 if (!ArchiveProbe.safeEntryName(nm)) {
-                    android.util.Log.w("DSHA", "zip 里跳过可疑条目: " + nm);
+                    android.util.Log.w("DSHA", "zip 里跳过可疑条目: "
+                            + SensitiveData.redact(nm));
                     continue;
                 }
                 java.io.File out = new java.io.File(dst, nm);
@@ -935,7 +951,7 @@ class PluginController {
                 if (files > 200000) return "包内文件数异常（超过 20 万），已中止";
             }
         } catch (Exception ex) {
-            return "解压 zip 失败：" + ex.getMessage();
+            return "解压 zip 失败：" + SensitiveData.redact(ex.getMessage());
         }
         return files == 0 ? "zip 里没有任何文件" : null;
     }
@@ -994,7 +1010,7 @@ class PluginController {
         // 导入等价于安装（往 node_modules 解包 + 注册），同样留一份存档点 ——
         // 导入这条路的坑还更多：归档布局认错就会把 monorepo 的管理包当插件搬进去
         // （端到端测试抓到过）。
-        PluginSavepoint.create(proot, host,
+        String savepoint = PluginSavepoint.create(proot, host,
                 "导入插件归档 " + (tarGz == null ? "?" : tarGz.getName()));
         try {
             java.io.File staging = new java.io.File(proot.getRootfsDir(),
@@ -1014,6 +1030,7 @@ class PluginController {
                         String n = c.getName();
                         if (n.startsWith(".") || n.endsWith(".disabled")) continue;
                         if (!n.matches("[A-Za-z0-9@._+\\-]+")) continue; // 非法包名直接忽略
+                        if (isHmrPlugin(n)) continue;
                         java.io.File target = new java.io.File(dir, n);
                         host.deleteRecursively(target); // 只删目标目录内的同名旧条目
                         boolean ok = c.renameTo(target);
@@ -1021,7 +1038,13 @@ class PluginController {
                         if (ok) {
                             moved = true;
                             if (target.isDirectory() && new java.io.File(target, "package.json").isFile()) {
-                                importedNames.add(n);
+                                String declared = readPkgField(target, "name");
+                                if (isHmrPlugin(n) || isHmrPlugin(declared)) {
+                                    host.deleteRecursively(target);
+                                    moved = false;
+                                } else {
+                                    importedNames.add(n);
+                                }
                             }
                         }
                     }
@@ -1033,10 +1056,13 @@ class PluginController {
                 for (String name : importedNames) {
                     registerImportedPlugin(name);
                 }
-                android.util.Log.i("DSHA", "插件导入完成并注册: " + importedNames);
+                android.util.Log.i("DSHA", "插件导入完成并注册: "
+                        + SensitiveData.redact(importedNames.toString()));
             }
+            if (!moved && savepoint != null) PluginSavepoint.restore(proot, host);
             return moved;
         } catch (Exception ignored) {
+            if (savepoint != null) PluginSavepoint.restore(proot, host);
             return false;
         }
     }
@@ -1170,7 +1196,8 @@ class PluginController {
                     + " 个、隔离 " + quarantined.size() + " 个");
             return msg.toString();
         } catch (Throwable t) {
-            android.util.Log.w("DSHA", "自愈自指依赖失败: " + t);
+            android.util.Log.w("DSHA", "自愈自指依赖失败: "
+                    + SensitiveData.redact(String.valueOf(t)));
             return "";
         }
     }
@@ -1207,12 +1234,14 @@ class PluginController {
                     + " 2>&1; then echo QUARANTINED; else echo QUARANTINE_FAILED; fi",
                     60_000);
             if (r != null && r.contains("QUARANTINE_FAILED")) {
-                android.util.Log.w("DSHA", "隔离 " + name + " 失败（实体保持原样）: " + r);
+                android.util.Log.w("DSHA", "隔离 " + name + " 失败（实体保持原样）: "
+                        + SensitiveData.redact(r));
                 return false;
             }
             return r != null && r.contains("QUARANTINED");
         } catch (Throwable t) {
-            android.util.Log.w("DSHA", "隔离 " + name + " 失败: " + t);
+            android.util.Log.w("DSHA", "隔离 " + name + " 失败: "
+                    + SensitiveData.redact(String.valueOf(t)));
             return false;
         }
     }
@@ -1254,10 +1283,12 @@ class PluginController {
             if (r != null && r.contains("MOVED_OK")) {
                 return "link:/root/plugin-src/" + name;
             }
-            android.util.Log.w("DSHA", "把 " + name + " 挪出 node_modules 失败: " + r);
+            android.util.Log.w("DSHA", "把 " + name + " 挪出 node_modules 失败: "
+                    + SensitiveData.redact(r));
             return null;
         } catch (Throwable t) {
-            android.util.Log.w("DSHA", "把 " + name + " 挪出 node_modules 异常: " + t);
+            android.util.Log.w("DSHA", "把 " + name + " 挪出 node_modules 异常: "
+                    + SensitiveData.redact(String.valueOf(t)));
             return null;
         }
     }
@@ -1871,9 +1902,9 @@ class PluginController {
                     "node apps/cli/lib/bin.js plugin --profile web remove " + esc + " 2>&1 || " +
                     "echo '[DSHA] dsh remove 未生效，走 manifest 直改' ) ; " +
                     py + "; echo REMOVE_EXIT=$?");
-            log.append(r);
+            log.append(SensitiveData.redact(r));
         } catch (Exception e) {
-            log.append("卸载执行异常: ").append(e.getMessage());
+            log.append("卸载执行异常: ").append(SensitiveData.redact(e.getMessage()));
         }
         // 上游报告过一种更阴的情形：插件卸载后 manifest 看着干净了，但 profile 的
         // package-map/lock 仍留着 profile-local 的 @deepseek-ai 副本，故障延后爆发
@@ -1883,7 +1914,7 @@ class PluginController {
             log.append("\n\n已顺带清掉残留的 @deepseek-ai 重复副本 —— 它们会在卸载后留下来，"
                     + "让工具调用全部失败。");
         }
-        return log.toString();
+        return SensitiveData.redact(log.toString());
     }
 
     /** 双通道物理清理：Java 递归删 + 系统 rm -rf 兜底；返回是否删干净 */
@@ -1956,7 +1987,6 @@ class PluginController {
      *  再从 GitHub 装一份同名的，只会和内置版本抢同一个包名，还得走 git-hosted
      *  那条最容易出错的路（clone → 跑 prepare → 硬链接进 store）。 */
     static final String[] BUILTIN_PLUGIN_NAMES = {
-            "@dsh-external/dsh-mobile-nav",
             "dsh-device-shell-guide",
             "dsh-task-notifier",
             "dsh-status-overlay",
@@ -2312,16 +2342,24 @@ class PluginController {
             // 只在**最外层**打：installSubdirFromSource 构建完会回头调 installPlugin，
             // 那是同一线程重入 tryLock，再打一份就会把「装之前」的干净状态覆盖成
             // 「装了一半」的状态 —— 保险变成了拍下事故现场。
-            if (installLock.getHoldCount() == 1) {
-                PluginSavepoint.create(proot, host, pkg);
+            boolean outer = installLock.getHoldCount() == 1;
+            String savepoint = outer ? PluginSavepoint.create(proot, host, pkg) : null;
+            String result = installPluginLocked(pkg, fallbackSpec);
+            if (outer && savepoint != null && (result == null || !result.contains("INSTALL_EXIT=0"))) {
+                String rollback = PluginSavepoint.restore(proot, host);
+                result = (result == null ? "安装失败" : result)
+                        + "\n\n[安装失败，已还原安装前 profile]\n" + rollback;
             }
-            return installPluginLocked(pkg, fallbackSpec);
+            return result;
         } finally {
             installLock.unlock();
         }
     }
 
     private String installPluginLocked(String pkg, String fallbackSpec) {
+        if (isHmrPlugin(pkg) || isHmrPlugin(fallbackSpec)) {
+            return "不兼容当前移动端运行方式：cordis-plugin-hmr";
+        }
         if (!isValidPluginSpec(pkg)) {
             return "安装失败：非法插件名/来源：" + (pkg == null ? "null" : pkg);
         }
@@ -2487,6 +2525,9 @@ class PluginController {
             r = r + "\n如果都失败，把上面的输出贴到 DSHA 的 GitHub issue，我们跟进。";
         }
         if (r != null && r.contains("INSTALL_EXIT=0")) {
+            if (!validateProfileAfterInstall()) {
+                return "PROFILE_VALIDATE_FAIL: 新版 dsh profile 启动校验未通过";
+            }
             // 装完当场查双副本：pnpm 可能刚把 @deepseek-ai/* 物理复制进 profile，
             // 那会让下次启动后所有工具调用失败
             String dupes = checkAndFixDshDupes();
@@ -2503,10 +2544,24 @@ class PluginController {
             // 不能只报告，得按原因去救（缺构建产物就构建、只是没写就补注册、
             // 压根不是 bundle 就说清楚）。
             String rescue = isInProfileManifest(pkg) ? "" : rescueUnregistered(pkg, fallbackSpec);
-            return r + explainPeerWarnings(r) + dupeNote + rescue
-                    + "\n\n[已安装到 profile，刷新页面即可生效（多数插件热加载）]" + verifyNote(pkg);
+            return SensitiveData.redact(r + explainPeerWarnings(r) + dupeNote + rescue
+                    + "\n\n[已安装到 profile，刷新页面即可生效（多数插件热加载）]" + verifyNote(pkg));
         }
-        return r == null ? "无输出" : r;
+        return r == null ? "无输出" : SensitiveData.redact(r);
+    }
+
+    /** Commit gate for installs: validate only the profile metadata, without touching sessions. */
+    private boolean validateProfileAfterInstall() {
+        try {
+            String out = proot.execAndRead(
+                    "cd /root/.dsh/profiles/web 2>/dev/null || exit 1; "
+                            + "test -s package.json && node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8'))\"; "
+                            + "test -f cordis.patch.yml 2>/dev/null || true; echo PROFILE_OK",
+                    45_000);
+            return out != null && out.contains("PROFILE_OK");
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     /** 解析 GitHub 仓库链接为插件信息（不安装，供市场列表展示）：
@@ -2601,7 +2656,7 @@ class PluginController {
             }
             return installPlugin(npmName, "github:" + ref.slug()) + verifyNote(npmName);
         } catch (Throwable e) {
-            return "安装失败: " + e.getMessage();
+            return "安装失败: " + SensitiveData.redact(e.getMessage());
         }
     }
 
@@ -2698,7 +2753,7 @@ class PluginController {
             if (sb.length() > 0) sb.append('\n');
             sb.append(lines[i]);
         }
-        return sb.toString();
+        return SensitiveData.redact(sb.toString());
     }
 
     /**
@@ -2853,7 +2908,8 @@ class PluginController {
                         + String.join(", ", done) + "（刷新页面即可生效（多数插件热加载））");
             }
         } catch (Throwable t) {
-            android.util.Log.w("DSHA", "自动注册本地插件失败: " + t);
+            android.util.Log.w("DSHA", "自动注册本地插件失败: "
+                    + SensitiveData.redact(String.valueOf(t)));
         }
         return done;
     }
@@ -3089,10 +3145,12 @@ class PluginController {
             String out = proot.execAndRead(
                     "python3 /root/.dsha-dupes.py --fix 2>&1 | tail -12; "
                             + "rm -f /root/.dsha-dupes.py", 90_000);
-            android.util.Log.i("DSHA", "插件副本检查: " + (out == null ? "无输出" : out.trim()));
-            return out;
+            android.util.Log.i("DSHA", "插件副本检查: "
+                    + SensitiveData.redact(out == null ? "无输出" : out.trim()));
+            return SensitiveData.redact(out);
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "插件副本检查失败: " + e);
+            android.util.Log.w("DSHA", "插件副本检查失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
             return null;
         }
     }
@@ -3139,7 +3197,7 @@ class PluginController {
                         "echo 'registry=https://registry.npmmirror.com' > /root/.npmrc; " +
                         "dsh plugin --profile web add " + arg + " 2>&1; fi | tail -40; echo INSTALL_EXIT=${PIPESTATUS[0]}");
             } catch (Exception e) {
-                return "安装失败: " + e.getMessage();
+                return "安装失败: " + SensitiveData.redact(e.getMessage());
             }
         }
 
@@ -3152,26 +3210,28 @@ class PluginController {
     private String copyToDownloads(java.io.File src, String name, String sub) {
         final String base = android.os.Environment.DIRECTORY_DOWNLOADS;
         // 方案1：MediaStore（Android 10+ 免权限）
-        try {
-            android.content.ContentValues cv = new android.content.ContentValues();
-            cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name);
-            cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/gzip");
-            cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
-                    PublicDirs.relative(base, sub));
-            android.net.Uri uri = appContext.getContentResolver().insert(
-                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
-            if (uri != null) {
-                try (java.io.OutputStream os = appContext.getContentResolver().openOutputStream(uri)) {
-                    try (java.io.FileInputStream fis = new java.io.FileInputStream(src)) {
-                        byte[] buf = new byte[65536];
-                        int n;
-                        while ((n = fis.read(buf)) != -1) os.write(buf, 0, n);
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            try {
+                android.content.ContentValues cv = new android.content.ContentValues();
+                cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name);
+                cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/gzip");
+                cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                        PublicDirs.relative(base, sub));
+                android.net.Uri uri = appContext.getContentResolver().insert(
+                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                if (uri != null) {
+                    try (java.io.OutputStream os = appContext.getContentResolver().openOutputStream(uri)) {
+                        try (java.io.FileInputStream fis = new java.io.FileInputStream(src)) {
+                            byte[] buf = new byte[65536];
+                            int n;
+                            while ((n = fis.read(buf)) != -1) os.write(buf, 0, n);
+                        }
                     }
+                    return PublicDirs.display(android.os.Environment
+                            .getExternalStorageDirectory().getAbsolutePath(), base, sub) + "/" + name;
                 }
-                return PublicDirs.display(android.os.Environment
-                        .getExternalStorageDirectory().getAbsolutePath(), base, sub) + "/" + name;
+            } catch (Exception ignored) {
             }
-        } catch (Exception ignored) {
         }
         // 方案2：All files access 直写（Android 11+ 授权后）
         try {
@@ -3227,7 +3287,8 @@ class PluginController {
             }
             return "NOT_FOUND";
         } catch (Exception e) {
-            android.util.Log.w("DSHA", "导出单个插件失败 " + n + ": " + e);
+            android.util.Log.w("DSHA", "导出单个插件失败 " + n + ": "
+                    + SensitiveData.redact(String.valueOf(e)));
             return null;
         } finally {
             //noinspection ResultOfMethodCallIgnored

@@ -35,6 +35,40 @@ KNOWN_UNRUNNABLE = (
 ENTRY_RE = re.compile(r"failed to (?:apply|create|init) loader entry ([0-9a-zA-Z_]+) \(([^)]+)\)")
 
 
+def validate_patch_text(text):
+    """Validate the small list-shaped patch without requiring a new rootfs package.
+
+    Ubuntu's minimal offline rootfs does not ship PyYAML.  Use it when present for
+    full validation; otherwise reject only shapes that cannot be a Cordis patch
+    list.  The generated entries contain a restricted id and fixed scalar values,
+    so this fallback still prevents a torn/obviously malformed write while keeping
+    HMR recovery fully offline.
+    """
+    try:
+        import yaml
+        parsed = yaml.safe_load(text)
+        return parsed is None or isinstance(parsed, list)
+    except ImportError:
+        meaningful = []
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "\t" in raw or any(ord(ch) < 0x20 for ch in raw if ch not in "\r\n"):
+                return False
+            meaningful.append(line)
+        if not meaningful:
+            return True
+        # An empty list is normalized before this check.  Existing Cordis patch
+        # files are sequences of mapping entries.  Do not append to an inline
+        # non-empty list: that shape needs a real YAML parser to edit safely.
+        if meaningful == ["[]"]:
+            return True
+        return meaningful[0].startswith("-")
+    except Exception:
+        return False
+
+
 def arg(name, default=None):
     key = "--" + name
     if key in sys.argv:
@@ -109,15 +143,10 @@ def main():
         print("HEAL_PROFILE_OK: 无需改动")
         return 0
 
-    # 写回前先验证 YAML 合法，别把用户的 profile 弄成打不开的样子
-    try:
-        import yaml
-        parsed = yaml.safe_load(text)
-        if parsed is not None and not isinstance(parsed, list):
-            print("HEAL_PROFILE: 生成结果不是 YAML 数组，放弃改动")
-            return 1
-    except Exception as e:
-        print("HEAL_PROFILE: 生成的 YAML 不合法（%s），放弃改动" % e)
+    # 写回前先验证 YAML 合法，别把用户的 profile 弄成打不开的样子。
+    # 轻量 rootfs 可能没有 PyYAML，validate_patch_text() 会走离线保守校验。
+    if not validate_patch_text(text):
+        print("HEAL_PROFILE: 生成结果不是 YAML 数组，放弃改动")
         return 1
 
     try:

@@ -43,7 +43,7 @@ public class ShellService extends IShellService.Stub {
             int code = p.exitValue();
             return bos.toString(StandardCharsets.UTF_8.name()) + "\n[EXIT=" + code + "]";
         } catch (Throwable e) {
-            return "ERROR: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+            return "ERROR: " + SensitiveData.redact(String.valueOf(e));
         }
     }
 }

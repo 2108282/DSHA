@@ -42,12 +42,35 @@ public class PluginFragment extends Fragment {
     /** 底部细进度条：文案含「正在」时自动亮起，操作结束自动收起（见 {@link #say}） */
     private android.widget.ProgressBar busyBar;
 
+    /** Alpha uses the upstream profile while allowing controlled market installs. */
+    private boolean isAlphaRuntime() {
+        return c != null && HarnessController.EXPECTED_RUNTIME_ID.equals(c.runtimeId());
+    }
+
+    /** 防止隐藏 UI 之外的陈旧回调再次触发市场安装。 */
+    private boolean alphaMarketDisabled() {
+        return false;
+    }
+
+    private static boolean isHmrSource(String value) {
+        String s = value == null ? "" : value.toLowerCase(java.util.Locale.ROOT);
+        return s.contains("cordis-plugin-hmr") || s.contains("plugin-hmr");
+    }
+
+    private boolean rejectHmr(String display, String source) {
+        if (!isHmrSource(display) && !isHmrSource(source)) return false;
+        say("不兼容当前移动端运行方式：" + SensitiveData.redact(display));
+        Toast.makeText(requireContext(), "不兼容当前移动端运行方式", Toast.LENGTH_LONG).show();
+        return true;
+    }
+
     /** 统一设置状态文案：市场拉取/插件安装/卸载动辄几十秒，只有静态文字容易让人以为卡死，
      *  这里按文案自动联动底部细进度条，所有调用点无需各自管理可见性。 */
     private void say(String s) {
-        if (status != null) status.setText(s);
+        String safe = SensitiveData.redact(s);
+        if (status != null) status.setText(safe);
         if (busyBar != null) {
-            boolean busy = s != null && (s.contains("正在") || s.contains("加载中"));
+            boolean busy = safe != null && (safe.contains("正在") || safe.contains("加载中"));
             busyBar.setVisibility(busy ? View.VISIBLE : View.GONE);
         }
     }
@@ -75,6 +98,8 @@ public class PluginFragment extends Fragment {
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
         c = HarnessController.get(requireContext());
+        final boolean alphaRuntime = isAlphaRuntime();
+        if (alphaRuntime) mode = Mode.MARKET;
         adapter = new PluginAdapter();
         RecyclerView rv = view.findViewById(R.id.pluginList);
         rv.setLayoutManager(new LinearLayoutManager(requireContext()));
@@ -92,6 +117,7 @@ public class PluginFragment extends Fragment {
         // 取不到就跳过整段解析逻辑 —— 将来布局再变也不至于 NPE。
         final android.widget.EditText githubInput =
                 requireActivity().findViewById(R.id.appbar_github_input);
+        final View appbarSpacer = requireActivity().findViewById(R.id.appbar_spacer);
         // 不在这里 return —— 下面的 if (githubInput != null) 已经做了保护，
         // 而 btnMarket/btnSort/btnFilter/btnRefresh 的绑定都在本方法后半段：
         // 中途 return 会让整个插件页的按钮全部失去监听。
@@ -222,6 +248,7 @@ public class PluginFragment extends Fragment {
         });
 
         btnMarket.setOnClickListener(v -> {
+            if (alphaMarketDisabled()) return;
             mode = Mode.MARKET;
             exitMulti();   // 多选只属于插件管理页，切走就收起来
             styleTab(btnMarket, true);
@@ -248,6 +275,7 @@ public class PluginFragment extends Fragment {
         TextView btnRefresh = view.findViewById(R.id.btnRefresh);
         if (btnRefresh != null) {
             btnRefresh.setOnClickListener(v -> {
+                if (alphaMarketDisabled()) return;
                 say("已清除缓存，正在重新拉取…");
                 c.refreshMarketIndex();
                 items.clear();
@@ -276,6 +304,17 @@ public class PluginFragment extends Fragment {
             showInstalled();
         });
 
+        btnMarket.setVisibility(View.VISIBLE);
+        btnSort.setVisibility(View.VISIBLE);
+        if (btnFilter != null) btnFilter.setVisibility(View.VISIBLE);
+        if (btnRefresh != null) btnRefresh.setVisibility(View.VISIBLE);
+        btnInstalled.setVisibility(View.VISIBLE);
+        styleTab(btnMarket, true);
+        styleTab(btnInstalled, false);
+        view.findViewById(R.id.actionBar).setVisibility(View.GONE);
+        view.findViewById(R.id.chkHideBuiltin).setVisibility(View.GONE);
+        if (githubInput != null) githubInput.setVisibility(View.VISIBLE);
+        if (appbarSpacer != null) appbarSpacer.setVisibility(View.VISIBLE);
         showMarket();
     }
 
@@ -438,6 +477,7 @@ public class PluginFragment extends Fragment {
         // 否则用户只能看着自检报错，然后去终端手改 package.json，那不叫修好。
         final HarnessController hc = c;
         if (hc == null) return;
+        if (HarnessController.EXPECTED_RUNTIME_ID.equals(hc.runtimeId())) return;
         new Thread(() -> {
             int fixed = hc.repairBuiltinPlugins();
             if (fixed <= 0) return;
@@ -504,11 +544,13 @@ public class PluginFragment extends Fragment {
      *  {@link #runOnUiThreadSafely} 在 detach 后会静默丢弃，不适合这种场合。 */
     private static void toastOnMain(android.content.Context appCtx, String msg) {
         if (appCtx == null || msg == null) return;
+        final String safe = SensitiveData.redact(msg);
         new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
-                Toast.makeText(appCtx, msg, Toast.LENGTH_LONG).show());
+                Toast.makeText(appCtx, safe, Toast.LENGTH_LONG).show());
     }
 
     private void showMarket() {
+        if (alphaMarketDisabled()) return;
         if (!items.isEmpty()) {
             refreshMarketView();
             return;
@@ -770,7 +812,8 @@ public class PluginFragment extends Fragment {
                     }
                     r = c.importArchive(tmp);
                 } catch (Exception e) {
-                    r = new String[]{"ERR", "读取所选文件失败：" + e.getMessage()};
+                    r = new String[]{"ERR", "读取所选文件失败："
+                            + SensitiveData.redact(e.getMessage())};
                 } finally {
                     //noinspection ResultOfMethodCallIgnored
                     tmp.delete();
@@ -944,7 +987,12 @@ public class PluginFragment extends Fragment {
         } else {
             sb.append(readme);
         }
-        return sb.toString();
+        sb.append("\n\n⚠ 第三方插件会在 dsh 环境执行代码，请确认来源可信后再安装。\n");
+        // Repository metadata, translated text and README content are fetched
+        // from the network. This string is shown and can be copied, so keep a
+        // final redaction boundary even if an upstream field bypasses the
+        // adapter's normal sanitization.
+        return SensitiveData.redact(sb.toString());
     }
 
     /** 批量异步拉取市场列表 star 数（GitHub search API，每批 ~80 仓库）。
@@ -1031,6 +1079,8 @@ public class PluginFragment extends Fragment {
     /** 后台装一个插件并把结果显示出来（市场里几条路都用它，别再各写一份线程）。
      *  必须在 UI 线程调用 —— say 与 showInstallResult 都只能在 UI 线程跑。 */
     private void installInBackground(final String pkg, final String display, final String spec) {
+        if (alphaMarketDisabled()) return;
+        if (rejectHmr(display, spec)) return;
         say("正在安装 " + pkg + " …");
         new Thread(() -> {
             String out = c.installPlugin(pkg, spec);
@@ -1048,6 +1098,8 @@ public class PluginFragment extends Fragment {
      * 的另一半原因。
      */
     private void installMarketItem(String[] it) {
+        if (alphaMarketDisabled()) return;
+        if (rejectHmr(MarketCol.at(it, MarketCol.NAME), MarketCol.at(it, MarketCol.URL))) return;
         GitHubRef gr = GitHubRef.parse(it[MarketCol.URL]);
         if (gr == null) {
             // 不是 GitHub 链接，但可能是别的 pnpm 来源（jsr: / gitlab: / 远程 tarball /
@@ -1083,6 +1135,17 @@ public class PluginFragment extends Fragment {
 
     /** 按任意 pnpm 来源直接安装（npm / jsr: / gitlab: / 远程 tarball / 本地路径 …）。 */
     private void installBySpec(String display, String spec) {
+        if (alphaMarketDisabled()) return;
+        if (rejectHmr(display, spec)) return;
+        new android.app.AlertDialog.Builder(requireContext())
+                .setTitle("安装第三方插件？")
+                .setMessage("第三方插件会在 dsh 环境执行代码，请确认来源可信后继续。")
+                .setPositiveButton("继续安装", (d, w) -> installBySpecConfirmed(display, spec))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void installBySpecConfirmed(String display, String spec) {
         say("正在安装 " + display + "（" + PluginSpec.describe(PluginSpec.classify(spec)) + "）…");
         final android.content.Context appCtx = requireContext().getApplicationContext();
         new Thread(() -> {
@@ -1098,6 +1161,8 @@ public class PluginFragment extends Fragment {
     }
 
     private void startAutoInstall(String[] it, String owner, String repo) {
+        if (alphaMarketDisabled()) return;
+        if (rejectHmr(MarketCol.at(it, MarketCol.NAME), MarketCol.at(it, MarketCol.URL))) return;
         final String display = it[MarketCol.NAME];
         say("正在预检 " + display + " …");
         new Thread(() -> {
@@ -1126,12 +1191,14 @@ public class PluginFragment extends Fragment {
                     say("⚠️ 已弃用：" + display);
                     new android.app.AlertDialog.Builder(requireContext())
                             .setTitle("⚠️ 已被内置功能接替：" + display)
-                            .setMessage(DeprecatedPlugins.reason(deprecated)
+                            .setMessage(SensitiveData.redact(DeprecatedPlugins.reason(deprecated)
                                     + "\n\n两边改造同一批界面元素，同时启用的表现是抽屉和浮层出两份、"
                                     + "点一下响应两次。"
-                                    + "\n\n仓库：\n" + it[MarketCol.URL])
+                                    + "\n\n仓库：\n" + it[MarketCol.URL]))
                             .setPositiveButton("仍然安装",
-                                    (d, w) -> installInBackground(pkg, display, spec))
+                                    (d, w) -> {
+                                        if (!rejectHmr(display, spec)) installInBackground(pkg, display, spec);
+                                    })
                             .setNegativeButton("算了", null)
                             .show();
                 });
@@ -1152,18 +1219,22 @@ public class PluginFragment extends Fragment {
                 say(badge + "：" + display);
                 android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(requireContext())
                         .setTitle(badge + "：" + display)
-                        .setMessage(why + "\n\n仓库：\n" + it[MarketCol.URL])
+                        .setMessage(SensitiveData.redact(why + "\n\n仓库：\n"
+                                + it[MarketCol.URL]))
                         // 即使预检说装不上也保留「仍然试试」—— 预检是启发式的，
                         // 不该替用户做最终决定（万一作者刚发布、或仓库结构特殊）
                         .setPositiveButton("仍然安装",
-                                (d, w) -> installInBackground(pkg, display, spec))
+                                (d, w) -> {
+                                    if (!rejectHmr(display, spec)) installInBackground(pkg, display, spec);
+                                })
                         .setNeutralButton("复制仓库链接", (d, w) -> {
                             android.content.ClipboardManager cm = (android.content.ClipboardManager)
                                     requireContext().getSystemService(
                                             android.content.Context.CLIPBOARD_SERVICE);
                             if (cm != null) {
                                 cm.setPrimaryClip(
-                                        android.content.ClipData.newPlainText("url", it[MarketCol.URL]));
+                                        android.content.ClipData.newPlainText("url",
+                                                SensitiveData.redact(it[MarketCol.URL])));
                                 Toast.makeText(requireContext(), "链接已复制", Toast.LENGTH_SHORT).show();
                             }
                         })
@@ -1183,7 +1254,7 @@ public class PluginFragment extends Fragment {
     private View buildSelectableMessage(String text) {
         int pad = (int) (16 * getResources().getDisplayMetrics().density);
         TextView tv = new TextView(requireContext());
-        tv.setText(text == null ? "无输出" : text);
+        tv.setText(text == null ? "无输出" : SensitiveData.redact(text));
         tv.setTextIsSelectable(true);
         tv.setTextSize(12);
         tv.setPadding(pad, pad / 2, pad, pad / 2);
@@ -1198,19 +1269,24 @@ public class PluginFragment extends Fragment {
             android.content.ClipboardManager cm = (android.content.ClipboardManager)
                     requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
             if (cm == null) return;
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("DSHA", text == null ? "" : text));
+            // Clipboard content is an external/display boundary too. Keep
+            // actual install/network inputs untouched; only copied diagnostics
+            // are redacted here.
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("DSHA",
+                    SensitiveData.redact(text == null ? "" : text)));
             Toast.makeText(requireContext(), "已复制" + (what == null ? "" : what),
                     Toast.LENGTH_SHORT).show();
         } catch (Throwable t) {
-            Toast.makeText(requireContext(), "复制失败：" + t, Toast.LENGTH_SHORT).show();
+            Toast.makeText(requireContext(), "复制失败："
+                    + SensitiveData.redact(String.valueOf(t)), Toast.LENGTH_SHORT).show();
         }
     }
 
     /** 结果对话框：内容可滚动、可选中，还带一个「复制」按钮。 */
     private void showCopyableResult(String title, String msg) {
-        final String text = msg == null || msg.isEmpty() ? "无输出" : msg;
+        final String text = msg == null || msg.isEmpty() ? "无输出" : SensitiveData.redact(msg);
         new android.app.AlertDialog.Builder(requireContext())
-                .setTitle(title)
+                .setTitle(SensitiveData.redact(title))
                 .setView(buildSelectableMessage(text))
                 .setPositiveButton("知道了", null)
                 .setNeutralButton("复制", (d, w) -> copyToClipboard(text, "全部输出"))
@@ -1220,7 +1296,7 @@ public class PluginFragment extends Fragment {
     private void showInstallResult(String pkg, String display, String out) {
         boolean ok = out != null && out.contains("INSTALL_EXIT=0");
         say((ok ? "✅ 安装成功 " : "❌ 安装失败 ") + display + (ok ? "，刷新页面即可生效" : ""));
-        final String text = out == null ? "无输出" : out;
+        final String text = out == null ? "无输出" : SensitiveData.redact(out);
         android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(requireContext())
                 .setTitle((ok ? "✅ 安装成功：" : "❌ 安装失败：") + display)
                 // 失败时那几十行输出是用户唯一的线索：要能滚动、能选中、能一键复制
@@ -1299,29 +1375,39 @@ public class PluginFragment extends Fragment {
         public void onBindViewHolder(@NonNull VH h, int pos) {
             String[] it = data.get(pos);
             if (isMarket) {
-                h.name.setText(it[MarketCol.NAME]);
-                h.desc.setText(MarketCol.at(it, MarketCol.DESC));
-                h.status.setText("⭐ " + MarketCol.at(it, MarketCol.STARS)
+                final boolean incompatible = isHmrSource(MarketCol.at(it, MarketCol.NAME))
+                        || isHmrSource(MarketCol.at(it, MarketCol.URL));
+                h.name.setText(SensitiveData.redact(it[MarketCol.NAME]));
+                h.desc.setText(SensitiveData.redact(MarketCol.at(it, MarketCol.DESC)));
+                h.status.setText(SensitiveData.redact("⭐ " + MarketCol.at(it, MarketCol.STARS)
                         + " · 👤 " + (MarketCol.at(it, MarketCol.OWNER).isEmpty()
                                 ? "?" : MarketCol.at(it, MarketCol.OWNER))
                         + " · " + MarketCol.at(it, MarketCol.COMPAT)
-                        + " · " + MarketCol.at(it, MarketCol.CATEGORY));
+                        + " · " + MarketCol.at(it, MarketCol.CATEGORY)));
                 h.installBtn.setVisibility(View.VISIBLE);
-                h.installBtn.setText("安装");
+                h.installBtn.setText(incompatible ? "不兼容" : "安装");
+                h.installBtn.setEnabled(!incompatible);
                 h.switchView.setVisibility(View.GONE);
                 h.itemView.setOnClickListener(v -> showDetail(it));
-                h.installBtn.setOnClickListener(v -> installMarketItem(it));
+                h.installBtn.setOnClickListener(v -> {
+                    if (incompatible) rejectHmr(MarketCol.at(it, MarketCol.NAME), MarketCol.at(it, MarketCol.URL));
+                    else installMarketItem(it);
+                });
+                if (incompatible) {
+                    h.status.setText("不兼容当前移动端运行方式");
+                }
             } else {
-                h.name.setText(it[MarketCol.Installed.NAME]);
+                h.name.setText(SensitiveData.redact(it[MarketCol.Installed.NAME]));
                 // 简介：内置插件用我们写的中文，其余读它 package.json 的 description。
                 // 以前这里写死空串 —— 列表上只有一串包名，用户根本不知道每个插件干什么。
-                h.desc.setText(MarketCol.at(it, MarketCol.Installed.DESC));
+                h.desc.setText(SensitiveData.redact(MarketCol.at(it, MarketCol.Installed.DESC)));
                 boolean enabled = "启用".equals(it[MarketCol.Installed.STATE]);
                 // 注册了不等于加载成功：PENDING（inject 的服务没提供者）不报错，插件就静静地
                 // 什么都不做。这一行是用户唯一能看到真实原因的地方，别让它退化成"已启用"。
                 String fail = loadFailures.get(it[0]);
                 if (enabled && fail != null && !fail.isEmpty()) {
-                    h.status.setText("⚠ 已启用但没加载起来（" + fail + "）");
+                    h.status.setText("⚠ 已启用但没加载起来（"
+                            + SensitiveData.redact(fail) + "）");
                 } else {
                     h.status.setText(enabled ? "已启用" : "已禁用");
                 }
@@ -1329,6 +1415,7 @@ public class PluginFragment extends Fragment {
                 // 导出的是单个插件、单个文件，落在 Download/DSHA/插件/。
                 h.installBtn.setVisibility(View.VISIBLE);
                 h.installBtn.setText("导出");
+                h.installBtn.setEnabled(true);
                 h.installBtn.setOnClickListener(v -> exportOne(it[0]));
                 h.switchView.setVisibility(View.VISIBLE);
                 h.itemView.setOnClickListener(null); // 防止 RecyclerView 复用到市场的点击监听
@@ -1373,7 +1460,7 @@ public class PluginFragment extends Fragment {
                             if (ok) {
                                 it[1] = checked ? "启用" : "禁用";
                                 h.status.setText(checked ? "已启用" : "已禁用");
-                                Toast.makeText(appCtx, it[0]
+                                Toast.makeText(appCtx, SensitiveData.redact(it[0])
                                                 + (checked ? " 已启用，刷新页面即可生效" : " 已禁用"),
                                         Toast.LENGTH_SHORT).show();
                             } else {
@@ -1381,7 +1468,8 @@ public class PluginFragment extends Fragment {
                                 btn.setChecked(!checked);
                                 suppressToggle = false;
                                 // 把真实原因摊开：以前一律显示「操作失败」，用户无从下手
-                                Toast.makeText(appCtx, why.isEmpty() ? "操作失败" : why,
+                                Toast.makeText(appCtx,
+                                        SensitiveData.redact(why.isEmpty() ? "操作失败" : why),
                                         Toast.LENGTH_LONG).show();
                             }
                         });

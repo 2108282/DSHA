@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # provision-builtin-plugins.sh — 在离线 rootfs 内预置 DSHA 内置插件
-# （@dsh-external/dsh-mobile-nav / dsh-device-shell-guide / dsh-task-notifier），
+# （dsh-device-shell-guide / dsh-task-notifier），
 # 让离线包「解压即用」：首启无需运行时注入。
 #
 # 由 offline-provision.sh（chroot 内）调用；插件源在 /root/patches/builtin/。
@@ -11,19 +11,19 @@
 set -euo pipefail
 
 SRC=/root/patches/builtin
-DEST_MOBILE=/root/dsha-mobile-nav
 DEST_GUIDE=/root/dsha-device-shell-guide
 DEST_NOTIFIER=/root/dsha-task-notifier
 DEST_OVERLAY=/root/dsha-status-overlay
+DEST_WEB=/root/dsha-web-mobile
 PROFILE_DIR=/root/.dsh/profiles/web
 NM="$PROFILE_DIR/node_modules"
 PF="$PROFILE_DIR/package.json"
 # marker = 实体目录 + "-installed"（与 App ensureNativeMobileAdapt/
 # ensureDeviceShellGuide 检查的路径一致）
-MARK_MOBILE="${DEST_MOBILE}-installed"
 MARK_GUIDE="${DEST_GUIDE}-installed"
 MARK_NOTIFIER="${DEST_NOTIFIER}-installed"
 MARK_OVERLAY="${DEST_OVERLAY}-installed"
+MARK_WEB="${DEST_WEB}-installed"
 BUILTIN_SNAPSHOT=/root/dsha-builtin.txt
 
 echo "==> 预置 DSHA 内置插件"
@@ -35,25 +35,6 @@ echo "==> 预置 DSHA 内置插件"
 # 静默失败，却照样立了「已装好」的凭证。结果离线包里的插件只剩 package.json +
 # cordis.patch.yml，main 指向的 lib/index.js 不存在 —— dsh 加载它必然失败，
 # 而 App 因为 marker 在就永远不会来补。现在一律先校验再立 marker。
-if [ -d "$SRC/mobile-nav" ]; then
-  mkdir -p "$DEST_MOBILE/lib"
-  cp -f "$SRC/mobile-nav/package.json" "$DEST_MOBILE/"
-  cp -f "$SRC/mobile-nav/cordis.patch.yml" "$DEST_MOBILE/"
-  cp -f "$SRC/mobile-nav/lib/index.js" "$DEST_MOBILE/lib/"
-  cp -f "$SRC/mobile-nav/lib/client.js" "$DEST_MOBILE/lib/"
-  cp -f "$SRC/mobile-nav/LICENSE" "$DEST_MOBILE/" 2>/dev/null || true   # MIT 署名，缺了不致命
-  if [ -s "$DEST_MOBILE/package.json" ] && [ -s "$DEST_MOBILE/lib/index.js" ] \
-     && [ -s "$DEST_MOBILE/lib/client.js" ]; then
-    touch "$MARK_MOBILE"
-    echo "  ✓ mobile-nav 已预置（client.js $(wc -c < "$DEST_MOBILE/lib/client.js") 字节）"
-  else
-    rm -f "$MARK_MOBILE"
-    echo "  ERROR: mobile-nav 实体不完整 → 不立 marker，App 首启会自己补" >&2
-  fi
-else
-  echo "  WARN: 缺 mobile-nav 源（/root/patches/builtin/mobile-nav），跳过"
-fi
-
 if [ -d "$SRC/device-shell-guide" ]; then
   mkdir -p "$DEST_GUIDE/lib"
   cp -f "$SRC/device-shell-guide/package.json" "$DEST_GUIDE/" 2>/dev/null || true
@@ -86,6 +67,27 @@ else
   echo "  WARN: 缺 task-notifier 源（/root/patches/builtin/task-notifier），跳过"
 fi
 
+if [ -d "$SRC/web-mobile" ]; then
+  rm -rf "$DEST_WEB"
+  mkdir -p "$DEST_WEB"
+  cp -f "$SRC/web-mobile/package.json" "$DEST_WEB/"
+  cp -f "$SRC/web-mobile/cordis.patch.yml" "$DEST_WEB/"
+  cp -f "$SRC/web-mobile/LICENSE" "$DEST_WEB/" 2>/dev/null || true
+  cp -a "$SRC/web-mobile/lib" "$DEST_WEB/"
+  cp -a "$SRC/web-mobile/assets" "$DEST_WEB/" 2>/dev/null || true
+  if [ -s "$DEST_WEB/package.json" ] && [ -s "$DEST_WEB/cordis.patch.yml" ] \
+     && [ -s "$DEST_WEB/lib/index.js" ] && [ -s "$DEST_WEB/lib/client.js" ] \
+     && [ -s "$DEST_WEB/lib/compress.js" ]; then
+    touch "$MARK_WEB"
+    echo "  ✓ web-mobile 已预置（完整 client/compress bundle）"
+  else
+    rm -f "$MARK_WEB"
+    echo "  ERROR: web-mobile 实体不完整 → 不立 marker" >&2
+  fi
+else
+  echo "  WARN: 缺 web-mobile 源（/root/patches/builtin/web-mobile），跳过" >&2
+fi
+
 # 流式悬浮条（把 agent 输出实时显示在屏幕顶部）。默认功能是关着的，插件本身仍要装好，
 # 否则用户打开开关后还得等一次 Web 重启才生效。
 if [ -d "$SRC/status-overlay" ]; then
@@ -112,12 +114,14 @@ import json, sys
 p = sys.argv[1]
 d = json.load(open(p))
 d.setdefault('dependencies', {})
-d['dependencies']['@dsh-external/dsh-mobile-nav'] = 'link:/root/dsha-mobile-nav'
 d['dependencies']['dsh-device-shell-guide'] = 'link:/root/dsha-device-shell-guide'
+d['dependencies']['dsh-task-notifier'] = 'link:/root/dsha-task-notifier'
+d['dependencies']['dsh-status-overlay'] = 'link:/root/dsha-status-overlay'
+d['dependencies']['dsh-web-mobile'] = 'link:/root/dsha-web-mobile'
 dsh = d.setdefault('dsh', {})
 prof = dsh.setdefault('profile', {})
 bundles = prof.setdefault('bundles', [])
-for n in ('@dsh-external/dsh-mobile-nav', 'dsh-device-shell-guide'):
+for n in ('dsh-device-shell-guide', 'dsh-task-notifier', 'dsh-status-overlay', 'dsh-web-mobile'):
     if n not in bundles:
         bundles.append(n)
 json.dump(d, open(p, 'w'), indent=2, ensure_ascii=False)
@@ -129,15 +133,22 @@ else
   "name": "dsh-profile-web",
   "private": true,
   "dependencies": {
-    "@dsh-external/dsh-mobile-nav": "link:/root/dsha-mobile-nav",
-    "dsh-device-shell-guide": "link:/root/dsha-device-shell-guide"
+    "dsh-device-shell-guide": "link:/root/dsha-device-shell-guide",
+    "dsh-task-notifier": "link:/root/dsha-task-notifier",
+    "dsh-status-overlay": "link:/root/dsha-status-overlay",
+    "dsh-web-mobile": "link:/root/dsha-web-mobile"
   },
   "dsh": {
     "profile": {
       "bundles": [
-        "@dsh-external/dsh-mobile-nav",
-        "dsh-device-shell-guide"
-      ]
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-device-shell-guide",
+        "dsh-task-notifier",
+        "dsh-status-overlay",
+        "dsh-web-mobile"
+      ],
+      "patchReload": "startup"
     }
   }
 }
@@ -146,12 +157,23 @@ JSON
 fi
 
 # ---------- 3) node_modules 符号链接（togglePlugin 靠改名开关） ----------
-# scope 包在 node_modules 下是二级目录（@dsh-external/dsh-mobile-nav）：
-# 父目录不先建出来 ln 会直接失败，而本脚本是 set -e —— 那会让整个离线包构建中断。
-mkdir -p "$NM/@dsh-external"
-ln -sfn /root/dsha-mobile-nav "$NM/@dsh-external/dsh-mobile-nav"
 ln -sfn /root/dsha-device-shell-guide "$NM/dsh-device-shell-guide"
+ln -sfn /root/dsha-task-notifier "$NM/dsh-task-notifier"
+ln -sfn /root/dsha-status-overlay "$NM/dsh-status-overlay"
+ln -sfn /root/dsha-web-mobile "$NM/dsh-web-mobile"
 echo "  ✓ node_modules 符号链接已建"
+
+# Cordis loader imports entries from its own global module location rather than
+# the profile's working directory.  Keep explicit global links as well; without
+# these, a profile can look registered while the real loader reports
+# ERR_MODULE_NOT_FOUND.  Each link is created independently to avoid shell
+# precedence/word-splitting surprises.
+GLOBAL_NM=/usr/local/lib/node_modules
+ln -sfn /root/dsha-device-shell-guide "$GLOBAL_NM/dsh-device-shell-guide"
+ln -sfn /root/dsha-task-notifier "$GLOBAL_NM/dsh-task-notifier"
+ln -sfn /root/dsha-status-overlay "$GLOBAL_NM/dsh-status-overlay"
+ln -sfn /root/dsha-web-mobile "$GLOBAL_NM/dsh-web-mobile"
+echo "  ✓ global node_modules 符号链接已建"
 
 # ---------- 4) home 级 cordis.patch.yml：官方极简模式 bash 描述注入 ----------
 # （复刻 App ensureDeviceShellGuide 的逻辑，marker 存在时 App 跳过，必须在这做）
@@ -178,7 +200,7 @@ fi
 
 # ---------- 5) 内置插件快照（App「隐藏自带」功能依赖；installGuard 只在
 #            文件不存在时生成，离线预置的会沿用） ----------
-printf '@dsh-external/dsh-mobile-nav\ndsh-device-shell-guide\n' > "$BUILTIN_SNAPSHOT"
+printf 'dsh-device-shell-guide\ndsh-task-notifier\ndsh-status-overlay\ndsh-web-mobile\n' > "$BUILTIN_SNAPSHOT"
 echo "  ✓ 内置插件快照已写（dsha-builtin.txt）"
 
 echo "==> 内置插件预置完成"

@@ -24,7 +24,36 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bundle/offline-rootfs.tar.gz
-          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'scripts/provision-builtin-plugins.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/webui-origin-port-patch.sh', 'app/src/main/assets/*.patch', 'app/src/main/assets/mobile-nav/**', 'app/src/main/assets/device-shell-guide/**', 'app/src/main/assets/task-notifier/**', 'app/src/main/assets/status-overlay/**') }}
+          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'scripts/prepare-dsh-alpha-runtime.sh', 'scripts/provision-builtin-plugins.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/webui-origin-port-patch.sh', 'app/src/main/assets/*.patch', 'app/src/main/assets/mobile-nav/**', 'app/src/main/assets/device-shell-guide/**', 'app/src/main/assets/task-notifier/**', 'app/src/main/assets/status-overlay/**') }}
+
+      - name: Set up Node.js for pinned dsh build
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+
+      - name: Prepare pinned dsh production closure
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          UPSTREAM="$RUNNER_TEMP/deepseek-harness"
+          git clone --filter=blob:none --no-checkout --no-tags \
+            https://github.com/deepseek-ai/deepseek-harness.git "$UPSTREAM"
+          git -C "$UPSTREAM" fetch --depth 1 origin \
+            "refs/tags/dsh-v0.1.2-alpha.2:refs/tags/dsh-v0.1.2-alpha.2"
+          git -C "$UPSTREAM" checkout --detach \
+            0a53fb55bea101816fa226bb964ae2bed71c343b
+          test "$(git -C "$UPSTREAM" rev-parse HEAD)" = \
+            0a53fb55bea101816fa226bb964ae2bed71c343b
+          git -C "$UPSTREAM" describe --tags --exact-match HEAD | \
+            grep -Fx dsh-v0.1.2-alpha.2
+          corepack enable
+          corepack prepare pnpm@11.7.0 --activate
+          DSH_UPSTREAM_DIR="$UPSTREAM" \
+            OUT="$RUNNER_TEMP/dsh-alpha-runtime-0.1.2-alpha.2-linux-arm64.tar.gz" \
+            bash scripts/prepare-dsh-alpha-runtime.sh
+          test -s "$RUNNER_TEMP/dsh-alpha-runtime-0.1.2-alpha.2-linux-arm64.tar.gz"
+          echo "DSH_RUNTIME_ARCHIVE=$RUNNER_TEMP/dsh-alpha-runtime-0.1.2-alpha.2-linux-arm64.tar.gz" >> "$GITHUB_ENV"
 
       - name: Build offline rootfs bundle
         if: steps.cache.outputs.cache-hit != 'true'

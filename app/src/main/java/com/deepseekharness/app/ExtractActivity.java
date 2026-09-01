@@ -39,7 +39,8 @@ public class ExtractActivity extends AppCompatActivity {
                 wl.acquire(20 * 60 * 1000L);
             }
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "解压期间拿不到 WakeLock: " + e);
+            android.util.Log.w("DSHA", "解压期间拿不到 WakeLock: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
 
         statusText = findViewById(R.id.extract_status);
@@ -66,7 +67,7 @@ public class ExtractActivity extends AppCompatActivity {
         ProotBootstrap proot = new ProotBootstrap(this);
         new Thread(() -> {
             try {
-                if (!force && proot.isOfflineExtracted()) {
+                if (!force && proot.hasExpectedAlphaOfflineRuntime()) {
                     runOnUiThread(() -> statusText.setText("内置环境已就绪"));
                     Thread.sleep(400);
                     proceed();
@@ -78,7 +79,7 @@ public class ExtractActivity extends AppCompatActivity {
                 //  2) 写对话/日志时文件被删 → 数据保护备份的 .dsh 可能不完整
                 // 必须先 stopWebAndWait（等端口关透）+ 停 HarnessService（否则其
                 // keepAlive 线程 15s 发现端口挂了会自动拉起 startWeb，干扰重解压）。
-                if (force) {
+                if (force || proot.isOfflineExtracted()) {
                     HarnessController c = HarnessController.get(this);
                     if (c.isWebRunning()) {
                         runOnUiThread(() -> statusText.setText("正在停止 Web UI…"));
@@ -92,7 +93,7 @@ public class ExtractActivity extends AppCompatActivity {
                     }
                 }
                 if (!proot.hasOfflineBundle()) {
-                    final String diag = proot.diagnoseBundle();
+                    final String diag = SensitiveData.redact(proot.diagnoseBundle());
                     runOnUiThread(() -> {
                         bar.setVisibility(ProgressBar.GONE);
                         progressBar.setVisibility(ProgressBar.GONE);
@@ -151,13 +152,15 @@ public class ExtractActivity extends AppCompatActivity {
                 Thread.sleep(300);
                 proceed();
             } catch (Exception e) {
-                final String diag = proot.diagnoseBundle() + "\n\n" + proot.diagnoseRootfs();
+                final String diag = SensitiveData.redact(
+                        proot.diagnoseBundle() + "\n\n" + proot.diagnoseRootfs());
                 runOnUiThread(() -> {
                     bar.setVisibility(ProgressBar.GONE);
                     progressBar.setVisibility(ProgressBar.GONE);
                     detailText.setVisibility(TextView.GONE);
                     errorText.setVisibility(TextView.VISIBLE);
-                    errorText.setText("解压失败：" + e.getMessage() + "\n\n" + diag);
+                    errorText.setText("解压失败："
+                            + SensitiveData.redact(String.valueOf(e)) + "\n\n" + diag);
                     statusText.setText("解压失败（本页不会自动跳走）");
                 });
             }
