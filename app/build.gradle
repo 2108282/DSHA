@@ -25,9 +25,17 @@ if (!slim && !offlineGz.exists() && !offlineBin.exists()) {
 tasks.register("protectOfflineBundle") {
     doLast {
         if (offlineGz.exists()) {
-            offlineBin.delete()
-            if (!offlineGz.renameTo(offlineBin)) {
-                throw new GradleException("无法把 offline-rootfs.tar.gz 改名为 .bin")
+            try {
+                java.nio.file.Files.move(
+                    offlineGz.toPath(),
+                    offlineBin.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+                println "protectOfflineBundle: 已将 offline-rootfs.tar.gz 重命名为 .bin"
+            } catch (Exception e) {
+                if (!offlineBin.exists()) {
+                    throw new GradleException("无法把 offline-rootfs.tar.gz 改名为 .bin: " + e)
+                }
             }
         }
     }

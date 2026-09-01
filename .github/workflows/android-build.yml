@@ -29,11 +29,10 @@ jobs:
               https://github.com/qiannianhuanxiang/DSHA/releases/download/v1.1.9.1/deepseekharness-arm64-v1.1.9.1.apk
           fi
           echo "正在精确解压提取 offline-rootfs..."
-          # 提取并重命名为标准 assets 路径，供 protectOfflineBundle 正常运行
           if unzip -l /tmp/dsha-release.apk "assets/offline-rootfs.bin" >/dev/null 2>&1; then
-            unzip -p /tmp/dsha-release.apk "assets/offline-rootfs.bin" > app/src/main/assets/offline-rootfs.tar.gz
-          else
-            unzip -p /tmp/dsha-release.apk "assets/offline-rootfs.tar.gz" > app/src/main/assets/offline-rootfs.tar.gz
+            unzip -p /tmp/dsha-release.apk "assets/offline-rootfs.bin" > app/src/main/assets/offline-rootfs.bin
+          elif unzip -l /tmp/dsha-release.apk "assets/offline-rootfs.tar.gz" >/dev/null 2>&1; then
+            unzip -p /tmp/dsha-release.apk "assets/offline-rootfs.tar.gz" > app/src/main/assets/offline-rootfs.bin
           fi
           if unzip -l /tmp/dsha-release.apk "assets/offline-rootfs.version" >/dev/null 2>&1; then
             unzip -p /tmp/dsha-release.apk "assets/offline-rootfs.version" > app/src/main/assets/offline-rootfs.version
@@ -41,7 +40,7 @@ jobs:
             echo "5" > app/src/main/assets/offline-rootfs.version
           fi
           rm -f /tmp/dsha-release.apk
-          ls -lh app/src/main/assets/offline-rootfs.tar.gz app/src/main/assets/offline-rootfs.version
+          ls -lh app/src/main/assets/offline-rootfs.*
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
