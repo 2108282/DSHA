@@ -711,18 +711,21 @@ public class QuickChatSheetActivity extends Activity {
         } catch (Throwable ignored) {}
     }
 
-    /** 从底部顺滑滑入展开 */
+    /** 从底部顺滑滑入展开（屏幕外静默就绪，绝不闪屏变形） */
     private void animateIn() {
         isDismissing = false;
-        // 如果当前高度偏低（上次异常或<=50%），拉起前重置为 78% 默认高度
-        if (currentHeight <= (int) (screenHeight * 0.52f)) {
-            currentHeight = defaultHeight;
-            updateCardHeight(defaultHeight);
-        }
         if (sheetCard != null) {
-            sheetCard.setVisibility(View.VISIBLE);
+            // 如果上次处于低位 (<=50%)，在屏幕外先设为不可见并修改高度
+            if (currentHeight <= (int) (screenHeight * 0.52f)) {
+                currentHeight = defaultHeight;
+                updateCardHeight(defaultHeight);
+            }
+            sheetCard.setVisibility(View.INVISIBLE);
+            sheetCard.setTranslationY(screenHeight > 0 ? screenHeight : 2500);
+
             sheetCard.post(() -> {
                 sheetCard.setTranslationY(sheetCard.getHeight() > 0 ? sheetCard.getHeight() : defaultHeight);
+                sheetCard.setVisibility(View.VISIBLE);
                 sheetCard.animate()
                         .translationY(0)
                         .setDuration(220)
@@ -733,7 +736,7 @@ public class QuickChatSheetActivity extends Activity {
         }
     }
 
-    /** 顺滑向下平移退出弹层并转入后台保活（moveTaskToBack） */
+    /** 顺滑向下平移退出弹层并转入后台保活（moveTaskToBack，退出时绝不碰高度） */
     private void dismissSheet() {
         if (isDismissing) return;
         isDismissing = true;
@@ -754,11 +757,6 @@ public class QuickChatSheetActivity extends Activity {
                     .setListener(new AnimatorListenerAdapter() {
                         @Override
                         public void onAnimationEnd(Animator animation) {
-                            // 在动画结束（卡片已滑出屏幕不可见）后再重置高度，彻底消除退出时的拉长闪屏
-                            if (currentHeight <= (int) (screenHeight * 0.52f)) {
-                                currentHeight = defaultHeight;
-                                updateCardHeight(defaultHeight);
-                            }
                             moveTaskToBack(true);
                             overridePendingTransition(0, 0);
                             isDismissing = false;
@@ -766,10 +764,6 @@ public class QuickChatSheetActivity extends Activity {
                     })
                     .start();
         } else {
-            if (currentHeight <= (int) (screenHeight * 0.52f)) {
-                currentHeight = defaultHeight;
-                updateCardHeight(defaultHeight);
-            }
             moveTaskToBack(true);
             overridePendingTransition(0, 0);
             isDismissing = false;
