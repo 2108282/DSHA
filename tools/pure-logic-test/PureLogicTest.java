@@ -494,6 +494,7 @@ public final class PureLogicTest {
         ok("scope: 只有全量用 DSHA-backup- 前缀（老版本只看得见它）",
                 BackupScope.visibleToLegacyScan(BackupScope.FULL)
                         && !BackupScope.visibleToLegacyScan(BackupScope.SESSIONS)
+                        && !BackupScope.visibleToLegacyScan(BackupScope.SETTINGS)
                         && !BackupScope.visibleToLegacyScan(BackupScope.PLUGINS));
         boolean prefixDistinct = true;
         for (int a : BackupScope.ALL) {
@@ -504,12 +505,18 @@ public final class PureLogicTest {
                 if (BackupScope.fileNamePrefix(a).startsWith(BackupScope.fileNamePrefix(b))) prefixDistinct = false;
             }
         }
-        ok("scope: 三个文件名前缀互不相同、也互不为前缀", prefixDistinct);
+        ok("scope: 四个文件名前缀互不相同、也互不为前缀", prefixDistinct);
         boolean roundTripScope = true, nameRoundTrip = true, pathsPaired = true;
         for (int s : BackupScope.ALL) {
             if (BackupScope.fromId(BackupScope.id(s)) != s) roundTripScope = false;
             String name = BackupScope.fileNamePrefix(s) + "20260826-120000.tar.gz";
             if (BackupScope.fromFileName(name) != s) nameRoundTrip = false;
+            // 回归：调用方传全路径时，前缀比对必须先剥掉目录 —— 否则部分备份被判成
+            // 全量，而全量恢复会把整个 .dsh 挪走再替换（配置与插件跟着被覆盖）。
+            if (BackupScope.fromFileName(
+                    "/storage/emulated/0/Download/DSHA/存档/" + name) != s) nameRoundTrip = false;
+            if (BackupScope.fromFileName(
+                    "C:\\Users\\x\\Download\\" + name) != s) nameRoundTrip = false;
             String[] packed = BackupScope.dshPaths(s);
             String[] merged = BackupScope.mergeSubdirs(s);
             if (packed.length != merged.length) {
@@ -549,12 +556,18 @@ public final class PureLogicTest {
         ok("scope: 需要快照的范围与快照条目非空一致",
                 BackupScope.needsPublicDataSnapshot(BackupScope.FULL)
                         && BackupScope.needsPublicDataSnapshot(BackupScope.SESSIONS)
+                        && BackupScope.needsPublicDataSnapshot(BackupScope.SETTINGS)
                         && !BackupScope.needsPublicDataSnapshot(BackupScope.PLUGINS)
                         && BackupScope.snapshotEntries(BackupScope.PLUGINS).length == 0
                         && BackupScope.snapshotEntries(BackupScope.SESSIONS).length > 0);
         ok("scope: 对话备份只快照 sessions（不必把 storages/attachments 也拖进来）",
                 BackupScope.snapshotEntries(BackupScope.SESSIONS).length == 1
                         && "sessions".equals(BackupScope.snapshotEntries(BackupScope.SESSIONS)[0]));
+        // settings.yaml 在设备上也是指向公开目录的软链，所以「只设置」这个范围同样必须
+        // 走解引用快照 —— 否则包里那一行是 lrwxrwxrwx，换设备恢复出来是个悬空链接。
+        ok("scope: 设置备份只快照 settings.yaml，且它进得了快照",
+                BackupScope.snapshotEntries(BackupScope.SETTINGS).length == 1
+                        && "settings.yaml".equals(BackupScope.snapshotEntries(BackupScope.SETTINGS)[0]));
 
         // ===== PublicDirs：公开 Download 目录布局 =====
         eq("dirs: 存档子目录", "Download/DSHA/存档", PublicDirs.relative("Download", PublicDirs.ARCHIVES));

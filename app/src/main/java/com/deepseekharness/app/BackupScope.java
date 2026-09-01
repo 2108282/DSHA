@@ -1,7 +1,7 @@
 package com.deepseekharness.app;
 
 /**
- * 备份范围的<b>唯一</b>定义：全量 / 只对话 / 只插件。
+ * 备份范围的<b>唯一</b>定义：全量 / 只对话 / 只设置 / 只插件。
  *
  * <p>一处定义，三处派生 —— 备份时 tar 打哪些路径、恢复时合并哪些子树、文件名叫什么，
  * 全都从这里出。这三件事必须一致：备份打了 A 而恢复只合并 B，用户就会拿到一个
@@ -25,9 +25,11 @@ final class BackupScope {
     static final int SESSIONS = 1;
     /** 只插件：profile 声明 + 内联的本机插件源码。 */
     static final int PLUGINS = 2;
+    /** 只设置：upstream 的 {@code .dsh/settings.yaml}，原字节搬运。 */
+    static final int SETTINGS = 3;
 
     /** UI 与对话框里展示的顺序（也是选项顺序）。 */
-    static final int[] ALL = { FULL, SESSIONS, PLUGINS };
+    static final int[] ALL = { FULL, SESSIONS, SETTINGS, PLUGINS };
 
     private BackupScope() {
     }
@@ -37,6 +39,7 @@ final class BackupScope {
         switch (scope) {
             case SESSIONS: return "sessions";
             case PLUGINS:  return "plugins";
+            case SETTINGS: return "settings";
             default:       return "full";
         }
     }
@@ -47,6 +50,7 @@ final class BackupScope {
         String s = id.trim();
         if (s.equals("sessions")) return SESSIONS;
         if (s.equals("plugins")) return PLUGINS;
+        if (s.equals("settings")) return SETTINGS;
         return FULL;
     }
 
@@ -55,6 +59,7 @@ final class BackupScope {
         switch (scope) {
             case SESSIONS: return "DSHA-sessions-";
             case PLUGINS:  return "DSHA-plugins-";
+            case SETTINGS: return "DSHA-settings-";
             default:       return "DSHA-backup-";
         }
     }
@@ -63,8 +68,14 @@ final class BackupScope {
     static int fromFileName(String name) {
         if (name == null) return FULL;
         String n = name.trim();
+        // 调用方传进来的可能是全路径（不止 Uri 的 lastPathSegment，也有 File.getPath 那条）。
+        // 前缀比对之前先剥掉目录部分，否则 /storage/…/存档/DSHA-sessions-x.tar.gz 会一路
+        // 落到 return FULL —— 部分备份被当成全量恢复，而全量恢复是「把整个 .dsh 挪走再替换」。
+        int slash = Math.max(n.lastIndexOf('/'), n.lastIndexOf('\\'));
+        if (slash >= 0 && slash + 1 < n.length()) n = n.substring(slash + 1);
         if (n.startsWith("DSHA-sessions-")) return SESSIONS;
         if (n.startsWith("DSHA-plugins-")) return PLUGINS;
+        if (n.startsWith("DSHA-settings-")) return SETTINGS;
         return FULL;
     }
 
@@ -78,6 +89,7 @@ final class BackupScope {
         switch (scope) {
             case SESSIONS: return "只备份对话";
             case PLUGINS:  return "只备份插件";
+            case SETTINGS: return "只备份设置";
             default:       return "全量备份";
         }
     }
@@ -89,6 +101,8 @@ final class BackupScope {
                 return "只打包对话，恢复时不动配置与插件";
             case PLUGINS:
                 return "只打包插件，恢复时不动对话";
+            case SETTINGS:
+                return "只打包 settings.yaml，恢复时不动对话与插件";
             default:
                 return "配置 + 对话 + 插件，换机或重装用这个";
         }
@@ -97,18 +111,20 @@ final class BackupScope {
     /**
      * {@code .dsh} 下要打包的子路径；空数组表示<b>整个 {@code .dsh}</b>。
      *
-     * <p>返回的是相对 {@code /root} 的路径，直接进 tar 的位置参数。
+     * <p>返回的是相对 {@code /root} 的路径，直接进 tar 的位置参数。条目可以是目录，
+     * 也可以是单个文件（{@code settings.yaml} 就是文件）。
      */
     static String[] dshPaths(int scope) {
         switch (scope) {
             case SESSIONS: return new String[] { ".dsh/sessions" };
             case PLUGINS:  return new String[] { ".dsh/profiles" };
+            case SETTINGS: return new String[] { ".dsh/settings.yaml" };
             default:       return new String[0];   // 空 = 整个 .dsh
         }
     }
 
     /**
-     * 恢复时要合并的 {@code .dsh} 子目录名；空数组表示整目录替换（全量的老行为）。
+     * 恢复时要合并的 {@code .dsh} 子路径；空数组表示整目录替换（全量的老行为）。
      *
      * <p>必须与 {@link #dshPaths(int)} 一一对应 —— 备份打了 sessions 而恢复合并 profiles
      * 这种错位，纯逻辑断言会当场抓住。
@@ -117,6 +133,7 @@ final class BackupScope {
         switch (scope) {
             case SESSIONS: return new String[] { "sessions" };
             case PLUGINS:  return new String[] { "profiles" };
+            case SETTINGS: return new String[] { "settings.yaml" };
             default:       return new String[0];
         }
     }
@@ -144,9 +161,14 @@ final class BackupScope {
      * 每个 {@code link:} 插件也展开一遍，包会爆掉。所以只对这四个已知条目做解引用快照，
      * 放在包内的 {@code .dsha-pub/} 下。老版本不认识这个目录，会照旧恢复 {@code .dsh}
      * ——行为不比今天差，属于纯增量。
+     *
+     * <p><b>刻意从 {@link #snapshotEntries(int)} 派生</b>，不再单独列一份范围表：
+     * 上游 1.2 把两者写成两处，结果「只设置」这个新范围在这里返回 false、在那边却
+     * 返回 {@code settings.yaml} —— 眼下无害（生产代码只看 snapshotEntries 非空），
+     * 但下一个按这个方法判断的人就会打出一个 settings.yaml 是悬空软链的包。
      */
     static boolean needsPublicDataSnapshot(int scope) {
-        return scope == FULL || scope == SESSIONS;
+        return snapshotEntries(scope).length > 0;
     }
 
     /** 公开目录里会被软链出去的热数据条目（与 BackupManager 的软链自修复同一份名单）。 */
@@ -160,6 +182,7 @@ final class BackupScope {
     /** 这个范围需要快照哪些公开条目：只对话时没必要把 storages/attachments 全带上。 */
     static String[] snapshotEntries(int scope) {
         if (scope == SESSIONS) return new String[] { "sessions" };
+        if (scope == SETTINGS) return new String[] { "settings.yaml" };
         if (scope == FULL) return PUBLIC_HOT_ENTRIES.clone();
         return new String[0];
     }

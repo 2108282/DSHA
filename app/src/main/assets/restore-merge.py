@@ -534,6 +534,12 @@ def main():
         ok_dsh = restore_dsh_subtree(stage, root, ["sessions"])
         # 快照后跑：它才是真数据（.dsh/sessions 在设备上多半只是个软链）
         ok_dsh = restore_pub_snapshot(stage, root, only=["sessions"]) or ok_dsh
+    elif scope == "settings":
+        say("· 这是「只设置」备份：只覆盖 settings.yaml，对话与插件保持现状")
+        ok_dsh = restore_dsh_subtree(stage, root, ["settings.yaml"])
+        # 与 sessions 同理：设备上 .dsh/settings.yaml 多半是指向公开目录的软链，
+        # 包里那份解引用快照才是真内容，所以快照放在后面跑（写到链接目标上）。
+        ok_dsh = restore_pub_snapshot(stage, root, only=["settings.yaml"]) or ok_dsh
     elif scope == "plugins":
         say("· 这是「只插件」备份：只覆盖插件，对话与配置保持现状")
         ok_dsh = restore_dsh_subtree(stage, root, ["profiles"])

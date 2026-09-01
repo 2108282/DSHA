@@ -6,10 +6,11 @@
 # 拿一个只含对话的包那么干，等于把配置、凭据、插件声明一起换掉。原数据虽然还在
 # .pre-restore-* 里，但用户看到 RESTORE_OK 就不会去找，等发现时已经分不清该回退哪个。
 #
-# 三个用例：
+# 四个用例：
 #   1. scope=sessions —— 只换对话，配置/插件/凭据必须原样，且不得出现 .dsh.pre-restore-*
 #   2. scope=plugins  —— 只换插件声明，对话必须原样
-#   3. 无清单的老包   —— 必须仍走全量路径（老备份的语义就是全量，行为不能变）
+#   3. scope=settings —— 只换 settings.yaml（软链与普通文件两种布局都测），其余不动
+#   4. 无清单的老包   —— 必须仍走全量路径（老备份的语义就是全量，行为不能变）
 #
 # 顺带验证「软链落点」：sessions 在设备上是指向 Documents/dshdata 的软链，
 # 恢复要写进它指向的公开目录、保持软链不动，否则数据会跟着私有目录一起被卸载带走。
@@ -94,7 +95,38 @@ chk "对话一条没动" '{"id":"old-1"}' "$(cat "$B/pub/sessions/session.jsonl"
 chk "settings.yaml 未被动" "theme: dark" "$(cat "$B/root/.dsh/settings.yaml" 2>/dev/null)"
 chk "没走整目录替换" 0 "$(ls -d "$B/root"/.dsh.pre-restore-* 2>/dev/null | wc -l)"
 
-echo "③ 老包（无清单）：必须仍是全量行为"
+echo "③ scope=settings：只换设置"
+# 真机上 settings.yaml 在数据迁移之后同样是指向公开目录的软链，所以这个场景按真机
+# 布局造：包里带的是 .dsha-pub/settings.yaml（解引用快照），恢复必须写进链接目标、
+# 保持链接不动，而对话/插件/凭据一律不许碰。
+setup_device
+rm -f "$B/root/.dsh/settings.yaml"
+echo 'theme: dark' > "$B/pub/settings.yaml"
+ln -s "$B/pub/settings.yaml" "$B/root/.dsh/settings.yaml"
+rm -rf "$B/stage"; mkdir -p "$B/stage/.dsha-pub"
+manifest settings
+echo 'theme: light' > "$B/stage/.dsha-pub/settings.yaml"
+out="$(run_merge full)"   # 故意传 full：清单里的 settings 必须赢
+chk "结果是 RESTORE_OK" 1 "$(printf '%s' "$out" | grep -c RESTORE_OK)"
+chk "settings.yaml 仍是软链" 1 "$([ -L "$B/root/.dsh/settings.yaml" ] && echo 1 || echo 0)"
+chk "设置写进了公开目录（软链目标）" "theme: light" "$(cat "$B/pub/settings.yaml" 2>/dev/null)"
+chk "对话一条没动" '{"id":"old-1"}' "$(cat "$B/pub/sessions/session.jsonl" 2>/dev/null)"
+chk "插件声明未被动" 1 "$([ -f "$B/root/.dsh/profiles/web/package.json" ] && echo 1 || echo 0)"
+chk "凭据未被动" "OLD-CRED" "$(cat "$B/root/.dsh/.credentials.yaml" 2>/dev/null)"
+chk "没走整目录替换" 0 "$(ls -d "$B/root"/.dsh.pre-restore-* 2>/dev/null | wc -l)"
+
+# 同一个范围、另一种布局：包里没有快照目录，只有 .dsh/settings.yaml（本机没迁移过
+# 公开目录时备份出来就是这样）。这条路走 restore_dsh_subtree，不能因为缺快照就报空。
+setup_device
+rm -rf "$B/stage"; mkdir -p "$B/stage/.dsh"
+manifest settings
+echo 'theme: solar' > "$B/stage/.dsh/settings.yaml"
+out="$(run_merge settings)"
+chk "无快照布局也是 RESTORE_OK" 1 "$(printf '%s' "$out" | grep -c RESTORE_OK)"
+chk "settings.yaml 来自包" "theme: solar" "$(cat "$B/root/.dsh/settings.yaml" 2>/dev/null)"
+chk "对话仍未被动" '{"id":"old-1"}' "$(cat "$B/pub/sessions/session.jsonl" 2>/dev/null)"
+
+echo "④ 老包（无清单）：必须仍是全量行为"
 setup_device
 rm -rf "$B/stage"; mkdir -p "$B/stage/.dsh/sessions" "$B/stage/.dsh/profiles/web"
 echo '{"id":"legacy-1"}'  > "$B/stage/.dsh/sessions/session.jsonl"
