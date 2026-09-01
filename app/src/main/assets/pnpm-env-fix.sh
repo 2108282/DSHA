@@ -108,6 +108,58 @@ else
   echo "PNPM_YAML_COPY=skip-hardlink-ok"
 fi
 
+# ⑤ prerelease 依赖钉版本（issue #46）
+#
+# dsh 的 profile 模板把 @deepseek-ai/dsh-client-runtime 声明成 ">=0.1.0 <0.2.0"，
+# 而 registry 上这个包**只有 prerelease**：latest=0.0.1-rc.1、next=0.1.1-rc.2，
+# 正式 0.1.x 从没发过。semver 规则里「不带 prerelease 标识的范围会排除所有 prerelease
+# 版本」，所以这个范围在任何镜像上都解析不到 —— 装插件后 dsh 重装 profile，第一个包就
+# ERR_PNPM_NO_MATCHING_VERSION，整个 profile 装不起来。这不是 npmmirror 的问题，
+# 换官方源同样失败（报错原文里 pnpm 自己也列出了 next: 0.1.1-rc.2）。
+#
+# 解法：给 profile 的 pnpm-workspace.yaml 加一条 overrides，把它钉到实际存在的版本。
+# 版本优先问 registry 的 next dist-tag（dsh 官方推的那个），问不到再回退。
+# **升级内置 dsh 版本时记得同步 CR_FALLBACK。**
+CR_PKG='@deepseek-ai/dsh-client-runtime'
+CR_FALLBACK='0.1.1-rc.2'   # 与内置 dsh 0.1.1-rc.2 配套
+cr_fixed=0
+cr_already=0
+CR_VER=''
+for WS in "$PROFILES_DIR"/*/pnpm-workspace.yaml; do
+  [ -f "$WS" ] || continue
+  PJ="${WS%/pnpm-workspace.yaml}/package.json"
+  grep -q 'dsh-client-runtime' "$PJ" 2>/dev/null || continue
+  # 已经钉过就别重复写（这个文件每次启动都会被扫）
+  if grep -q 'dsh-client-runtime' "$WS" 2>/dev/null; then
+    cr_already=$((cr_already + 1))
+    continue
+  fi
+  # 声明里本来就带 prerelease 标识（如 ">=0.1.0-0"）说明上游已经修好了，别插手
+  grep -qE '"@deepseek-ai/dsh-client-runtime"[[:space:]]*:[[:space:]]*"[^"]*-[0-9A-Za-z]' \
+    "$PJ" 2>/dev/null && continue
+  if [ -z "$CR_VER" ]; then
+    # 只问一次，问不到就用回退值 —— 这一步不许把启动流程拖住
+    CR_VER=$(timeout 15 npm view "$CR_PKG" dist-tags.next 2>/dev/null | tr -d ' \r\n"')
+    case "$CR_VER" in
+      '' | *[!0-9.A-Za-z_-]*) CR_VER="$CR_FALLBACK" ;;
+    esac
+  fi
+  # 有 overrides: 就插进去，没有就在末尾新建 —— 直接 >> 追加会写出重复的顶层键，
+  # YAML 里那是后者覆盖前者，把这个文件另外管着的 nodeLinker / allowBuilds 弄丢。
+  if awk -v k="$CR_PKG" -v v="$CR_VER" '
+      /^overrides:/ && !d { print; print "  \"" k "\": \"" v "\""; d = 1; next }
+      { print }
+      END { if (!d) { print ""; print "overrides:"; print "  \"" k "\": \"" v "\"" } }
+    ' "$WS" > "$WS.dsha-tmp" 2>/dev/null && mv "$WS.dsha-tmp" "$WS"; then
+    cr_fixed=$((cr_fixed + 1))
+    log "$WS 钉住 $CR_PKG@$CR_VER（原范围排除了 prerelease，解析不到任何版本）"
+  else
+    rm -f "$WS.dsha-tmp"
+    log "$WS 写 overrides 失败，跳过"
+  fi
+done
+echo "PNPM_PRERELEASE_PIN=$cr_fixed already=$cr_already"
+
 # ④ 清 store 的临时目录（只有失败残留才会留在这儿；正常安装结束即清）
 cleaned=0
 for STORE in /root/.local/share/pnpm/store/v* /root/.pnpm-store/v*; do
