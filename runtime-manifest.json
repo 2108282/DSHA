@@ -5,7 +5,7 @@
   "upstreamTag": "dsh-v0.1.2-alpha.2",
   "upstreamCommit": "0a53fb55bea101816fa226bb964ae2bed71c343b",
   "offlineVersion": 5,
-  "generated": "2026-08-31T13:52:17Z",
+  "generated": "2026-09-01T05:46:30Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -88,8 +88,8 @@
     {
       "path": "app/src/main/assets/fix-stale-bundles.sh",
       "asset": "fix-stale-bundles.sh",
-      "size": 2845,
-      "sha256": "ea60f85c7927b842cd8ff498d92e494fd3c0f40dff4c3a3ec7b7e721cab5e8ac",
+      "size": 2852,
+      "sha256": "d2f9d905040403f50a271f6cbbfabb5e778c6f5732faac47ff06eba818a4cf4e",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/fix-stale-bundles.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/fix-stale-bundles.sh",
@@ -121,8 +121,8 @@
     {
       "path": "app/src/main/assets/heal-pnpm-shells.py",
       "asset": "heal-pnpm-shells.py",
-      "size": 7451,
-      "sha256": "fbf16047401a055bc13b2484d4ec8bdf341d68d1c5fb8b968ec79e255f0b1683",
+      "size": 7453,
+      "sha256": "e493fcabe2b3ebc07f495864507645cc28f19b215af2e1eb65aa96c0a11a3564",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/heal-pnpm-shells.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/heal-pnpm-shells.py",
@@ -132,8 +132,8 @@
     {
       "path": "app/src/main/assets/heal-profile-boot.py",
       "asset": "heal-profile-boot.py",
-      "size": 6854,
-      "sha256": "6157a31fa17cbdbfd4045d58c8d9208b5bbe84a23d38d208b088121d93e6b525",
+      "size": 6894,
+      "sha256": "e490ee61fc9dd5469c5c60ed0655eed31b092efbd0b53db66117b73d5706a1ef",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/heal-profile-boot.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/heal-profile-boot.py",
@@ -220,8 +220,8 @@
     {
       "path": "app/src/main/assets/restore-merge.py",
       "asset": "restore-merge.py",
-      "size": 37988,
-      "sha256": "2ec9164714324333561033413b5769cd577b4a10e42fb5e302381383ae3ef712",
+      "size": 38465,
+      "sha256": "e70d1e85eadefd8584c0aeab531157f20053204144f2b64e2c2c57422758c3eb",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/restore-merge.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/restore-merge.py",
@@ -242,8 +242,8 @@
     {
       "path": "app/src/main/assets/selftest.py",
       "asset": "selftest.py",
-      "size": 68279,
-      "sha256": "7e715ca65084d3721fb1940966230aaecb63132cdfe4f4df9f7617651279b9c5",
+      "size": 68281,
+      "sha256": "477246338d433d57b5dc46add21c33acefb33f20a26b6b349666d7ee63746bd6",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/selftest.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/selftest.py",
