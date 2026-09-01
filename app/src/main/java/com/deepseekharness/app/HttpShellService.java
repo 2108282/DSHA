@@ -627,9 +627,9 @@ public final class HttpShellService {
         return false;
     }
 
-    private static java.io.File authLeaseFileIfPossible() {
+    private java.io.File authLeaseFileIfPossible() {
         try {
-            HarnessController hc = HarnessController.get();
+            HarnessController hc = HarnessController.get(ctx);
             if (hc != null && hc.getProot() != null && hc.getProot().getRootfsDir() != null) {
                 return new java.io.File(hc.getProot().getRootfsDir(), "root/.dsh/.auth_lease");
             }
