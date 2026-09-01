@@ -180,8 +180,11 @@ final class OverlayController {
      */
     static void push(Context ctx, String sessionKey, String kind, String text) {
         if (ctx == null || !enabled(ctx) || !permitted(ctx)) return;
-        // Overlay content is display-only. Keep any credentials in streamed
-        // diagnostics out of both the transient buffer and the window.
+        // 悬浮条是贴在屏幕最顶层、旁人也看得见的东西，而它显示的是 AI 输出流与命令原文
+        // —— 里面完全可能带着 API key 或 auth URL。所以这里脱敏，代价是 AI 正好在讲
+        // OAuth 之类内容时会看到 <redacted>；瞥一眼进度少看到一个 token 不影响使用，
+        // 完整内容在 WebUI 里照旧。（与终端复制回调刻意不脱敏的取舍不同：那边用户是要
+        // 把内容拿走去用，改写等于给他一个假的粘贴结果。）
         text = SensitiveData.redact(text);
         final String k = kind == null ? "delta" : kind;
         if ("reasoning".equals(k) && !showReasoning(ctx)) return;

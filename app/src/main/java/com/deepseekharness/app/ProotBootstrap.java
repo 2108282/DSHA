@@ -1344,16 +1344,20 @@ public class ProotBootstrap {
         for (String n : names) {
             File from = new File(dataBak, n);
             File to = new File(rootHome, n);
-            if (!from.exists()) continue;
-            if (to.exists() || !from.renameTo(to)) {
+            // 这里必须用 existsNoFollow：`File.exists()` 会跟随链接，一根**悬空**软链
+            // （换设备之后 sessions/settings 指向的公开目录不在，就是这个样子）会被判成
+            // 「不存在」而跳过 —— 那根链接就永远留在保护目录里，用户的 /root 下少一项。
+            if (!FileCopy.existsNoFollow(from)) continue;
+            if (FileCopy.existsNoFollow(to) || !from.renameTo(to)) {
                 stuck++;
             } else {
                 back++;
             }
         }
         if (stuck == 0) {
-            //noinspection ResultOfMethodCallIgnored
-            dataBak.delete();
+            // 保护目录里可能还留着「复制成功」那些项的副本（复制不删原件，原件仍在
+            // /root），所以这里要递归删干净，`delete()` 对非空目录只会静默失败。
+            deleteRecursively(dataBak);
             return "已挪回 " + back + " 项，rootfs 与升级前一致。";
         }
         return "已挪回 " + back + " 项，还有 " + stuck + " 项留在 " + dataBak.getName()

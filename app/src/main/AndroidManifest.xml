@@ -164,7 +164,7 @@
              不能直接绑我们的 provider。暴露范围也只有 files/linux/ubuntu/root 这一棵树。 -->
         <provider
             android:name=".DshaDocumentsProvider"
-            android:authorities="com.dsh.client.documents"
+            android:authorities="${applicationId}.documents"
             android:exported="true"
             android:grantUriPermissions="true"
             android:permission="android.permission.MANAGE_DOCUMENTS">

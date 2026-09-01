@@ -88,8 +88,11 @@ public final class DshaDocumentsProvider extends DocumentsProvider {
         r.add(DocumentsContract.Document.COLUMN_LAST_MODIFIED, f.lastModified());
     }
     @Override public ParcelFileDescriptor openDocument(String id, String mode, CancellationSignal signal) throws FileNotFoundException {
-        int m = mode.contains("w") ? ParcelFileDescriptor.MODE_READ_WRITE : ParcelFileDescriptor.MODE_READ_ONLY;
-        return ParcelFileDescriptor.open(file(id), m);
+        // 必须走 parseMode：SAF 客户端传的是 "r" / "w" / "wt" / "wa" / "rw" / "rwt"。
+        // 自己 contains("w") → MODE_READ_WRITE 会**漏掉 truncate** —— 文件管理器保存一个
+        // 变短了的文件时，尾部会残留上一版的内容（改 package.json 这种最容易踩到）。
+        return ParcelFileDescriptor.open(file(id),
+                ParcelFileDescriptor.parseMode(mode == null || mode.isEmpty() ? "r" : mode));
     }
     @Override public String createDocument(String parentId, String mimeType, String displayName) throws FileNotFoundException {
         File p = file(parentId); File out = new File(p, displayName);
