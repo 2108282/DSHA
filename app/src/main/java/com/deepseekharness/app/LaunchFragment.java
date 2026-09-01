@@ -190,7 +190,27 @@ public class LaunchFragment extends Fragment {
             statusText.setText("环境未就绪。若刚装好 APK，请杀掉进程再打开一次以进入解压页。");
         }
 
+        if (getActivity() != null && getActivity().getIntent() != null) {
+            Intent actIntent = getActivity().getIntent();
+            if (actIntent.getBooleanExtra("open_web", false) || actIntent.getBooleanExtra("auto_enter_web", false)) {
+                enterWhenReady = true;
+            }
+        }
+
         mainHandler.post(tick);
+    }
+
+    /** 供通知点击或外部意图唤醒：直接进入 Web 对话界面 */
+    public void enterWebDirectly() {
+        if (!isAdded()) return;
+        if (webReady && !insideWeb) {
+            openWeb();
+        } else if (!insideWeb) {
+            enterWhenReady = true;
+            if (!starting && c != null && c.getProot().isOfflineExtracted() && startBtn != null) {
+                startBtn.performClick();
+            }
+        }
     }
 
     /**
@@ -389,7 +409,7 @@ public class LaunchFragment extends Fragment {
         webView.loadUrl(uiUrl());
     }
 
-    private void closeWeb() {
+    public void closeWeb() {
         if (!insideWeb) return;
         insideWeb = false;
         webPane.setVisibility(View.GONE);
