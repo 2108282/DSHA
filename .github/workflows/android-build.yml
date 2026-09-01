@@ -23,16 +23,16 @@ jobs:
           mkdir -p app/src/main/assets
           echo "正在下载官方最新发布版 APK..."
           URL="https://github.com/qiannianhuanxiang/DSHA/releases/download/v1.2.0-alpha.2/dsha-1.2.0-alpha.2-vc104.apk"
-          if ! curl -fL --retry 3 -o /tmp/dsha-release.apk "$URL"; then
+          if ! curl -fL --retry 3 --connect-timeout 30 -o /tmp/dsha-release.apk "$URL"; then
             echo "尝试备用下载地址..."
-            curl -fL --retry 3 -o /tmp/dsha-release.apk \
+            curl -fL --retry 3 --connect-timeout 30 -o /tmp/dsha-release.apk \
               https://github.com/qiannianhuanxiang/DSHA/releases/download/v1.1.9.1/deepseekharness-arm64-v1.1.9.1.apk
           fi
           echo "正在精确解压提取 offline-rootfs..."
           if unzip -l /tmp/dsha-release.apk "assets/offline-rootfs.bin" >/dev/null 2>&1; then
-            unzip -p /tmp/dsha-release.apk "assets/offline-rootfs.bin" > app/src/main/assets/offline-rootfs.bin
+            unzip -p /tmp/dsha-release.apk "assets/offline-rootfs.bin" > app/src/main/assets/offline-rootfs.tar.gz
           elif unzip -l /tmp/dsha-release.apk "assets/offline-rootfs.tar.gz" >/dev/null 2>&1; then
-            unzip -p /tmp/dsha-release.apk "assets/offline-rootfs.tar.gz" > app/src/main/assets/offline-rootfs.bin
+            unzip -p /tmp/dsha-release.apk "assets/offline-rootfs.tar.gz" > app/src/main/assets/offline-rootfs.tar.gz
           fi
           if unzip -l /tmp/dsha-release.apk "assets/offline-rootfs.version" >/dev/null 2>&1; then
             unzip -p /tmp/dsha-release.apk "assets/offline-rootfs.version" > app/src/main/assets/offline-rootfs.version
@@ -40,6 +40,7 @@ jobs:
             echo "5" > app/src/main/assets/offline-rootfs.version
           fi
           rm -f /tmp/dsha-release.apk
+          test -s app/src/main/assets/offline-rootfs.tar.gz
           ls -lh app/src/main/assets/offline-rootfs.*
 
       - name: Set up JDK 17
@@ -84,11 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           sed -i '/aapt2FromMavenOverride/d' gradle.properties
-          if ! gradle :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee /tmp/gradle-build.log; then
-            echo "::error title=Gradle Build Failed::编译构建失败，输出详细日志："
-            tail -n 250 /tmp/gradle-build.log
-            exit 1
-          fi
+          gradle :app:assembleDebug --no-daemon --stacktrace
           ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK
