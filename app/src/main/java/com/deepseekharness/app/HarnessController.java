@@ -5354,8 +5354,29 @@ public class HarnessController {
                 + "（原文件留 .pre-fix 备份）");
     }
 
-    /** 会话目录的现状指纹：目录 mtime + 直接子项个数。空串＝拿不到，那就照扫不敢跳。 */
-    private String sessionsStamp() {
+    /** 延迟一段时间再排进 IO 队列。
+     *
+     *  <p>维护类任务（自动备份这种）不该和启动抢那唯一的 IO 线程 —— 直接 IO.execute
+     *  会让用户点了启动之后干等它做完。用独立线程只负责等，等完再交给 IO，
+     *  这样既保留了「容器操作串行」的语义，又不占启动的位置。
+     */
+    private void ioLater(long delayMs, Runnable task) {
+        Thread t = new Thread(() -> {
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException e) {
+                return;
+            }
+            try {
+                IO.execute(task);
+            } catch (Throwable ignored) {
+            }
+        }, "dsha-io-later");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** 会话目录的现状指纹：目录 mtime + 直接子项个数。空串＝拿不到，那就照扫不敢跳。 */    private String sessionsStamp() {
         try {
             java.io.File d = rootfsFile("root/.dsh/sessions");
             if (!d.isDirectory()) return "";
@@ -5655,7 +5676,11 @@ public class HarnessController {
             final int n = prefs.getInt("backup_launch_count", 0) + 1;
             prefs.edit().putInt("backup_launch_count", n).apply();
             if (n % interval != 0) return; // 每 N 次才备份
-            IO.execute(() -> {
+            // 备份要打 tar 包（几秒到几十秒），而 IO 是**单线程**池 —— 直接 IO.execute
+            // 就是排在启动前面让用户干等。真机现场：03:17:45 点启动，03:17:48 才打完备份，
+            // 03:17:52 会话自愈完，03:17:53 启动的活才真正开始，用户在「正在启动」上卡 12 秒。
+            // 备份是维护任务，晚 45 秒做没有任何损失，那时 Web 早起来了、队列也空了。
+            ioLater(45_000, () -> {
                 try {
                     // 判据用 hasUserDataInDsh() 而不是「.dsh 目录存在」：全新环境里解压收尾
                     // 就会把 .dsh 建出来，老判据会把**空环境**打成一个"有效"备份。它是当次
