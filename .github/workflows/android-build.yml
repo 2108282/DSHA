@@ -86,11 +86,13 @@ jobs:
           set -euo pipefail
           sed -i '/aapt2FromMavenOverride/d' gradle.properties
           if ! gradle :app:assembleDebug --no-daemon --stacktrace > /tmp/build.log 2>&1; then
-            echo "## ❌ Gradle Build Failed Output" >> "$GITHUB_STEP_SUMMARY"
-            echo '```text' >> "$GITHUB_STEP_SUMMARY"
-            tail -n 120 /tmp/build.log >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "========== GRADLE BUILD FAILED =========="
             cat /tmp/build.log
+            while IFS= read -r line; do
+              if [ -n "$line" ]; then
+                echo "::error title=GradleLog::$line"
+              fi
+            done < <(tail -n 15 /tmp/build.log)
             exit 1
           fi
           ls -lh app/build/outputs/apk/debug/app-debug.apk
