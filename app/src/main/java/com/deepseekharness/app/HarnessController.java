@@ -4803,6 +4803,9 @@ public class HarnessController {
         prefs.edit().putBoolean("keepalive_paused", false).remove("last_web_stop").apply();
         // ===== 会话自愈必跑点：无论 web 是否已经在运行，都先提交一次自愈（幂等，秒级）。
         // 若把 heal 放在 IO 启动任务里，web 已存活时 startWeb 提前 return 会导致修复永不执行。
+        // 点下去立刻给反馈。下面的活都排在单线程 IO 队列里，前面可能还有别的任务，
+        // 而用户此刻只想知道「按钮生效了」—— 真机体感「点了三秒没反应」就是这里空着。
+        setProgress("正在启动 Web UI", 0);
         maybeHealSessionCorruption();
         synchronized (webStartLock) {
             if (webProcess != null && webProcess.isAlive()) {
@@ -5351,6 +5354,18 @@ public class HarnessController {
                 + "（原文件留 .pre-fix 备份）");
     }
 
+    /** 会话目录的现状指纹：目录 mtime + 直接子项个数。空串＝拿不到，那就照扫不敢跳。 */
+    private String sessionsStamp() {
+        try {
+            java.io.File d = rootfsFile("root/.dsh/sessions");
+            if (!d.isDirectory()) return "";
+            String[] kids = d.list();
+            return d.lastModified() + ":" + (kids == null ? -1 : kids.length);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
     /** 上次真的扫过会话的时刻 —— 用来挡住同一次启动里的重复调用。 */
     private volatile long lastSessionHealAt = 0;
 
@@ -5362,6 +5377,16 @@ public class HarnessController {
         long nowMs = System.currentTimeMillis();
         if (nowMs - lastSessionHealAt < 60_000) return;
         lastSessionHealAt = nowMs;
+        // 停 Web 之前先问一句「有没有必要」。
+        //
+        // 下面第一步就是停 Web + 等端口关透，然后起 python 全量扫一遍（1~3 秒）。
+        // 而 IO 是**单线程**池 —— 用户打开 App（MainActivity 会调这里）之后马上点启动，
+        // 启动的活就排在这后面白等，真机体感正是「点了三秒没反应」。
+        // 会话目录没动过就没有再扫一遍的理由，直接返回：不停 Web、不起 python。
+        String sStamp = sessionsStamp();
+        if (!sStamp.isEmpty() && sStamp.equals(prefs.getString("sessions_heal_stamp", ""))) {
+            return;
+        }
         healingSession = true;
         try {
             if (!proot.isInstalled()) return;
@@ -5402,6 +5427,11 @@ public class HarnessController {
             logHealResult(r);
         } catch (Throwable ignored) {
         } finally {
+            // 记下这次扫过的会话现状，下次同样的现状就不必再扫（见方法开头那道门槛）。
+            // 放在 finally 里意味着「扫到一半失败」也会记 —— 取舍是这样：会话损坏本来罕见，
+            // 而 mtime 或子项数一变还是会重扫，60 秒去重窗口过后手动重启也会重扫，
+            // 漏掉一次的代价远小于每次启动都白付 1~3 秒。
+            prefs.edit().putString("sessions_heal_stamp", sessionsStamp()).apply();
             healingSession = false;
         }
     }
