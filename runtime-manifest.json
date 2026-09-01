@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-29T05:07:22Z",
+  "generated": "2026-09-01T15:39:17Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -204,8 +204,8 @@
     {
       "path": "app/src/main/assets/pnpm-env-fix.sh",
       "asset": "pnpm-env-fix.sh",
-      "size": 3126,
-      "sha256": "016e78543e61b73929f88dc448da75c646a96d8881514b165a02d334598ad2ff",
+      "size": 6478,
+      "sha256": "64617420114c1a243b2609efa3379dd3f700dae411ea7103e6f0089ee3cf222e",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/pnpm-env-fix.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/pnpm-env-fix.sh",
@@ -215,8 +215,8 @@
     {
       "path": "app/src/main/assets/restore-merge.py",
       "asset": "restore-merge.py",
-      "size": 22296,
-      "sha256": "529ba543a9664dc8a238a12c674fef693ff0d4ed92792f4d4cd6a3acc4cff390",
+      "size": 22796,
+      "sha256": "c71e0c6c1797ff2693019396831eb2d239f7c780394210d1f07a9a38454f2556",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/restore-merge.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/restore-merge.py",

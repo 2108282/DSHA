@@ -50,6 +50,24 @@ def sha256_of(path):
     return h.hexdigest()
 
 
+def assert_lf(path):
+    """行尾必须是 LF，否则拒绝生成清单。
+
+    清单里的 size/sha256 是按**仓库字节**算的，客户端从 raw.githubusercontent 下到的
+    也是仓库字节。工作树被检出成 CRLF 时，每一项都会偏大（每个换行 +1 字节）——
+    清单自己的签名照样验得过，客户端却因为逐文件 sha256 对不上而**整批拒绝**，
+    界面上只剩一句「清单签名验证失败」。issue #45 里 alpha2 就是这么坏掉的：
+    36 个条目全部与线上不符。这里 fail-closed，比默默生成一份坏清单好得多。
+    """
+    with open(path, "rb") as f:
+        data = f.read()
+    if b"\r\n" in data:
+        raise SystemExit(
+            "拒绝生成清单：%s 的行尾是 CRLF。\n"
+            "仓库根的 .gitattributes 已强制 LF —— 重新检出一次再跑：\n"
+            "  git rm --cached -r . && git reset --hard" % path)
+
+
 def collect():
     items = []
     for root, dirs, files in os.walk(ASSETS):
@@ -58,6 +76,7 @@ def collect():
             if name in SKIP_NAMES or not name.endswith(EXTS):
                 continue
             full = os.path.join(root, name)
+            assert_lf(full)
             rel = os.path.relpath(full, ".").replace(os.sep, "/")
             items.append({
                 "path": rel,
