@@ -129,4 +129,11 @@ final class FileCopy {
     static boolean existsNoFollow(File f) {
         return Files.exists(f.toPath(), LinkOption.NOFOLLOW_LINKS);
     }
+
+    /** 这个路径本身是不是一根符号链接（不看目标存不存在）。
+     *  递归删除必须先问这一句 —— {@code File.isDirectory()} 对「指向目录的软链」返回 true，
+     *  跟着递归进去就会把链接目标里的东西删掉，而我们的 sessions/settings 正指向公开目录。 */
+    static boolean isSymlink(File f) {
+        return Files.isSymbolicLink(f.toPath());
+    }
 }

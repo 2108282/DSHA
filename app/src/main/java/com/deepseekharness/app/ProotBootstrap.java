@@ -1012,36 +1012,12 @@ public class ProotBootstrap {
                     dataBak = new java.io.File(baseDir, ".data-preserve-" + System.currentTimeMillis());
                     //noinspection ResultOfMethodCallIgnored
                     dataBak.mkdirs();
-                    int moved = 0, copied = 0;
-                    java.util.List<String> movedNames = new java.util.ArrayList<>();
-                    for (java.io.File k : kids) {
-                        // 内置插件实体（/root/dsha-*）不必保：新 APK 会按
-                        // BUILTIN_ASSET_VERSION 重新注入，而且新版往往就是要换掉它们
-                        if (k.getName().startsWith("dsha-")) continue;
-                        java.io.File dst = new java.io.File(dataBak, k.getName());
-                        if (k.renameTo(dst)) {
-                            moved++;
-                            movedNames.add(k.getName());
-                        } else {
-                            try {
-                                copyRecursively(k, dst);
-                                copied++;
-                            } catch (Throwable e) {
-                                // fail-closed：这一项没能**原样**保住就不许往下走 —— 下一步是
-                                // 删 rootfs。原来这里只是 failed++ 记一行 warning 然后继续，
-                                // 于是那一项数据跟着 rootfs 一起没了，而日志里只留一行没人看。
-                                // 先把已经 rename 走的挪回原位再中止：中止时 rootfs 完好，
-                                // 用户下次启动照旧能用，代价只是这次升级没做成。
-                                String back = restoreProtected(dataBak, rootHome, movedNames);
-                                throw new IOException("升级已中止（rootfs 未改动）：无法原样保住 "
-                                        + k.getName() + " —— " + e + "\n" + back
-                                        + "\n先做一次备份、或把 /root 下那一项（尤其是软链）"
-                                        + "整理好再重试。");
-                            }
-                        }
-                    }
-                    android.util.Log.i("DSHA", "用户数据已保护：挪走 " + moved + " 项、复制 "
-                            + copied + " 项 → " + dataBak.getName());
+                    // 怎么挪、失败怎么回滚，全在 DataPreserve（纯 java.io，
+                    // tools/data-preserve-test.sh 能真造目录/软链/失败场景跑一遍）。
+                    // 这里只负责起名字和写日志。
+                    DataPreserve.Result pr = DataPreserve.preserve(rootHome, dataBak);
+                    android.util.Log.i("DSHA", "用户数据已保护：" + pr
+                            + " → " + dataBak.getName());
                 }
             }
             // 空间预检：**必须在删 rootfs 之前**。删完才发现装不回来是这条路上最坏的结果
@@ -1311,13 +1287,17 @@ public class ProotBootstrap {
         }
     }
 
+    /**
+     * 递归删除，<b>不跟随符号链接</b>；判据与实现都在 {@link DataPreserve}（那边有断言）。
+     *
+     * <p>原来这份跟随链接：{@code File.isDirectory()} 对「指向目录的软链」返回 true，
+     * 于是会递归进去删掉链接目标里的东西。而 {@code /root/.dsh/sessions} 正指向
+     * {@code Documents/dshdata} —— {@link #uninstall()} 里 {@code rm -rf} 起不来时的
+     * 兜底就走这里，跟随一次就把用户对话删了，而「卸载不带走公开目录数据」是这个项目
+     * 的设计前提。{@code HarnessController} 那份早就防住了，只有这份漏着。
+     */
     private void deleteRecursively(File f) {
-        if (f.isDirectory()) {
-            File[] children = f.listFiles();
-            if (children != null) for (File c : children) deleteRecursively(c);
-        }
-        //noinspection ResultOfMethodCallIgnored
-        f.delete();
+        DataPreserve.deleteRecursively(f);
     }
 
     /** 递归拷贝目录/文件（重解压前数据保护用） */
@@ -1332,37 +1312,6 @@ public class ProotBootstrap {
         FileCopy.copyPreservingLinks(src, dst);
     }
 
-    /**
-     * 数据保护中途失败时，把已经 rename 进 {@code dataBak} 的条目挪回 {@code /root}。
-     *
-     * <p>返回一句给用户看的结果 —— 挪不回去的必须说清落在哪个目录，否则用户只看到
-     * 「升级失败」而不知道东西还在。挪得干净就顺手把空的保护目录删掉，不在
-     * {@code files/linux} 下堆一串 {@code .data-preserve-*}。
-     */
-    private String restoreProtected(File dataBak, File rootHome, java.util.List<String> names) {
-        int back = 0, stuck = 0;
-        for (String n : names) {
-            File from = new File(dataBak, n);
-            File to = new File(rootHome, n);
-            // 这里必须用 existsNoFollow：`File.exists()` 会跟随链接，一根**悬空**软链
-            // （换设备之后 sessions/settings 指向的公开目录不在，就是这个样子）会被判成
-            // 「不存在」而跳过 —— 那根链接就永远留在保护目录里，用户的 /root 下少一项。
-            if (!FileCopy.existsNoFollow(from)) continue;
-            if (FileCopy.existsNoFollow(to) || !from.renameTo(to)) {
-                stuck++;
-            } else {
-                back++;
-            }
-        }
-        if (stuck == 0) {
-            // 保护目录里可能还留着「复制成功」那些项的副本（复制不删原件，原件仍在
-            // /root），所以这里要递归删干净，`delete()` 对非空目录只会静默失败。
-            deleteRecursively(dataBak);
-            return "已挪回 " + back + " 项，rootfs 与升级前一致。";
-        }
-        return "已挪回 " + back + " 项，还有 " + stuck + " 项留在 " + dataBak.getName()
-                + "（那就是升级前的 /root 内容，可以手动取回）。";
-    }
 
     /** 拷贝单个文件 */
     private void copyFile(File src, File dst) throws IOException {
