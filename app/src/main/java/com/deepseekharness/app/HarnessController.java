@@ -4782,7 +4782,26 @@ public class HarnessController {
             boolean started = false;
             try {
                 // 启动前预检：端口仍被占 → 深杀残留（根治 EADDRINUSE）
-                if (isWebPortUp(400)) {
+                // 端口上已经有人监听时，先问清那位还能不能服务 —— 能就直接接管。
+                //
+                // 下面那套清场（stop → 等端口关 → TERM → sleep 3 → KILL → sleep 1 →
+                // 再等 4 秒）最坏要付 12 秒，而它最常见的触发场景恰恰是：App 被系统回收
+                // 或用户划掉，容器里的 dsh 还好好跑着，用户重新进来点启动。那种情况下
+                // 把一个健康实例杀掉重建纯属白等 —— 用户实测「1.2 两秒进去，我们要二十秒」
+                // 差的就是这一段。
+                //
+                // 只用 isWebPortUp 判断不够：连得上不代表答话（端口被别的进程占、node
+                // 卡死、还没进 listen 回调都连得上）。所以再让 WebProbe 发一次真请求，
+                // 对方回 HTTP 状态行才算健康；不健康就照旧走清场。
+                boolean portUp = isWebPortUp(400);
+                if (portUp && WebProbe.servesHttp(parsePort(), 1500)) {
+                    proot.noteProrootSuccess();   // 这个运行时确实能用
+                    bumpWebEpoch();               // 通知预览端刷新
+                    setState("", 100, "Web UI 已在运行", "", false);
+                    ensureBuiltinPluginsAfterProfileReady();
+                    return;                       // finally 会释放 webStarting
+                }
+                if (portUp) {
                     destroyAllWebProcesses();
                     proot.execAndRead(stopWebCommand());
                     if (!waitPortClosed(4000)) {
