@@ -90,11 +90,10 @@ jobs:
             cat /tmp/build.log
             while IFS= read -r line; do
               if [ -n "$line" ]; then
-                # 去除特殊控制字符防止 annotation 解析失败
                 clean_line=$(echo "$line" | tr -d '\r\n')
-                echo "::error title=GradleLog::$clean_line"
+                echo "::error title=JavaError::$clean_line"
               fi
-            done < <(grep -C 2 -E "What went wrong|Caused by:|FAILED" /tmp/build.log | head -n 12)
+            done < <(grep -A 2 -B 1 "error:" /tmp/build.log | head -n 10)
             exit 1
           fi
           ls -lh app/build/outputs/apk/debug/app-debug.apk
