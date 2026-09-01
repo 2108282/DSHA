@@ -4780,6 +4780,11 @@ public class HarnessController {
         }
         IO.execute(() -> {
             boolean started = false;
+            // 启动分步耗时 —— 用户反馈「1.2 两秒、我们二十秒」，而光读代码只能猜。
+            // 这几行把每一步实际花的毫秒打进活动日志，一次真机启动就能指出瓶颈在哪。
+            final long tStart = System.currentTimeMillis();
+            long tPrev = tStart;
+            final StringBuilder timing = new StringBuilder();
             try {
                 // 启动前预检：端口仍被占 → 深杀残留（根治 EADDRINUSE）
                 // 端口上已经有人监听时，先问清那位还能不能服务 —— 能就直接接管。
@@ -4798,6 +4803,8 @@ public class HarnessController {
                     proot.noteProrootSuccess();   // 这个运行时确实能用
                     bumpWebEpoch();               // 通知预览端刷新
                     setState("", 100, "Web UI 已在运行", "", false);
+                    logActivity("接管已在运行的 dsh（跳过清场与重启），耗时 "
+                            + (System.currentTimeMillis() - tStart) + "ms");
                     ensureBuiltinPluginsAfterProfileReady();
                     return;                       // finally 会释放 webStarting
                 }
@@ -4822,15 +4829,23 @@ public class HarnessController {
                 }
                 // 会话损坏自愈：web 拉起前先修（无门槛全量扫描，幂等；修复后用户刷新即恢复历史）
                 doHealSessionCorruption();
+                timing.append("清场+会话自检 ").append(System.currentTimeMillis() - tPrev).append("ms · ");
+                tPrev = System.currentTimeMillis();
                 setProgress("正在启动 Web UI", 0);
                 proot.ensureRuntimeFiles();
                 ensureDangerGuard(); // 安全包装器缺失则自动补装
                 ensureBashGuardPatch(); // bash 工具 lib 强制加载守卫（不依赖重装）
+                timing.append("运行文件+守卫 ").append(System.currentTimeMillis() - tPrev).append("ms · ");
+                tPrev = System.currentTimeMillis();
                 // 校准 bundles 必须在 dsh 起来之前做完（它读到解析不到的 bundle 就直接退出），
                 // 但**不能**放在 startWebCommand() 里面 —— 那个方法只该组装命令字符串，
                 // 在里面做文件 IO、甚至再起一个 proot 进程，正撞上马上要启动的 Web 进程。
                 sanitizeProfileBundles();
+                timing.append("清理bundle ").append(System.currentTimeMillis() - tPrev).append("ms · ");
+                tPrev = System.currentTimeMillis();
                 Process p = proot.execRootfs(startWebCommand());
+                timing.append("起进程 ").append(System.currentTimeMillis() - tPrev).append("ms");
+                logActivity("启动分步耗时：" + timing);
                 webProcesses.add(p);
                 synchronized (webStartLock) {
                     webProcess = p;
@@ -4877,6 +4892,8 @@ public class HarnessController {
                 Thread waiter = new Thread(() -> {
                     try {
                         if (waitWebPortUp(60_000)) {
+                            logActivity("Web 就绪，自点击起共 "
+                                    + (System.currentTimeMillis() - tStart) + "ms");
                             setState("", 100, "Web UI 已启动", "", false);
                             proot.noteProrootSuccess();   // 这次运行时可用，清零失败计数
                             // 全新安装的关键一步：profile 是 dsh 首次启动时才创建的，
