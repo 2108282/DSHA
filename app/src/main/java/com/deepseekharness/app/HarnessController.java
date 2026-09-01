@@ -3303,9 +3303,16 @@ public class HarnessController {
         String wd = getWorkdir();
         // 关键 workspace 包清单：任一 require.resolve 失败即视为依赖缺失，自动 pnpm install
         // 保底超时：offline 90s / 联网 180s，避免长卡拖崩启动
-        return "node -e \"['@deepseek-ai/dsh-app-boot','@deepseek-ai/dsh-workspace','@deepseek-ai/dsh-session','@deepseek-ai/dsh-base'].forEach(function(m){try{require.resolve(m)}catch(e){process.exit(1)}})\" 2>/dev/null || "
+        // 探测「这几个 workspace 包在不在」原来用 node -e require.resolve —— 那是一次完整的
+        // node 冷启动（进程创建 + V8 初始化），在 proot 里 200~500ms，每次启动都付，而绝大
+        // 多数时候答案都是「在」。改用 shell 看 package.json：缺失场景是整个包没装，而
+        // package.json 存在比目录存在更能说明装完了。省掉一次 node 启动。
+        return "for m in dsh-app-boot dsh-workspace dsh-session dsh-base; do "
+                + "[ -f node_modules/@deepseek-ai/$m/package.json ] || "
                 + "{ echo '[DSHA] 检测到 harness 依赖缺失，正在自动修复…'; "
-                + "(timeout 90 pnpm install --offline 2>/dev/null || timeout 180 pnpm install) >> /root/deps-selfheal.log 2>&1; }; ";
+                + "(timeout 90 pnpm install --offline 2>/dev/null || timeout 180 pnpm install) "
+                + ">> /root/deps-selfheal.log 2>&1; break; }; "
+                + "done; ";
     }
 
     /** 这批幂等补丁上次是在什么前提下打成功的 —— 前提没变就不必再打一遍。
@@ -3342,7 +3349,10 @@ public class HarnessController {
                 // 先 mkdir 是因为目录不存在会被判 FAILED 而静默放弃缓存。
                 "mkdir -p /root/.cache/node-compile 2>/dev/null; "
                 + "export NODE_COMPILE_CACHE=/root/.cache/node-compile; "
-                + "node /root/dsh-config-fix.js 2>/dev/null || true; "
+                + "if [ ! -f /root/.dsh/.config-fix-done ] || "
+                + "[ /root/.dsh/settings.yaml -nt /root/.dsh/.config-fix-done ]; then "
+                + "node /root/dsh-config-fix.js 2>/dev/null; "
+                + "touch /root/.dsh/.config-fix-done 2>/dev/null; fi; "
                 // 判定源码模式必须认启动入口 bin.js：RC6 模式下工作区目录也存在（只是没有源码），
                 // 只认 -d 会把空工作区误判成源码树 → 启动失败
                 + "if [ -f /root/" + wd + "/apps/cli/lib/bin.js ]; then cd /root/" + wd + "; "
