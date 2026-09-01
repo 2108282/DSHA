@@ -70,7 +70,8 @@ final class DownloadSink {
                             .getAbsolutePath(), base, PublicDirs.DOWNLOADS) + "/" + name;
                 }
             } catch (Throwable e) {
-                android.util.Log.w("DSHA", "下载写 MediaStore 失败，改直写: " + e);
+                android.util.Log.w("DSHA", "下载写 MediaStore 失败，改直写: "
+                        + SensitiveData.redact(String.valueOf(e)));
             }
         }
         // Android 9-，或已授予「所有文件访问」
@@ -85,7 +86,8 @@ final class DownloadSink {
                 return dst.getAbsolutePath();
             }
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "下载直写失败: " + e);
+            android.util.Log.w("DSHA", "下载直写失败: "
+                    + SensitiveData.redact(String.valueOf(e)));
         }
         return null;
     }
@@ -106,7 +108,11 @@ final class DownloadSink {
                         ? mime : conn.getContentType());
             }
         } catch (Throwable e) {
-            android.util.Log.w("DSHA", "下载失败 " + url + ": " + e);
+            // Download URLs can carry the dsh BrowserAuth/LAN token.  Never put
+            // the raw URL (or an exception that embeds it) into logcat.
+            android.util.Log.w("DSHA", "下载失败 "
+                    + SensitiveData.redact(String.valueOf(url)) + ": "
+                    + SensitiveData.redact(String.valueOf(e)));
             return null;
         } finally {
             if (conn != null) conn.disconnect();

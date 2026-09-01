@@ -1666,13 +1666,15 @@ public class HarnessController {
      *  只留最后 200 行，避免无限增长。 */
     public void logActivity(String what) {
         try {
+            // 这份日志用户能导出、自检也会读 —— 落盘与 Logcat 之前都先脱敏。
+            String safeWhat = SensitiveData.redact(what);
             java.io.File f = rootfsFile("root/.dsh/dsha-activity.log");
             if (f.getParentFile() != null) {
                 //noinspection ResultOfMethodCallIgnored
                 f.getParentFile().mkdirs();
             }
             String line = new java.text.SimpleDateFormat("MM-dd HH:mm:ss",
-                    java.util.Locale.US).format(new java.util.Date()) + "  " + what + "\n";
+                    java.util.Locale.US).format(new java.util.Date()) + "  " + safeWhat + "\n";
             java.nio.file.Files.write(f.toPath(), line.getBytes(StandardCharsets.UTF_8),
                     java.nio.file.StandardOpenOption.CREATE,
                     java.nio.file.StandardOpenOption.APPEND);
@@ -1684,7 +1686,7 @@ public class HarnessController {
                                     .getBytes(StandardCharsets.UTF_8));
                 }
             }
-            android.util.Log.i("DSHA", "[活动] " + what);
+            android.util.Log.i("DSHA", "[活动] " + safeWhat);
         } catch (Throwable ignored) {
         }
     }

@@ -15,6 +15,70 @@ public final class PureLogicTest {
     private static int fail = 0;
 
     public static void main(String[] args) {
+        // ---------- SensitiveData ----------
+        // dsh BrowserAuth uses base64url, so both '-' and '_' must be covered;
+        // diagnostics must not retain any credential suffix after redaction.
+        String sensitiveToken = "Abc-def_01234567890123456789012345678901234";
+        String sensitive = "http://127.0.0.1:3080/?token=" + sensitiveToken
+                + " Cookie: dsh-auth-test=backend-secret"
+                + " dsha_lan=lan-secret X-Dsha-Token: header-secret"
+                + " DEEPSEEK_API_KEY=api-secret";
+        String redacted = SensitiveData.redact(sensitive);
+        ok("redact: URL token 完整移除（含 base64url -/_）",
+                !redacted.contains(sensitiveToken)
+                        && redacted.contains("?token=<redacted>"));
+        ok("redact: Cookie、LAN token、header、API key 不泄漏",
+                !redacted.contains("backend-secret")
+                        && !redacted.contains("lan-secret")
+                        && !redacted.contains("header-secret")
+                        && !redacted.contains("api-secret"));
+        String legacyCookies = "Cookie: dsha_t=legacy-secret; dsha_token=other-secret";
+        ok("redact: 旧 Cookie 凭据也不泄漏",
+                !SensitiveData.redact(legacyCookies).contains("legacy-secret")
+                        && !SensitiveData.redact(legacyCookies).contains("other-secret"));
+        String mixedSensitive = "https://host/?ToKeN=query-secret&API_Key=query-key\r\n"
+                + "sEt-CoOkIe: dsh-auth-web=cookie-secret; HttpOnly\r\n"
+                + "AuThOrIzAtIoN: BeArEr auth-secret\r\n"
+                + "X-ToKeN: bridge-secret\r\n"
+                + "Exception: Bearer bare-secret token: text-secret";
+        String mixedRedacted = SensitiveData.redact(mixedSensitive);
+        ok("redact: query、混合大小写 header、异常文本均脱敏",
+                !mixedRedacted.contains("query-secret")
+                        && !mixedRedacted.contains("query-key")
+                        && !mixedRedacted.contains("cookie-secret")
+                        && !mixedRedacted.contains("auth-secret")
+                        && !mixedRedacted.contains("bridge-secret")
+                        && !mixedRedacted.contains("bare-secret")
+                        && !mixedRedacted.contains("text-secret"));
+        String cookieEquals = "cOoKiE=dsh-auth-web=equals-secret; path=/\n"
+                + "sEt-CoOkIe=dsh-auth-web=equals-set-cookie; HttpOnly";
+        String cookieEqualsRedacted = SensitiveData.redact(cookieEquals);
+        ok("redact: Cookie/Set-Cookie 等号形式也脱敏",
+                !cookieEqualsRedacted.contains("equals-secret")
+                        && !cookieEqualsRedacted.contains("equals-set-cookie"));
+        String bareDshCookie = "dsh-auth-standalone=standalone-secret; Path=/";
+        ok("redact: 独立 dsh-auth Cookie 行也脱敏",
+                !SensitiveData.redact(bareDshCookie).contains("standalone-secret"));
+        SensitiveData.Stream redactor = new SensitiveData.Stream();
+        String splitPrefix = "dsh web: http://127.0.0.1:3080/?to";
+        String splitSuffix = "ken=" + sensitiveToken + "\n";
+        String splitRedacted = redactor.accept(splitPrefix)
+                + redactor.accept(splitSuffix) + redactor.finish();
+        ok("redact: 凭据跨输出块仍完整移除",
+                !splitRedacted.contains(sensitiveToken)
+                        && splitRedacted.contains("?token=<redacted>"));
+        String jsonSensitive = "{\"ToKeN\":\"json-token\","
+                + "\"api_key\": \"json-api\","
+                + "\"Authorization\":\"Bearer json-bearer\","
+                + "\"Set-Cookie\":\"dsh-auth-json=json-cookie; HttpOnly\"}";
+        String jsonRedacted = SensitiveData.redact(jsonSensitive);
+        ok("redact: JSON 引号字段和混合大小写字段均脱敏",
+                !jsonRedacted.contains("json-token")
+                        && !jsonRedacted.contains("json-api")
+                        && !jsonRedacted.contains("json-bearer")
+                        && !jsonRedacted.contains("json-cookie")
+                        && jsonRedacted.contains("\"ToKeN\":\"<redacted>\""));
+
         // ---------- stripTokenFromRequestLine ----------
         // 回归：token 是唯一参数时，原实现把 HTTP 版本一起吃掉（→ "GET /"），
         // 后端 Node parser 当畸形请求直接 400。这是最常见的场景：打开首页。
