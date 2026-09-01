@@ -203,7 +203,11 @@ dependencies {
     // 真机上崩过（v1.1.9-rc1 那个带 PTY 的本地包）。依赖树可自证：
     //   gradle :app:dependencies --configuration debugRuntimeClasspath | grep -i guava
     //   → 只有 listenablefuture，没有 com.google.guava:guava，所以压根不存在要解决的冲突。
-    debugImplementation 'com.github.L-JINBIN:MTDataFilesProvider:v1.0.0'
+    // MT 管理器是靠这个 provider 契约认出 DSHA 的。历史上出的包一直带着它，
+    // 但依赖写成了 debugImplementation —— release 包里根本没有
+    // bin.mt.file.content.MTDataFilesProvider，于是 MT 的「添加本地存储」里
+    // 找不到 DSHA，用户以为是权限没给。放回 release 运行时。
+    implementation 'com.github.L-JINBIN:MTDataFilesProvider:v1.0.0'
 }
 
 afterEvaluate {

@@ -157,6 +157,21 @@
             android:enabled="true"
             android:exported="true"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!-- SAF 文件提供器：让系统「文件」以及 MT 这类文件管理器能直接浏览 App 私有目录下
+             的 rootfs。android:permission 是 MANAGE_DOCUMENTS —— 那是 signature 级权限，
+             只有系统 DocumentsUI 持有，所以第三方 App 只能经系统的选择器间接访问，
+             不能直接绑我们的 provider。暴露范围也只有 files/linux/ubuntu/root 这一棵树。 -->
+        <provider
+            android:name=".DshaDocumentsProvider"
+            android:authorities="com.dsh.client.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
     </application>
 
 </manifest>
