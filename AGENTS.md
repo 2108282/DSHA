@@ -45,6 +45,8 @@ Key files under `app/src/main/java/com/deepseekharness/app/`:
 | `HarnessController.java` | ~6200-line business core (install steps, config, Web lifecycle, backup/restore, device bridge). Read before editing; make minimal patches |
 | `PluginController.java` | Plugins + plugin market, split out of the controller in 2026-08 (1668 lines). Coupling to the host is deliberately narrow: `Context`, `ProotBootstrap`, and seven host methods — see its javadoc before widening it. UI callers go through the forwarding block on `HarnessController` |
 | `ShellQuote.java` | POSIX single-quote escaping — the **only** shell-quoting implementation in the tree. Values from the plugin market reach `bash -c` through it, so it carries round-trip assertions in `tools/pure-logic-test.sh` |
+| `SensitiveData.java` | The **only** redaction helper. Everything that gets logged, persisted or shown (activity log, Logcat, PTY title, overlay text, download errors, plugin toggle errors) goes through it; real HTTP requests keep the raw value. Its `Stream` class buffers until a newline because dsh emits one logical line in arbitrary `read()` chunks and a credential can straddle the boundary. Android-free, asserted in `tools/pure-logic-test.sh` |
+| `DshaDocumentsProvider.java` | SAF root so any file manager (not just MT's private contract) can browse the rootfs. Guarded by the signature-level `MANAGE_DOCUMENTS`, and every documentId is canonicalized against `files/linux/ubuntu/root` |
 | `ProotBootstrap.java` | proot/env exec, offline extraction, multi-mirror downloads |
 | `ExtractActivity.java` | First-run offline extraction screen |
 | `BackupManager.java` | Manual + migration backups to `Download/DSHA`, restore |
@@ -104,14 +106,14 @@ Injected into the rootfs on demand and run through proot; all are idempotent and
 
 Rule: **restore as much as possible, never fail the whole archive over one unknown entry, and tell the user what was skipped.**
 
-### Backup scope — `full` / `sessions` / `plugins`
+### Backup scope — `full` / `sessions` / `settings` / `plugins`
 
 `BackupScope` is the **single** definition of "how much does one backup cover": it owns the tar
 path list, the sub-trees the restore side merges, the file-name prefix and the UI labels. Two
 invariants are asserted in `tools/pure-logic-test.sh`:
 
 - **Only a full backup is named `DSHA-backup-*`.** Partial backups are `DSHA-sessions-*` /
-  `DSHA-plugins-*` on purpose: older builds (and `looksLikeBackupName`, which drives the
+  `DSHA-settings-*` / `DSHA-plugins-*` on purpose: older builds (and `looksLikeBackupName`, which drives the
   automatic restore prompt) only scan the `DSHA-backup-` prefix, and a full restore *moves the
   whole `.dsh` aside and replaces it*. Letting an old build treat a sessions-only archive as a
   full backup would wipe the user's config and plugins.
@@ -263,6 +265,11 @@ single-flight guard, and never lower `SCRIPT_VERSION` — old installs keep thei
 - Do not remove the protection Gradle tasks or the extraction invariants "for cleanliness" — they exist for the reasons above.
 
 ## Known traps (verify before assuming)
+
+- **保护用户数据的那一步必须 fail-closed，而且要能回滚。** 重解压内置环境之前会把整个 `/root` 挪进 `.data-preserve-*`（主路径 `renameTo`：同文件系统、O(1)、软链原样带走）。rename 不成才退回 `FileCopy.copyPreservingLinks`，那里**无法原样重建软链就直接抛** —— 悬空的 `sessions` 链接没有可读的退路，跟随一个目录链接会把几 KB 的保护快照变成几 GB 的半份拷贝。调用方收到异常要先把已经挪走的条目 rename 回 `/root`（`ProotBootstrap.restoreProtected`）再中止升级：中止时 rootfs 完好，代价只是这次升级没做成。**别改回「记一行 warning 然后继续」** —— 下一步就是删 rootfs，那一项数据永久没了，而现场只有一行没人看的日志。升级完成后的「挪回去」阶段相反：只记 failed 不中止（rootfs 已经换好，数据还在保护目录里）。
+- **`BackupScope.fromFileName` 这类前缀判据要先剥掉目录。** 调用方不止传文件名，也有传 `File.getPath` 的整条路径 —— 不剥目录，`/storage/…/DSHA-sessions-x.tar.gz` 会被判成 `FULL`，而全量恢复是「整个 `.dsh` 挪走再替换」，配置、凭据、插件一起被换掉。
+- **`needsPublicDataSnapshot` 从 `snapshotEntries` 派生，别再写第二份范围表。** 上游 1.2 把两者分开写，结果新加的 `settings` 范围在一处说「不需要快照」、另一处却返回 `settings.yaml`。眼下无害（生产代码只看 `snapshotEntries` 非空），但下一个按前者判断的人就会打出一个 `settings.yaml` 是悬空软链的包。
+- **诊断文本只在展示与落盘边界脱敏，真实请求用原值。** 新增日志/Toast/活动日志/悬浮条文本时套 `SensitiveData.redact`；处理长时间进程输出用 `SensitiveData.Stream`（凭据会跨 `read()` 块）。**唯一刻意不脱敏的地方是终端复制回调** —— 剪贴板是用户主动复制的内容，改写它等于给他一个假的粘贴结果。
 
 - **确认弹窗要和通知一起发，而且别拿 dismiss 当拒绝.** 早期实现是「前台弹窗 / 后台通知」二选一：Activity 一被 pause，用户就再也看不到弹窗，只能干等 60s 超时被拒 —— 这正是「确认框有时不出现」的由来。现在两条都发（通知是权威渠道），弹窗用 `setCancelable(false)` 且**不在** `OnCancel`/`OnDismiss` 里 `countDown`（pause 造成的 dismiss 会被误判成用户拒绝）。在 finishing 的 Activity 上 `show()` 会抛 `BadTokenException`，那是主线程，异常不在 `handle()` 的 catch 范围内，必须自己 try 住。**这套约定对每一个阻塞式对话框都成立** —— `/app/ask` 曾经原样犯了一遍（`OnDismiss` 里 `countDown`，于是旋屏、切深色模式、Activity 被回收都会给 agent 送回一句「用户关掉了提问框」，而用户什么都没做）。修法是只认 `OnCancel`（用户主动取消）、不认 `OnDismiss`；代价是 Activity 重建时那次提问要等满超时，宁可让 agent 多等也不要给它假答案。
 - **确认要带 epoch.** 锁屏残留通知、通知历史、手表转发上的旧「允许」按钮，会把授权决定打到**下一个**请求上（等于一次点击授权了另一条命令）。每次确认递增 `confirmEpoch`，回调校验 epoch 并认领 latch，过期点击直接丢弃。`confirmBusy` 必须是 `AtomicBoolean`：「检查后置位」不原子的话两个请求会互相覆盖 `pendingLatch`。清理顺序也有讲究 —— 先清 latch/弹窗/通知，最后才放开 `confirmBusy`，否则下一个请求抢先发出的通知会被本轮的 `cancelConfirmNotification()`（固定通知 ID）取消掉。
