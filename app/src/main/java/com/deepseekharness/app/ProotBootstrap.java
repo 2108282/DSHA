@@ -1012,7 +1012,8 @@ public class ProotBootstrap {
                     dataBak = new java.io.File(baseDir, ".data-preserve-" + System.currentTimeMillis());
                     //noinspection ResultOfMethodCallIgnored
                     dataBak.mkdirs();
-                    int moved = 0, copied = 0, failed = 0;
+                    int moved = 0, copied = 0;
+                    java.util.List<String> movedNames = new java.util.ArrayList<>();
                     for (java.io.File k : kids) {
                         // 内置插件实体（/root/dsha-*）不必保：新 APK 会按
                         // BUILTIN_ASSET_VERSION 重新注入，而且新版往往就是要换掉它们
@@ -1020,18 +1021,27 @@ public class ProotBootstrap {
                         java.io.File dst = new java.io.File(dataBak, k.getName());
                         if (k.renameTo(dst)) {
                             moved++;
+                            movedNames.add(k.getName());
                         } else {
                             try {
                                 copyRecursively(k, dst);
                                 copied++;
                             } catch (Throwable e) {
-                                failed++;
-                                android.util.Log.w("DSHA", "保护 " + k.getName() + " 失败: " + e);
+                                // fail-closed：这一项没能**原样**保住就不许往下走 —— 下一步是
+                                // 删 rootfs。原来这里只是 failed++ 记一行 warning 然后继续，
+                                // 于是那一项数据跟着 rootfs 一起没了，而日志里只留一行没人看。
+                                // 先把已经 rename 走的挪回原位再中止：中止时 rootfs 完好，
+                                // 用户下次启动照旧能用，代价只是这次升级没做成。
+                                String back = restoreProtected(dataBak, rootHome, movedNames);
+                                throw new IOException("升级已中止（rootfs 未改动）：无法原样保住 "
+                                        + k.getName() + " —— " + e + "\n" + back
+                                        + "\n先做一次备份、或把 /root 下那一项（尤其是软链）"
+                                        + "整理好再重试。");
                             }
                         }
                     }
                     android.util.Log.i("DSHA", "用户数据已保护：挪走 " + moved + " 项、复制 "
-                            + copied + " 项、失败 " + failed + " 项 → " + dataBak.getName());
+                            + copied + " 项 → " + dataBak.getName());
                 }
             }
             // 空间预检：**必须在删 rootfs 之前**。删完才发现装不回来是这条路上最坏的结果
@@ -1319,11 +1329,35 @@ public class ProotBootstrap {
      * 下次启动 migrate 脚本又在公开侧留一份 {@code *.conflict-<ts>}。
      */
     private void copyRecursively(File src, File dst) throws IOException {
-        int fallbacks = FileCopy.copyPreservingLinks(src, dst);
-        if (fallbacks > 0) {
-            android.util.Log.w("DSHA", "有 " + fallbacks
-                    + " 根软链没能原样重建，已退回按内容复制（会多占空间）: " + src);
+        FileCopy.copyPreservingLinks(src, dst);
+    }
+
+    /**
+     * 数据保护中途失败时，把已经 rename 进 {@code dataBak} 的条目挪回 {@code /root}。
+     *
+     * <p>返回一句给用户看的结果 —— 挪不回去的必须说清落在哪个目录，否则用户只看到
+     * 「升级失败」而不知道东西还在。挪得干净就顺手把空的保护目录删掉，不在
+     * {@code files/linux} 下堆一串 {@code .data-preserve-*}。
+     */
+    private String restoreProtected(File dataBak, File rootHome, java.util.List<String> names) {
+        int back = 0, stuck = 0;
+        for (String n : names) {
+            File from = new File(dataBak, n);
+            File to = new File(rootHome, n);
+            if (!from.exists()) continue;
+            if (to.exists() || !from.renameTo(to)) {
+                stuck++;
+            } else {
+                back++;
+            }
         }
+        if (stuck == 0) {
+            //noinspection ResultOfMethodCallIgnored
+            dataBak.delete();
+            return "已挪回 " + back + " 项，rootfs 与升级前一致。";
+        }
+        return "已挪回 " + back + " 项，还有 " + stuck + " 项留在 " + dataBak.getName()
+                + "（那就是升级前的 /root 内容，可以手动取回）。";
     }
 
     /** 拷贝单个文件 */

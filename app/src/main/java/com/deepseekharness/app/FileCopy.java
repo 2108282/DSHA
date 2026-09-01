@@ -35,48 +35,63 @@ final class FileCopy {
     /**
      * 递归复制 {@code src} 到 {@code dst}。
      *
-     * <p>遇到符号链接：读出目标原样重建，<b>不</b>递归进去。极少数文件系统不允许建软链时
-     * 退回「按内容复制」——宁可多占空间也不丢数据，但会计入返回值，好让调用方记一行日志。
-     *
-     * @return 退回按内容复制的软链个数（0 = 全部原样保留）
+     * <p>遇到符号链接：读出目标原样重建，<b>不</b>递归进去。<b>无法原样重建就直接失败</b>
+     * —— 调用方必须中止 rootfs 切换并保留旧数据。跟随复制或静默跳过都会破坏数据边界：
+     * 悬空的 sessions/settings 链接没有可读的退路，而跟随一个目录链接会把「几 KB 的
+     * 保护性快照」变成「几 GB 的半份拷贝」，恰好在空间不够时炸在最坏的位置。
      */
-    static int copyPreservingLinks(File src, File dst) throws IOException {
-        int[] fallbacks = {0};
-        copy(src, dst, fallbacks);
-        return fallbacks[0];
+    static void copyPreservingLinks(File src, File dst) throws IOException {
+        copy(src, dst);
     }
 
-    private static void copy(File src, File dst, int[] fallbacks) throws IOException {
+    private static void copy(File src, File dst) throws IOException {
         Path sp = src.toPath();
         if (Files.isSymbolicLink(sp)) {
             if (relink(sp, dst.toPath())) return;
-            fallbacks[0]++;
-            // 落到下面按内容复制（这时 isDirectory/isFile 会跟随链接，正是我们要的退路）
+            throw new IOException("无法原样保留符号链接: " + src);
         }
         if (src.isDirectory()) {
             if (!dst.exists() && !dst.mkdirs()) {
                 throw new IOException("无法创建目录: " + dst);
             }
             File[] children = src.listFiles();
-            if (children != null) {
-                for (File c : children) {
-                    copy(c, new File(dst, c.getName()), fallbacks);
-                }
+            if (children == null) {
+                // 读目录失败 ≠ 空目录。当成保护失败抛出去，别让「只复制了半棵 .dsh」
+                // 之后还继续做离线包切换。
+                throw new IOException("无法读取目录: " + src);
+            }
+            for (File c : children) {
+                copy(c, new File(dst, c.getName()));
             }
         } else if (src.isFile()) {
             copyFile(src, dst);
+        } else {
+            // 设备节点 / FIFO 不该出现在 .dsh 里。这里失败比静默丢掉一个不认识的条目
+            // 更能保住数据完整性。
+            throw new IOException("无法复制未知文件类型: " + src);
         }
-        // 其它类型（socket / fifo / 悬空链接读不出目标）一律跳过：rootfs 里没有值得搬的
     }
 
-    /** 原样重建一根软链；建不出来返回 false（调用方退回复制内容）。 */
+    /** 原样重建一根软链；建不出来返回 false（调用方一律当失败处理，不再退回复制内容）。 */
     private static boolean relink(Path src, Path dst) {
+        Path target;
         try {
-            Path target = Files.readSymbolicLink(src);
+            target = Files.readSymbolicLink(src);
             if (dst.getParent() != null) Files.createDirectories(dst.getParent());
             Files.deleteIfExists(dst);
             Files.createSymbolicLink(dst, target);
             return true;
+        } catch (Throwable e) {
+        }
+        // Android 的 NIO 实现有时会拒掉建链接这一步，即使底层的 App 私有文件系统本身
+        // 支持软链。所以再用平台原语试一次 —— 这仍然是「忠实重建」的第二次尝试，
+        // 不是退回复制数据。
+        try {
+            target = Files.readSymbolicLink(src);
+            if (dst.getParent() != null) Files.createDirectories(dst.getParent());
+            Files.deleteIfExists(dst);
+            android.system.Os.symlink(target.toString(), dst.toString());
+            return Files.isSymbolicLink(dst);
         } catch (Throwable e) {
             return false;
         }
