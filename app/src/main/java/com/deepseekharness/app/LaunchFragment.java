@@ -205,13 +205,13 @@ public class LaunchFragment extends Fragment {
      */
     private long nextTickDelayMs() {
         if (starting || !webReady) {
-            // 读秒要连着走字。固定 1500ms 会让「已等待 N 秒」跳着变（0→1→3→4→6），
-            // 用户看到的就是「读秒不准」。对齐到下一个整秒边界，刷新正好落在秒变那一刻。
-            if (startingAt > 0) {
-                long ms = System.currentTimeMillis() - startingAt;
-                return Math.max(200, 1000 - (ms % 1000));
-            }
-            return 1000;
+            // 等启动期间固定 250ms 一次，两个理由：
+            // ① 这个心跳同时负责探 3080 —— 端口一 UP 就该立刻进 WebUI。间隔 1 秒意味着
+            //    平均白等 500ms、最坏 1 秒，而探端口只是本机 socket connect，很便宜；
+            // ② 读秒依然准：秒数变化后最多 250ms 就刷出来，肉眼看不出滞后。
+            // 上一版「对齐整秒边界」能让读秒精确到毫秒，但把进入 WebUI 也拖慢了同一量级 ——
+            // 那笔买卖不划算。
+            return 250;
         }
         return insideWeb ? 4000 : 2500;
     }
