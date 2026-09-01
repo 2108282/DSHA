@@ -51,7 +51,7 @@ import android.widget.TextView;
  * 1. 左右 100% 铺满物理屏幕（Theme.DeepseekHarness.SheetTransparent + Decor 零边距）；
  * 2. 顶栏 4 按钮像素级规格统一（36x36dp 触摸区、1.85dp 中等线宽、圆角对齐、绝对对称居中）；
  *    - ① [ ✕ ] 关闭弹层
- *    - ② [ ⚙ ] 容器控制台主界面
+ *    - ② [ >_ ] 容器终端控制台
  *    - ③ [ 💬➕ ] 开启新对话（毫秒级 DOM 触发 / 路由重置）
  *    - ④ [ ⬒ ] 顺时针旋转 90° 的全屏展开聊天按钮
  * 3. 多档 15% 阶梯智能吸附停靠（35%/50%/65%/80%/95%），低于 25% 安全退出；
@@ -59,7 +59,8 @@ import android.widget.TextView;
  * 5. 全局静态 WebView 单例保活，再次弹出零转圈、零重新加载；
  * 6. 1:1 精准字体还原（移除 OverviewMode，设置 textZoom 100）；
  * 7. 注入透明全局 CSS 变量与 DOM 背景，100% 透出毛玻璃半透明卡片与桌面壁纸；
- * 8. 键盘弹出时：卡片顶部与底板绝对锁死在原位，底部全量铺满浅色底板，内部 WebView 视口等额收缩，输入框精准停靠在键盘正上方。
+ * 8. 键盘弹出时：单次状态跃迁平滑拉升至默认高度，卡片顶部与底板绝对锁死在原位，底部全量铺满浅色底板，内部 WebView 视口等额收缩，输入框精准停靠在键盘正上方；
+ * 9. 低位退出在动画完全结束后（onAnimationEnd）重置高度，彻底消除退出时的拉长闪屏。
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
 public class QuickChatSheetActivity extends Activity {
@@ -93,7 +94,9 @@ public class QuickChatSheetActivity extends Activity {
     private float initialTouchY = 0f;
     private int initialHeightOnTouch = 0;
 
-    // 键盘监听：仅为底部 keyboardSpacer 动态更新高度，确保卡片外壳纹丝不动
+    // 键盘监听状态跃迁锁与动画控制器（彻底杜绝动画死锁）
+    private boolean isKeyboardElevated = false;
+    private ValueAnimator heightAnimator = null;
     private ViewTreeObserver.OnGlobalLayoutListener keyboardLayoutListener;
 
     @Override
@@ -221,7 +224,7 @@ public class QuickChatSheetActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(42)));
         headerBar.setPadding(dpToPx(10), 0, dpToPx(10), dpToPx(2));
 
-        // 左侧按钮组：[① ✕ 关闭] + [② ⚙ 容器设置]
+        // 左侧按钮组：[① ✕ 关闭] + [② >_ 容器设置]
         LinearLayout leftGroup = new LinearLayout(this);
         RelativeLayout.LayoutParams leftLp = new RelativeLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT);
@@ -236,7 +239,7 @@ public class QuickChatSheetActivity extends Activity {
         btnClose.setOnClickListener(v -> dismissSheet());
         leftGroup.addView(btnClose);
 
-        // [② ⚙ 容器设置按钮]
+        // [② >_ 容器设置按钮]
         View btnSettings = createHeaderIconButton(ICON_SETTINGS, textColor, "进入容器主页面");
         LinearLayout.LayoutParams settingsLp = (LinearLayout.LayoutParams) btnSettings.getLayoutParams();
         settingsLp.setMarginStart(dpToPx(4));
@@ -410,7 +413,7 @@ public class QuickChatSheetActivity extends Activity {
                     canvas.drawLine(cx - s, cy + s, cx + s, cy - s, paint);
                     break;
                 }
-                case ICON_SETTINGS: { // ② [ >_ 容器控制台 ] (方案2：圆角窗口外框 + 内部命令行提示符 > _)
+                case ICON_SETTINGS: { // ② [ >_ 容器控制台 ] (圆角窗口外框 + 内部命令行提示符 > _)
                     float halfW = 8.5f * dp;
                     float halfH = 7.0f * dp;
                     float r = 2.8f * dp;
@@ -463,7 +466,7 @@ public class QuickChatSheetActivity extends Activity {
         }
     }
 
-    /** 键盘精准监听：卡片整体位置与高度绝对不动，仅动态调整键盘底部占位块，使输入框自然上浮 */
+    /** 键盘精准监听：单次状态跃迁拉升高度，底部占位块承托输入法，使输入框自然上浮 */
     private void setupKeyboardObserver() {
         if (getWindow() == null || getWindow().getDecorView() == null) return;
         View decorView = getWindow().getDecorView();
@@ -484,6 +487,8 @@ public class QuickChatSheetActivity extends Activity {
                 }
             }
 
+            boolean isKeyboardVisible = keyboardHeight > dpToPx(100);
+
             if (keyboardSpacer != null) {
                 ViewGroup.LayoutParams lp = keyboardSpacer.getLayoutParams();
                 if (lp != null && lp.height != keyboardHeight) {
@@ -492,9 +497,16 @@ public class QuickChatSheetActivity extends Activity {
                 }
             }
 
-            // 键盘弹出且当前高度处于 <=50% 低位时，自动平滑拉升到 78% 默认舒适高度
-            if (keyboardHeight > dpToPx(100) && currentHeight <= (int) (screenHeight * 0.52f)) {
-                animateHeightTo(defaultHeight);
+            // 状态跃迁锁：仅在键盘从“隐藏”变为“弹出”的单次边缘跳变时触发拉升，防止每帧循环打断动画
+            if (isKeyboardVisible) {
+                if (!isKeyboardElevated) {
+                    isKeyboardElevated = true;
+                    if (currentHeight <= (int) (screenHeight * 0.52f)) {
+                        animateHeightTo(defaultHeight);
+                    }
+                }
+            } else {
+                isKeyboardElevated = false;
             }
         };
         decorView.getViewTreeObserver().addOnGlobalLayoutListener(keyboardLayoutListener);
@@ -574,14 +586,18 @@ public class QuickChatSheetActivity extends Activity {
         int startH = currentHeight;
         if (startH == targetH) return;
 
-        ValueAnimator anim = ValueAnimator.ofInt(startH, targetH);
-        anim.setDuration(180);
-        anim.setInterpolator(new DecelerateInterpolator());
-        anim.addUpdateListener(animation -> {
+        if (heightAnimator != null && heightAnimator.isRunning()) {
+            heightAnimator.cancel();
+        }
+
+        heightAnimator = ValueAnimator.ofInt(startH, targetH);
+        heightAnimator.setDuration(180);
+        heightAnimator.setInterpolator(new DecelerateInterpolator());
+        heightAnimator.addUpdateListener(animation -> {
             currentHeight = (int) animation.getAnimatedValue();
             updateCardHeight(currentHeight);
         });
-        anim.start();
+        heightAnimator.start();
     }
 
     /** 挂载常驻单例 WebView，实现 100% 零转圈秒开、1:1 原生字体与透明毛玻璃透光 */
@@ -698,6 +714,11 @@ public class QuickChatSheetActivity extends Activity {
     /** 从底部顺滑滑入展开 */
     private void animateIn() {
         isDismissing = false;
+        // 如果当前高度偏低（上次异常或<=50%），拉起前重置为 78% 默认高度
+        if (currentHeight <= (int) (screenHeight * 0.52f)) {
+            currentHeight = defaultHeight;
+            updateCardHeight(defaultHeight);
+        }
         if (sheetCard != null) {
             sheetCard.setVisibility(View.VISIBLE);
             sheetCard.post(() -> {
@@ -725,12 +746,6 @@ public class QuickChatSheetActivity extends Activity {
             }
         } catch (Throwable ignored) {}
 
-        // 如果用户在 <= 50% 的低位离开，下次唤醒自动重置为 78% 默认舒适高度
-        if (currentHeight <= (int) (screenHeight * 0.52f)) {
-            currentHeight = defaultHeight;
-            updateCardHeight(defaultHeight);
-        }
-
         if (sheetCard != null) {
             sheetCard.animate()
                     .translationY(sheetCard.getHeight() + dpToPx(30))
@@ -739,6 +754,11 @@ public class QuickChatSheetActivity extends Activity {
                     .setListener(new AnimatorListenerAdapter() {
                         @Override
                         public void onAnimationEnd(Animator animation) {
+                            // 在动画结束（卡片已滑出屏幕不可见）后再重置高度，彻底消除退出时的拉长闪屏
+                            if (currentHeight <= (int) (screenHeight * 0.52f)) {
+                                currentHeight = defaultHeight;
+                                updateCardHeight(defaultHeight);
+                            }
                             moveTaskToBack(true);
                             overridePendingTransition(0, 0);
                             isDismissing = false;
@@ -746,6 +766,10 @@ public class QuickChatSheetActivity extends Activity {
                     })
                     .start();
         } else {
+            if (currentHeight <= (int) (screenHeight * 0.52f)) {
+                currentHeight = defaultHeight;
+                updateCardHeight(defaultHeight);
+            }
             moveTaskToBack(true);
             overridePendingTransition(0, 0);
             isDismissing = false;
