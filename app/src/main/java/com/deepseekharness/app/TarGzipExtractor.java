@@ -186,7 +186,8 @@ public final class TarGzipExtractor {
             //   绝对路径 / 开头 ../ 或包含 /../ 的段 / NUL
             //   文件名里的 ".."（如 v1.2..3.md）不是穿越，必须放行——
             //   否则用户备份里含双点的正常文件名恢复失败（"非法文件条目"）
-            boolean traversal = name.startsWith("/")
+            boolean traversal = name.equals("..")
+                    || name.startsWith("/")
                     || name.startsWith("../") || name.contains("/../") || name.endsWith("/..")
                     || name.contains("\u0000");
             if (name == null || name.isEmpty()
@@ -227,10 +228,14 @@ public final class TarGzipExtractor {
                         throw new IOException("预构建包损坏（禁止符号链接条目: " + safeName(name) + "）");
                     }
                     if (out.getParentFile() != null) out.getParentFile().mkdirs();
-                    // 符号链接目标安全校验：目标必须在 dest 内（绝不指向系统文件/外部目录）
-                    if (linkSafeWithin(dest, out, linkname, false)) {
+                    // rootfs tar 使用 /root/...、/usr/... 这类「容器内绝对路径」。
+                    // Android 宿主不能直接创建指向自身 /root 的链接，因此仅在离线
+                    // rootfs 解压（rejectLinks=false）时把它转换成 dest 内相对链接。
+                    // 外部/备份归档仍拒绝绝对链接，避免任何路径逃逸。
+                    String symlinkTarget = safeSymlinkTarget(dest, out, linkname, rejectLinks);
+                    if (symlinkTarget != null) {
                         try {
-                            Os.symlink(linkname, out.getAbsolutePath());
+                            Os.symlink(symlinkTarget, out.getAbsolutePath());
                         } catch (Throwable ignored) {
                         }
                     }
@@ -282,6 +287,34 @@ public final class TarGzipExtractor {
                     && ts.charAt(rs.length()) == java.io.File.separatorChar);
         } catch (Throwable e) {
             return false;
+        }
+    }
+
+    /**
+     * Returns a host-valid symlink target for an internal rootfs link, or null when unsafe.
+     * Absolute targets are mapped from the virtual root (/) into {@code dest} and made
+     * relative to the link's parent, so the resulting tree behaves identically in chroot.
+     */
+    private static String safeSymlinkTarget(File dest, File out, String linkname,
+                                            boolean rejectLinks) {
+        if (linkname == null || linkname.isEmpty()) return null;
+        File raw = new File(linkname);
+        if (!raw.isAbsolute()) {
+            return linkSafeWithin(dest, out, linkname, false) ? linkname : null;
+        }
+        if (rejectLinks) return null;
+        try {
+            java.nio.file.Path root = dest.toPath().toAbsolutePath().normalize();
+            String virtual = linkname.replace('\\', '/');
+            java.nio.file.Path target = root.resolve(virtual.substring(1)).normalize();
+            String rs = root.toString();
+            String ts = target.toString();
+            if (!(ts.equals(rs) || (ts.startsWith(rs) && ts.length() > rs.length()
+                    && ts.charAt(rs.length()) == java.io.File.separatorChar))) return null;
+            java.nio.file.Path parent = out.getParentFile().toPath().toAbsolutePath().normalize();
+            return parent.relativize(target).toString();
+        } catch (Throwable e) {
+            return null;
         }
     }
 

@@ -176,5 +176,40 @@ check "真文件照样复制到位" \
 check "可执行位保留（rootfs 里的脚本丢了执行位就跑不起来）" \
       "$([ -x "$BAK/hook.sh" ] && echo yes || echo no)"
 
+# ---------- 6. rootfs 里的绝对软链：映射进 dest，而不是静默丢掉 ----------
+# 离线包是在真 Linux 上打的，里面有 /etc/localtime -> /usr/share/zoneinfo/... 这类
+# **容器内绝对路径**的链接。Android 宿主上原样建这种链接会指到手机自己的 /usr（不存在），
+# 所以旧实现的 linkSafeWithin 判定「不在 dest 内」直接跳过 —— 链接根本没建出来，
+# 而 tar 里的条目数又对不上，表现是「解压成功但容器里某些命令/时区文件缺失」。
+# 现在离线解压这条路（rejectLinks=false）把绝对目标从虚拟根映射进 dest 再相对化，
+# chroot 之后看到的路径与原始 rootfs 完全一致；外部/备份归档仍然拒绝绝对链接。
+ABS="$WORK/abs-src"
+mkdir -p "$ABS/usr/lib" "$ABS/etc"
+printf 'libfoo-content\n' > "$ABS/usr/lib/libfoo.so"
+ln -s /usr/lib/libfoo.so "$ABS/etc/abs.so"                 # 容器内绝对路径
+ln -s /etc/../usr/lib/libfoo.so "$ABS/etc/dots.so"         # 归一化后仍在根内
+ln -s /../../escaped "$ABS/etc/escape.so"                  # 归一化后逃出 dest → 必须跳过
+if tar -czf "$WORK/abs.tar.gz" -C "$ABS" . 2>"$WORK/tar-abs.err"; then
+    OUT2="$WORK/out-abs"
+    mkdir -p "$OUT2"
+    if java -cp "$WORK/cls" com.deepseekharness.app.ExtractRun \
+            "$WORK/abs.tar.gz" "$OUT2" > "$WORK/run-abs.log" 2>&1; then
+        ok "含绝对软链的包解压跑通（$(grep -o 'SKIPPED=[0-9]*' "$WORK/run-abs.log")）"
+    else
+        bad "含绝对软链的包解压抛异常：$(head -3 "$WORK/run-abs.log")"
+    fi
+    check "绝对软链建出来了，且不再指向宿主 /usr" \
+          "$([ -L "$OUT2/etc/abs.so" ] && case "$(readlink "$OUT2/etc/abs.so")" in
+                /*) echo no ;; *) echo yes ;; esac || echo no)"
+    check "映射后的链接真能读到内容（相对化算对了）" \
+          "$([ "$(cat "$OUT2/etc/abs.so" 2>/dev/null)" = "libfoo-content" ] && echo yes || echo no)"
+    check "带 .. 的绝对路径归一化后同样映射进 dest" \
+          "$([ "$(cat "$OUT2/etc/dots.so" 2>/dev/null)" = "libfoo-content" ] && echo yes || echo no)"
+    check "归一化后逃出 dest 的链接被拒（没建出来）" \
+          "$([ -e "$OUT2/etc/escape.so" ] || [ -L "$OUT2/etc/escape.so" ] && echo no || echo yes)"
+else
+    echo "  SKIP 绝对软链映射：当前主机造不出测试链接"
+fi
+
 echo "----------------------------------------------"
 if [ "$fail" -eq 0 ]; then echo "全部通过：$pass 条"; else echo "失败 $fail 条（通过 $pass）"; exit 1; fi
