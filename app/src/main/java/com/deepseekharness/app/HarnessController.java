@@ -3308,9 +3308,6 @@ public class HarnessController {
                 + "(timeout 90 pnpm install --offline 2>/dev/null || timeout 180 pnpm install) >> /root/deps-selfheal.log 2>&1; }; ";
     }
 
-    /** WebUI 实际启动命令核心（看门狗重启与正常启动共用）。
-     *  自动判断：源码目录存在 → cd + 依赖自愈 + node apps/cli/lib/bin.js web；
-     *  否则回退全局 dsh web（预构建/目录缺失场景）。含 exec 与日志重定向。 */
     /** 这批幂等补丁上次是在什么前提下打成功的 —— 前提没变就不必再打一遍。
      *  空串表示「拿不到前提」（例如 profile 还没建），那时一律照打，不敢跳。 */
     private String patchStampNow() {
@@ -3322,6 +3319,10 @@ public class HarnessController {
             return "";
         }
     }
+
+    /** WebUI 实际启动命令核心（看门狗重启与正常启动共用）。
+     *  自动判断：源码目录存在 → cd + 依赖自愈 + node apps/cli/lib/bin.js web；
+     *  否则回退全局 dsh web（预构建/目录缺失场景）。含 exec 与日志重定向。 */
 
     private String runCoreCommand(boolean lanReady) {
         int port = parsePort();
