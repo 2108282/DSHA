@@ -202,7 +202,15 @@ public class LaunchFragment extends Fragment {
      * 走字、就绪后还要自动跳进 WebUI，慢了会被当成卡住。
      */
     private long nextTickDelayMs() {
-        if (starting || !webReady) return 1500;   // 还在等启动：保持灵敏
+        if (starting || !webReady) {
+            // 读秒要连着走字。固定 1500ms 会让「已等待 N 秒」跳着变（0→1→3→4→6），
+            // 用户看到的就是「读秒不准」。对齐到下一个整秒边界，刷新正好落在秒变那一刻。
+            if (startingAt > 0) {
+                long ms = System.currentTimeMillis() - startingAt;
+                return Math.max(200, 1000 - (ms % 1000));
+            }
+            return 1000;
+        }
         return insideWeb ? 4000 : 2500;
     }
 
@@ -420,7 +428,10 @@ public class LaunchFragment extends Fragment {
         if (starting && !webReady && startingAt > 0) {
             long sec = (System.currentTimeMillis() - startingAt) / 1000;
             String wait = "正在启动… 已等待 " + sec + " 秒"
-                    + (sec >= 45 ? "（偏慢了，可看下方日志尾部）" : "（通常 20~60 秒）");
+                    // 「通常 20~60 秒」是补丁门槛与自愈去重之前的数字。现在真机实测
+                    // 冷启动约 3~5 秒（起进程 2.1s + dsh 初始化 3.5s，其余已压掉），
+                    // 挂着旧区间会让用户觉得读秒不对 —— 显示 3 秒却说通常要 20 秒。
+                    + (sec >= 20 ? "（偏慢了，可看下方日志尾部）" : "（通常 3~10 秒）");
             base = base.isEmpty() ? wait : wait + "\n" + base;
         }
         // 没填 key 也允许安装和启动，但要给个明确去处，否则用户会卡在「为什么不能对话」
