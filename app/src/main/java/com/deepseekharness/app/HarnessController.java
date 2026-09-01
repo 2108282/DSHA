@@ -3187,8 +3187,20 @@ public class HarnessController {
         lastSelfHealMs = 0;
         lastSelfHealSessions = 0;
         long prepStart = System.currentTimeMillis();
+        // 这 6 个脚本都是幂等补丁：绝大多数启动里它们只是确认「补丁已经在了」就返回。
+        // 而真机日志显示这一段要 3.5 秒（自愈脚本 3538ms / 2 次容器会话）——
+        // 几乎全是起容器会话的固定成本，用户在白等一件大概率什么都不用做的事。
+        //
+        // 门槛：这些补丁的前提只有两个 —— 我们的资产版本，以及 profile 的
+        // node_modules 那一棵。两者都没变就没有重打的理由。pnpm 重装、装插件、
+        // 换 dsh 版本都会改 node_modules 的 mtime，那时 stamp 对不上，照旧全打一遍。
+        final String patchStamp = patchStampNow();
+        final boolean patchesFresh = !patchStamp.isEmpty()
+                && patchStamp.equals(prefs.getString("patch_stamp", ""));
         try {
-            java.util.Map<String, String> r1 = runAssetScripts(new String[][]{
+            java.util.Map<String, String> r1 = patchesFresh
+                    ? java.util.Collections.<String, String>emptyMap()
+                    : runAssetScripts(new String[][]{
                     // dsh 的 Web 服务本身没有鉴权（上游只绑 127.0.0.1，而 Android 上任何
                     // App 都能访问回环且不需要权限）→ 给它加 token 校验
                     {"webserver-auth-patch.sh", "dsha-webserver-auth.sh"},
@@ -3212,7 +3224,7 @@ public class HarnessController {
         // **必须留在 ensureBuiltinBundles 之后**：先补回内置 bundle，再清理解析不到的，
         // 顺序反过来会把刚补回的又清掉。所以这里单独一批，不与上面那四个合并。
         try {
-            runAssetScripts(new String[][]{
+            if (!patchesFresh) runAssetScripts(new String[][]{
                     // 热数据迁移到公开目录（会话/设置/附件跨重装不丢）：
                     // 幂等且安全，只迁纯文件目录、不碰 credentials、失败保留私有副本
                     {"migrate-public-data.sh", "dsha-migrate-public.sh"},
@@ -3271,9 +3283,15 @@ public class HarnessController {
         writeWatchdogFiles(runCoreCommand(lanReady), parsePort());
         // 观测用（真机拿数据）：准备阶段总耗时，以及自愈脚本占了多少、跑了几次容器会话。
         // 这一行是「还要不要继续合并会话」的依据 —— 没有数字就不该再动启动路径。
+        if (!patchesFresh && !patchStamp.isEmpty()) {
+            // 打完之后重新取一次：补丁自己动了 node_modules 的话，
+            // 用打之前那份 stamp 会导致下次启动又对不上、又白打一遍。
+            prefs.edit().putString("patch_stamp", patchStampNow()).apply();
+        }
         logActivity("启动准备耗时 " + (System.currentTimeMillis() - prepStart)
                 + "ms（自愈脚本 " + lastSelfHealMs + "ms / "
-                + lastSelfHealSessions + " 次容器会话）");
+                + lastSelfHealSessions + " 次容器会话"
+                + (patchesFresh ? "，补丁前提未变已整批跳过" : "") + "）");
         return sb.toString();
     }
 
@@ -3293,6 +3311,18 @@ public class HarnessController {
     /** WebUI 实际启动命令核心（看门狗重启与正常启动共用）。
      *  自动判断：源码目录存在 → cd + 依赖自愈 + node apps/cli/lib/bin.js web；
      *  否则回退全局 dsh web（预构建/目录缺失场景）。含 exec 与日志重定向。 */
+    /** 这批幂等补丁上次是在什么前提下打成功的 —— 前提没变就不必再打一遍。
+     *  空串表示「拿不到前提」（例如 profile 还没建），那时一律照打，不敢跳。 */
+    private String patchStampNow() {
+        try {
+            java.io.File nm = rootfsFile("root/.dsh/profiles/web/node_modules");
+            if (!nm.isDirectory()) return "";
+            return BUILTIN_ASSET_VERSION + ":" + nm.lastModified();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
     private String runCoreCommand(boolean lanReady) {
         int port = parsePort();
         // 默认端口(3080)不显式传 --port —— 彻底避免 commander 报 'argument missing'；
