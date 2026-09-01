@@ -85,7 +85,14 @@ jobs:
         run: |
           set -euo pipefail
           sed -i '/aapt2FromMavenOverride/d' gradle.properties
-          gradle :app:assembleDebug --no-daemon --stacktrace
+          if ! gradle :app:assembleDebug --no-daemon --stacktrace > /tmp/build.log 2>&1; then
+            echo "## ❌ Gradle Build Failed Output" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 120 /tmp/build.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/build.log
+            exit 1
+          fi
           ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK
