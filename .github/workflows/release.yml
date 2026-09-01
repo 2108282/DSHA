@@ -309,8 +309,32 @@ jobs:
             sha256       ${{ steps.apk.outputs.sha }}
             ```
 
-            由 CI 构建并用项目 release keystore 签名，可直接覆盖安装。
-            以下是自动生成的变更记录：
+            ## DSHA v1.2.0-alpha.2 (vc104)
+
+            > 这是 Alpha 测试预发布，不是正式稳定版。
+            > 仅支持 arm64-v8a / Android 8.0+。
+            > 请先备份重要数据；遇到问题请到 QQ 群反馈：975836806。
+
+            ### Alpha2 主要改动
+            - 升级内置 dsh 运行时至 `0.1.2-alpha.2`。
+            - 移除旧 `mobile-nav` 内置插件链路，保留并使用 `dsh-web-mobile`。
+            - 修复恢复流程：内置 Python 3 运行时，兼容覆盖升级后的旧 rootfs 路径，恢复失败会给出明确原因。
+            - 新增 DSHA DocumentsProvider 与 MT 文件管理器兼容链路。
+            - 修复 MTDataFilesProvider 在 release 包中缺失的问题。
+            - 完善备份、恢复、插件、ADB、局域网与启动自检相关逻辑。
+            - vc104 已验证可覆盖升级，保留现有 `.dsh`、凭据与备份数据。
+
+            ### 已知限制与未完成验证
+            - 仍为 Alpha 版本，可能存在未知稳定性、兼容性和数据恢复问题。
+            - MT 文件管理器中的 provider 枚举仍需更多机型人工验证。
+            - WebView 页面可见性、部分恢复交互及其他复杂设备场景仍需要持续测试。
+            - 不建议作为唯一生产环境或唯一数据副本使用。
+
+            ### 校验
+            - 文件：`${{ steps.apk.outputs.file }}`
+            - SHA-256：`${{ steps.apk.outputs.sha }}`
+
+            由 CI 构建并用项目发布密钥签名，可直接覆盖安装。以下是自动生成的变更记录：
           files: |
             ${{ steps.apk.outputs.file }}
             ${{ steps.apk.outputs.file }}.sha256
