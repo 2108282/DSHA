@@ -5340,7 +5340,17 @@ public class HarnessController {
                 + "（原文件留 .pre-fix 备份）");
     }
 
+    /** 上次真的扫过会话的时刻 —— 用来挡住同一次启动里的重复调用。 */
+    private volatile long lastSessionHealAt = 0;
+
     private void doHealSessionCorruption() {
+        // 这个方法有三个入口：MainActivity 打开 App 时、startWeb 的同步段、启动线程里。
+        // 真机日志是一次启动跑三遍（01:20:09 / :11 / :11），每遍都返回
+        // SESSION_HEALED_NONE，而且每遍开头都要停 Web、等端口关透 —— 纯白等。
+        // 同一次启动扫一遍就够：60 秒内的重复调用直接跳过，不丢「每次开 App 扫一次」的能力。
+        long nowMs = System.currentTimeMillis();
+        if (nowMs - lastSessionHealAt < 60_000) return;
+        lastSessionHealAt = nowMs;
         healingSession = true;
         try {
             if (!proot.isInstalled()) return;
