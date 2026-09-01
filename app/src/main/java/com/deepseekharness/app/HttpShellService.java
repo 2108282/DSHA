@@ -530,11 +530,11 @@ public final class HttpShellService {
     private String appNotify(String path) {
         try {
             String q = queryOf(path);
-            String title = getParam(q, "title", "DSHA 通知");
-            String text = getParam(q, "text", "");
-            if (text.isEmpty()) return "NO_TEXT";
-            title = safeDisplay(title);
-            text = safeDisplay(text);
+            String rawTitle = getParam(q, "title", "DSHA 通知");
+            String rawText = getParam(q, "text", "");
+            if (rawText.isEmpty()) return "NO_TEXT";
+            final String title = safeDisplay(rawTitle);
+            final String text = safeDisplay(rawText);
 
             // 任务结束，清除运行中状态通知
             cancelRunningNotification();
