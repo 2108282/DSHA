@@ -110,8 +110,7 @@ android {
                         ?: project.findProperty("dsha.key.password") ?: ""
                 println "签名：release keystore ${ksPath}（alias=${keyAlias}）"
             } else {
-                println "⚠️ 签名：未配置 DSHA_KEYSTORE，退回 debug keystore —— 仅供本地调试，" +
-                        "不可用于发布（用户将无法覆盖升级）"
+                println "⚠️ 签名：未配置 DSHA_KEYSTORE，使用 AGP 默认 debug 签名"
             }
             enableV1Signing true
             enableV2Signing true
@@ -124,7 +123,10 @@ android {
             // 产物是对外发布的，不能让任意调试器附加上来（AGP 默认给 debug 构建
             // 加 android:debuggable="true"，这里显式关掉）
             debuggable false
-            signingConfig signingConfigs.debug
+            def ks = signingConfigs.debug
+            if (ks.storeFile != null && ks.storeFile.exists()) {
+                signingConfig ks
+            }
         }
         release {
             minifyEnabled false
