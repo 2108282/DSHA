@@ -6,7 +6,7 @@
 - **分支**：`feat/auth-lease-and-automation-improvements`
 - **规模**：11 个提交，24 个文件，约 +1200 / −310
 
-改动可以分成五组，彼此基本独立，**可以按组拆开提 PR**：A 授权租约、B 通知栏交互闭环、C 元素定位与截屏、D 图片附件软链接修复、E fork 侧 CI。其中 E 只服务于本 fork 的免费打包，不应该提给上游。
+改动可以分成六组，彼此基本独立，**可以按组拆开提 PR**：A 授权租约、B 通知栏交互闭环与抽屉弹层、C 元素定位与截屏、D 图片附件软链接修复、E 3081局域网代理桥修复、F fork 侧 CI。其中 F 只服务于本 fork 的免费打包，不应该提给上游。
 
 D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但它跟通知栏毫无关系，是独立的一处 bug 修复；**在另一个仓库 `/root/工作区/dsha-repo` 里它有一个干净的单主题提交 `6dcdcb8`**（父提交就是上游 `41539fa`，内容与 `9afb5a4` 里那份逐字节一致）。提 PR 直接用它，不必从混合提交里做手术。
 
@@ -78,8 +78,6 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
 点击通知栏常驻通知或者交互按钮即可调出
 <img width="1200" height="2670" alt="image" src="https://github.com/user-attachments/assets/eacf404b-9017-4535-b8b3-7c474f072ca5" />
 
-
-（弹层高度过低时输入法有bug，懒得修了）
 通知交互全面升级为 **`QuickChatSheetActivity` 全局快捷悬浮抽屉弹层**（取代原本局限狭窄的通知栏 `RemoteInput` 打字输入框）：
 
 #### 核心特性与技术规范：
@@ -95,21 +93,25 @@ D 组虽然被混在 `9afb5a4` 那个通知栏大提交里一起提交了，但�
    - 页面加载时注入动态 CSS 样式，强制覆写 DSH 前端的 `--dsw-alias-bg-base`、`--dsw-alias-bg-layer-1`、`--dsw-specific-sidebar-fill` 为 `transparent !important`；
    - 显式关闭 `FORCE_DARK` 与 `setAlgorithmicDarkeningAllowed(false)`，**100% 保持 DSHA 浅色原貌，透出底层桌面壁纸与应用**。
 4. **顶栏 4 按钮像素级统一规格与新会话功能**：
-   - **规格对齐**：4 个按钮一律锁定为 **36dp × 36dp** 外层触摸区与 36dp 正圆水波纹反馈，内部图形严格基于 24dp 视口与 **1.85dp 黄金中等线宽**圆倒角绘制；
-   - **对称绝对居中**：左侧 2 个按钮（`[✕]` + `[⚙]`）与右侧 2 个按钮（`[💬➕]` + `[⬒]`）完全对称，中间“DSHA 对话”标题在物理屏幕正中央 100% 绝对居中；
+   - **规格对齐**：4 个按钮一律锁定为 **36dp × 36dp** 外层触摸区与 36dp 正圆水波纹反馈，内部图形严格基于 24dp 视口与 **1.85dp 黄金中等线宽**圆倒角绘制，并引入几何光学尺寸补偿；
+   - **对称绝对居中**：左侧 2 个按钮（`[✕]` + `[>_]`）与右侧 2 个按钮（`[💬➕]` + `[⬒]`）完全对称（各占用 76dp），中间“DSHA 对话”标题在物理屏幕正中央 100% 绝对居中；
    - **4 按钮功能一览**：
      - **① `[ ✕ ]` 关闭**：光学收敛细线交叉，顺滑滑出退出并转入后台保活（`moveTaskToBack`）；
-     - **② `[ >_ ]` 容器终端控制台**：圆角窗口外框与命令行提示符 `>_`，一键唤醒并跳转至 `MainActivity` 容器后台主界面（启动/终端/市场/设置）；
+     - **② `[ >_ ]` 容器终端控制台**：圆角窗口外框与命令行提示符 `>_`，携带 `go_home=true` 一键唤醒并跳转至 `MainActivity` 容器后台主界面（自动退出全屏 Web，固定展示包含启动/终端/市场/设置的主页）；
      - **③ `[ 💬➕ ]` 开启新对话**：圆角气泡内嵌十字加号，毫秒级通过 DOM 事件触发 DSH 前端内置新会话广播或路由重置，就地清空输入框并开启全新对话流；
      - **④ `[ ⬒ ]` 全屏聊天**：顺时针旋转 90° 后的顶部分栏形态，一键进入主 App 完整全屏对话页（彻底避开与网页内展开侧边栏图标的视觉撞车）。
-5. **键盘自适应与同色底板覆盖（顶栏绝对固定）**：
-   - 卡片顶边物理锚定在原处，键盘弹出时顶栏、关闭与设置按钮绝对不被顶飞出屏幕；
-   - 卡片底板延伸覆盖到屏幕物理最底端，键盘覆盖在卡片上方，**透过键盘半透明缝隙看到的依然是纯净浅色底板，彻底消灭黑块与漏桌面现象**；
-   - WebView 可用视口等额收缩，网页底部的输入框自动精准吸附在输入法正上方。
-6. **内存单例保活秒开（0 秒加载、0 网络请求）**：
+5. **键盘弹出智能联动与全贴底防漏底板**：
+   - **卡片外壳纹丝不动**：卡片顶边由物理坐标固定，Window 采用 `SOFT_INPUT_ADJUST_NOTHING`，键盘弹出时顶栏、关闭与设置按钮绝对不被顶飞出屏幕；
+   - **低位自动拉高升档**：当卡片处于 $\le 50\%$ 低位时，点击输入框弹出键盘瞬间，通过单次状态跃迁锁平滑触发 180ms 减速动画将卡片拉升至 **78% 默认舒适高度**，彻底解决低档位打字视口局促问题；
+   - **全贴底同色毛玻璃底板**：卡片底板延伸覆盖到屏幕物理最底端，键盘覆盖在卡片上方，**透过键盘半透明缝隙看到的依然是纯净浅色底板，彻底消灭黑块与漏桌面现象**；
+   - **网页输入框自适应上浮**：内部 `webContainer` 动态响应输入法高度，网页底部的输入框自动精准吸附在输入法正上方。
+6. **任务栈物理隔离与防误跳桌面拦截**：
+   - `AndroidManifest.xml` 中将弹层配置独立亲和性 `taskAffinity="com.dsh.client.quick_sheet"`；
+   - 彻底与主 App 的 Launcher 任务栈在系统层级物理隔离，**从手机桌面点击 DSHA 图标永远固定打开主 App，不再误跳弹层**。
+7. **内存单例保活秒开与静默就绪重置（0 秒加载、0 网络请求）**：
    - 采用内存静态 `WebView` 常驻缓存，1:1 精准还原字体（移除 OverviewMode，设置 textZoom 100）；
-   - 用户下滑或点击 ✕ 退出时，平滑滑出后调用 `moveTaskToBack(true)` 挂起保活，不销毁 WebView 与 WebSocket 连接；
-   - 再次点击通知或发送命令时，通过 `FLAG_ACTIVITY_REORDER_TO_FRONT` 与 `onNewIntent()` 毫秒级滑出，**会话状态不丢、输入框草稿不丢、零重新加载**。
+   - 用户下滑或点击 ✕ 退出时，平滑滑出后调用 `moveTaskToBack(true)` 挂起保活，退出时完全不碰高度，彻底消除退出闪烁；
+   - 若在 $\le 50\%$ 低位离开，下次呼出在屏幕外静默将高度重置为 78% 后再滑入屏幕，**会话状态不丢、输入框草稿不丢、零重新加载、零尺寸突变残影**。
 
 #### 命令行直接调出方法：
 ```bash
@@ -127,7 +129,7 @@ am start -n com.dsh.client/com.deepseekharness.app.QuickChatSheetActivity
 
 - `HarnessService.java`（常驻保活 1001）/ `TaskNotifier.java`（任务完成 2002）/ `HttpShellService.java`（实时运行 2003）/ `ConfirmReceiver.java`（任务终止 2004）的所有通知点击主体均统一指向 `QuickChatSheetActivity`；
 - 配置 `FLAG_ACTIVITY_REORDER_TO_FRONT | FLAG_ACTIVITY_SINGLE_TOP`，复用后台常驻实例秒开；
-- 弹层顶部配备 `[⚙ 容器控制台]` 与 `[◫ 全屏聊天]` 按钮，随时可一键转入全屏 App。
+- 弹层顶部配备 `[>_ 容器控制台]` 与 `[◫ 全屏聊天]` 按钮，随时可一键转入全屏 App。
 
 | 通知类型 | 触发场景 | 点击行为 |
 | :--- | :--- | :--- |
@@ -219,7 +221,23 @@ am start -n com.dsh.client/com.deepseekharness.app.QuickChatSheetActivity
 
 ---
 
-## E. Fork 侧 CI（不建议提给上游）
+## E. 3081 局域网访问代理桥修复（Issue #42）
+
+**动机**：通过同 WiFi 下的其他电脑或手机访问 `http://<手机IP>:3081/?token=<token>` 时，页面直接超时卡死，或永远卡在 `HARNESS Loading plugins...` 旋转等待画面无法进入主应用。
+
+### E1. 补齐请求头结尾 CRLF（解决双向死锁）
+- **文件**：`app/src/main/java/com/deepseekharness/app/LanProxyService.java` (`rewriteHost`)
+- **排查**：代理在通过 `head.split("\\r?\\n")` 切分并重拼请求头追加 `X-Dsha-Token` 后，Java `split` 丢弃了末尾空行；发往后端 3080 的 HTTP 请求头缺失了标准的 `\r\n\r\n` 结束符。Node.js HTTP 解析器认为请求头未结束一直阻塞等待，Android 代理端也在阻塞等待 Node.js 响应，双方陷入**双向死锁（Deadlock）**，外部浏览器最终超时失败。
+- **修复**：在 `rewriteHost` 末尾显式补齐 `sb.append("\r\n")`，通知后端请求头已发送完毕。
+
+### E2. 提高 Chunked 传输上限至 32MB 并完整透传末尾 CRLF（解决大型插件截断）
+- **文件**：`app/src/main/java/com/deepseekharness/app/LanProxyService.java` (`pipeChunked`)
+- **排查**：代理硬编码了 `MAX_CHUNK = 1024 * 1024`（1MB）。DSH 加载 1.22MB 的大型插件（如 `dsh-better-sidebar/client.js`）时，单块数据超过 1MB 被代理误判为非法超大块直接掐断连接；且遇到末尾块 `size == 0` 时直接 break 漏掉了随后的 CRLF。导致浏览器接收到的脚本残缺损坏，`Promise.all` 永远无法 resolve，前端一直挂在 `Loading plugins...`。
+- **修复**：将单块上限提升至 `32 * 1024 * 1024`（32MB），并在 `size == 0` 时完整读出并转发紧随其后的 CRLF，确保分块流完整收尾。
+
+---
+
+## F. Fork 侧 CI（不建议提给上游）
 
 `.github/workflows/android-build.yml`：删掉 `bundle` job（原本在 `ubuntu-24.04-arm` 上现编 arm64 rootfs，约 90 分钟且 fork 用不上 ARM runner 配额），改为直接从上游 release APK 里 `unzip -p` 抽出 `assets/offline-rootfs.*`。触发分支加 `feat/**`。
 
