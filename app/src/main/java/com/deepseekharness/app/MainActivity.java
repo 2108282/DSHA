@@ -167,6 +167,47 @@ public class MainActivity extends AppCompatActivity {
         if (savedInstanceState == null) {
             nav.setSelectedItemId(R.id.nav_launch);
         }
+        handleIntentRouting(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIntentRouting(intent);
+    }
+
+    private void handleIntentRouting(Intent intent) {
+        if (intent == null) return;
+
+        // 1. 固定重置回到容器后台主页（关闭全屏网页并切到启动页）
+        if (intent.getBooleanExtra("go_home", false)) {
+            BottomNavigationView nav = findViewById(R.id.bottom_nav);
+            if (nav != null && nav.getSelectedItemId() != R.id.nav_launch) {
+                nav.setSelectedItemId(R.id.nav_launch);
+            }
+            Fragment f = getSupportFragmentManager().findFragmentById(R.id.fragment_container);
+            if (f instanceof LaunchFragment) {
+                ((LaunchFragment) f).closeWeb();
+            }
+            return;
+        }
+
+        // 2. 直达全屏网页对话
+        handleNotificationEnterWeb(intent);
+    }
+
+    private void handleNotificationEnterWeb(Intent intent) {
+        if (intent != null && (intent.getBooleanExtra("open_web", false) || intent.getBooleanExtra("auto_enter_web", false))) {
+            BottomNavigationView nav = findViewById(R.id.bottom_nav);
+            if (nav != null && nav.getSelectedItemId() != R.id.nav_launch) {
+                nav.setSelectedItemId(R.id.nav_launch);
+            }
+            Fragment f = getSupportFragmentManager().findFragmentById(R.id.fragment_container);
+            if (f instanceof LaunchFragment) {
+                ((LaunchFragment) f).enterWebDirectly();
+            }
+        }
     }
 
     private void switchFragment(Fragment f) {

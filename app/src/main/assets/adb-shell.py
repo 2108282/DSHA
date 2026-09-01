@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# DSHA_ADB_SCRIPT_VERSION=12
+# DSHA_ADB_SCRIPT_VERSION=13
 """
 DSHA 设备 shell 工具（ADB 无线通道，免 Shizuku）。
 用法：
@@ -27,8 +27,8 @@ READONLY_SUB = {
     'pm': frozenset(('list', 'path', 'dump')),
     'settings': frozenset(('get', 'list')),
     'cmd': frozenset(),
-    'am': frozenset(),
-    'wm': frozenset(),
+    'am': frozenset(('start', 'stack', 'get-config', 'to-uri', 'to-intent-uri')),
+    'wm': frozenset(('size', 'density', 'displays')),
     'input': frozenset(),
     'svc': frozenset(),
 }
@@ -89,7 +89,7 @@ def main():
     # DSH_INTERNAL=1：App 自己的调用（保活探活、pm grant 授权）跳过确认关卡 ——
     # 否则六层保活每分钟探一次活，就会不停弹确认框。（吸收上游 PR#24 的做法）
     confirm_reason = cmd.split('#', 1)[1].strip() if '#' in cmd else ''
-    if os.environ.get('DSH_INTERNAL') != '1' and not is_readonly_cmd(cmd):
+    if os.environ.get('DSH_INTERNAL') != '1' and not is_auth_lease_active() and not is_readonly_cmd(cmd):
         ok = request_confirm(cmd, confirm_reason)
         if not ok:
             print('USER_REJECTED: 未获授权，命令未执行')
@@ -221,6 +221,25 @@ def connect_with_retry(device_cls, signer_cls, cmd, port):
         except Exception as e:
             last = e
     raise ConnectFail('%s (%s) 已尝试端口=%s' % (last, type(last).__name__, tried))
+
+
+def is_auth_lease_active():
+    """检查临时任务授权租期（用户在任务开始前置同意后，租期内免二次弹窗确认）。"""
+    lease_file = '/root/.dsh/.auth_lease'
+    try:
+        if os.path.exists(lease_file):
+            with open(lease_file, 'r') as f:
+                exp = float(f.read().strip())
+            if time.time() < exp:
+                return True
+            else:
+                try:
+                    os.remove(lease_file)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return False
 
 
 def is_readonly_cmd(cmd):

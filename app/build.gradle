@@ -131,7 +131,16 @@ android {
     packagingOptions {
         jniLibs {
             useLegacyPackaging = true
-            excludes += ['**/x86/**', '**/x86_64/**', '**/armeabi/**', '**/armeabi-v7a/**']
+            excludes += [
+                'lib/x86/**',
+                'lib/x86_64/**',
+                'lib/armeabi/**',
+                'lib/armeabi-v7a/**',
+                '**/x86/**',
+                '**/x86_64/**',
+                '**/armeabi/**',
+                '**/armeabi-v7a/**'
+            ]
         }
     }
 

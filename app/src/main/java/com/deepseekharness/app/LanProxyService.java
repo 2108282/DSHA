@@ -751,8 +751,9 @@ public final class LanProxyService {
         out.flush();
     }
 
+    /** chunked 透传直到末尾 0 块；单块上限 32MB + 块尾必须 CRLF（畸形流直接结束）。 */
     private static void pipeChunked(InputStream in, OutputStream out) throws IOException {
-        final int maxChunk = 1024 * 1024;
+        final int maxChunk = 32 * 1024 * 1024;
         while (true) {
             java.io.ByteArrayOutputStream line = new java.io.ByteArrayOutputStream();
             int b;
@@ -776,6 +777,11 @@ public final class LanProxyService {
             if (size < 0 || size > maxChunk) return;
             out.write(line.toByteArray());
             if (size == 0) {
+                // 读末尾 0 块之后的 CRLF (\r\n) 并转发给客户端，确保 chunked 流完整结束
+                int c1 = in.read();
+                int c2 = in.read();
+                if (c1 >= 0) out.write(c1);
+                if (c2 >= 0) out.write(c2);
                 out.flush();
                 return;
             }

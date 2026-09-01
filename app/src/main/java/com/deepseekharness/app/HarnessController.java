@@ -4879,7 +4879,7 @@ public class HarnessController {
             String missing = missingBuiltinEntities();
             if (sameVersion && missing.isEmpty()) return;
             proot.execAndRead(
-                    "rm -f /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
+                    "rm -f /root/dsha-web-mobile-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed /root/dsha-task-notifier-installed; "
                     + "echo refreshed");
             android.util.Log.i("DSHA", "内置插件资产要重注入（版本"
                     + (sameVersion ? "一致" : "变化：" + (r == null ? "?" : r.trim()))
@@ -4892,7 +4892,7 @@ public class HarnessController {
      *  只查有 {@code -installed} marker 的那几个 —— 与上面删 marker 的范围保持一致，
      *  免得又出现「一处检查、另一处漏掉」。 */
     private String missingBuiltinEntities() {
-        String[] dirs = {"dsha-device-shell-guide", "dsha-status-overlay"};
+        String[] dirs = {"dsha-web-mobile", "dsha-device-shell-guide", "dsha-status-overlay", "dsha-task-notifier"};
         StringBuilder sb = new StringBuilder();
         for (String d : dirs) {
             if (!new java.io.File(proot.getRootfsDir(), "root/" + d).isDirectory()) {
