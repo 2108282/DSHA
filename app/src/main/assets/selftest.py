@@ -36,6 +36,11 @@ SESSION_PKG_CANDIDATES = (
     "@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
     "/usr/local/lib/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
 )
+ATTACHMENT_PKG_CANDIDATES = (
+    "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/"
+    "@deepseek-ai/dsh-attachment-local/lib/index.js",
+    "/usr/local/lib/node_modules/@deepseek-ai/dsh-attachment-local/lib/index.js",
+)
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 # 每条 FAIL 都必须告诉用户下一步做什么。分散写在各处必然有漏 ——
@@ -70,6 +75,7 @@ NEXT_STEP = {
     "电池优化白名单": "到「配置」页点「申请电池优化白名单」",
     "write 补丁": "点启动页的「重启」——补丁是启动时打的",
     "会话发布补丁": "点启动页的「重启」——补丁是启动时打的",
+    "附件发布补丁": "点启动页的「重启」——补丁是启动时打的",
     "插件副本检查": "点启动页的「重启」——启动时会自动改成符号链接",
     "危险命令守卫": "点启动页的「重启」——守卫缺失时会自动补装",
     "设备引导插件": "点启动页的「重启」",
@@ -608,6 +614,21 @@ def check_write_patch():
         else:
             add("FAIL", "会话发布补丁",
                 "未打 —— 会话写完即失效（ENOENT ... session.jsonl.zstd）；"
+                "到启动页点一次「重启」即会自动补上（补丁是启动 Web 时打的）")
+    # 图片附件发布补丁：没打的话在 Android /sdcard 外部存储上发送图片报 ATTACHMENT_WRITE_FAILED (EINVAL link)
+    atarget = next((p for p in ATTACHMENT_PKG_CANDIDATES if os.path.isfile(p)), None)
+    if atarget is None:
+        add("SKIP", "附件发布补丁", "找不到 dsh-attachment-local")
+    else:
+        _asrc = read(atarget, 400000)
+        if "DSHA_L2S_FIX_ATTACHMENT" in _asrc:
+            add("PASS", "附件发布补丁", "已生效（图片附件走 rename 发布，支持 Android 外部存储）")
+        elif stage() != "ran":
+            add("SKIP", "附件发布补丁", "还没启动过 Web —— 补丁是启动时打的，启动一次即会自动补上")
+            return
+        else:
+            add("FAIL", "附件发布补丁",
+                "未打 —— 发送图片附件会失败（ATTACHMENT_WRITE_FAILED）；"
                 "到启动页点一次「重启」即会自动补上（补丁是启动 Web 时打的）")
     mark = read("/root/.dsha-hardlink").strip()
     _rt = arg("runtime") or "proot"
