@@ -466,7 +466,8 @@ public class ProotBootstrap {
             new File(rootfsDir, "root/手机存储").mkdirs();
             File readme = new File(d, "读我-这个目录能做什么.txt");
             if (readme.isFile()) return;
-            String text = "这个目录在容器里挂成 /root/手机存储，可以在 DSHA 的工作区选择里选到它。\n"
+            String text = "容器里的 /root/手机存储 就是手机内部存储的根（整个 /storage/emulated/0），\n"
+                    + "在 DSHA 的工作区选择里能看到「手机存储」这一项。这个文件夹是推荐的落脚点。\n"
                     + "\n"
                     + "能做什么\n"
                     + "· 让 agent 读写这里的文档、脚本、图片 —— 手机上任何文件管理器都能直接打开，不用导出\n"
