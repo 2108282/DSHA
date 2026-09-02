@@ -1,18 +1,43 @@
-## 🌟 Forktest 分支专属修复：全面兼容 Stellar 与澎湃 OS 15/16
+## 🌟 Fork 专属核心架构升级（基于上游 v1.1.10 底座）
 
+本分支以官方 **`v1.1.10`** 为底座（享受冷启动提速、手机存储根挂载、新版真 PTY 终端等全部官方新特性），并深度融合了以下关键特权与交互修复：
+
+### 1. 全面兼容 Stellar 与澎湃 OS 15/16（彻底解决底层 Binder 挂起）
 在最新的 **小米澎湃 OS (HyperOS / Android 15+)** 等实行强 SELinux 沙箱隔离的系统上，传统的 `Shizuku.bindUserService()` 会因底层 `app_process` 无法跨进程发送 Binder 而被系统静默拦截，导致状态永久卡在 `binding=true, bound=false`。
-
-本分支对底层 ADB / Shizuku 桥接模块（`ShizukuShell.java` 与 `HttpShellService.java`）进行了全方位的降维重构与加固：
-- **引入 `execDirect` 降维打击兜底方案**：彻底放弃脆弱的 `UserService` / `ContentProvider` 握手。在服务未就绪时，直接通过底层的 `IShizukuService.newProcess` 管道原生执行 Shell 命令；
+- **引入 `execDirect` 降维打击兜底方案**：彻底放弃脆弱的 `UserService` / `ContentProvider` 握手。在服务未就绪或异常时，直接通过底层的 `IShizukuService.newProcess` 管道原生执行 Shell 命令；
 - **合并系统标准流**：通过 `2>&1` 技术将错误流与标准流在内核态合并读取，避免双重管道死锁，完美实现零延迟、零卡顿的底层系统级控制；
 - **重构环境生命周期**：在 `DshaApp.onCreate()` 增加 `:shizuku` 进程强隔离防御，并在 `UserServiceArgs` 中补齐了针对 Shizuku 13.x 必填的 `.processNameSuffix` 等多项规范化参数；
-- **新增诊断端点**：提供 `curl http://127.0.0.1:3090/app/shizuku` 的状态诊断直达接口。
+- **新增诊断端点**：提供 `curl http://127.0.0.1:3090/app/shizuku` 的状态诊断直达接口；
+- **效果**：即使不用系统开发者选项中的「无线调试」，只要装有以 Root/Boot 运行的 Stellar 或 Shizuku，DSHA 即可完美获得 `uid=2000` 甚至 `root` 的底层控制权！
 
-**效果：即使不用系统开发者选项中的「无线调试」，只要装有以 Root/Boot 运行的 Stellar 或 Shizuku，DSHA 即可完美获得 `uid=2000` 甚至 `root` 的底层控制权！**
+### 2. 全场景模型异常捕获与通知栏精简（方案 B 符号系）
+针对模型出现 503、400、401、429、余额不足或网络断开时无提示的问题，重构了 `task-notifier` 与 `status-overlay`：
+- **纯净提取 `LlmFailure`**：只提取 HTTP 状态码与简要报错信息，严格截取前 50 字符，**绝对物理隔离思考流（Reasoning）与终端命令退出码（Exit Code）**；
+- **全场景 6 大分支精准提示**：
+  - **`❌ 模型请求失败`**：展示具体原因与状态码（如 `Service Unavailable (503)` / `Invalid API Key (401)`）；
+  - **`🔵 任务已中断`**：用户紧急制动或主动停止；
+  - **`📏 达到单次最大长度`**：模型单次输出达到 Max Tokens 限制；
+  - **`🛡️ 任务已挂起`**：触发安全策略或等待授权；
+  - **`⚡ 连接异常中断`**：容器掉线或连接丢失；
+  - **`任务完成`**：单轮/多轮任务顺利结束；
+- **悬浮条同步提示**：模型报错时，屏幕顶部悬浮条同步上屏展示 `❌ 模型请求失败: [详情]` 并停留 3.5 秒自然淡出；
+- **极简通知标题**：去除全部通知标题中多余的 `DSHA · ` 前缀，界面更纯净。
+
+### 3. 全局毛玻璃悬浮抽屉与按键精准直达 (`QuickChatSheetActivity`)
+- **`QuickChatSheetActivity`**：基于 `taskAffinity` 独立任务栈的半透明毛玻璃悬浮抽屉（支持 15% 多档智能阶梯吸附、贴底键盘自适应）；
+- **按钮直达路由分发**：
+  - **按钮 ② `[ >_ ]` 终端按钮**：传递 `open_terminal=true`，`MainActivity` 收到后一步秒级直达终端控制台；
+  - **按钮 ④ `[ ⬒ ]` 全屏按钮**：传递 `open_web=true`，联动 `LaunchFragment.enterWebDirectly()` 秒级展开全屏 Web 对话；
+  - **重写 `onNewIntent`**：彻底解决 Activity 后台唤醒时丢参数的问题。
+
+### 4. 其它核心特性与补丁对齐
+- **两阶段候选池消歧提示词**：`device-shell-guide` 引入消歧规则，杜绝将语音搜索话筒当成搜索按钮盲点；
+- **图片附件软链接修复**：`fs-write-patch.sh` 段③原子补丁将 `link()` 改为 `rename()`，彻底解决 WebUI 发图报 `ATTACHMENT_WRITE_FAILED` 崩溃；
+- **3081 局域网代理扩容**：`LanProxyService` 提升 Chunk 上限至 32MB 并补齐结尾 CRLF，解决加载大插件卡死；
+- **资产自愈补齐**：`HarnessController` 补齐 `dsha-task-notifier-installed` marker 扫描与清理，`BUILTIN_ASSET_VERSION = 26`，覆盖安装自动刷新容器内部插件。
 
 ---
 
----
 # Fork 改动备忘（2108282/DSHA）
 
 记录本 fork 相对上游 `qiannianhuanxiang/DSHA` 的全部改动，便于日后 rebase、拆分提 PR，或者上游想合并时快速理解动机。
