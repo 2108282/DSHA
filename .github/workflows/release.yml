@@ -270,6 +270,11 @@ jobs:
           # releases/latest 会跳过预发布，所以既能发出去给人验机，又不会被
           # 客户端的更新检查推给所有用户。手滑打错 tag 也不会误发正式版。
           prerelease: ${{ inputs.prerelease || contains(steps.tag.outputs.value, '-') }}
+          # 显式写 false：这个 tag 指向 dev/1.1.x 而不是默认分支，v1.1.10 那次
+          # 就被创建成了草稿 —— 草稿不出现在 releases 列表也不算 latest，
+          # 等于「构建成功、CI 全绿、用户什么也下载不到」，而且没有任何报错提示。
+          draft: false
+          make_latest: ${{ !(inputs.prerelease || contains(steps.tag.outputs.value, '-')) }}
           generate_release_notes: true
           body: |
             **仅支持 arm64 / Android 8.0+**，APK 已内置完整 Linux 环境。
