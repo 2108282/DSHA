@@ -997,6 +997,38 @@ public final class PureLogicTest {
         ok("restart: 工作区名带单引号时按 ShellQuote 转义（不是裸的 '…'）",
                 rsQ.contains("cd /root/'it'\\''s work' || exit 1"));
 
+        // ===== DangerShellGuard：确认弹窗的判据 =====
+        // 这批断言补的是 2026-09-01 那个真机 bug 的回归：adb-shell.py 当时无条件带
+        // force=1，而桥端 force=1 的语义是「所有命令都确认」，于是连 am start 打开应用
+        // 都要点一次。判据本身没病，病在报备端把它整个短路了 —— isDangerous() 里那段
+        // 专门处理 adb 通道的判据从写下来就没生效过。去掉 force=1 之后它才第一次真正
+        // 开始工作，所以现在必须有测试盯着，否则改判据会静默回归成「什么都拦」或
+        //「什么都不拦」，而这两种坏法在 UI 上都不明显。
+        String[] dangerCmds = {
+                "adb shell rm -rf /sdcard/x", "adb shell pm uninstall com.x",
+                "adb shell reboot", "adb shell wipe data", "adb exec-out rm -f /sdcard/a",
+        };
+        for (String c : dangerCmds) {
+            ok("isDangerous 仍拦：" + c, DangerShellGuard.isDangerous(c));
+        }
+        String[] safeCmds = {
+                "adb shell am start -n com.a/.B", "adb shell input tap 100 200",
+                "adb shell monkey -p com.a 1", "adb shell dumpsys window",
+                "adb shell settings get system font_scale",
+        };
+        for (String c : safeCmds) {
+            ok("isDangerous 放行：" + c, !DangerShellGuard.isDangerous(c));
+        }
+        // 我们自己注入的包装不算用户意图 —— 那段 `source dsh-guard.sh 2>/dev/null;` 里的
+        // `>` 曾让「覆盖关键路径」那条判据对任何提到关键路径的命令生效，于是每条都要确认。
+        ok("isDangerous 放行：带 dsh-guard.sh 包装的普通命令",
+                !DangerShellGuard.isDangerous("source /root/dsh-guard.sh 2>/dev/null; ls /root"));
+        ok("isDangerous 仍拦：rm${IFS}-rf 这类分隔符混淆",
+                DangerShellGuard.isDangerous("rm${IFS}-rf /sdcard/x"));
+        // 旧正则 [a-z]'\s*'[a-z] 会把这种正常写法也算成 r''m 混淆，导致大量误拦
+        ok("isDangerous 放行：echo 'a' 'b'（正常的两个带引号参数）",
+                !DangerShellGuard.isDangerous("echo 'a' 'b'"));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"
