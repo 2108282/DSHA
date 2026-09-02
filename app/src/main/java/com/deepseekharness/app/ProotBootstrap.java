@@ -304,6 +304,21 @@ public class ProotBootstrap {
         ProcessBuilder probe = new ProcessBuilder("/system/bin/true");
         applyProotEnv(probe);
         java.util.Map<String, String> m = probe.environment();
+        // PTY 会话必须有 TERM。没有它：clear / tput / reset 直接报
+        // "TERM environment variable not set."，vim htop less 退化甚至拒绝启动，
+        // 而 codex 这类 TUI 程序拿不到终端能力描述，光标控制与宽度判断全靠猜 ——
+        // 真机上表现为排版错乱、欢迎横幅重复画两遍。
+        // 这里原先只把 applyProotEnv 给 proot 自己准备的那几个变量原样导出，
+        // 从来没有人设过 TERM。
+        //
+        // 值取 xterm-256color：rootfs 的 /usr/share/terminfo/x/ 里有这一项
+        //（ncurses-base 自带，已在容器里实测 clear 能用），而且 Termux 的 TerminalView
+        // 实现的转义序列基本按 xterm 那套来。
+        // 下面几个都只在缺失时补，不覆盖 applyProotEnv 已经定好的值。
+        if (!m.containsKey("TERM")) m.put("TERM", "xterm-256color");
+        if (!m.containsKey("COLORTERM")) m.put("COLORTERM", "truecolor");
+        if (!m.containsKey("LANG")) m.put("LANG", "C.UTF-8");
+        if (!m.containsKey("HOME")) m.put("HOME", "/root");
         java.util.List<String> out = new java.util.ArrayList<>(m.size());
         for (java.util.Map.Entry<String, String> e : m.entrySet()) {
             if (e.getKey() == null || e.getValue() == null) continue;
