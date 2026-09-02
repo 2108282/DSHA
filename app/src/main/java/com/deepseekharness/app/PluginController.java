@@ -2361,6 +2361,9 @@ class PluginController {
         // （npm/cli#2144：clone 到 store/tmp 时丢 .gitignore → prepare 阶段 ENOENT，
         //  用户报的正是这个）。所以能走 registry 就别走 git。
         StringBuilder tried = new StringBuilder();
+        // issue #49：装之前先清掉残缺实体 —— pnpm 看到同名目录就报 Already up to date、
+        // added 0，压根不会重新下载，于是后续诊断全在读一个上次中断留下的坏包。
+        tried.append(dropBrokenEntity(pkg));
         String spec = pkg;
         String pre = precheckGitPlugin(fallbackSpec != null ? fallbackSpec : pkg);
         if (pre != null) {
@@ -3055,6 +3058,70 @@ class PluginController {
      * <p>「提示安装成功，插件管理页空无一物」就是只看退出码的后果。没注册上就把实话
      * 追加在结果后面 —— 用户至少知道该往哪查，而不是以为装好了在等它生效。
      */
+    /** profile 里这个包的实体目录（scoped 名字带斜杠，File 会自然当成子目录）。 */
+    private java.io.File entityDir(String pkg) {
+        return new java.io.File(proot.getRootfsDir(),
+                "root/.dsh/profiles/web/node_modules/" + pkg);
+    }
+
+    /** 实体是不是完整的：package.json 能解析、main 指向的入口文件真实存在。
+     *  空目录、写了一半的 JSON、指向不存在文件的 main —— 都算坏。 */
+    private boolean entityLooksComplete(java.io.File dir) {
+        try {
+            if (!dir.isDirectory()) return false;
+            java.io.File pj = new java.io.File(dir, "package.json");
+            if (!pj.isFile()) return false;
+            String txt = new String(java.nio.file.Files.readAllBytes(pj.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            org.json.JSONObject o = new org.json.JSONObject(txt);
+            String main = o.optString("main", "").trim();
+            if (main.isEmpty()) return true;   // 没声明 main 就用默认 index.js，交给 node 去判
+            return new java.io.File(dir, main).isFile();
+        } catch (Throwable t) {
+            return false;      // JSON 解析炸了同样算坏
+        }
+    }
+
+    /** issue #49：装之前先把残缺实体清掉。
+     *
+     *  <p>pnpm 看到同名实体就报 {@code Already up to date} / {@code added 0}，压根不会
+     *  重新下载 —— 哪怕那个实体是上一次安装中断留下的残骸。后续所有诊断都在读这个坏包，
+     *  于是得出「这个包没有声明 dsh.bundle」这种离题的结论，用户照提示反复重装也没用。
+     *
+     *  @return 删掉了坏实体就返回一句说明（拼进安装报告），实体正常则返回空串 */
+    private String dropBrokenEntity(String pkg) {
+        try {
+            if (pkg == null || pkg.isEmpty() || pkg.contains(":")) return "";
+            java.io.File dir = entityDir(pkg);
+            if (!dir.isDirectory() || entityLooksComplete(dir)) return "";
+            DataPreserve.deleteRecursively(dir);
+            host.logActivity("安装前清掉 " + pkg + " 的残缺实体 —— pnpm 会把它当「已装」而跳过下载");
+            return "· 发现上次安装留下的残缺实体，已删除后重新装\n";
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** 实体的真实状态。给不出结论的时候，把事实摆出来比让用户在三个「常见原因」里猜有用。 */
+    private String entityDiag(String pkg) {
+        try {
+            java.io.File dir = entityDir(pkg);
+            if (!dir.isDirectory()) return "实体目录不存在：node_modules/" + pkg + "\n";
+            java.io.File pj = new java.io.File(dir, "package.json");
+            if (!pj.isFile()) return "实体目录在，里面却没有 package.json —— 装到一半断了\n";
+            String txt = new String(java.nio.file.Files.readAllBytes(pj.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            org.json.JSONObject o = new org.json.JSONObject(txt);
+            java.io.File entry = new java.io.File(dir, o.optString("main", "index.js"));
+            return "实体现状：name=" + o.optString("name", "?")
+                    + " · main=" + o.optString("main", "(默认 index.js)")
+                    + " · 入口文件" + (entry.isFile() ? "在" : "不在")
+                    + " · dsh 声明" + (o.opt("dsh") != null ? "有" : "没有") + "\n";
+        } catch (Throwable t) {
+            return "实体的 package.json 解析失败 —— 内容不完整\n";
+        }
+    }
+
     private String verifyNote(String name) {
         try {
             if (isInProfileManifest(name)) return "";
@@ -3062,8 +3129,9 @@ class PluginController {
             return "";      // 查不了就别冤枉安装结果
         }
         return "\n\n⚠ 但它没有出现在已装列表里 —— 命令报了成功，实际没注册上。\n"
+                + entityDiag(name)
                 + "常见原因：装到的不是插件本体（比如 monorepo 的仓库根）、入口文件缺失"
-                + "（源码需要先编译）、或者包名与实际注册名不一致。";
+                + "（源码需要先编译）、包名与实际注册名不一致，或者上次安装中断留下了残缺实体。";
     }
 
     /** 这个名字现在是否真的算「已装」（在 bundles 里，或包里声明了 dsh 字段）。 */
