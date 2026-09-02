@@ -635,8 +635,9 @@ public final class HttpShellService {
             HarnessController hc = HarnessController.get(ctx);
             if (hc != null && hc.getProot() != null && hc.getProot().getRootfsDir() != null) {
                 java.io.File lf = new java.io.File(hc.getProot().getRootfsDir(), "root/.dsh/.auth_lease");
-                if (lf.exists()) {
-                    String s = FileCopy.readString(lf).trim();
+                if (lf.isFile()) {
+                    byte[] b = java.nio.file.Files.readAllBytes(lf.toPath());
+                    String s = new String(b, java.nio.charset.StandardCharsets.UTF_8).trim();
                     if (!s.isEmpty()) {
                         long expSec = Long.parseLong(s);
                         if (expSec * 1000L > System.currentTimeMillis()) {
@@ -659,7 +660,8 @@ public final class HttpShellService {
                 if (!dshDir.exists()) dshDir.mkdirs();
                 java.io.File lf = new java.io.File(dshDir, ".auth_lease");
                 long expSec = untilMs / 1000L;
-                FileCopy.writeString(lf, String.valueOf(expSec));
+                byte[] b = String.valueOf(expSec).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                java.nio.file.Files.write(lf.toPath(), b);
             }
         } catch (Throwable ignored) {}
     }
