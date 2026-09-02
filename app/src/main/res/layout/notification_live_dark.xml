@@ -38,8 +38,8 @@
             android:scaleType="fitCenter" />
     </RelativeLayout>
 
-    <!-- 中间细分割线 -->
-    <View
+    <!-- 中间细分割线 (RemoteViews 必须使用 ImageView 或 FrameLayout 代替 View) -->
+    <ImageView
         android:id="@+id/notif_divider"
         android:layout_width="match_parent"
         android:layout_height="1dp"

@@ -1520,8 +1520,9 @@ public final class HttpShellService {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         PendingIntent denyPi = PendingIntent.getBroadcast(ctx, 32, denyI,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification n = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
+        NotificationCompat.Builder cb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                 .setSmallIcon(R.drawable.ic_launch)
+                .setSubText("大肥鱼")
                 .setContentTitle("⚠️ 安全确认")
                 .setContentText("模型试图执行：" + shortCmd)
                 .setStyle(new NotificationCompat.BigTextStyle()
@@ -1530,7 +1531,27 @@ public final class HttpShellService {
                 .addAction(0, "拒绝", denyPi)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setOngoing(true)
-                .build();
+                .setOnlyAlertOnce(true)
+                .setShowWhen(false)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setCategory(NotificationCompat.CATEGORY_STATUS);
+
+        try {
+            android.graphics.Bitmap whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
+            if (whaleBmp != null) cb.setLargeIcon(whaleBmp);
+        } catch (Throwable ignored) {}
+
+        android.os.Bundle cExtras = cb.getExtras();
+        if (cExtras != null) {
+            cExtras.putBoolean("android.requestPromotedOngoing", true);
+            cExtras.putString("android.shortCriticalText", "安全确认");
+        }
+        try {
+            java.lang.reflect.Method m = cb.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
+            m.invoke(cb, true);
+        } catch (Throwable ignored) {}
+
+        Notification n = cb.build();
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) nm.notify(CONFIRM_NOTIF_ID, n);
     }
@@ -1685,6 +1706,7 @@ public final class HttpShellService {
 
         NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                 .setSmallIcon(R.drawable.ic_launch)
+                .setSubText("大肥鱼")
                 .setContentTitle("💬 助手提问")
                 .setContentText(safeDisplay(shortQ))
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(safeDisplay(q)))
@@ -1696,6 +1718,11 @@ public final class HttpShellService {
                 .setShowWhen(false)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setCategory(NotificationCompat.CATEGORY_STATUS);
+
+        try {
+            android.graphics.Bitmap whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
+            if (whaleBmp != null) nb.setLargeIcon(whaleBmp);
+        } catch (Throwable ignored) {}
 
         // Android 16 (API 36 / 澎湃 OS 焦点通知) 状态栏实时更新胶囊 (Promoted Ongoing Notification)
         android.os.Bundle askExtras = nb.getExtras();
