@@ -201,10 +201,6 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
-                R.drawable.ic_launch, "💬 重新开始", actionPi)
-                .build();
-
-        NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
                 R.drawable.ic_alarm_white, "💬 重新开始", actionPi)
                 .build();
 

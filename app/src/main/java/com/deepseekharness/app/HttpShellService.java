@@ -557,10 +557,6 @@ public final class HttpShellService {
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                 PendingIntent actionPi = PendingIntent.getActivity(ctx, 25, actionIntent,
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-                NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
-                        R.drawable.ic_launch, "💬 继续对话", actionPi)
-                        .build();
-
                 String statusLabel = "任务完成";
                 String btnText = "继续对话";
                 if (title.contains("失败") || title.contains("中断") || title.contains("异常") || title.contains("终止") || title.contains("挂起")) {
@@ -1669,10 +1665,6 @@ public final class HttpShellService {
                     .setAction(ConfirmReceiver.ACTION_STOP_TASK);
             PendingIntent stopPi = PendingIntent.getBroadcast(ctx, 111, stopIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
-            NotificationCompat.Action stopAction = new NotificationCompat.Action.Builder(
-                    R.drawable.ic_launch, "🛑 停止任务", stopPi)
-                    .build();
 
             String shortMsg = (text == null || text.trim().isEmpty()) ? "智能体正在执行自动化任务..." : shortText(text);
 

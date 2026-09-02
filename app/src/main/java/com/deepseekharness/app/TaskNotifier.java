@@ -104,10 +104,6 @@ public class TaskNotifier {
         PendingIntent actionPi = PendingIntent.getActivity(ctx, 26, actionIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
-                R.drawable.ic_launch, "💬 继续对话", actionPi)
-                .build();
-
-        NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
                 R.drawable.ic_alarm_white, "💬 继续对话", actionPi)
                 .build();
 
