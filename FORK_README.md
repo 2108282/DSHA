@@ -37,6 +37,11 @@
 - **3081 局域网代理扩容**：`LanProxyService` 提升 Chunk 上限至 32MB 并补齐结尾 CRLF，解决加载大插件卡死；
 - **资产自愈补齐**：`HarnessController` 补齐 `dsha-task-notifier-installed` marker 扫描与清理，覆盖安装自动刷新容器内部插件。
 
+### 5. 原生接入 Android 16 (API 36 / 澎湃 OS) 状态栏灵动胶囊 / 焦点通知 (Live Updates)
+- **非 Root 官方正规接入**：声明 `POST_PROMOTED_NOTIFICATIONS` 权限，并在运行中通知与助手提问中开启 `android.requestPromotedOngoing` 与 `android.shortCriticalText` 紧凑文本；
+- **免开悬浮通知权限**：在小米澎湃 OS、ColorOS 等高版本定制系统上，系统自动将其提拔为**屏幕顶部挖孔旁的实时状态栏小胶囊（Pill Chip）**，无需用户手动开启容易被拦截的“悬浮通知大横幅”权限；
+- **全版本自适应降级**：在 Android 8.0 ~ 15 老系统上自动保持经典标准通知栏卡片，零报错、零崩溃。
+
 ---
 
 # Fork 改动备忘（2108282/DSHA）底座1.1.9.1

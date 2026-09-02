@@ -1565,7 +1565,24 @@ public final class HttpShellService {
                     .setContentIntent(contentPi)
                     .addAction(stopAction)
                     .setOngoing(true)
+                    .setOnlyAlertOnce(true)
+                    .setShowWhen(false)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setCategory(NotificationCompat.CATEGORY_STATUS)
                     .setPriority(NotificationCompat.PRIORITY_HIGH);
+
+            // Android 16 (API 36 / 澎湃 OS 焦点通知) 状态栏实时更新胶囊 (Promoted Ongoing Notification)
+            android.os.Bundle extras = nb.getExtras();
+            if (extras != null) {
+                extras.putBoolean("android.requestPromotedOngoing", true);
+                if (shortMsg != null && !shortMsg.isEmpty()) {
+                    extras.putString("android.shortCriticalText", safeDisplay(shortMsg));
+                }
+            }
+            try {
+                java.lang.reflect.Method m = nb.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
+                m.invoke(nb, true);
+            } catch (Throwable ignored) {}
 
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
@@ -1596,7 +1613,22 @@ public final class HttpShellService {
                 .setContentIntent(contentPi)
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setOngoing(true);
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setShowWhen(false)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setCategory(NotificationCompat.CATEGORY_STATUS);
+
+        // Android 16 (API 36 / 澎湃 OS 焦点通知) 状态栏实时更新胶囊 (Promoted Ongoing Notification)
+        android.os.Bundle askExtras = nb.getExtras();
+        if (askExtras != null) {
+            askExtras.putBoolean("android.requestPromotedOngoing", true);
+            askExtras.putString("android.shortCriticalText", "等待回答");
+        }
+        try {
+            java.lang.reflect.Method m = nb.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
+            m.invoke(nb, true);
+        } catch (Throwable ignored) {}
 
         for (int i = 0; i < opts.length; i++) {
             String opt = opts[i];
