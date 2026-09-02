@@ -5720,8 +5720,25 @@ public class HarnessController {
 
             step(progress, "复核账号数…");
             int after = DeviceOwner.parseAccountCount(adbInternal(DeviceOwner.accountProbeCmd(), 300));
+            if (after >= 0 && after >= before) {
+                // 冻结没让账号数下降 —— dpm 必然被同一条 enforceCanSetDeviceOwnerLocked 拒掉。
+                // 而失败的 set-device-owner 会在系统里留下 active admin，比不试更难收拾，
+                // 所以到此为止，不去白跑那一下。
+                return "这条路在这台机器上走不通，已经停在跑 dpm 之前（没有留下任何管理员记录）。\n\n"
+                        + "冻结前 " + before + " 个账号，冻结后 " + after + " 个 —— 一个都没少。\n\n"
+                        + "原因是我这套自动冻结的前提错了：`pm disable-user` 只是停用应用，"
+                        + "并不会移除它在系统 AccountManager 里注册的账号。应用停了，账号记录照样在。\n\n"
+                        + "剩下两条路，都不太现实：\n"
+                        + "· 在「设置 → 账号」里把账号一个个真删掉 —— 你这 " + before + " 个里大部分是"
+                        + "应用注册的，设置里往往看不到、也删不掉；\n"
+                        + "· 恢复出厂设置，在添加任何账号之前先激活。\n\n"
+                        + "建议放弃这一层。现有的保活（前台服务常驻 + 电池白名单 + ADB 分层重连 + WakeLock）"
+                        + "在多数机器上已经能撑住长任务，DeviceOwner 多给的只是「连一键清理都杀不掉」，"
+                        + "边际收益不值得为它恢复出厂。\n\n"
+                        + "刚才冻结的应用正在恢复。";
+            }
             step(progress, "正在激活设备所有者…");
-            String out = adbInternal(DeviceOwner.activateCmd(), 20);
+            String out = adbInternal(DeviceOwner.activateCmd(), 40);
 
             if (isDeviceOwner()) {
                 prefs.edit().putBoolean(K_DO_AUTO_TRIED, true).apply();
@@ -5758,7 +5775,14 @@ public class HarnessController {
                 }
             }
             try {
-                if (rec.isFile()) rec.delete();
+                if (okCount == frozen.size() && rec.isFile()) {
+                    rec.delete();
+                } else if (!frozen.isEmpty()) {
+                    // 没全解冻就把记录留着 —— 下次启动的 thawLeftovers 会继续试。
+                    // 宁可多试几轮，也不能把「还有应用停用着」这件事随记录一起删掉。
+                    logActivity("有 " + (frozen.size() - okCount) + " 个应用没恢复，"
+                            + "记录留着，下次启动继续试");
+                }
             } catch (Throwable ignored) {
             }
             if (!frozen.isEmpty()) {
@@ -5813,13 +5837,56 @@ public class HarnessController {
     }
 
     /**
+     * 当前处于「停用」状态的应用清单，给用户核对用。
+     *
+     * <p>只读，刻意不自动去启用 —— 这个列表里也有用户自己主动禁用的系统应用（预装广告、
+     * 用不上的服务），替他一把全开回来是越界。真正该自动恢复的是我们冻过的那些，
+     * 那份有记录、由 {@link #thawLeftovers()} 负责。
+     */
+    public String disabledPackages() {
+        try {
+            String out = adbInternal("pm list packages -d", 80);
+            if (out == null || out.trim().isEmpty()) {
+                return "读不到（先确认 ADB 通道是通的）。";
+            }
+            java.util.List<String> pkgs = new java.util.ArrayList<>();
+            for (String line : out.split("\r?\n")) {
+                String t = line.trim();
+                if (t.startsWith("package:")) pkgs.add(t.substring("package:".length()));
+            }
+            if (pkgs.isEmpty()) return "当前没有处于停用状态的应用 —— 都恢复好了。";
+            StringBuilder sb = new StringBuilder("处于停用状态的应用（" + pkgs.size() + " 个）：\n\n");
+            for (int i = 0; i < pkgs.size() && i < 40; i++) {
+                sb.append("  ").append(pkgs.get(i)).append('\n');
+            }
+            if (pkgs.size() > 40) sb.append("  … 还有 ").append(pkgs.size() - 40).append(" 个\n");
+            sb.append("\n这里面可能有你自己以前禁用过的应用，所以我不替你一键全开。"
+                    + "如果认出刚才被临时冻结的，可以在系统设置里启用，"
+                    + "或者告诉我包名我单独恢复。");
+            return sb.toString();
+        } catch (Throwable t) {
+            return "查询失败：" + t.getClass().getSimpleName();
+        }
+    }
+
+    /**
      * 撤销。
      *
      * <p>这个入口是必须的 —— 上游 Dhizuku 最常见的求助就是「找不到怎么关，只能恢复出厂」。
      * clearDeviceOwnerApp 不需要 adb，所以即使 ADB 通道坏了也撤得掉。
      */
     public String clearDeviceOwnerNow() {
-        if (!isDeviceOwner()) return "当前不是设备所有者，无需撤销。";
+        if (!isDeviceOwner()) {
+            // 不是 owner 也可能留着一个 active admin —— 失败的 set-device-owner 会先把 admin 设上
+            // 再去检查账号，检查不过就撂在那儿了（上游那句 "was already an admin for user 0"
+            // 就是这么来的）。留着它会给卸载应用多添一道阻碍，顺手清掉。
+            String r = adbInternal("dpm remove-active-admin --user 0 " + DeviceOwner.RECEIVER, 6);
+            boolean removed = r != null && r.toLowerCase().contains("success");
+            if (removed) logActivity("清掉了激活失败留下的设备管理员记录");
+            return removed
+                    ? "当前不是设备所有者。顺便清掉了之前激活失败留下的设备管理员记录。"
+                    : "当前不是设备所有者，无需撤销。";
+        }
         try {
             android.app.admin.DevicePolicyManager dpm =
                     (android.app.admin.DevicePolicyManager)

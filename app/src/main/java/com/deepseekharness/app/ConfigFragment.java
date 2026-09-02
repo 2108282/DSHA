@@ -454,11 +454,30 @@ public class ConfigFragment extends Fragment {
                         .setTitle("设备所有者")
                         .setMessage(r)
                         .setPositiveButton("好", null)
+                        .setNeutralButton("查看停用的应用", (d2, w2) -> showDisabledPackages())
                         .show();
                 View v = getView();
                 if (v != null) refreshDeviceOwnerStatus(v);
             });
         }, "dsha-freeze-thaw").start();
+    }
+
+    /** 列出停用状态的应用。冻结流程跑完，用户最想确认的就是「我的应用都回来了吗」。 */
+    private void showDisabledPackages() {
+        final HarnessController c = HarnessController.get(requireContext());
+        Toast.makeText(requireContext(), "正在查询…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            final String r = c.disabledPackages();
+            if (!isAdded()) return;
+            requireActivity().runOnUiThread(() -> {
+                if (!isAdded()) return;
+                new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                        .setTitle("停用状态的应用")
+                        .setMessage(r)
+                        .setPositiveButton("好", null)
+                        .show();
+            });
+        }, "dsha-disabled-pkgs").start();
     }
 
     /** 激活要跑 adb（几秒），撤销是系统调用 —— 都别在主线程做。 */
