@@ -1360,11 +1360,11 @@ public class HarnessController {
         try {
             if (dstPkg.isFile() && srcPkg.isFile()) {
                 String a = readVersionOf(dstPkg), b = readVersionOf(srcPkg);
-                // 版本相同还不够，得确认文件数也一样。dsh-web-mobile 2.3.0 的 lib/index.js
-                // 会 import 同目录的 compress.js —— 只要少写一个文件，dsh 启动就会
-                // ERR_MODULE_NOT_FOUND 把整棵 plugin tree 拖崩，而 package.json 与
-                // version 看起来完全正常，幂等检查就这么把残缺实体放过去了。
-                if (!a.isEmpty() && a.equals(b) && countFiles(dst) >= countFiles(src)) return true;
+                // 基准取 assets，不取实体。实体本身也可能是残缺的（它同样是复制出来的），
+                // 两边都缺时 countFiles(dst) >= countFiles(src) 照样成立，于是又一次放过。
+                // assets 是唯一权威来源，只有它说得清「应该有几个文件」。
+                int want = countAssetTree(builtinAssetDir(name));
+                if (!a.isEmpty() && a.equals(b) && want > 0 && countFiles(dst) >= want) return true;
             }
         } catch (Throwable ignored) {
         }
@@ -1374,8 +1374,12 @@ public class HarnessController {
             if (srcPkg.isFile()) {
                 purgeForPlace(dst);
                 copyForPlace(src, dst);
-                if (dstPkg.isFile()) return true;
-                tried.append("A(复制后 package.json 不在) ");
+                // 同样以 assets 的文件数为准：实体残缺的话，从它复制出来的也是残缺的，
+                // 这时候必须让 A 路失败、落到下面 B 路直接从 assets 写。
+                int wantA = countAssetTree(builtinAssetDir(name));
+                if (dstPkg.isFile() && (wantA <= 0 || countFiles(dst) >= wantA)) return true;
+                tried.append("A(复制后 ").append(countFiles(dst)).append("/").append(wantA)
+                        .append(" 个文件，实体本身可能就是残缺的) ");
             } else {
                 tried.append("A(实体缺 package.json) ");
             }
