@@ -580,7 +580,7 @@ public final class HttpShellService {
                         .setTimeoutAfter(120_000L)
                         .setAutoCancel(true);
 
-                attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText, actionPi, null, null, false);
+                attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText, actionPi, false);
 
                 nm.notify(Constants.NOTIF_TASK, b.build());
             }
@@ -1640,7 +1640,7 @@ public final class HttpShellService {
         return new AuthPromptInfo(fallbackTitle, s, "等待回答", "等待回答", btn0, btn1);
     }
 
-    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat) {
+    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, boolean enableFloat) {
         b.setSubText("大肥鱼");
         b.setOnlyAlertOnce(true);
         b.setShowWhen(false);
@@ -1719,32 +1719,6 @@ public final class HttpShellService {
             org.json.JSONObject baseInfo = new org.json.JSONObject();
             baseInfo.put("type", 2);
             baseInfo.put("title", title != null ? title : "DSHA");
-
-            // 双按钮与动作列表注入 baseInfo.actions
-            org.json.JSONArray actionsArr = new org.json.JSONArray();
-            if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
-                org.json.JSONObject a1 = new org.json.JSONObject();
-                a1.put("action", "miui.focus.action_1");
-                a1.put("actionTitle", actionTitle);
-                a1.put("actionIcon", "miui.focus.pic_action");
-                a1.put("actionIconDark", "miui.focus.pic_action");
-                a1.put("actionIntentType", 2);
-                actionsArr.put(a1);
-            }
-
-            if (secondaryActionPi != null && secondaryActionTitle != null && !secondaryActionTitle.isEmpty()) {
-                org.json.JSONObject a2 = new org.json.JSONObject();
-                a2.put("action", "miui.focus.action_2");
-                a2.put("actionTitle", secondaryActionTitle);
-                a2.put("actionIcon", "miui.focus.pic_action");
-                a2.put("actionIconDark", "miui.focus.pic_action");
-                a2.put("actionIntentType", 2);
-                actionsArr.put(a2);
-            }
-
-            if (actionsArr.length() > 0) {
-                baseInfo.put("actions", actionsArr);
-            }
             paramV2.put("baseInfo", baseInfo);
 
             org.json.JSONObject hintInfo = new org.json.JSONObject();
@@ -1754,7 +1728,7 @@ public final class HttpShellService {
             hintInfo.put("colorContent", "#58A6FF");
             hintInfo.put("colorContentDark", "#58A6FF");
 
-            // 单按钮保底在 hintInfo.actionInfo（复刻系统日程原生标准药丸按钮）
+            // 单按钮配置在 hintInfo.actionInfo（复刻系统日程原生标准单药丸按钮）
             if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
                 org.json.JSONObject actionInfo = new org.json.JSONObject();
                 actionInfo.put("action", "miui.focus.action_1");
@@ -1795,12 +1769,6 @@ public final class HttpShellService {
                         android.app.Notification.Action a1 = new android.app.Notification.Action.Builder(
                                 alarmIcon, actionTitle, primaryActionPi).build();
                         actionBundle.putParcelable("miui.focus.action_1", a1);
-
-                        if (secondaryActionPi != null && secondaryActionTitle != null) {
-                            android.app.Notification.Action a2 = new android.app.Notification.Action.Builder(
-                                    alarmIcon, secondaryActionTitle, secondaryActionPi).build();
-                            actionBundle.putParcelable("miui.focus.action_2", a2);
-                        }
                         extras.putBundle("miui.focus.actions", actionBundle);
                     }
                 }
@@ -1882,7 +1850,7 @@ public final class HttpShellService {
                     .addAction(stopAction)
                     .setOngoing(true);
 
-            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, null, null, false);
+            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, false);
 
             if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());
         } catch (Throwable ignored) {}
