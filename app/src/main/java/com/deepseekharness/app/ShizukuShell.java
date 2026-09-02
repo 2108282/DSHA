@@ -29,6 +29,7 @@ public final class ShizukuShell {
     private static volatile Context appCtx;
     private static volatile IShellService shellService;
     private static volatile boolean binding = false;
+    private static volatile long bindingStartedAt = 0L;
     private static volatile boolean binderListenerAttached = false;
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
     private static volatile long lastRetryAt = 0L;
@@ -120,19 +121,22 @@ public final class ShizukuShell {
     public static void ensureBound(Context ctx) {
         init(ctx);
         attachBinderListener();
-        if (binding || shellService != null) return;
+        long now = System.currentTimeMillis();
+        if ((binding && now - bindingStartedAt < 6000L) || shellService != null) return;
         if (appCtx == null) return;
         if (!hasPermission()) {
             Log.w(TAG, "ensureBound skip: no Shizuku permission yet");
             return;
         }
         binding = true;
+        bindingStartedAt = now;
         try {
             Shizuku.UserServiceArgs args = new Shizuku.UserServiceArgs(
-                    new ComponentName(appCtx, ShellService.class))
+                    new ComponentName(BuildConfig.APPLICATION_ID, ShellService.class.getName()))
                     .daemon(false)
                     .processNameSuffix("shizuku")
-                    .version(1);
+                    .debuggable(BuildConfig.DEBUG)
+                    .version(BuildConfig.VERSION_CODE);
             Shizuku.bindUserService(args, new ServiceConnection() {
                 @Override
                 public void onServiceConnected(ComponentName name, IBinder binder) {
