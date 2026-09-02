@@ -4806,6 +4806,7 @@ public class HarnessController {
         // 点下去立刻给反馈。下面的活都排在单线程 IO 队列里，前面可能还有别的任务，
         // 而用户此刻只想知道「按钮生效了」—— 真机体感「点了三秒没反应」就是这里空着。
         setProgress("正在启动 Web UI", 0);
+        repairProrootDowngradeOnce();
         maybeHealSessionCorruption();
         synchronized (webStartLock) {
             if (webProcess != null && webProcess.isAlive()) {
@@ -4953,10 +4954,33 @@ public class HarnessController {
                             ensureBuiltinPluginsAfterProfileReady();
                         } else {
                             // 超时：释放 busy（否则一直卡灰，靠 10 分钟自愈太慢）
-                            boolean forced = proot.noteProrootFailure("Web 启动超时（60s 端口未就绪）");
+                            //
+                            // 端口没起来**不等于 proroot 不行**。超时的根因绝大多数跟容器运行时
+                            // 无关：profile 装不起来（#46 那个 semver）、key 没填、插件报错卡住
+                            // 加载、磁盘满、首次装依赖被网络拖住 —— 换成 proot 同样起不来，
+                            // 但用户从此背上慢容器，而且真正的毛病一点没修。
+                            // 所以先问一句「容器本身还能执行命令吗」：能，就说明 proroot 是好的，
+                            // 这笔账不该记在它头上。
+                            boolean containerOk;
+                            try {
+                                String probe = proot.execAndRead("echo DSHA_RT_OK", 8_000);
+                                containerOk = probe != null && probe.contains("DSHA_RT_OK");
+                            } catch (Throwable t) {
+                                containerOk = false;
+                            }
+                            boolean forced = false;
+                            if (!containerOk) {
+                                forced = proot.noteProrootFailure(
+                                        "Web 启动超时（60s）且容器无法执行命令");
+                            } else {
+                                logActivity("Web 启动超时，但容器能正常执行命令 —— "
+                                        + "不计入 proroot 失败（根因在 dsh 侧，查启动页日志尾部）");
+                            }
                             setState("", 0, "", "Web UI 启动超时（60s 端口未就绪）\n"
                                     + (forced
                                     ? "proroot 连续失败已达上限，已自动切回 proot —— 再点一次「重启」"
+                                    : containerOk
+                                    ? "容器本身是正常的，问题出在 dsh 启动阶段 —— 查看启动页日志尾部"
                                     : "可稍后点「重启」，或查看启动页日志尾部"), false);
                         }
                     } catch (Throwable ignored) {
@@ -5379,6 +5403,31 @@ public class HarnessController {
         }, "dsha-io-later");
         t.setDaemon(true);
         t.start();
+    }
+
+    /** 一次性修正：把被旧逻辑误切到 proot 的用户切回 proroot。
+     *
+     *  <p>旧版本把「Web 60 秒端口未就绪」直接记成 proroot 的失败，连续 3 次就永久切到
+     *  proot。但超时的根因绝大多数跟容器运行时无关 —— profile 装不起来（#46 的 semver）、
+     *  key 没填、插件报错卡住加载、磁盘满、首次装依赖被网络拖住 —— 换成 proot 同样起不来，
+     *  于是用户白背一个慢 5~6 倍的运行时，真正的毛病一点没修。
+     *
+     *  <p>判据用「上次降级的原因里带『超时』」：那是旧逻辑的措辞。运行时探针
+     *  （checkRuntimeHealthAndHeal）判定的确定性不兼容不会长这样，那种降级是对的，不动。
+     *  手动在设置页选 proot 的用户也不会有这个原因，不会被覆盖。 */
+    private void repairProrootDowngradeOnce() {
+        try {
+            if (prefs.getBoolean("proroot_downgrade_repaired", false)) return;
+            prefs.edit().putBoolean("proroot_downgrade_repaired", true).apply();
+            if (!"proot".equals(prefs.getString("container_runtime", "proroot"))) return;
+            String why = prefs.getString("proroot_last_error", "");
+            if (!why.contains("超时")) return;
+            prefs.edit().putString("container_runtime", "proroot")
+                    .putInt("proroot_fail_streak", 0).apply();
+            logActivity("已把容器运行时切回 proroot：上次降级的原因是「" + why
+                    + "」，而 Web 启动超时通常不是 proroot 的问题（旧版本会误判）");
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 运行文件与守卫这三步（ensureRuntimeFiles / ensureDangerGuard / ensureBashGuardPatch）
