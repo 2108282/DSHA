@@ -1033,6 +1033,64 @@ public final class PureLogicTest {
         ok("isDangerous 放行：echo 'a' 'b'（正常的两个带引号参数）",
                 !DangerShellGuard.isDangerous("echo 'a' 'b'"));
 
+        // ===== DeviceOwner：预检判据与 dpm 输出解析 =====
+        // 这批断言的意义在于「宁可不激活，也不要贸然跑 set-device-owner」——
+        // 那条命令失败一次会在系统里留下 active admin，之后更难收拾，
+        // 所以解析拿不到数字时必须判成「不能激活」，不能当作通过。
+        eqi("DO: 账号数 0", 0, DeviceOwner.parseAccountCount(
+                "User UserInfo{0:User:4c13}:\n  Accounts: 0\n  Active Sessions: 0"));
+        eqi("DO: 账号数 2", 2, DeviceOwner.parseAccountCount(
+                "User UserInfo{0:User:4c13}:\n  Accounts: 2\n"));
+        eqi("DO: 多用户段落相加", 3, DeviceOwner.parseAccountCount(
+                "User UserInfo{0:a}:\n  Accounts: 1\nUser UserInfo{999:b}:\n  Accounts: 2\n"));
+        eqi("DO: 「Accounts: 2 (…)」只取数字", 2,
+                DeviceOwner.parseAccountCount("  Accounts: 2 (stale)\n"));
+        eqi("DO: 读不到账号数返回 -1", -1, DeviceOwner.parseAccountCount(""));
+        eqi("DO: 输出里没有 Accounts 行也是 -1", -1,
+                DeviceOwner.parseAccountCount("some unrelated dump\n"));
+
+        eqi("DO: 只有主用户", 1, DeviceOwner.parseUserCount(
+                "Users:\n\tUserInfo{0:Owner:c13} running"));
+        eqi("DO: 有分身用户", 2, DeviceOwner.parseUserCount(
+                "Users:\n\tUserInfo{0:Owner:c13} running\n\tUserInfo{999:XSpace:801010} running"));
+        eqi("DO: 读不到用户列表返回 -1", -1, DeviceOwner.parseUserCount("Users:\n"));
+
+        DeviceOwner.Precheck pk = DeviceOwner.precheck("  Accounts: 0\n",
+                "Users:\n\tUserInfo{0:Owner:c13} running");
+        ok("DO: 账号 0 + 单用户 → 可以激活", pk.ok);
+        ok("DO: 通过时也要提醒「装了就不能直接卸载」", pk.advice.contains("卸载"));
+
+        DeviceOwner.Precheck pk2 = DeviceOwner.precheck("  Accounts: 3\n",
+                "Users:\n\tUserInfo{0:Owner:c13} running");
+        ok("DO: 有账号 → 拦住", !pk2.ok);
+        ok("DO: 有账号时说清「删完可能还得冻结应用并重启」",
+                pk2.advice.contains("冻结") && pk2.advice.contains("重启"));
+
+        DeviceOwner.Precheck pk3 = DeviceOwner.precheck("  Accounts: 0\n",
+                "Users:\n\tUserInfo{0:a} running\n\tUserInfo{999:b} running");
+        ok("DO: 有多余用户 → 拦住", !pk3.ok);
+
+        DeviceOwner.Precheck pk4 = DeviceOwner.precheck("", "Users:\n\tUserInfo{0:a}");
+        ok("DO: 账号数读不到 → 判成不能激活（不赌）", !pk4.ok);
+
+        ok("DO: 激活命令带 --user 0（绕开「还有其他用户」那道拒绝）",
+                DeviceOwner.activateCmd().contains("--user 0"));
+        ok("DO: 激活命令指向我们的 receiver",
+                DeviceOwner.activateCmd().endsWith("com.deepseekharness.app/.DshaDeviceAdminReceiver"));
+
+        ok("DO: 认得出成功", DeviceOwner.looksActivated(
+                "Success: Active admin and device owner set to com.deepseekharness.app/.DshaDeviceAdminReceiver for user 0"));
+        ok("DO: 不把失败当成功", !DeviceOwner.looksActivated(
+                "java.lang.IllegalStateException: Not allowed to set the device owner"));
+        ok("DO: 账号原因翻成人话",
+                DeviceOwner.explainFailure("... Not allowed to set the device owner because there are already some accounts on the device.")
+                        .contains("dumpsys account list"));
+        ok("DO: 厂商签名限制说明白没有软办法",
+                DeviceOwner.explainFailure("java.lang.RuntimeException: Can't set package ComponentInfo{...} as device owner.")
+                        .contains("没有软办法"));
+        ok("DO: 空输出提示先查 ADB 通道",
+                DeviceOwner.explainFailure("").contains("ADB"));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"
