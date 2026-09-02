@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 配置页。分组原则：按「用户找东西时怎么想」排，不按代码演进顺序堆。
+     · 需要按「保存配置」才生效的项全部排在保存按钮**之前**；按钮之后只放即时生效的操作，
+       这样不会再有「ADB 那些设置改完要不要保存」的困惑。
+     · 开关标签只留短名字，解释下沉成小字副标题 —— 原先每条都是「名称（一长串括号说明）」，
+       在手机窄屏上每行折成两三行，扫读时就是一堵字墙。 -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -9,87 +14,91 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingStart="@dimen/page_pad"
-        android:paddingTop="@dimen/gap_control"
-        android:paddingEnd="@dimen/page_pad"
-        android:paddingBottom="@dimen/gap_section">
+        android:padding="@dimen/page_pad">
 
         <TextView
             android:id="@+id/sub_back"
-            style="@style/DshaText.Label"
+            style="@style/DshaText.Body"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:paddingBottom="@dimen/gap_tight"
-            android:text="‹ 返回"
-            android:visibility="gone" />
+            android:minHeight="@dimen/touch_min"
+            android:gravity="center_vertical"
+            android:clickable="true"
+            android:focusable="true"
+            android:text="‹ 返回" />
 
         <TextView
             style="@style/DshaText.Display"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="@dimen/gap_tight"
             android:text="配置" />
 
-        <TextView
-            android:id="@+id/config_workspace_entry"
-            style="@style/DshaText.Body"
-            android:layout_width="match_parent"
-            android:layout_height="@dimen/btn_height"
-            android:layout_marginTop="@dimen/gap_control"
-            android:background="@drawable/bg_btn"
-            android:gravity="center"
-            android:text="📁 工作区 · 备份/恢复 · 环境管理" />
+            <TextView
+                android:id="@+id/config_workspace_entry"
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/touch_min"
+                android:background="@drawable/bg_chip_clickable"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:paddingStart="@dimen/gap_tight"
+                android:paddingEnd="@dimen/gap_tight"
+                android:text="📁 工作区 · 备份/恢复 · 环境管理" />
 
-        <!-- ========== 接入 ========== -->
+        <TextView
+            style="@style/DshaText.Title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_section"
+            android:text="连接" />
+        <TextView
+            style="@style/DshaText.Caption"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_hair"
+            android:layout_marginBottom="@dimen/gap_tight"
+            android:textColor="@color/text_secondary"
+            android:text="改完这一节要按下面的「保存配置」" />
+
         <LinearLayout
             style="@style/DshaCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_section">
-
-            <TextView
-                style="@style/DshaText.Title"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="API Key" />
+            android:orientation="vertical">
 
             <TextView
                 style="@style/DshaText.Label"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_control"
-                android:text="DeepSeek API Key" />
-
-            <TextView
-                style="@style/DshaText.Caption"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_hair"
-                android:text="可留空 —— 装好后在 WebUI 的设置里也能配置官方或第三方 API（自定义接口地址与模型）" />
-
+                android:layout_marginTop="@dimen/gap_tight"
+                android:text="DeepSeek API Key" />
             <EditText
                 android:id="@+id/config_api_key"
-                style="@style/DshaText.Body"
                 android:layout_width="match_parent"
                 android:layout_height="@dimen/input_height"
-                android:layout_marginTop="@dimen/gap_tight"
+                android:layout_marginTop="@dimen/gap_hair"
                 android:background="@drawable/bg_input"
-                android:hint="sk-..."
-                android:importantForAutofill="no"
-                android:inputType="textPassword"
-                android:paddingStart="@dimen/gap_control"
-                android:paddingEnd="@dimen/gap_control" />
+                android:paddingStart="@dimen/gap_tight"
+                android:paddingEnd="@dimen/gap_tight"
+                android:textSize="@dimen/text_body"
+                android:inputType="textNoSuggestions"
+                android:hint="sk-..." />
 
-            <!-- 高级项默认收起：端口几乎没人改、模型在 WebUI 里也能配、
-                 沙箱模式是高级概念。全铺在首屏只会让必填的 API Key 被淹没。 -->
             <TextView
                 android:id="@+id/config_adv_header"
-                style="@style/DshaText.Label"
+                style="@style/DshaText.Body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_control"
-                android:background="?attr/selectableItemBackground"
-                android:paddingTop="@dimen/gap_tight"
-                android:paddingBottom="@dimen/gap_tight"
+                android:minHeight="@dimen/touch_min"
+                android:background="@drawable/bg_chip_clickable"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:paddingStart="@dimen/gap_tight"
+                android:paddingEnd="@dimen/gap_tight"
                 android:text="▸ 高级：端口" />
 
             <LinearLayout
@@ -99,60 +108,65 @@
                 android:orientation="vertical"
                 android:visibility="gone">
 
-                <TextView
-                    style="@style/DshaText.Label"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/gap_tight"
-                    android:text="端口" />
-
-                <EditText
-                    android:id="@+id/config_port"
-                    style="@style/DshaText.Body"
-                    android:layout_width="match_parent"
-                    android:layout_height="@dimen/input_height"
-                    android:layout_marginTop="@dimen/gap_tight"
-                    android:background="@drawable/bg_input"
-                    android:hint="3080"
-                    android:importantForAutofill="no"
-                    android:inputType="number"
-                    android:paddingStart="@dimen/gap_control"
-                    android:paddingEnd="@dimen/gap_control" />
+            <TextView
+                style="@style/DshaText.Label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/gap_tight"
+                android:text="WebUI 端口" />
+            <EditText
+                android:id="@+id/config_port"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/input_height"
+                android:layout_marginTop="@dimen/gap_hair"
+                android:background="@drawable/bg_input"
+                android:paddingStart="@dimen/gap_tight"
+                android:paddingEnd="@dimen/gap_tight"
+                android:textSize="@dimen/text_body"
+                android:inputType="number"
+                android:hint="3080" />
 
             </LinearLayout>
+
         </LinearLayout>
 
-        <!-- ========== 行为 ========== -->
+        <TextView
+            style="@style/DshaText.Title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_section"
+            android:text="安全" />
+
         <LinearLayout
             style="@style/DshaCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_control">
-
-            <TextView
-                style="@style/DshaText.Title"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="行为" />
+            android:orientation="vertical">
 
             <CheckBox
                 android:id="@+id/config_confirm_shell"
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_tight"
                 android:minHeight="@dimen/touch_min"
-                android:paddingStart="@dimen/gap_tight"
-                android:text="危险 Shell 操作需确认（删除/格式化/卸载/重启等）" />
+                android:text="危险操作需要确认" />
+            <TextView
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/gap_control"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="删除、格式化、卸载、重启这类命令会先弹窗问你" />
 
             <TextView
                 android:id="@+id/config_guard_status"
                 style="@style/DshaText.Caption"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/gap_tight"
-                android:layout_marginTop="@dimen/gap_hair"
-                android:visibility="gone" />
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="" />
 
             <CheckBox
                 android:id="@+id/config_root_shell"
@@ -160,26 +174,15 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="@dimen/touch_min"
-                android:paddingStart="@dimen/gap_tight"
-                android:text="允许 root shell（agent 可用 --su 提权，默认关）" />
-
-            <CheckBox
-                android:id="@+id/config_check_update"
-                style="@style/DshaText.Body"
+                android:text="允许 root shell" />
+            <TextView
+                style="@style/DshaText.Caption"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minHeight="@dimen/touch_min"
-                android:paddingStart="@dimen/gap_tight"
-                android:text="启动时检查更新" />
-
-            <CheckBox
-                android:id="@+id/config_desktop_mode"
-                style="@style/DshaText.Body"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="@dimen/touch_min"
-                android:paddingStart="@dimen/gap_tight"
-                android:text="电脑模式（预览用桌面浏览器标识）" />
+                android:layout_marginStart="@dimen/gap_control"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="agent 可以用 --su 提权。默认关，开了等于把整台机器交出去" />
 
             <CheckBox
                 android:id="@+id/config_backup_key"
@@ -187,17 +190,62 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="@dimen/touch_min"
-                android:paddingStart="@dimen/gap_tight"
-                android:text="备份包含 API key（关掉更安全，恢复后需重填）" />
+                android:text="备份里包含 API Key" />
+            <TextView
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/gap_control"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="关掉更安全，代价是恢复到新设备后要重新填一次" />
 
             <CheckBox
-                android:id="@+id/config_gecko_core"
+                android:id="@+id/config_cap_location"
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="@dimen/touch_min"
-                android:paddingStart="@dimen/gap_tight"
-                android:text="内置浏览器内核（系统 WebView 过旧时再开，更吃内存）" />
+                android:text="允许读取位置" />
+            <TextView
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/gap_control"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="能定位到你本人，默认关闭" />
+
+            <CheckBox
+                android:id="@+id/config_cap_sensors"
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/touch_min"
+                android:text="允许读传感器、开手电" />
+            <TextView
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/gap_control"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="环境光 / 加速度 / 磁力这些，没有隐私风险" />
+
+        </LinearLayout>
+
+        <TextView
+            style="@style/DshaText.Title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_section"
+            android:text="运行时" />
+
+        <LinearLayout
+            style="@style/DshaCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
 
             <CheckBox
                 android:id="@+id/config_proroot"
@@ -205,17 +253,73 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="@dimen/touch_min"
-                android:paddingStart="@dimen/gap_tight"
-                android:text="proroot 运行时（默认开启，启动快 5~6 倍；关掉则用传统 proot）" />
+                android:text="proroot 运行时" />
+            <TextView
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/gap_control"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="默认开启，启动快 5~6 倍。关掉则退回传统 proot" />
 
             <CheckBox
-                android:id="@+id/config_lan_mode"
+                android:id="@+id/config_gecko_core"
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="@dimen/touch_min"
+                android:text="内置浏览器内核" />
+            <TextView
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/gap_control"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="系统 WebView 过旧时再开，更吃内存" />
+
+            <CheckBox
+                android:id="@+id/config_rc6"
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/touch_min"
+                android:text="deepseek-harness 用最新 RC" />
+
+            <TextView
+                style="@style/DshaText.Label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/gap_tight"
+                android:text="自动备份（每启动 N 次备份一次，0 = 关闭）" />
+            <EditText
+                android:id="@+id/config_auto_backup"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/input_height"
+                android:layout_marginTop="@dimen/gap_hair"
+                android:background="@drawable/bg_input"
                 android:paddingStart="@dimen/gap_tight"
-                android:text="局域网访问（同网段设备可打开，注意安全）" />
+                android:paddingEnd="@dimen/gap_tight"
+                android:textSize="@dimen/text_body"
+                android:inputType="number"
+                android:text="5"
+                android:hint="5" />
+
+        </LinearLayout>
+
+        <TextView
+            style="@style/DshaText.Title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_section"
+            android:text="显示与交互" />
+
+        <LinearLayout
+            style="@style/DshaCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
 
             <CheckBox
                 android:id="@+id/config_overlay_stream"
@@ -223,8 +327,15 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="@dimen/touch_min"
-                android:paddingStart="@dimen/gap_tight"
-                android:text="屏幕顶部流式显示 AI 输出（需悬浮窗权限；内容旁人可见）" />
+                android:text="屏幕顶部流式显示 AI 输出" />
+            <TextView
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/gap_control"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="需要悬浮窗权限。内容旁人看得见，注意场合" />
 
             <TextView
                 android:id="@+id/config_overlay_style"
@@ -238,66 +349,55 @@
                 android:gravity="center_vertical"
                 android:paddingStart="@dimen/gap_tight"
                 android:paddingEnd="@dimen/gap_tight"
-                android:text="悬浮条外观与行为 ▸ 底色 / 透明度 / 行数 / 停留时间 / 思考过程 / 就地批准" />
+                android:text="悬浮条外观与行为 ▸ 底色 / 透明度 / 行数 / 停留 / 思考过程 / 就地批准" />
 
-            <TextView
-                android:id="@+id/config_translate"
+            <CheckBox
+                android:id="@+id/config_desktop_mode"
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="@dimen/touch_min"
-                android:background="@drawable/bg_chip_clickable"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center_vertical"
-                android:paddingStart="@dimen/gap_tight"
-                android:paddingEnd="@dimen/gap_tight"
-                android:text="插件市场自动翻译 ▸ 开关 / 接口地址 / 模型 / Key" />
-
-            <CheckBox
-                android:id="@+id/config_cap_sensors"
-                style="@style/DshaText.Body"
+                android:text="电脑模式" />
+            <TextView
+                style="@style/DshaText.Caption"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="允许 agent 读传感器、开手电（环境光 / 加速度 / 磁力等，无隐私风险）" />
+                android:layout_marginStart="@dimen/gap_control"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="预览时用桌面浏览器标识" />
+
+        </LinearLayout>
+
+        <TextView
+            style="@style/DshaText.Title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_section"
+            android:text="网络" />
+
+        <LinearLayout
+            style="@style/DshaCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
 
             <CheckBox
-                android:id="@+id/config_cap_location"
-                style="@style/DshaText.Body"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="允许 agent 读取位置（能定位到你本人，默认关闭）" />
-
-            <CheckBox
-                android:id="@+id/config_rc6"
+                android:id="@+id/config_lan_mode"
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="@dimen/touch_min"
-                android:paddingStart="@dimen/gap_tight"
-                android:text="deepseek-harness：默认最新 RC"
-                android:visibility="gone" />
-
+                android:text="局域网访问" />
             <TextView
-                style="@style/DshaText.Label"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_control"
-                android:text="自动备份（每启动 N 次备份一次，0 = 关闭）" />
-
-            <EditText
-                android:id="@+id/config_auto_backup"
-                style="@style/DshaText.Body"
+                style="@style/DshaText.Caption"
                 android:layout_width="match_parent"
-                android:layout_height="@dimen/input_height"
-                android:layout_marginTop="@dimen/gap_tight"
-                android:background="@drawable/bg_input"
-                android:hint="5"
-                android:importantForAutofill="no"
-                android:inputType="number"
-                android:paddingStart="@dimen/gap_control"
-                android:paddingEnd="@dimen/gap_control"
-                android:text="5" />
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/gap_control"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="同网段的设备都能打开你的 WebUI，注意安全" />
+
         </LinearLayout>
 
         <Button
@@ -305,124 +405,142 @@
             android:layout_width="match_parent"
             android:layout_height="@dimen/btn_height"
             android:layout_marginTop="@dimen/gap_section"
-            android:background="@drawable/bg_btn_primary"
-            android:text="保存配置"
-            android:textAllCaps="false"
-            android:textColor="@color/accent_on"
-            android:textSize="@dimen/text_body" />
+            android:background="@drawable/bg_btn"
+            android:textSize="@dimen/text_body"
+            android:text="保存配置" />
 
-        <!-- ========== ADB 设备通道 ========== -->
+        <TextView
+            style="@style/DshaText.Title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_section"
+            android:text="设备与权限" />
+        <TextView
+            style="@style/DshaText.Caption"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_hair"
+            android:layout_marginBottom="@dimen/gap_tight"
+            android:textColor="@color/text_secondary"
+            android:text="下面这些点一下就生效，不用保存" />
+
         <LinearLayout
             style="@style/DshaCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_section">
-
-            <TextView
-                style="@style/DshaText.Title"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="ADB 设备通道" />
+            android:orientation="vertical">
 
             <CheckBox
                 android:id="@+id/config_adb_enable"
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_tight"
                 android:minHeight="@dimen/touch_min"
-                android:paddingStart="@dimen/gap_tight"
-                android:text="启用 ADB 设备通道（默认关闭）" />
-
+                android:text="启用 ADB 设备通道" />
             <TextView
                 style="@style/DshaText.Caption"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_hair"
-                android:text="不开也能用：设备状态、应用列表、启动应用、剪贴板、通知、震动、分享、导出文件、弹窗询问 —— 助手会走 App 层接口。\n开了才多出：模拟点击(input)、静默装卸应用(pm)、改系统设置(settings)、抓 logcat/dumpsys 这类 shell 能力，需要手机「开发者选项 → 无线调试」。" />
+                android:layout_marginStart="@dimen/gap_control"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="默认关闭。开了 agent 才能用 ADB 操作手机" />
 
             <TextView
                 android:id="@+id/config_adb_status"
-                style="@style/DshaText.Label"
+                style="@style/DshaText.Caption"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_hair"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
                 android:text="ADB 已关闭。不用无线调试就保持关闭。" />
 
             <Button
                 android:id="@+id/config_adb_pair"
                 android:layout_width="match_parent"
                 android:layout_height="@dimen/btn_height"
-                android:layout_marginTop="@dimen/gap_control"
+                android:layout_marginTop="@dimen/gap_tight"
                 android:background="@drawable/bg_btn"
-                android:text="🔐 ADB 无线配对（免 Shizuku）"
-                android:textAllCaps="false"
-                android:textColor="@color/text_secondary"
-                android:textSize="@dimen/text_body" />
-
-            <Button
-                android:id="@+id/config_battery_opt"
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/btn_height"
-                android:layout_marginTop="@dimen/gap_control"
-                android:background="@drawable/bg_btn"
-                android:text="🔋 关闭电池优化（保活必做）"
-                android:textAllCaps="false"
-                android:textColor="@color/text_secondary"
-                android:textSize="@dimen/text_body" />
+                android:textSize="@dimen/text_body"
+                android:text="🔐 ADB 无线配对（免 Shizuku）" />
 
             <Button
                 android:id="@+id/config_a11y"
                 android:layout_width="match_parent"
                 android:layout_height="@dimen/btn_height"
-                android:layout_marginTop="@dimen/gap_control"
+                android:layout_marginTop="@dimen/gap_tight"
                 android:background="@drawable/bg_btn"
-                android:text="👆 屏幕操作权限（免 ADB 让 AI 操作手机）"
-                android:textAllCaps="false"
-                android:textColor="@color/text_secondary"
-                android:textSize="@dimen/text_body" />
+                android:textSize="@dimen/text_body"
+                android:text="👆 屏幕操作权限（免 ADB 让 AI 操作手机）" />
 
             <TextView
                 android:id="@+id/config_a11y_status"
                 style="@style/DshaText.Caption"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/gap_tight"
-                android:layout_marginTop="@dimen/gap_hair" />
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="" />
 
             <Button
-                android:id="@+id/config_runtime_update"
+                android:id="@+id/config_battery_opt"
                 android:layout_width="match_parent"
                 android:layout_height="@dimen/btn_height"
-                android:layout_marginTop="@dimen/gap_control"
+                android:layout_marginTop="@dimen/gap_tight"
                 android:background="@drawable/bg_btn"
-                android:text="🔄 检查脚本更新（几十 KB，不用重下整包）"
-                android:textAllCaps="false"
-                android:textColor="@color/text_secondary"
-                android:textSize="@dimen/text_body" />
-
-            <TextView
-                android:id="@+id/config_runtime_status"
-                style="@style/DshaText.Caption"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/gap_tight"
-                android:layout_marginTop="@dimen/gap_hair" />
+                android:textSize="@dimen/text_body"
+                android:text="🔋 关闭电池优化（保活必做）" />
 
             <TextView
                 android:id="@+id/config_battery_opt_hint"
                 style="@style/DshaText.Caption"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_hair"
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
                 android:text="系统休眠会冻结后台网络，ADB 连接因此断掉且无法自动恢复。加入白名单后保活才真正生效。" />
 
+        </LinearLayout>
+
+        <TextView
+            style="@style/DshaText.Title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_section"
+            android:text="更新与维护" />
+
+        <LinearLayout
+            style="@style/DshaCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <CheckBox
+                android:id="@+id/config_check_update"
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/touch_min"
+                android:text="启动时检查新版本" />
+
+            <Button
+                android:id="@+id/config_runtime_update"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/btn_height"
+                android:layout_marginTop="@dimen/gap_tight"
+                android:background="@drawable/bg_btn"
+                android:textSize="@dimen/text_body"
+                android:text="🔄 检查脚本更新（几十 KB，不用重下整包）" />
+
             <TextView
+                android:id="@+id/config_runtime_status"
                 style="@style/DshaText.Caption"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_tight"
-                android:text="只有勾选并保存后才会后台预热、扫配对、弹通知。要用时：系统设置 → 开发者选项 → 无线调试 → 使用配对码配对设备。" />
+                android:layout_marginBottom="@dimen/gap_tight"
+                android:textColor="@color/text_secondary"
+                android:text="" />
+
         </LinearLayout>
 
         <TextView
@@ -432,6 +550,11 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/gap_section"
             android:gravity="center"
+            android:minHeight="@dimen/touch_min"
+            android:clickable="true"
+            android:focusable="true"
+            android:textColor="@color/text_secondary"
             android:text="DSHA" />
+
     </LinearLayout>
 </ScrollView>

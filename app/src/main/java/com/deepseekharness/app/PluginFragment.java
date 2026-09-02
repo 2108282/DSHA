@@ -803,7 +803,6 @@ public class PluginFragment extends Fragment {
         final String[] star = {it[MarketCol.STARS]};
         final String[] who = {owner};
         final String[] date = {""};
-        final String[] zh = {Translator.cached(requireContext(), it[MarketCol.DESC])};  // 缓存命中就不显示「翻译中」
         final String[] readme = {null};
         final android.app.AlertDialog[] holder = new android.app.AlertDialog[1];
 
@@ -816,12 +815,12 @@ public class PluginFragment extends Fragment {
         body.setLineSpacing(0, 1.15f);
         final android.widget.ScrollView scroll = new android.widget.ScrollView(requireContext());
         scroll.addView(body);
-        body.setText(detailMessage(it, star[0], who[0], date[0], zh[0], readme[0]));
+        body.setText(detailMessage(it, star[0], who[0], date[0], readme[0]));
 
         final Runnable render = () -> {
             android.app.AlertDialog d = holder[0];
             if (d != null && d.isShowing()) {
-                body.setText(detailMessage(it, star[0], who[0], date[0], zh[0], readme[0]));
+                body.setText(detailMessage(it, star[0], who[0], date[0], readme[0]));
             }
         };
 
@@ -864,19 +863,6 @@ public class PluginFragment extends Fragment {
             }, "dsha-readme").start();
         }
 
-        // 异步翻译描述。只在详情打开时翻这一条 —— 列表整页翻要几十个请求，又慢又费钱
-        if (zh[0] == null && Translator.enabled(requireContext())
-                && it[MarketCol.DESC] != null && !it[MarketCol.DESC].trim().isEmpty()) {
-            final android.content.Context app = requireContext().getApplicationContext();
-            new Thread(() -> {
-                String out = Translator.translate(app, it[MarketCol.DESC]);
-                if (out == null) return;    // 失败就保持原文，不弹错误框打扰人
-                runOnUiThreadSafely(() -> {
-                    zh[0] = out;
-                    render.run();
-                });
-            }, "dsha-translate").start();
-        }
     }
 
     /** README 最多显示这么多字符：再长弹窗里也读不完，还白占内存。 */
@@ -926,18 +912,13 @@ public class PluginFragment extends Fragment {
 
     /** 详情弹窗的正文。三路异步共用一处组装，避免各自 setText 相互覆盖。 */
     private String detailMessage(String[] it, String star, String owner, String date,
-                                String zh, String readme) {
+                                String readme) {
         StringBuilder sb = new StringBuilder();
         sb.append("⭐ ").append(star).append(" · 👤 ").append(owner.isEmpty() ? "?" : owner)
                 .append("\n兼容性：").append(it[3])
                 .append("\n分类：").append(it[4])
                 .append("\n\n");
-        if (zh != null && !zh.isEmpty()) {
-            sb.append(zh).append("\n\n🌐 已自动翻译 · 原文见仓库");
-        } else {
-            sb.append(it[5]);
-            if (Translator.enabled(requireContext())) sb.append("\n\n🌐 翻译中…");
-        }
+        sb.append(it[5]);
         sb.append("\n\n🔗 ").append(it[6])
                 .append("\n\n📅 最近更新：")
                 .append(date == null || date.isEmpty() ? "查询中…" : date);
