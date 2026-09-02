@@ -204,15 +204,45 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 R.drawable.ic_launch, "💬 重新开始", actionPi)
                 .build();
 
+        android.widget.RemoteViews rv = new android.widget.RemoteViews(ctx.getPackageName(), R.layout.notification_live_dark);
+        rv.setTextViewText(R.id.notif_title, "⚠️ 任务已终止");
+        rv.setTextViewText(R.id.notif_status_label, "任务状态");
+        rv.setTextColor(R.id.notif_status_label, 0xFFFF4D4F);
+        rv.setTextViewText(R.id.notif_detail, "已按指令停止操作。点击查看或继续对话。");
+        rv.setTextViewText(R.id.notif_btn_text, "重新开始");
+        rv.setImageViewResource(R.id.notif_btn_icon, R.drawable.ic_alarm_white);
+        rv.setOnClickPendingIntent(R.id.notif_btn_action, actionPi);
+
         NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_TASK_RESULT)
                 .setSmallIcon(R.drawable.ic_launch)
+                .setSubText("大肥鱼")
                 .setContentTitle("⚠️ 任务已终止")
                 .setContentText("已按指令停止操作。点击查看或继续对话。")
-                .setStyle(new NotificationCompat.BigTextStyle().bigText("已按指令停止操作。点击查看或继续对话。"))
                 .setContentIntent(contentPi)
-                .addAction(replyAction)
-                .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_HIGH);
+                .setCustomContentView(rv)
+                .setCustomBigContentView(rv)
+                .setOnlyAlertOnce(true)
+                .setShowWhen(false)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setTimeoutAfter(120_000L)
+                .setAutoCancel(true);
+
+        try {
+            android.graphics.Bitmap whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
+            if (whaleBmp != null) nb.setLargeIcon(whaleBmp);
+        } catch (Throwable ignored) {}
+
+        // Android 16 (API 36 / 澎湃 OS 焦点通知) 状态栏实时更新胶囊
+        android.os.Bundle crExtras = nb.getExtras();
+        if (crExtras != null) {
+            crExtras.putBoolean("android.requestPromotedOngoing", true);
+            crExtras.putString("android.shortCriticalText", "已终止");
+        }
+        try {
+            java.lang.reflect.Method m = nb.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
+            m.invoke(nb, true);
+        } catch (Throwable ignored) {}
 
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) nm.notify(Constants.NOTIF_TASK_STOPPED, nb.build());
