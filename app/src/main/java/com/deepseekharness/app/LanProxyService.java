@@ -504,6 +504,16 @@ public final class LanProxyService {
                                 sb.append(l).append("\r\n");
                             }
             }
+            // Java 的 String.split 默认丢弃尾部空字符串，而 HTTP 请求头以 \r\n\r\n 收尾 ——
+            // 上面这个循环因此永远补不出协议要求的那个结尾空行，重组结果只到最后一个头字段。
+            // 后端认为头还没发完，继续等；客户端在等响应，两边卡死（issue #42：从 3081 桥
+            // 访问时页面 Loading 到超时）。在这里统一收尾，不依赖 split 的结果 ——
+            // 也让下面插 X-Dsha-Token 的 lastIndexOf("\r\n\r\n") 找得到位置（找不到时它会
+            // 把 token 追加到头的末尾，那样同样是一份没有结尾空行的请求头）。
+            String joined = sb.toString();
+            if (!joined.endsWith("\r\n\r\n")) {
+                sb.append(joined.endsWith("\r\n") ? "\r\n" : "\r\n\r\n");
+            }
             if (!hostDone) sb.insert(0, "Host: 127.0.0.1:" + backendPort + "\r\n");
             // 后端 dsh 现在要求 token（webserver-auth-patch.sh）。局域网来的请求
             // 自带的是本代理的鉴权 token（已在上面剥离），这里补上后端要的那个。
