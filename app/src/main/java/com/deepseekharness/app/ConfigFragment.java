@@ -139,6 +139,9 @@ public class ConfigFragment extends Fragment {
         saveBtn = view.findViewById(R.id.config_save);
         repoLink = view.findViewById(R.id.config_repo_link);
         SubPageBack.bind(this, view);
+        View doBtn = view.findViewById(R.id.config_device_owner);
+        if (doBtn != null) doBtn.setOnClickListener(v -> showDeviceOwnerDialog());
+        refreshDeviceOwnerStatus(view);
         setupCommonControls(); // 模式 spinner / 保存 / 关于
         // 工作区（文件/备份恢复/环境管理）→ 二级页面
         TextView workspaceEntry = view.findViewById(R.id.config_workspace_entry);
@@ -359,6 +362,76 @@ public class ConfigFragment extends Fragment {
     }
 
 
+
+    /** 设备所有者的状态与操作。做成对话框：一年用一次的东西不该在配置页常驻一堆控件。
+     *
+     *  <p>「撤销」刻意和激活放在同一个对话框里 —— 上游 Dhizuku 最常见的求助是
+     *  「找不到怎么关，只能恢复出厂」。入口藏得深就等于没有。 */
+    private void showDeviceOwnerDialog() {
+        final HarnessController c = HarnessController.get(requireContext());
+        final boolean on = c.isDeviceOwner();
+        String msg;
+        if (on) {
+            msg = "状态：已激活\n\n"
+                    + "系统不再按省电策略冻结 DSHA，息屏后任务继续跑。\n\n"
+                    + "⚠ 这个状态下 App 无法直接卸载 —— 要卸载先在这里撤销。";
+        } else {
+            msg = "状态：未激活\n\n"
+                    + "激活后系统不再冻结 DSHA、息屏也能继续跑任务，比加电池白名单更彻底一层。\n\n"
+                    + "它只用于保活与息屏运行，不会开放给 agent —— 静默装卸应用、改系统设置"
+                    + "这类能力交给 AI 风险与收益不成比例。\n\n"
+                    + "门槛（Android 的硬要求，不是我们设的）：\n"
+                    + "· 设备上不能有任何账号；从设置里删完还要确认没有应用仍持有引用\n"
+                    + "· 不能有分身 / 双开 / 访客用户\n"
+                    + "· OPPO、ColorOS 只放行白名单与测试签名；Samsung 触发 Knox 后也会拒\n\n"
+                    + "所以它适合备用机或刚重置过的设备。开 ADB 通道时我们会自动试一次。";
+        }
+        androidx.appcompat.app.AlertDialog.Builder b =
+                new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                        .setTitle("设备所有者")
+                        .setMessage(msg)
+                        .setNegativeButton("关闭", null);
+        if (on) {
+            b.setPositiveButton("撤销", (d, w) -> runDeviceOwnerAction(false));
+        } else {
+            b.setPositiveButton("检查并激活", (d, w) -> runDeviceOwnerAction(true));
+        }
+        b.show();
+    }
+
+    /** 激活要跑 adb（几秒），撤销是系统调用 —— 都别在主线程做。 */
+    private void runDeviceOwnerAction(boolean activate) {
+        Toast.makeText(requireContext(), activate ? "正在检查设备条件…" : "正在撤销…",
+                Toast.LENGTH_SHORT).show();
+        final HarnessController c = HarnessController.get(requireContext());
+        new Thread(() -> {
+            final String r = activate ? c.activateDeviceOwnerNow() : c.clearDeviceOwnerNow();
+            if (!isAdded()) return;
+            requireActivity().runOnUiThread(() -> {
+                if (!isAdded()) return;
+                new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                        .setTitle("设备所有者")
+                        .setMessage(r)
+                        .setPositiveButton("好", null)
+                        .show();
+                View v = getView();
+                if (v != null) refreshDeviceOwnerStatus(v);
+            });
+        }, "dsha-device-owner").start();
+    }
+
+    /** 状态行。isDeviceOwner 是本地系统调用、很快，可以在主线程读。 */
+    private void refreshDeviceOwnerStatus(View root) {
+        try {
+            android.widget.TextView t = root.findViewById(R.id.config_device_owner_status);
+            if (t == null) return;
+            boolean on = HarnessController.get(requireContext()).isDeviceOwner();
+            t.setText(on
+                    ? "已激活 —— 系统不再冻结本应用；卸载前需要先撤销"
+                    : "未激活。开 ADB 通道时会自动试一次；条件严格，多数主力机装不上");
+        } catch (Throwable ignored) {
+        }
+    }
 
     /** 悬浮条的外观与行为。做成独立对话框而不是往配置页里塞七个控件：
      *  这些项只有开了悬浮条的人才关心，摊在主页面上是给所有人添噪声。 */

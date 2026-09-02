@@ -5556,6 +5556,134 @@ public class HarnessController {
         }
     }
 
+    // ═══════════════ DeviceOwner（设备所有者）═══════════════
+    //
+    // 定位刻意收窄：**只用于保活与息屏运行，不向 agent 开放。**
+    // DeviceOwner 能静默装卸应用、授任意运行时权限、改系统设置 —— 把这些交给 agent
+    // 风险与收益不成比例（一次误判就能把用户的机器改乱，而且没有守卫能事后补救）。
+    // DSHA 已经有 ADB 通道与无障碍两条受 DangerShellGuard 保护的路，agent 够用了。
+    // 所以这一整块不加 3090 端点、不写进系统提示词，`/app/*` 里也查不到它。
+
+    /** 系统认不认我们是设备所有者。问 DevicePolicyManager，不问 adb —— 这是唯一权威答案。 */
+    public boolean isDeviceOwner() {
+        try {
+            android.app.admin.DevicePolicyManager dpm =
+                    (android.app.admin.DevicePolicyManager)
+                            appContext.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            return dpm != null && dpm.isDeviceOwnerApp(appContext.getPackageName());
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 跑一条内部 adb 命令（DSH_INTERNAL=1 绕开守卫 —— 守卫是给 agent 设的，
+     *  App 自己发起的操作不该弹确认框）。照 AdbBridge.grantSecureSettings 的模式来。 */
+    private String adbInternal(String cmd, int headLines) {
+        return proot.execAndRead("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py "
+                + cmd + " 2>&1 | head -" + headLines);
+    }
+
+    /** 预检：账号数与用户数都得干净。返回结论对象，UI 与自动路径共用同一套判据。 */
+    public DeviceOwner.Precheck deviceOwnerPrecheck() {
+        String accounts = adbInternal(DeviceOwner.accountProbeCmd(), 40);
+        String users = adbInternal(DeviceOwner.userProbeCmd(), 20);
+        return DeviceOwner.precheck(accounts, users);
+    }
+
+    /**
+     * 手动激活（配置页按钮走这里）。整条链：预检 → dpm → 复核 → 记日志。
+     *
+     * <p>复核那一步不能省：dpm 打印 Success 不等于系统真的认了（有 ROM 会打印成功却不生效），
+     * 所以最后一定回头问 DevicePolicyManager。
+     */
+    public String activateDeviceOwnerNow() {
+        if (isDeviceOwner()) return "已经是设备所有者了，不用再激活。";
+        DeviceOwner.Precheck pk = deviceOwnerPrecheck();
+        if (!pk.ok) return pk.reason + "\n\n" + pk.advice;
+
+        String out = adbInternal(DeviceOwner.activateCmd(), 20);
+        boolean claimed = DeviceOwner.looksActivated(out);
+        // 无论 dpm 说什么，都回头问系统
+        boolean real = isDeviceOwner();
+        if (real) {
+            prefs.edit().putBoolean(K_DO_AUTO_TRIED, true).apply();
+            logActivity("已激活设备所有者 —— 系统不再按省电策略冻结本应用，息屏也能继续跑任务");
+            return "激活成功。\n\n从现在起系统不会再按省电策略冻结 DSHA，息屏后任务继续跑。\n\n"
+                    + "⚠ 这个状态下 App 无法直接卸载 —— 要卸载先回本页点「撤销设备所有者」。";
+        }
+        if (claimed) {
+            return "dpm 报了成功，但系统仍不认我们是设备所有者。\n\n"
+                    + "这种情况多见于强制停止后状态没刷新：把 DSHA 强制停止再打开，回来看状态。";
+        }
+        return DeviceOwner.explainFailure(out);
+    }
+
+    /**
+     * 撤销。
+     *
+     * <p>这个入口是必须的 —— 上游 Dhizuku 最常见的求助就是「找不到怎么关，只能恢复出厂」。
+     * clearDeviceOwnerApp 不需要 adb，所以即使 ADB 通道坏了也撤得掉。
+     */
+    public String clearDeviceOwnerNow() {
+        if (!isDeviceOwner()) return "当前不是设备所有者，无需撤销。";
+        try {
+            android.app.admin.DevicePolicyManager dpm =
+                    (android.app.admin.DevicePolicyManager)
+                            appContext.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            if (dpm == null) return "拿不到 DevicePolicyManager，撤销失败。";
+            dpm.clearDeviceOwnerApp(appContext.getPackageName());
+            prefs.edit().putBoolean(K_DO_AUTO_TRIED, true).apply();   // 撤了就别再自动装回去
+            logActivity("已撤销设备所有者");
+            return isDeviceOwner()
+                    ? "撤销命令执行了，但系统仍认为我们是设备所有者 —— 强制停止 App 再看一次。"
+                    : "已撤销。系统恢复按省电策略管理本应用，App 也可以正常卸载了。";
+        } catch (Throwable t) {
+            return "撤销失败：" + t.getClass().getSimpleName() + " " + t.getMessage();
+        }
+    }
+
+    /** 自动尝试过的标记。只试一次 —— 每次启动都跑 dpm 既慢又会在系统里反复留痕。 */
+    private static final String K_DO_AUTO_TRIED = "device_owner_auto_tried";
+
+    /**
+     * ADB 通道刚就绪时自动试一次激活。
+     *
+     * <p>为什么自动：激活必须有 adb，而用户开 ADB 通道的那一刻正是唯一条件齐备的时机；
+     * 让他事后自己想起来去点一个按钮，多数人不会点，保活也就一直没有。
+     *
+     * <p>为什么只试一次：预检不通过（有账号/有分身）是常态，反复跑 dpm 既慢，
+     * 失败还会在系统里留下 active admin。试过就记标记，之后只能手动触发。
+     */
+    void autoActivateDeviceOwner() {
+        try {
+            if (prefs.getBoolean(K_DO_AUTO_TRIED, false)) return;
+            if (isDeviceOwner()) {
+                prefs.edit().putBoolean(K_DO_AUTO_TRIED, true).apply();
+                return;
+            }
+            DeviceOwner.Precheck pk = deviceOwnerPrecheck();
+            if (!pk.ok && pk.reason.contains("读不到")) {
+                // ADB 可能只是还没连上 —— 这种情况**不置标记**，下次连上了还能再试。
+                // 置了标记就等于把「以后自动激活」永久关掉，而原因只是这一刻网络没通。
+                return;
+            }
+            prefs.edit().putBoolean(K_DO_AUTO_TRIED, true).apply();
+            if (!pk.ok) {
+                // 不弹窗打扰：多数机器过不了预检，这是预期结果，写进活动日志就够
+                logActivity("设备所有者未激活（" + pk.reason + "）—— 想要更强的保活可到配置页手动处理");
+                return;
+            }
+            String out = adbInternal(DeviceOwner.activateCmd(), 20);
+            if (isDeviceOwner()) {
+                logActivity("已自动激活设备所有者 —— 系统不再冻结本应用，息屏也能继续跑");
+            } else {
+                logActivity("设备所有者自动激活失败：" + DeviceOwner.explainFailure(out));
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("DSHA", "DeviceOwner 自动激活异常（不致命）: " + t);
+        }
+    }
+
     /** 延迟一段时间再排进 IO 队列。
      *
      *  <p>维护类任务（自动备份这种）不该和启动抢那唯一的 IO 线程 —— 直接 IO.execute
