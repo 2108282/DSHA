@@ -4516,7 +4516,7 @@ public class HarnessController {
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
      *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
      *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
-    private static final String BUILTIN_ASSET_VERSION = "24";
+    private static final String BUILTIN_ASSET_VERSION = "25";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
      *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，
@@ -4537,7 +4537,7 @@ public class HarnessController {
             String missing = missingBuiltinEntities();
             if (sameVersion && missing.isEmpty()) return;
             proot.execAndRead(
-                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
+                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed /root/dsha-task-notifier-installed; "
                     + "echo refreshed");
             android.util.Log.i("DSHA", "内置插件资产要重注入（版本"
                     + (sameVersion ? "一致" : "变化：" + (r == null ? "?" : r.trim()))
@@ -4550,7 +4550,7 @@ public class HarnessController {
      *  只查有 {@code -installed} marker 的那几个 —— 与上面删 marker 的范围保持一致，
      *  免得又出现「一处检查、另一处漏掉」。 */
     private String missingBuiltinEntities() {
-        String[] dirs = {"dsha-mobile-nav", "dsha-device-shell-guide", "dsha-status-overlay"};
+        String[] dirs = {"dsha-mobile-nav", "dsha-device-shell-guide", "dsha-status-overlay", "dsha-task-notifier"};
         StringBuilder sb = new StringBuilder();
         for (String d : dirs) {
             if (!new java.io.File(proot.getRootfsDir(), "root/" + d).isDirectory()) {
@@ -5292,7 +5292,7 @@ public class HarnessController {
                                 "cat /root/.dsh/builtin-assets.version 2>/dev/null || echo NONE");
                         if (r == null || !r.trim().equals(BUILTIN_ASSET_VERSION)) {
                             proot.execAndRead(
-                                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; echo cleaned");
+                                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed /root/dsha-task-notifier-installed; echo cleaned");
                             android.util.Log.i("DSHA", "迁移(≤v1.1.1)：已删内置插件 marker，等待重注入");
                         }
                         // 2) 老版本无离线包版本标记 → 写当前（避免误弹升级提示）
@@ -5306,7 +5306,7 @@ public class HarnessController {
                         // 旧版 profile 可能缺 dependencies 字段 / 用 file: 依赖，
                         // 触发一次 fix-stale-bundles 自愈（App 启动时会跑，这里显式跑一次）
                         proot.execAndRead(
-                                "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
+                                "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed /root/dsha-task-notifier-installed; "
                                 + "echo 'v1.0.x 迁移：删 marker 强制重注入'");
                         android.util.Log.i("DSHA", "迁移(v1.0.x)完成");
                     }
