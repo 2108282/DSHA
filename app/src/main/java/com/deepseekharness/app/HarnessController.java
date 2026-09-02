@@ -525,6 +525,14 @@ public class HarnessController {
         this.prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         this.proot = new ProotBootstrap(ctx);
         this.plugins = new PluginController(this, ctx, this.proot);
+        // issue #48：桥没启动过时 HttpShellService 拿不到 Context，
+        // ensureToken() 里 tokenFileIfPossible() 返回 null —— 于是它只在内存里生成
+        // 一个 token 就返回，**没有写进 /root/.dsh/.bridge_token**。启动页把这个内存
+        // token 拼进 URL，而 dsh 服务端校验的是文件里那个（webserver-auth-patch.sh 读文件），
+        // 文件压根不存在 → 用户看到「需要 token」闸门，进不去 WebUI。
+        // 原先只有自检路径绑过 Context，那要用户先去点一次自检才碰巧修好。
+        // 控制器一建好就绑上，token 生成从此总能落盘。
+        HttpShellService.bindTokenContext(ctx);
     }
 
     public void addStateListener(StateListener l) { stateListeners.add(l); }
