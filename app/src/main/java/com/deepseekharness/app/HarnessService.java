@@ -48,7 +48,7 @@ public class HarnessService extends Service {
         c = HarnessController.get(this);
         createChannel();
         c.addStateListener(stateListener);
-        startForeground(NOTIF_ID, buildNotification("DSHA运行中", "Web UI 正在后台保持运行"));
+        startForeground(NOTIF_ID, buildNotification("后台运行中", "Web UI 正在后台保持运行"));
         // 桥接 Shizuku shell 能力（rootfs 里的助手可通过 127.0.0.1:3090 执行设备命令）
         shellHttp = new HttpShellService(this);
         shellHttp.start();
@@ -77,7 +77,7 @@ public class HarnessService extends Service {
         // 所以这里无条件先把前台通知立起来（重复调用是允许且幂等的），之后再干活。
         try {
             startForeground(NOTIF_ID,
-                    buildNotification("DSHA运行中", "Web UI 正在后台保持运行"));
+                    buildNotification("后台运行中", "Web UI 正在后台保持运行"));
         } catch (Throwable e) {
             android.util.Log.w("DSHA", "onStartCommand 里 startForeground 失败: " + e);
         }
@@ -271,7 +271,7 @@ public class HarnessService extends Service {
         if (c.getError() != null && !c.getError().isEmpty()) {
             updateNotification("DSHA启动失败", c.getError());
         } else if (c.getMessage() != null && !c.getMessage().isEmpty()) {
-            updateNotification("DSHA运行中", "Web UI: http://127.0.0.1:" + c.getPort());
+            updateNotification("后台运行中", "Web UI: http://127.0.0.1:" + c.getPort());
         }
     }
 

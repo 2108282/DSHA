@@ -206,7 +206,7 @@ public class ConfirmReceiver extends BroadcastReceiver {
 
         NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_TASK_RESULT)
                 .setSmallIcon(R.drawable.ic_launch)
-                .setContentTitle("⚠️ DSHA · 任务已终止")
+                .setContentTitle("⚠️ 任务已终止")
                 .setContentText("已按指令停止操作。点击查看或继续对话。")
                 .setStyle(new NotificationCompat.BigTextStyle().bigText("已按指令停止操作。点击查看或继续对话。"))
                 .setContentIntent(contentPi)

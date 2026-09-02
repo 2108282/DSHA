@@ -527,7 +527,7 @@ public final class HttpShellService {
     private String appNotify(String path) {
         try {
             String q = queryOf(path);
-            String title = getParam(q, "title", "DSHA 通知");
+            String title = getParam(q, "title", "通知");
             String text = getParam(q, "text", "");
             if (text.isEmpty()) return "NO_TEXT";
             title = safeDisplay(title);
@@ -1347,7 +1347,7 @@ public final class HttpShellService {
                     try {
                         if (act.isFinishing() || act.isDestroyed()) return;
                         pendingDialog = new androidx.appcompat.app.AlertDialog.Builder(act)
-                                .setTitle("DSHA 安全确认")
+                                .setTitle("安全确认")
                                 .setMessage(prompt)
                                 // 必须明确选一个：误触关闭不再被当作拒绝。也不要在
                                 // OnDismiss/OnCancel 里 countDown —— Activity 被 pause
@@ -1445,7 +1445,7 @@ public final class HttpShellService {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification n = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                 .setSmallIcon(R.drawable.ic_launch)
-                .setContentTitle("⚠️ DSHA 安全确认")
+                .setContentTitle("⚠️ 安全确认")
                 .setContentText("模型试图执行：" + shortCmd)
                 .setStyle(new NotificationCompat.BigTextStyle()
                         .bigText("模型试图在设备上执行：\n" + displayCmd + "\n\n是否允许？"))
@@ -1466,7 +1466,7 @@ public final class HttpShellService {
     private String appTaskRunning(String path) {
         try {
             String q = queryOf(path);
-            String title = getParam(q, "title", "DSHA · 正在执行");
+            String title = getParam(q, "title", "正在执行");
             String text = getParam(q, "text", "智能体正在执行自动化任务...");
             showRunningNotification(title, text);
             return "OK";
@@ -1485,7 +1485,7 @@ public final class HttpShellService {
     }
 
     private void showRunningNotification(String text) {
-        showRunningNotification("DSHA · 正在执行", text);
+        showRunningNotification("正在执行", text);
     }
 
     private void showRunningNotification(String title, String text) {
@@ -1517,7 +1517,7 @@ public final class HttpShellService {
 
             NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_AGENT_RUNNING)
                     .setSmallIcon(R.drawable.ic_launch)
-                    .setContentTitle(title != null && !title.isEmpty() ? safeDisplay(title) : "DSHA · 正在执行")
+                    .setContentTitle(title != null && !title.isEmpty() ? safeDisplay(title) : "正在执行")
                     .setContentText(safeDisplay(shortMsg))
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(safeDisplay(text != null && !text.isEmpty() ? text : shortMsg)))
                     .setContentIntent(contentPi)

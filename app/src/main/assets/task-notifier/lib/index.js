@@ -101,7 +101,7 @@ export function apply(ctx) {
 
       if (type === 'turn/start') {
         void callBridge('/app/task/running', {
-          title: 'DSHA · 正在执行',
+          title: '正在执行',
           text: '智能体正在分析并执行任务...'
         })
         return
@@ -110,7 +110,7 @@ export function apply(ctx) {
       if (type === 'tool/call') {
         const text = formatToolDetail(event?.data?.name, event?.data?.arguments)
         void callBridge('/app/task/running', {
-          title: 'DSHA · 正在执行',
+          title: '正在执行',
           text: text || '智能体正在调用工具...'
         })
         return
@@ -133,20 +133,20 @@ export function apply(ctx) {
               return
             }
             void callBridge('/app/notify', {
-              title: 'DSHA · 任务已中断',
+              title: '🔵 任务已中断',
               text: 'Agent 任务已被中断，点击或在下方打字重新开始'
             })
             return
           }
           void callBridge('/app/notify', {
-            title: `DSHA · 任务已结束（${reason}）`,
+            title: `任务已结束（${reason}）`,
             text: 'Agent 一轮对话已结束，点击或在下方打字继续对话'
           })
           return
         }
 
         void callBridge('/app/notify', {
-          title: 'DSHA · 任务完成',
+          title: '任务完成',
           text: 'Agent 已完成当前任务，点击或在下方打字继续对话'
         })
       }
