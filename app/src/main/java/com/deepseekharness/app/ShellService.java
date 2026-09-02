@@ -1,5 +1,7 @@
 package com.deepseekharness.app;
 
+import android.content.Context;
+import androidx.annotation.Keep;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -9,6 +11,17 @@ import java.nio.charset.StandardCharsets;
  * 由 ShizukuShell 通过 bindUserService 绑定，进程由 Shizuku 托管。
  */
 public class ShellService extends IShellService.Stub {
+
+    public ShellService() {
+    }
+
+    @Keep
+    public ShellService(Context context) {
+    }
+
+    public void destroy() {
+        System.exit(0);
+    }
 
     @Override
     public String exec(String cmd) {
