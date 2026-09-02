@@ -185,6 +185,37 @@ public final class DeviceOwner {
         return sb.toString();
     }
 
+    /**
+     * 从 {@code dumpsys account list} 里取出「持有账号的应用包名」，供自动冻结用。
+     *
+     * <p>只认服务缓存里映射得出包名的那些 —— 拿不到包名就没法冻，也不该瞎猜。
+     * 顺序保持 dumpsys 里的出现顺序，方便和 {@link #describeAccountOwners} 的展示对上。
+     */
+    public static java.util.List<String> accountHolderPkgs(String dumpsys) {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        if (dumpsys == null || dumpsys.isEmpty()) return new java.util.ArrayList<>(out);
+        java.util.HashMap<String, String> pkgOf = new java.util.HashMap<>();
+        java.util.regex.Matcher svc = java.util.regex.Pattern.compile(
+                        "AuthenticatorDescription\\s*\\{type=([A-Za-z0-9_.\\-]+)}[^{]*ComponentInfo\\{([A-Za-z0-9_.\\-]+)/")
+                .matcher(dumpsys);
+        while (svc.find()) {
+            pkgOf.put(svc.group(1), svc.group(2));
+        }
+        for (String line : dumpsys.split("\r?\n")) {
+            if (!line.contains("Account {")) continue;
+            java.util.regex.Matcher mm = java.util.regex.Pattern
+                    .compile("type=([A-Za-z0-9_.\\-]+)").matcher(line);
+            if (mm.find()) {
+                String pkg = pkgOf.get(mm.group(1));
+                if (pkg != null) out.add(pkg);
+            }
+        }
+        // 有些 ROM 不打印账号明细，只能退一步：把注册过账号服务的应用都算上。
+        // 宁可多冻几个（都会解冻），也别因为解析不到而让整条路走不通。
+        if (out.isEmpty()) out.addAll(pkgOf.values());
+        return new java.util.ArrayList<>(out);
+    }
+
     /** 预检结论。{@code ok=false} 时 {@link #advice} 一定是可执行的下一步，不是「失败了」。 */
     public static final class Precheck {
         public final boolean ok;

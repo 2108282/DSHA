@@ -1902,6 +1902,7 @@ public class HarnessController {
     public void ensureBuiltinPluginsReady() {
         migrateMobileNavRename();
         writeCapsFile();
+        thawLeftovers();
         IO.execute(() -> {
             try {
                 if (!proot.isInstalled()) return;
@@ -5657,6 +5658,158 @@ public class HarnessController {
                     + "这种情况多见于强制停止后状态没刷新：把 DSHA 强制停止再打开，回来看状态。";
         }
         return DeviceOwner.explainFailure(out);
+    }
+
+    /**
+     * 自动冻结持有账号的应用 → 激活 → 解冻。
+     *
+     * <p>这是把上游教程里那套手工流程（装 Hail、导出账号清单、逐个冻结、跑 dpm、再解冻）
+     * 自动化。手工做最容易出的事故是<b>忘了解冻</b>，所以这里的重点全在保证恢复：
+     * <ul>
+     *   <li>清单<b>先落盘再动手</b>，落在 rootfs 里 —— App 被杀、崩溃、断电之后
+     *       下次启动的 {@link #thawLeftovers()} 会兜住；</li>
+     *   <li>解冻放在 {@code finally}，且每个包失败重试一次；这段自己绝不抛异常出去；</li>
+     *   <li><b>全程不重启设备</b>。上游教程常说「清完账号重启一次再激活」，
+     *       但同一批讨论里也有人冻着 Google 服务重启之后开不了机 —— 自动化不能带用户走那条路。</li>
+     * </ul>
+     *
+     * <p>整条链约十几条 pm 命令、几秒钟跑完，期间推送与登录态会短暂中断，这是必然的代价。
+     *
+     * @param progress 进度回调（UI 用），可为 null
+     */
+    public String freezeThawActivate(java.util.function.Consumer<String> progress) {
+        if (isDeviceOwner()) return "已经是设备所有者了，不用再激活。";
+        java.util.List<String> frozen = new java.util.ArrayList<>();
+        java.io.File rec = rootfsFile(FrozenApps.FILE);
+        int before = -1;
+        try {
+            step(progress, "正在读取账号列表…");
+            String dump = adbInternal(DeviceOwner.accountProbeCmd(), 300);
+            before = DeviceOwner.parseAccountCount(dump);
+            if (before < 0) {
+                return "读不到账号列表 —— 先确认 ADB 通道是通的（配置页「设备与权限」）。\n\n"
+                        + "什么都还没动，不用担心有应用被冻着。";
+            }
+            if (before == 0) {
+                step(progress, "账号已经是 0，直接激活…");
+                return activateDeviceOwnerNow();
+            }
+
+            java.util.List<String> targets = new java.util.ArrayList<>();
+            for (String p : DeviceOwner.accountHolderPkgs(dump)) {
+                if (FrozenApps.freezable(p)) targets.add(p);
+            }
+            if (targets.isEmpty()) {
+                return "有 " + before + " 个账号，但没能解析出可冻结的应用包名，"
+                        + "这种情况只能手工处理。先看这份清单：\n\n"
+                        + DeviceOwner.describeAccountOwners(dump);
+            }
+
+            // 先落盘再动手 —— 中途被杀也能靠下次启动的自检恢复
+            if (rec.getParentFile() != null) rec.getParentFile().mkdirs();
+            java.nio.file.Files.write(rec.toPath(),
+                    FrozenApps.serialize(targets).getBytes(StandardCharsets.UTF_8));
+            logActivity("为激活设备所有者临时冻结 " + targets.size() + " 个应用（结束后自动恢复）");
+
+            for (int i = 0; i < targets.size(); i++) {
+                String p = targets.get(i);
+                step(progress, "冻结 " + (i + 1) + "/" + targets.size() + "：" + p);
+                adbInternal(FrozenApps.freezeCmd(p), 4);
+                frozen.add(p);      // 命令发出去就记上，宁可多解冻一次
+            }
+
+            step(progress, "复核账号数…");
+            int after = DeviceOwner.parseAccountCount(adbInternal(DeviceOwner.accountProbeCmd(), 300));
+            step(progress, "正在激活设备所有者…");
+            String out = adbInternal(DeviceOwner.activateCmd(), 20);
+
+            if (isDeviceOwner()) {
+                prefs.edit().putBoolean(K_DO_AUTO_TRIED, true).apply();
+                logActivity("已激活设备所有者（冻结 " + frozen.size() + " 个应用后）");
+                return "激活成功。\n\n系统不再按省电策略冻结 DSHA，息屏后任务继续跑。\n\n"
+                        + "刚才冻结的 " + frozen.size() + " 个应用正在恢复。\n\n"
+                        + "⚠ 从现在起 App 无法直接卸载 —— 要卸载先回本页点「撤销」。";
+            }
+            StringBuilder sb = new StringBuilder("激活失败。\n\n");
+            sb.append("冻结前 ").append(before).append(" 个账号");
+            if (after >= 0) sb.append("，冻结后 ").append(after).append(" 个");
+            sb.append("。\n");
+            if (after > 0) {
+                sb.append("说明还有应用持有账号，而它们的包名没能从 dumpsys 里解析出来 —— "
+                        + "这种就得手工找了。\n\n");
+            }
+            sb.append(DeviceOwner.explainFailure(out));
+            sb.append("\n\n刚才冻结的 ").append(frozen.size()).append(" 个应用正在恢复。");
+            return sb.toString();
+        } catch (Throwable t) {
+            return "流程出错：" + t.getClass().getSimpleName() + " " + t.getMessage()
+                    + "\n\n冻结的应用会被恢复（下次启动也会再检查一遍）。";
+        } finally {
+            // 最后一道保障：无论成败都解冻，且这里绝不让异常逃出去
+            int okCount = 0;
+            for (String p : frozen) {
+                try {
+                    String r = adbInternal(FrozenApps.thawCmd(p), 4);
+                    if (!FrozenApps.thawed(r)) {
+                        r = adbInternal(FrozenApps.thawCmd(p), 4);   // 失败重试一次
+                    }
+                    if (FrozenApps.thawed(r)) okCount++;
+                } catch (Throwable ignored) {
+                }
+            }
+            try {
+                if (rec.isFile()) rec.delete();
+            } catch (Throwable ignored) {
+            }
+            if (!frozen.isEmpty()) {
+                logActivity("已恢复 " + okCount + "/" + frozen.size() + " 个临时冻结的应用");
+                step(progress, "已恢复 " + okCount + "/" + frozen.size() + " 个应用");
+            }
+        }
+    }
+
+    private void step(java.util.function.Consumer<String> progress, String msg) {
+        try {
+            if (progress != null) progress.accept(msg);
+        } catch (Throwable ignored) {
+        }
+        android.util.Log.i("DSHA-DO", msg);
+    }
+
+    /**
+     * 启动时兜底：把上次流程没解冻的应用恢复回来。
+     *
+     * <p>这是整套自动冻结的安全网。没有它，一次意外（App 被杀、崩溃、断电）就能让用户的
+     * 应用一直冻着，而他根本不知道该去哪里恢复 —— 那是比激活失败严重得多的事故。
+     */
+    void thawLeftovers() {
+        try {
+            java.io.File f = rootfsFile(FrozenApps.FILE);
+            if (!f.isFile()) return;
+            java.util.List<String> pkgs = FrozenApps.parse(
+                    new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8));
+            if (pkgs.isEmpty()) {
+                f.delete();
+                return;
+            }
+            logActivity("发现上次没恢复的冻结应用 " + pkgs.size() + " 个，正在恢复");
+            int okCount = 0;
+            for (String p : pkgs) {
+                String r = adbInternal(FrozenApps.thawCmd(p), 4);
+                if (!FrozenApps.thawed(r)) r = adbInternal(FrozenApps.thawCmd(p), 4);
+                if (FrozenApps.thawed(r)) okCount++;
+            }
+            if (okCount == pkgs.size()) {
+                f.delete();
+            } else {
+                // 没全成功就留着记录，下次启动继续试 —— 宁可多试几轮，
+                // 也不能把「还冻着」这件事悄悄忘掉
+                logActivity("还有 " + (pkgs.size() - okCount) + " 个没恢复，下次启动会继续试");
+            }
+            logActivity("已恢复 " + okCount + "/" + pkgs.size() + " 个应用");
+        } catch (Throwable t) {
+            android.util.Log.w("DSHA", "解冻残留失败（下次启动会再试）: " + t);
+        }
     }
 
     /**

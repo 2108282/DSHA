@@ -395,8 +395,70 @@ public class ConfigFragment extends Fragment {
             b.setPositiveButton("撤销", (d, w) -> runDeviceOwnerAction(false));
         } else {
             b.setPositiveButton("检查并激活", (d, w) -> runDeviceOwnerAction(true));
+            b.setNeutralButton("自动冻结并激活", (d, w) -> confirmFreezeThaw());
         }
         b.show();
+    }
+
+    /**
+     * 自动冻结 → 激活 → 解冻。必须二次确认：这会短暂中断推送与登录态。
+     *
+     * <p>把风险讲全了再让用户点 —— 尤其是「不要在过程中重启」。上游有人冻着 Google 服务
+     * 重启之后开不了机，我们的流程本身不重启，但用户自己重启我们挡不住。
+     */
+    private void confirmFreezeThaw() {
+        new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                .setTitle("自动冻结并激活")
+                .setMessage("接下来会做四步：\n\n"
+                        + "1. 找出持有账号的应用\n"
+                        + "2. 临时冻结它们（pm disable-user，可逆，不是卸载）\n"
+                        + "3. 激活设备所有者\n"
+                        + "4. 无论成败都把应用解冻\n\n"
+                        + "几秒到十几秒。期间推送和登录态会短暂中断，微信、支付类应用可能报错，"
+                        + "结束后自己会恢复。\n\n"
+                        + "⚠ 过程中不要重启手机、不要强制停止 DSHA。\n"
+                        + "万一还是中断了，下次打开 DSHA 会自动把冻结的应用恢复回来 —— "
+                        + "清单是先落盘再动手的。")
+                .setPositiveButton("开始", (d, w) -> runFreezeThaw())
+                .setNegativeButton("算了", null)
+                .show();
+    }
+
+    /** 跑冻结流程，带进度。对话框不可取消 —— 中途关掉会让人以为流程停了，实际还在跑。 */
+    private void runFreezeThaw() {
+        final HarnessController c = HarnessController.get(requireContext());
+        final androidx.appcompat.app.AlertDialog dlg =
+                new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                        .setTitle("正在处理")
+                        .setMessage("准备中…")
+                        .setCancelable(false)
+                        .show();
+        new Thread(() -> {
+            final String r = c.freezeThawActivate(msg -> {
+                if (!isAdded()) return;
+                requireActivity().runOnUiThread(() -> {
+                    try {
+                        if (dlg.isShowing()) dlg.setMessage(msg);
+                    } catch (Throwable ignored) {
+                    }
+                });
+            });
+            if (!isAdded()) return;
+            requireActivity().runOnUiThread(() -> {
+                try {
+                    dlg.dismiss();
+                } catch (Throwable ignored) {
+                }
+                if (!isAdded()) return;
+                new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                        .setTitle("设备所有者")
+                        .setMessage(r)
+                        .setPositiveButton("好", null)
+                        .show();
+                View v = getView();
+                if (v != null) refreshDeviceOwnerStatus(v);
+            });
+        }, "dsha-freeze-thaw").start();
     }
 
     /** 激活要跑 adb（几秒），撤销是系统调用 —— 都别在主线程做。 */

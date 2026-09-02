@@ -1110,6 +1110,42 @@ public final class PureLogicTest {
         ok("DO: 同类型多个账号会标数量", owners.contains("2 个"));
         eq("DO: 没有账号明细也不硬凑", "", DeviceOwner.describeAccountOwners("  Accounts: 5\n"));
 
+        // ===== FrozenApps：临时冻结的记录与判据 =====
+        // 这批断言守的是「冻了必须能解冻」这条底线。
+        ok("冻结: 不冻我们自己", !FrozenApps.freezable("com.deepseekharness.app"));
+        ok("冻结: 不冻 com.android.shell（冻了连解冻命令都发不出去）",
+                !FrozenApps.freezable("com.android.shell"));
+        ok("冻结: 不冻设置（用户最后的自救入口）",
+                !FrozenApps.freezable("com.android.settings"));
+        ok("冻结: 不冻 systemui", !FrozenApps.freezable("com.android.systemui"));
+        ok("冻结: 普通第三方包可以冻", FrozenApps.freezable("com.tencent.mm"));
+        ok("冻结: 空名字与非包名一律不冻",
+                !FrozenApps.freezable("") && !FrozenApps.freezable("mm") && !FrozenApps.freezable(null));
+        ok("冻结: gms 标成高风险", FrozenApps.highRisk("com.google.android.gms"));
+        ok("冻结: 小米账号标成高风险", FrozenApps.highRisk("com.xiaomi.account"));
+        ok("冻结: 普通包不算高风险", !FrozenApps.highRisk("com.tencent.mm"));
+
+        java.util.List<String> fl = java.util.Arrays.asList("com.a.b", "", "com.c.d");
+        eq("冻结: 序列化跳过空行", "com.a.b\ncom.c.d\n", FrozenApps.serialize(fl));
+        eqi("冻结: 解析回来两个", 2, FrozenApps.parse("com.a.b\n\n com.c.d \n").size());
+        eqi("冻结: 解析忽略不像包名的行", 1, FrozenApps.parse("com.a.b\nnotapkg\n").size());
+        ok("冻结: 命令用 disable-user（可逆）而不是 uninstall",
+                FrozenApps.freezeCmd("com.x.y").contains("disable-user")
+                        && !FrozenApps.freezeCmd("com.x.y").contains("uninstall"));
+        ok("冻结: 认得出解冻成功", FrozenApps.thawed("Package com.x.y new state: enabled"));
+        ok("冻结: 解冻失败不当成功", !FrozenApps.thawed("Error: package not found"));
+
+        String hd = "  Accounts: 2\n"
+                + "    Account {name=a, type=com.google}\n"
+                + "    Account {name=b, type=com.tencent.mm}\n"
+                + "    ServiceInfo: AuthenticatorDescription {type=com.google}, "
+                + "ComponentInfo{com.google.android.gms/x}\n"
+                + "    ServiceInfo: AuthenticatorDescription {type=com.tencent.mm}, "
+                + "ComponentInfo{com.tencent.mm/y}\n";
+        java.util.List<String> holders = DeviceOwner.accountHolderPkgs(hd);
+        eqi("冻结: 从 dumpsys 取出两个持有方", 2, holders.size());
+        ok("冻结: 取到的是包名不是账号类型", holders.contains("com.google.android.gms"));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"
