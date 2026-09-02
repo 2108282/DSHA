@@ -247,5 +247,14 @@ public interface ContainerRuntime {
             {"/proc/self/fd", "/dev/fd"},
             {"/storage/emulated/0", "/sdcard"},
             {"/storage/emulated/0", "/storage/emulated/0"},
+            // 手机存储里的一个专用目录，挂成 /root 的**直接子目录** —— GUI 的工作区选择器
+            // 只列 /root 下一层，不挂进来用户在界面里根本看不到手机存储（虽然 /sdcard
+            // 早就通了，但那不在 /root 下，选不到）。
+            //
+            // ⚠️ 这是 FUSE：不支持符号链接、不支持硬链接、chmod 无效、文件名有字符限制。
+            // pnpm install 和 git clone 在上面必然失败（pnpm 的 node_modules 就是一片
+            // 符号链接森林）。只适合让 agent 读写文档、脚本、图片这类普通文件 ——
+            // 目录里放了一份 README 提醒这件事。
+            {"/storage/emulated/0/Download/DSHA/工作区", "/root/手机存储"},
     };
 }

@@ -447,11 +447,48 @@ public class ProotBootstrap {
         }
     }
 
+    /** 手机存储里那个挂给工作区用的目录（对应 {@code BINDS} 的 {@code /root/手机存储}）。
+     *
+     *  <p>proot bind 一个不存在的源目录会失败，所以必须先把它建出来。顺手放一份说明：
+     *  这是 FUSE，pnpm 和 git 在上面用不了 —— 用户看到目录的那一刻就该知道边界，
+     *  等他装依赖失败、对着 {@code EPERM: operation not permitted, symlink} 发愁再去查
+     *  就太晚了，那个报错离根因隔着好几层。
+     *
+     *  <p>文件名里刻意不用冒号：FUSE 不接受 {@code : * ? " < > | \}。 */
+    private void ensurePhoneWorkspaceDir() {
+        try {
+            File d = new File("/storage/emulated/0/Download/DSHA/工作区");
+            if (!d.isDirectory() && !d.mkdirs()) return;
+            File readme = new File(d, "读我-这个目录能做什么.txt");
+            if (readme.isFile()) return;
+            String text = "这个目录在容器里挂成 /root/手机存储，可以在 DSHA 的工作区选择里选到它。\n"
+                    + "\n"
+                    + "能做什么\n"
+                    + "· 让 agent 读写这里的文档、脚本、图片 —— 手机上任何文件管理器都能直接打开，不用导出\n"
+                    + "· 把资料丢进来给 agent 处理，产物也留在这里\n"
+                    + "\n"
+                    + "不能做什么（重要）\n"
+                    + "· 不能在这里 pnpm install / npm i。手机存储是 FUSE 文件系统，不支持符号链接，\n"
+                    + "  而 pnpm 的 node_modules 本身就是一片符号链接，装必失败\n"
+                    + "· 不能 git clone，同样是符号链接与权限位的问题\n"
+                    + "· chmod +x 无效，脚本设不了可执行位（用 bash 脚本名 来跑）\n"
+                    + "· 文件名里不能有 : * ? \" < > | \\\n"
+                    + "· 大量小文件时明显比容器内慢（每次读写都要过一遍 FUSE）\n"
+                    + "\n"
+                    + "要跑 Node 项目或者用 git，请把工作区选在容器内的目录\n"
+                    + "（工作区列表里除「手机存储」以外的那些都在容器内）。\n";
+            java.nio.file.Files.write(readme.toPath(),
+                    text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** 准备运行时：复制依赖库（匹配 SONAME）、创建目录 */
     public void ensureRuntimeFiles() {
         baseDir.mkdirs();
         tmpDir.mkdirs();
         libDir.mkdirs();
+        ensurePhoneWorkspaceDir();
 
         // 这两个是 **proot 的 NEEDED 依赖**，proroot 用不到
         // （它只链 libdl/libc，共享内存靠挂真实目录当 /dev/shm）。
