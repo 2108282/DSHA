@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- DeviceAdmin 策略声明。
-     刻意只留空的 <uses-policies/>：我们要的是 DeviceOwner 这个角色本身
-     （静默安装/卸载、授运行时权限、不被系统省电策略杀），不是设备管理类 App 那套
-     强制密码、擦除数据、锁屏的能力。多声明一条策略就多一份用户不该承担的风险，
-     系统的授权界面上也会多列一行让人不敢点的说明。 -->
-<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-policies />
-</device-admin>

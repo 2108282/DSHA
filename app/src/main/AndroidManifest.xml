@@ -172,23 +172,6 @@
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
             </intent-filter>
         </provider>
-        <!-- DeviceOwner（设备所有者）用的管理组件。
-             dpm set-device-owner 认的就是这个组件名，所以它必须 exported=true
-             并且带 BIND_DEVICE_ADMIN —— 那个权限只有系统能持有，等于「只允许系统绑定」，
-             不是把入口对普通应用敞开。
-             DEVICE_ADMIN_ENABLED 这条 intent-filter 也是必须的，缺了系统不认。 -->
-        <receiver
-            android:name=".DshaDeviceAdminReceiver"
-            android:exported="true"
-            android:permission="android.permission.BIND_DEVICE_ADMIN">
-            <meta-data
-                android:name="android.app.device_admin"
-                android:resource="@xml/device_admin" />
-            <intent-filter>
-                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
-            </intent-filter>
-        </receiver>
-
     </application>
 
 </manifest>

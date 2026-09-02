@@ -177,10 +177,6 @@ public class DeviceBridgeService extends Service {
             new Thread(() -> {
                 try {
                     AdbBridge.ensureReady(DeviceBridgeService.this, c.getProot());
-                    // ADB 环境刚就绪 —— 这是激活 DeviceOwner 唯一条件齐备的时机（它必须有 adb）。
-                    // 只用于保活与息屏运行，不向 agent 开放。预检不过或没连上都不打扰用户，
-                    // 写进活动日志即可（多数机器有账号，过不了是常态）。
-                    c.autoActivateDeviceOwner();
                 } catch (Throwable ignored) {
                 }
             }, "dsha-adb-prewarm").start();

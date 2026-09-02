@@ -500,25 +500,6 @@
                 android:textColor="@color/text_secondary"
                 android:text="系统休眠会冻结后台网络，ADB 连接因此断掉且无法自动恢复。加入白名单后保活才真正生效。" />
 
-            <Button
-                android:id="@+id/config_device_owner"
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/btn_height"
-                android:layout_marginTop="@dimen/gap_tight"
-                android:background="@drawable/bg_btn"
-                android:textSize="@dimen/text_body"
-                android:text="🛡 设备所有者（更强的保活）" />
-
-            <TextView
-                android:id="@+id/config_device_owner_status"
-                style="@style/DshaText.Caption"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="@dimen/gap_tight"
-                android:textColor="@color/text_secondary"
-                android:text="" />
-
-
         </LinearLayout>
 
         <TextView
