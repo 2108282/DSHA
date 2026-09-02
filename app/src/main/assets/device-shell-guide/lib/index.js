@@ -17,6 +17,7 @@
 
 /** 消息身份：dsh 持久化回放时强校验 message.id（缺 id → 整个会话历史拒绝加载） */
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 
 /*
  * 这里**故意不写模块级 inject**。
@@ -54,44 +55,106 @@ import { randomUUID } from 'node:crypto'
  * 所以：凡是引用「较新才有的端点」的地方，都要就地给一份能用的兜底 ——
  * 否则老用户那边的表现是 agent 突然不知道自己能操作手机（比压缩掉几 KB 提示词严重得多）。
  */
-const PROMPT = [
-  '【设备操作能力 · DSHA】你正运行在用户 Android 手机的容器里，可以干预这台实体手机。',
+const CAPS_FILE = '/root/.dsh/.dsha-caps.json'
 
-  '■ 三条通道，按这个顺序选：',
-  '  1) 普通工具与文件操作（ls / cat / curl …）—— 能办成的就用它',
-  '  2) App 层接口 /app/*（走 127.0.0.1:3090，零配置，不需要 ADB，也不需要 Shizuku）',
-  '  3) 设备 shell（ADB 无线调试，用户可能没开）—— 只有模拟点击、装卸应用、' +
-  '     改系统设置、抓 logcat/dumpsys 这类事才必须用它',
-  '  例：查设备状态用 /app/device 而不是 dumpsys battery；启动应用用 /app/launch 而不是 am start。',
+/**
+ * 读 App 侧写下的能力清单（HarnessController.writeCapsFile 生成）。
+ *
+ * 读不到就返回 null，调用方按「全开」处理 —— 宁可多教几段，也不能让 agent 突然
+ * 不知道自己能操作手机（那比多花几 KB 上下文严重得多）。App 在每次启动 Web 前重写它，
+ * 所以用户改完开关重启一次就生效。
+ */
+function readCaps() {
+  try {
+    const o = JSON.parse(readFileSync(CAPS_FILE, 'utf8'))
+    return (o && typeof o === 'object') ? o : null
+  } catch {
+    return null
+  }
+}
 
-  '■ 完整端点清单（读屏 / 点按 / 输入 / 截屏 / 通知 / 剪贴板 / 传感器 / 导出文件 …）：',
-  '  T=$(cat /root/.dsh/.bridge_token)',
-  '  curl -s "http://127.0.0.1:3090/app/help?token=$T"',
-  '  → 要用设备能力时查这一次，里面有每个端点的参数和写法。',
-  '    清单刻意没写在这里 —— 它有十几 KB，写进提示词就是每一轮都替你付一次上下文。',
-  '  ⚠ /app/help 与 /app/version 只有较新的 App 才有（老版本会把未知路径当 shell 命令处理，',
-  '    回给你的东西不像清单）。那种情况按下面这份最小清单用，别反复重试 /app/help：',
-  '    设备信息 /app/device · 应用列表 /app/apps?q= · 启动应用 /app/launch?pkg=',
-  '    读屏 /app/ui/dump · 按文字点按 /app/ui/tap?text= · 输入 /app/ui/input?text=',
-  '    滑动 /app/ui/swipe · 截屏 /app/ui/screenshot · 按键 /app/ui/key',
-  '    通知 /app/notify?title=&text= · 提问 /app/ask?q=&options=a|b · Toast /app/toast?text=',
-  '    剪贴板 /app/clip（写入加 ?text=） · 分享 /app/share?text= · 开链接 /app/open?url=',
-  '    震动 /app/vibrate?ms= · 导出文件 /app/export?path= · 读 sdcard 文件 /app/readfile?path=',
-  '    位置 /app/location · 传感器 /app/sensors 与 /app/sensor?type= · 手电 /app/torch?on=1',
-
-  '■ 硬约束（几条，都别违）：',
-  '  - 危险命令由 App 侧守卫拦下来弹确认框、用户点允许才执行。这道门是机制保证的，' +
-  '    所以你不必在执行前再口头问一次「可以吗」，把「为什么要跑这条」写进动作说明就够；',
-  '  - 不要试图绕过守卫（DSH_NO_CONFIRM、直接调 adb-shell.py 之类）—— 绕过即违规；',
-  '  - 接口回 DISABLED / NO_PERMISSION、或 ADB 连不上时，照原话告诉用户去哪里开，' +
-  '    不要反复重试同一条 —— 重试不会让开关自己变；',
-  '  - 屏幕操作的节奏：每次点按或输入之后先 /app/ui/dump 再决定下一步，别凭记忆连点，' +
-  '    界面可能已经变了；',
-  '  - 默认权限是 shell 级（uid=2000，非 root）。不要主动用 --su，' +
-  '    只有用户明确要求 root 操作时才提，并且要他先到「配置」页勾选授权；',
-  '  - 不要用 /root/dsh-bin/adb 或裸 adb 命令 —— 那是守卫包装脚本，会失败；',
-  '  - 与用户交流一律使用中文。',
-].join('\n')
+/**
+ * 按当前真正启用的能力拼提示词。
+ *
+ * 关着的能力不写进去，省的不只是上下文：原先无条件全量注入时，agent 会去调注定回
+ * DISABLED / NO_PERMISSION 的接口，再照提示词里那条「原话告诉用户去哪里开」绕一圈 ——
+ * 用户什么都没要求，却先看到一段「你需要先去开位置权限」。
+ *
+ * @param {Record<string, boolean> | null} caps
+ */
+function buildPrompt(caps) {
+  const on = (k) => caps == null || caps[k] === true
+  const L = []
+  L.push('【设备操作能力 · DSHA】你正运行在用户 Android 手机的容器里，可以干预这台实体手机。')
+  L.push('')
+  L.push('■ 通道，按这个顺序选：')
+  L.push('  1) 普通工具与文件操作（ls / cat / curl …）—— 能办成的就用它')
+  L.push('  2) App 层接口 /app/*（走 127.0.0.1:3090，零配置，不需要 ADB，也不需要 Shizuku）')
+  if (on('adb')) {
+    L.push('  3) 设备 shell（ADB 无线调试，当前已启用）—— 只有装卸应用、改系统设置、'
+      + '抓 logcat/dumpsys 这类事才必须用它')
+  }
+  L.push('  例：查设备状态用 /app/device 而不是 dumpsys battery；启动应用用 /app/launch 而不是 am start。')
+  L.push('')
+  L.push('■ 完整端点清单（读屏 / 点按 / 输入 / 截屏 / 通知 / 剪贴板 / 导出文件 …）：')
+  L.push('  T=$(cat /root/.dsh/.bridge_token)')
+  L.push('  curl -s "http://127.0.0.1:3090/app/help?token=$T"')
+  L.push('  → 要用设备能力时查这一次，里面有每个端点的参数和写法。')
+  L.push('    清单刻意没写在这里 —— 它有十几 KB，写进提示词就是每一轮都替你付一次上下文。')
+  L.push('  ⚠ /app/help 与 /app/version 只有较新的 App 才有（老版本会把未知路径当 shell 命令处理，')
+  L.push('    回给你的东西不像清单）。那种情况按下面这份最小清单用，别反复重试 /app/help：')
+  L.push('    设备信息 /app/device · 应用列表 /app/apps?q= · 启动应用 /app/launch?pkg=')
+  if (on('ui')) {
+    L.push('    读屏 /app/ui/dump · 按文字点按 /app/ui/tap?text= · 输入 /app/ui/input?text=')
+    L.push('    滑动 /app/ui/swipe · 截屏 /app/ui/screenshot · 按键 /app/ui/key')
+  }
+  L.push('    通知 /app/notify?title=&text= · 提问 /app/ask?q=&options=a|b · Toast /app/toast?text=')
+  L.push('    剪贴板 /app/clip（写入加 ?text=） · 分享 /app/share?text= · 开链接 /app/open?url=')
+  L.push('    震动 /app/vibrate?ms= · 导出文件 /app/export?path= · 读 sdcard 文件 /app/readfile?path=')
+  if (on('location')) L.push('    位置 /app/location')
+  if (on('sensors')) L.push('    传感器 /app/sensors 与 /app/sensor?type= · 手电 /app/torch?on=1')
+  L.push('')
+  L.push('■ 当前没开、别去试的能力（用户要用会自己去开，你主动调只会拿到 DISABLED）：')
+  const off = []
+  if (!on('adb')) off.push('设备 shell / ADB（装卸应用、改系统设置、logcat、dumpsys 都做不到）')
+  if (!on('ui')) off.push('屏幕操作与截屏（读屏、点按、输入、滑动、按键）')
+  if (!on('location')) off.push('位置')
+  if (!on('sensors')) off.push('传感器与手电')
+  if (!on('root')) off.push('root / --su 提权')
+  if (off.length === 0) {
+    L.pop()   // 一个都没关就把这个小标题撤掉，别留个空段落
+  } else {
+    for (const x of off) L.push('  - ' + x)
+    L.push('  用户提出要用其中某一项时，照原话告诉他去「配置」页哪一栏开，然后停下等他，'
+      + '不要反复重试 —— 重试不会让开关自己变。')
+  }
+  L.push('')
+  L.push('■ 硬约束（几条，都别违）：')
+  if (on('confirm')) {
+    L.push('  - 危险命令由 App 侧守卫拦下来弹确认框、用户点允许才执行。这道门是机制保证的，'
+      + '所以你不必在执行前再口头问一次「可以吗」，把「为什么要跑这条」写进动作说明就够；')
+    L.push('  - 不要试图绕过守卫（DSH_NO_CONFIRM、直接调 adb-shell.py 之类）—— 绕过即违规；')
+  } else {
+    L.push('  - 用户关掉了危险命令确认，也就是说删除、格式化、卸载这类操作会直接执行、'
+      + '没有弹窗这道门。你要自己把握：破坏性操作先说清后果、拿到用户明确同意再做；')
+  }
+  if (on('ui')) {
+    L.push('  - 屏幕操作的节奏：每次点按或输入之后先 /app/ui/dump 再决定下一步，别凭记忆连点，'
+      + '界面可能已经变了；')
+  }
+  if (on('root')) {
+    L.push('  - 用户已授权 root（--su）。它是最后手段：能用普通权限办成的就别提权，'
+      + '用之前说明为什么必须 root；')
+  } else {
+    L.push('  - 默认权限是 shell 级（uid=2000，非 root）。不要主动用 --su，'
+      + '只有用户明确要求 root 操作时才提，并且要他先到「配置」页勾选授权；')
+  }
+  if (on('adb')) {
+    L.push('  - 不要用 /root/dsh-bin/adb 或裸 adb 命令 —— 那是守卫包装脚本，会失败；')
+  }
+  L.push('  - 与用户交流一律使用中文。')
+  return L.join('\n')
+}
 
 /**
  * Plugin entry: register the guidance section.
@@ -105,7 +168,8 @@ export function apply(ctx) {
     promptCtx.systemPrompt.section({
       name: 'dsh:device-shell-guide',
       order: 150,
-      text: PROMPT,
+      // 每次 apply 时按当前能力现算一次（用户改开关后重启 Web 即生效）
+      text: buildPrompt(readCaps()),
     })
   })
 
@@ -134,7 +198,7 @@ export function apply(ctx) {
       // 否则这条引导消息会把整个会话历史写成「加载失败」的损坏状态。
       id: randomUUID(),
       role: 'user',
-      content: [{ type: 'text', text: PROMPT }],
+      content: [{ type: 'text', text: buildPrompt(readCaps()) }],
       source: { kind: 'dsh-device-guide', plugin: 'dsh-device-shell-guide' },
     }
     // 注入到本轮最后用户消息之后（= 用户提示词前的位置语义）

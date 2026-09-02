@@ -1868,8 +1868,40 @@ public class HarnessController {
 
     /** 启动自愈：确保内置插件（设备引导 / 任务通知 / 移动端适配）实体在位且注册有效。
      *  不再只依赖步骤⑥ —— ⑥ 可能跑在 profile 生成之前，也可能被版本标记判定跳过。 */
+    /**
+     * 把「现在真能用的能力」写成 JSON 给内置插件读。
+     *
+     * <p>device-shell-guide 原先把位置、传感器、屏幕操作、root 那几段无条件全注入 ——
+     * 关着的能力也在教 agent 怎么调。代价有两头：白付一轮上下文，而且 agent 会去试注定回
+     * DISABLED / NO_PERMISSION 的接口，然后照提示词里那条「原话告诉用户去哪里开」绕一圈。
+     * 能力开关是 App 侧状态，写出来让插件读一眼就知道，不必靠试错。
+     *
+     * <p>为什么用文件而不是加个 3090 端点：插件的 {@code systemPrompt.section} 是同步调用，
+     * 没法 await 一次 HTTP；readFileSync 快、不依赖网络、也不受桥起没起来影响。
+     */
+    void writeCapsFile() {
+        try {
+            String json = "{"
+                    + "\"adb\":" + DeviceBridgeService.isAdbEnabled(appContext)
+                    + ",\"ui\":" + DshaAccessibilityService.enabled(appContext)
+                    + ",\"location\":" + DeviceSense.locationAllowed(appContext)
+                    + ",\"sensors\":" + DeviceSense.sensorsAllowed(appContext)
+                    + ",\"root\":" + isRootShellAllowed()
+                    + ",\"overlay\":" + prefs.getBoolean("overlay_stream", false)
+                    + ",\"confirm\":" + prefs.getBoolean("confirm_shell", true)
+                    + "}";
+            java.io.File f = rootfsFile("root/.dsh/.dsha-caps.json");
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            java.nio.file.Files.write(f.toPath(), json.getBytes(StandardCharsets.UTF_8));
+        } catch (Throwable t) {
+            // 不致命：插件读不到就退回全量提示词，那是旧行为
+            android.util.Log.w("DSHA", "写能力清单失败（插件将退回全量提示词）: " + t);
+        }
+    }
+
     public void ensureBuiltinPluginsReady() {
         migrateMobileNavRename();
+        writeCapsFile();
         IO.execute(() -> {
             try {
                 if (!proot.isInstalled()) return;
@@ -4569,7 +4601,7 @@ public class HarnessController {
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
      *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
      *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
-    private static final String BUILTIN_ASSET_VERSION = "24";
+    private static final String BUILTIN_ASSET_VERSION = "25";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
      *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，
