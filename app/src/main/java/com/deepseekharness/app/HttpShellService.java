@@ -580,7 +580,7 @@ public final class HttpShellService {
                         .setTimeoutAfter(120_000L)
                         .setAutoCancel(true);
 
-                attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText);
+                attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText, actionPi, null, null);
 
                 nm.notify(Constants.NOTIF_TASK, b.build());
             }
@@ -1507,7 +1507,7 @@ public final class HttpShellService {
                 .addAction(0, "拒绝", denyPi)
                 .setOngoing(true);
 
-        attachFocusCapsule(ctx, cb, "⚠️ 安全确认", "模型试图执行：" + shortCmd, "权限请求", "允许操作", "安全确认");
+        attachFocusCapsule(ctx, cb, "⚠️ 安全确认", "模型试图执行：" + shortCmd, "权限请求", "允许", "安全确认", allowPi, "拒绝", denyPi);
 
         Notification n = cb.build();
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -1522,6 +1522,7 @@ public final class HttpShellService {
     private static String compactCapsuleText(String detail) {
         if (detail == null || detail.trim().isEmpty()) return "正在执行";
         String s = detail.trim();
+        if (s.contains("智能体") || s.contains("分析") || s.contains("执行任务") || s.contains("任务...")) return "分析执行中";
         if (s.contains("命令") || s.contains("bash") || s.contains("shell") || s.contains("exec")) return "执行命令中";
         if (s.contains("写") || s.contains("修改") || s.contains("创建") || s.contains("patch")) return "修改文件中";
         if (s.contains("读") || s.contains("cat") || s.contains("查看")) return "读取文件中";
@@ -1532,11 +1533,13 @@ public final class HttpShellService {
         if (s.contains("完成") || s.contains("成功") || s.contains("done")) return "任务已完成";
         if (s.contains("中断") || s.contains("停止") || s.contains("cancel") || s.contains("abort")) return "任务已中断";
         if (s.contains("失败") || s.contains("错误") || s.contains("503") || s.contains("400") || s.contains("error")) return "请求异常";
-        if (s.length() <= 6) return s;
-        return s.substring(0, 5) + "…";
+        if (s.contains("回答") || s.contains("提问") || s.contains("ask")) return "等待回答";
+        if (s.contains("确认") || s.contains("授权") || s.contains("confirm")) return "安全确认";
+        if (s.length() <= 5) return s;
+        return s.substring(0, 4) + "…";
     }
 
-    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText) {
+    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi) {
         b.setSubText("大肥鱼");
         b.setOnlyAlertOnce(true);
         b.setShowWhen(false);
@@ -1544,8 +1547,9 @@ public final class HttpShellService {
         b.setCategory(NotificationCompat.CATEGORY_STATUS);
         b.setPriority(NotificationCompat.PRIORITY_HIGH);
 
+        android.graphics.Bitmap whaleBmp = null;
         try {
-            android.graphics.Bitmap whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
+            whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
             if (whaleBmp != null) b.setLargeIcon(whaleBmp);
         } catch (Throwable ignored) {}
 
@@ -1572,13 +1576,19 @@ public final class HttpShellService {
 
             org.json.JSONObject bigIslandArea = new org.json.JSONObject();
 
-            // 左耳：大肥鱼小图标 + "大肥鱼"
+            // 左耳：小蓝鲸图片 + "大肥鱼"
             org.json.JSONObject leftTextInfo = new org.json.JSONObject();
             leftTextInfo.put("title", "大肥鱼");
             leftTextInfo.put("showHighlightColor", true);
             org.json.JSONObject leftImgText = new org.json.JSONObject();
             leftImgText.put("type", 1);
             leftImgText.put("textInfo", leftTextInfo);
+            if (whaleBmp != null) {
+                org.json.JSONObject leftPicInfo = new org.json.JSONObject();
+                leftPicInfo.put("type", 1);
+                leftPicInfo.put("pic", "miui.focus.pic_big_island");
+                leftImgText.put("picInfo", leftPicInfo);
+            }
             bigIslandArea.put("imageTextInfoLeft", leftImgText);
 
             // 右耳：动态 4~6 字实时状态
@@ -1588,6 +1598,14 @@ public final class HttpShellService {
             bigIslandArea.put("textInfo", rightTextInfo);
 
             island.put("bigIslandArea", bigIslandArea);
+            if (whaleBmp != null) {
+                org.json.JSONObject smallIsland = new org.json.JSONObject();
+                org.json.JSONObject smallPicInfo = new org.json.JSONObject();
+                smallPicInfo.put("type", 1);
+                smallPicInfo.put("pic", "miui.focus.pic_small_island");
+                smallIsland.put("picInfo", smallPicInfo);
+                island.put("smallIslandArea", smallIsland);
+            }
             paramV2.put("param_island", island);
 
             org.json.JSONObject baseInfo = new org.json.JSONObject();
@@ -1602,13 +1620,42 @@ public final class HttpShellService {
             hintInfo.put("colorContent", "#58A6FF");
             hintInfo.put("colorContentDark", "#58A6FF");
 
-            if (actionTitle != null && !actionTitle.isEmpty()) {
+            org.json.JSONArray actionsArr = new org.json.JSONArray();
+            if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
                 org.json.JSONObject actionInfo = new org.json.JSONObject();
+                actionInfo.put("action", "miui.focus.action_1");
                 actionInfo.put("title", actionTitle);
                 actionInfo.put("actionIntentType", 2);
                 hintInfo.put("actionInfo", actionInfo);
+
+                org.json.JSONObject a1 = new org.json.JSONObject();
+                a1.put("action", "miui.focus.action_1");
+                a1.put("title", actionTitle);
+                a1.put("actionIntentType", 2);
+                actionsArr.put(a1);
             }
+
+            if (secondaryActionPi != null && secondaryActionTitle != null && !secondaryActionTitle.isEmpty()) {
+                org.json.JSONObject a2 = new org.json.JSONObject();
+                a2.put("action", "miui.focus.action_2");
+                a2.put("title", secondaryActionTitle);
+                a2.put("actionIntentType", 2);
+                actionsArr.put(a2);
+            }
+
+            if (actionsArr.length() > 0) {
+                paramV2.put("actions", actionsArr);
+            }
+
             paramV2.put("hintInfo", hintInfo);
+
+            if (whaleBmp != null) {
+                org.json.JSONObject picInfo = new org.json.JSONObject();
+                picInfo.put("type", 1);
+                picInfo.put("pic", "miui.focus.icon_feature");
+                picInfo.put("picDark", "miui.focus.icon_feature");
+                paramV2.put("picInfo", picInfo);
+            }
 
             org.json.JSONObject root = new org.json.JSONObject();
             root.put("param_v2", paramV2);
@@ -1616,6 +1663,24 @@ public final class HttpShellService {
             if (extras != null) {
                 extras.putString("miui.focus.param", root.toString());
                 extras.putBoolean("enableFloat", true);
+
+                if (whaleBmp != null && Build.VERSION.SDK_INT >= 23) {
+                    android.os.Bundle pics = new android.os.Bundle();
+                    android.graphics.drawable.Icon whaleIcon = android.graphics.drawable.Icon.createWithBitmap(whaleBmp);
+                    pics.putParcelable("miui.focus.pic_big_island", whaleIcon);
+                    pics.putParcelable("miui.focus.pic_small_island", whaleIcon);
+                    pics.putParcelable("miui.focus.icon_feature", whaleIcon);
+                    extras.putBundle("miui.focus.pics", pics);
+                }
+
+                if (primaryActionPi != null) {
+                    android.os.Bundle actionBundle = new android.os.Bundle();
+                    actionBundle.putParcelable("miui.focus.action_1", primaryActionPi);
+                    if (secondaryActionPi != null) {
+                        actionBundle.putParcelable("miui.focus.action_2", secondaryActionPi);
+                    }
+                    extras.putBundle("miui.focus.actions", actionBundle);
+                }
             }
         } catch (Throwable ignored) {}
     }
@@ -1668,6 +1733,13 @@ public final class HttpShellService {
 
             String shortMsg = (text == null || text.trim().isEmpty()) ? "智能体正在执行自动化任务..." : shortText(text);
 
+            // 开启新任务时，立即顶掉并清除之前的完成卡片和终止卡片
+            if (nm != null) {
+                nm.cancel(Constants.NOTIF_TASK);
+                nm.cancel(Constants.NOTIF_TASK_STOPPED);
+                nm.cancel(Constants.NOTIF_ASK_QUESTION);
+            }
+
             String displayTitle = title != null && !title.isEmpty() ? safeDisplay(title) : "正在执行";
             String displayDetail = text != null && !text.isEmpty() ? safeDisplay(text) : "智能体正在分析并执行任务...";
             String capsuleText = compactCapsuleText(text != null && !text.isEmpty() ? text : title);
@@ -1685,7 +1757,7 @@ public final class HttpShellService {
                     .addAction(stopAction)
                     .setOngoing(true);
 
-            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText);
+            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, null, null);
 
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
@@ -1717,9 +1789,27 @@ public final class HttpShellService {
                 .setAutoCancel(true)
                 .setOngoing(true);
 
-        attachFocusCapsule(ctx, nb, "💬 助手提问", safeDisplay(shortQ), "等待回答", opts.length > 0 ? opts[0] : "回答", "等待回答");
-
-        for (int i = 0; i < opts.length; i++) {
+        PendingIntent pi0 = null;
+        PendingIntent pi1 = null;
+        if (opts.length > 0) {
+            Intent intent0 = new Intent(ctx, ConfirmReceiver.class)
+                    .setAction(ConfirmReceiver.ACTION_ASK_ANSWER)
+                    .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch)
+                    .putExtra(ConfirmReceiver.EXTRA_ANSWER, opts[0]);
+            pi0 = PendingIntent.getBroadcast(ctx, 40, intent0,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            nb.addAction(0, opts[0], pi0);
+        }
+        if (opts.length > 1) {
+            Intent intent1 = new Intent(ctx, ConfirmReceiver.class)
+                    .setAction(ConfirmReceiver.ACTION_ASK_ANSWER)
+                    .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch)
+                    .putExtra(ConfirmReceiver.EXTRA_ANSWER, opts[1]);
+            pi1 = PendingIntent.getBroadcast(ctx, 41, intent1,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            nb.addAction(0, opts[1], pi1);
+        }
+        for (int i = 2; i < opts.length; i++) {
             String opt = opts[i];
             Intent intent = new Intent(ctx, ConfirmReceiver.class)
                     .setAction(ConfirmReceiver.ACTION_ASK_ANSWER)
@@ -1729,6 +1819,8 @@ public final class HttpShellService {
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             nb.addAction(0, opt, pi);
         }
+
+        attachFocusCapsule(ctx, nb, "💬 助手提问", safeDisplay(shortQ), "等待回答", opts.length > 0 ? opts[0] : "允许", "等待回答", pi0, opts.length > 1 ? opts[1] : null, pi1);
 
         // 挂载 RemoteInput 直接就地文本输入快捷回复
         androidx.core.app.RemoteInput remoteInput = new androidx.core.app.RemoteInput.Builder(ConfirmReceiver.EXTRA_REPLY_TEXT)
