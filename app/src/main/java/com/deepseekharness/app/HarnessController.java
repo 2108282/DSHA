@@ -4876,9 +4876,14 @@ public class HarnessController {
                 timing.append("清场+会话自检 ").append(System.currentTimeMillis() - tPrev).append("ms · ");
                 tPrev = System.currentTimeMillis();
                 setProgress("正在启动 Web UI", 0);
-                proot.ensureRuntimeFiles();
-                ensureDangerGuard(); // 安全包装器缺失则自动补装
-                ensureBashGuardPatch(); // bash 工具 lib 强制加载守卫（不依赖重装）
+                // 三步都是幂等写文件，常态下只是确认「已经在了」，实测合计 364~393ms ——
+                // 这是启动路径上最后一个同步大项。资产版本没变、guard 也在，就整段跳过。
+                if (!runtimeFilesFresh()) {
+                    proot.ensureRuntimeFiles();
+                    ensureDangerGuard(); // 安全包装器缺失则自动补装
+                    ensureBashGuardPatch(); // bash 工具 lib 强制加载守卫（不依赖重装）
+                    markRuntimeFilesFresh();
+                }
                 timing.append("运行文件+守卫 ").append(System.currentTimeMillis() - tPrev).append("ms · ");
                 tPrev = System.currentTimeMillis();
                 // 校准 bundles 必须在 dsh 起来之前做完（它读到解析不到的 bundle 就直接退出），
@@ -5374,6 +5379,36 @@ public class HarnessController {
         }, "dsha-io-later");
         t.setDaemon(true);
         t.start();
+    }
+
+    /** 运行文件与守卫这三步（ensureRuntimeFiles / ensureDangerGuard / ensureBashGuardPatch）
+     *  都是幂等写文件，常态下只是逐个确认「已经在了」—— 真机实测合计 364~393ms，
+     *  是现在启动路径上唯一剩下的同步大项。
+     *
+     *  <p>判据：rootfs 里的标记文件内容等于当前 BUILTIN_ASSET_VERSION，且最关键的产物
+     *  dsh-guard.sh 确实在。改了 assets 就要升 BUILTIN_ASSET_VERSION（本来就是约定），
+     *  那时标记对不上、照旧全做一遍；重装 rootfs 时标记跟着消失，也会重做。 */
+    private boolean runtimeFilesFresh() {
+        try {
+            java.io.File marker = rootfsFile("root/.dsha-runtime-stamp");
+            if (!marker.isFile()) return false;
+            String v = new String(java.nio.file.Files.readAllBytes(marker.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8).trim();
+            if (!BUILTIN_ASSET_VERSION.equals(v)) return false;
+            // 标记在但 guard 脚本被删了（用户手动清理过）→ 不能信标记
+            return rootfsFile("root/dsh-guard.sh").isFile();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private void markRuntimeFilesFresh() {
+        try {
+            java.io.File marker = rootfsFile("root/.dsha-runtime-stamp");
+            java.nio.file.Files.write(marker.toPath(),
+                    BUILTIN_ASSET_VERSION.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 会话目录的现状指纹：目录 mtime + 直接子项个数。空串＝拿不到，那就照扫不敢跳。 */    private String sessionsStamp() {
