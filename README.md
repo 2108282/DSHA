@@ -22,19 +22,6 @@
 ---
 
 
-## 🌟 Forktest 分支专属修复：全面兼容 Stellar 与澎湃 OS 15/16
-
-在最新的 **小米澎湃 OS (HyperOS / Android 15+)** 等实行强 SELinux 沙箱隔离的系统上，传统的 `Shizuku.bindUserService()` 会因底层 `app_process` 无法跨进程发送 Binder 而被系统静默拦截，导致状态永久卡在 `binding=true, bound=false`。
-
-本分支对底层 ADB / Shizuku 桥接模块（`ShizukuShell.java` 与 `HttpShellService.java`）进行了全方位的降维重构与加固：
-- **引入 `execDirect` 降维打击兜底方案**：彻底放弃脆弱的 `UserService` / `ContentProvider` 握手。在服务未就绪时，直接通过底层的 `IShizukuService.newProcess` 管道原生执行 Shell 命令；
-- **合并系统标准流**：通过 `2>&1` 技术将错误流与标准流在内核态合并读取，避免双重管道死锁，完美实现零延迟、零卡顿的底层系统级控制；
-- **重构环境生命周期**：在 `DshaApp.onCreate()` 增加 `:shizuku` 进程强隔离防御，并在 `UserServiceArgs` 中补齐了针对 Shizuku 13.x 必填的 `.processNameSuffix` 等多项规范化参数；
-- **新增诊断端点**：提供 `curl http://127.0.0.1:3090/app/shizuku` 的状态诊断直达接口。
-
-**效果：即使不用系统开发者选项中的「无线调试」，只要装有以 Root/Boot 运行的 Stellar 或 Shizuku，DSHA 即可完美获得 `uid=2000` 甚至 `root` 的底层控制权！**
-
----
 ## 这是什么
 
 DeepSeek Harness（`@deepseek-ai/dsh`）是 DeepSeek 官方的 agent harness，类 Claude Code。
