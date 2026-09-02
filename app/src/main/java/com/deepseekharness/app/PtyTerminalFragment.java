@@ -54,6 +54,7 @@ public final class PtyTerminalFragment extends Fragment
      * 手机软键盘没有 Esc、Ctrl 和方向键，缺了这排 TUI 基本没法用。
      */
     private static final String[][] KEYS = {
+            {"中文", null},
             {"ESC", "\033"},
             {"TAB", "\t"},
             {"CTRL", null},
@@ -187,7 +188,9 @@ public final class PtyTerminalFragment extends Fragment
             b.setLayoutParams(lp);
             final String seq = k[1];
             final String label = k[0];
-            if (seq == null) {
+            if ("中文".equals(label)) {
+                b.setOnClickListener(v -> promptTextInput());
+            } else if (seq == null) {
                 if ("CTRL".equals(label)) ctrlBtn = b;
                 else altBtn = b;
                 b.setOnClickListener(v -> toggleModifier(label));
@@ -197,6 +200,53 @@ public final class PtyTerminalFragment extends Fragment
             box.addView(b);
         }
         paintModifiers();
+    }
+
+    /** 文本输入对话框 —— 专门给中文和长命令用。
+     *
+     *  <p>Termux 的 {@code TerminalView} 把 IME 的 inputType 设成 {@code TYPE_NULL}：
+     *  好处是所有按键都走 KeyEvent，终端要的按键语义（Ctrl 组合、方向键、退格）分毫不差；
+     *  代价是相当多的中文输入法在 TYPE_NULL 下干脆不给候选词 —— 拼音敲下去出不了字。
+     *
+     *  <p>改 inputType 能让中文进来，但那会把退格和回车变成 IME 的编辑操作，
+     *  终端的按键语义就散了，代价比收益大。所以不动那条路，另开一个输入框：中文、
+     *  长命令、整段文本都在这里打，确定之后整段写进 PTY。 */
+    private void promptTextInput() {
+        PtySession s = session;
+        if (s == null || !s.isRunning()) {
+            Toast.makeText(requireContext(), "会话已结束，切走再回来可重开", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final android.widget.EditText et = new android.widget.EditText(requireContext());
+        et.setHint("中文、长命令、整段文本");
+        et.setMinLines(2);
+        et.setMaxLines(6);
+        et.setGravity(Gravity.TOP | Gravity.START);
+        et.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        int pad = dp(12);
+        et.setPadding(pad, pad, pad, pad);
+        new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                .setTitle("输入文本")
+                .setView(et)
+                .setNegativeButton("取消", null)
+                .setNeutralButton("发送", (d, w) -> send(et.getText().toString()))
+                // 回车用 \r：终端里的 Enter 是 CR，不是 \n
+                .setPositiveButton("发送并回车", (d, w) -> send(et.getText().toString() + "\r"))
+                .show();
+        et.requestFocus();
+        // 对话框弹出来软键盘不一定跟着上来，主动叫一次
+        et.postDelayed(() -> {
+            try {
+                android.view.inputmethod.InputMethodManager im =
+                        (android.view.inputmethod.InputMethodManager)
+                                requireContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (im != null) {
+                    im.showSoftInput(et, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+                }
+            } catch (Throwable ignored) {
+            }
+        }, 120);
     }
 
     /** Ctrl / Alt 是状态键：按一下亮起来，下一个字符带上这个修饰键（TerminalView 会来问）。 */
