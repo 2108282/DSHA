@@ -1712,13 +1712,13 @@ public final class HttpShellService {
 
     private void showRunningNotification(String title, String text) {
         try {
-            if (Build.VERSION.SDK_INT >= 26) {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (Build.VERSION.SDK_INT >= 26 && nm != null) {
                 NotificationChannel ch = new NotificationChannel(
                         Constants.CHANNEL_AGENT_RUNNING, "Agent 运行状态",
                         NotificationManager.IMPORTANCE_HIGH);
                 ch.setDescription("智能体运行中实时操作步骤通知");
-                NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-                if (nm != null) nm.createNotificationChannel(ch);
+                nm.createNotificationChannel(ch);
             }
 
             Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
