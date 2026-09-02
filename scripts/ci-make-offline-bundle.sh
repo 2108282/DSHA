@@ -117,9 +117,9 @@ for f in webui-sidebar.patch bash-guard.patch webui-polyfill.sh webui-origin-por
   fi
 done
 # 内置插件源码 + 预置脚本（offline-provision.sh 里调用，实现「解压即用」）
-if [ -d "$REPO_ROOT/app/src/main/assets/mobile-nav" ]; then
+if [ -d "$REPO_ROOT/app/src/main/assets/dsh-web-mobile" ]; then
   sudo mkdir -p "$ROOTFS_DIR/root/patches/builtin"
-  sudo cp -r "$REPO_ROOT/app/src/main/assets/mobile-nav" "$ROOTFS_DIR/root/patches/builtin/"
+  sudo cp -r "$REPO_ROOT/app/src/main/assets/dsh-web-mobile" "$ROOTFS_DIR/root/patches/builtin/"
   sudo cp -r "$REPO_ROOT/app/src/main/assets/device-shell-guide" "$ROOTFS_DIR/root/patches/builtin/"
   sudo cp -r "$REPO_ROOT/app/src/main/assets/task-notifier" "$ROOTFS_DIR/root/patches/builtin/"
   sudo cp -r "$REPO_ROOT/app/src/main/assets/status-overlay" "$ROOTFS_DIR/root/patches/builtin/"

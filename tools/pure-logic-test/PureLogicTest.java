@@ -588,10 +588,14 @@ public final class PureLogicTest {
         eqi("dirs: 存档扫描两个位置", 2, scan.length);
         eq("dirs: 新目录排在前", PublicDirs.ARCHIVES, scan[0]);
         eq("dirs: 老目录兜底在后", PublicDirs.LEGACY, scan[1]);
-        // 插件名当文件名：scope 里的斜杠会被当路径分隔符
+        // 插件名当文件名：scope 里的斜杠会被当路径分隔符。
+        // 这里原来拿内置的移动端插件举例，它改名成 dsh-web-mobile 之后不再是 scoped 名字，
+        // 换一个仍然带 scope 的包，断言的意图才还在。
         eq("dirs: scoped 插件名去掉 @ 并把 / 换成 -",
-                "dsh-external-dsh-mobile-nav",
-                PublicDirs.safeFileName("@dsh-external/dsh-mobile-nav"));
+                "deepseek-ai-dsh-client-ui-layout",
+                PublicDirs.safeFileName("@deepseek-ai/dsh-client-ui-layout"));
+        eq("dirs: 改名后的内置移动端插件不带 scope，原样",
+                "dsh-web-mobile", PublicDirs.safeFileName("dsh-web-mobile"));
         eq("dirs: 普通插件名原样", "dsh-status-overlay",
                 PublicDirs.safeFileName("dsh-status-overlay"));
         eq("dirs: 非法文件名字符被替换", "a-b-c", PublicDirs.safeFileName("a:b?c"));

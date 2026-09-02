@@ -1066,7 +1066,7 @@ public class HarnessController {
 
             // 内置插件的实体位置：解析不到时优先尝试建链接救回来
             java.util.Map<String, String> builtinReal = new java.util.LinkedHashMap<>();
-            builtinReal.put("@dsh-external/dsh-mobile-nav", "/root/dsha-mobile-nav");
+            builtinReal.put("dsh-web-mobile", "/root/dsha-web-mobile");
             builtinReal.put("dsh-device-shell-guide", "/root/dsha-device-shell-guide");
             builtinReal.put("dsh-task-notifier", "/root/dsha-task-notifier");
             builtinReal.put("dsh-status-overlay", "/root/dsha-status-overlay");
@@ -1248,7 +1248,7 @@ public class HarnessController {
     /** 三个内置插件是否都已注册（bundles 与 dependencies 双在）。 */
     private boolean allBuiltinRegistered() {
         return guideRegistered("dsh-device-shell-guide")
-                && guideRegistered("@dsh-external/dsh-mobile-nav")
+                && guideRegistered("dsh-web-mobile")
                 && guideRegistered("dsh-task-notifier");
     }
 
@@ -1320,7 +1320,7 @@ public class HarnessController {
     /** 内置插件包名 → assets 目录名。方案 B 直接从 APK 写入，连中间实体都不需要。 */
     private static String builtinAssetDir(String pkgName) {
         if ("dsh-device-shell-guide".equals(pkgName)) return "device-shell-guide";
-        if ("@dsh-external/dsh-mobile-nav".equals(pkgName)) return "mobile-nav";
+        if ("dsh-web-mobile".equals(pkgName)) return "dsh-web-mobile";
         if ("dsh-task-notifier".equals(pkgName)) return "task-notifier";
         if ("dsh-status-overlay".equals(pkgName)) return "status-overlay";
         return null;
@@ -1472,7 +1472,7 @@ public class HarnessController {
         }
     }
     /** 确保配置自愈脚本已写入 rootfs（启动前把超限 timeoutMs 钳回合法值，防 ValidationError 崩溃 WebUI） */
-    /** 每次启动前校验内置 bundle（mobile-nav / device-shell-guide）：
+    /** 每次启动前校验内置 bundle（dsh-web-mobile / device-shell-guide）：
      *  若被 dsh plugin reconcile 清掉/链接丢失，自动补回注册（幂等，秒级）。
      *  防止"插件莫名其妙消失导致没效果"。 */
     /** 包级可见：{@link PluginController} 装完插件后要补齐 bundles 声明。 */
@@ -1488,7 +1488,7 @@ public class HarnessController {
             org.json.JSONArray bundles = profObj.optJSONArray("bundles");
             if (bundles == null) return;
             String[][] builtins = {
-                    {"@dsh-external/dsh-mobile-nav", "/root/dsha-mobile-nav"},
+                    {"dsh-web-mobile", "/root/dsha-web-mobile"},
                     {"dsh-device-shell-guide", "/root/dsha-device-shell-guide"},
                     {"dsh-task-notifier", "/root/dsha-task-notifier"},
                     {"dsh-status-overlay", "/root/dsha-status-overlay"},
@@ -1817,6 +1817,7 @@ public class HarnessController {
     /** 启动自愈：确保内置插件（设备引导 / 任务通知 / 移动端适配）实体在位且注册有效。
      *  不再只依赖步骤⑥ —— ⑥ 可能跑在 profile 生成之前，也可能被版本标记判定跳过。 */
     public void ensureBuiltinPluginsReady() {
+        migrateMobileNavRename();
         IO.execute(() -> {
             try {
                 if (!proot.isInstalled()) return;
@@ -2204,19 +2205,19 @@ public class HarnessController {
         } catch (Throwable ignored) {
         }
         // ===== 原生内置移动端 UI 适配（免第三方插件） =====
-        // 把 @dsh-external/dsh-mobile-nav 的 client 产物直接注入 web-app 前端，
+        // 把 dsh-web-mobile 的 client 产物直接注入 web-app 前端，
         // 手机端单栏/抽屉/汉堡/全屏设置开箱即用。幂等，失败不阻塞安装。
         try {
             // 布局迁移：官方版改 lib/ 子目录布局。旧 rootfs（根目录布局）marker 存在
             // 会跳过重注入 → 检测 lib/client.js 不存在（旧布局/缺失）时删 marker 强制重注入；
             // 新布局（含离线预置）存在则保留 marker，维持「解压即用」零注入。
             java.io.File mobileNew = new java.io.File(proot.getRootfsDir(),
-                    "root/dsha-mobile-nav/lib/client.js");
+                    "root/dsha-web-mobile/lib/client.js");
             if (!mobileNew.isFile()) {
                 java.io.File mobileMarker = new java.io.File(proot.getRootfsDir(),
-                        "root/dsha-mobile-nav-installed");
+                        "root/dsha-web-mobile-installed");
                 if (mobileMarker.exists()) mobileMarker.delete();
-                android.util.Log.i("DSHA", "mobile-nav 布局升级：删 marker 强制重注入官方版");
+                android.util.Log.i("DSHA", "dsh-web-mobile 布局升级：删 marker 强制重注入官方版");
             }
             ensureNativeMobileNav();
         } catch (Throwable ignored) {
@@ -3214,7 +3215,7 @@ public class HarnessController {
             noteFsWritePatchResult(r1.get("fs-write-patch.sh"));
         } catch (Throwable ignored) {
         }
-        // 启动前自愈：内置插件（mobile-nav/device-shell-guide）注册校验，
+        // 启动前自愈：内置插件（dsh-web-mobile/device-shell-guide）注册校验，
         // 被 dsh plugin reconcile 清掉/丢失时自动补回（幂等，纯 Java）
         try {
             ensureBuiltinBundles();
@@ -3456,16 +3457,16 @@ public class HarnessController {
      * 移除 deepseek-harness CLI 对 --host 0.0.0.0 的拒绝（底层 webServer 本就支持）。
      * 幂等；返回 true 表示本次可用 0.0.0.0。
      */
-    /** 内置移动端 UI 适配：把 @dsh-external/dsh-mobile-nav 的 client 产物注入 web-app 前端。
+    /** 内置移动端 UI 适配：把 dsh-web-mobile 的 client 产物注入 web-app 前端。
      *  原则：
      *  - 不依赖第三方插件仓库（assets 里自带完整 client.js/index.js/cordis.patch.yml）；
      *  - 注入点是「web-app 的 dist 静态目录 + cordis.patch insert」；
-     *  - 幂等：已注入（/root/dsha-mobile-nav-installed 标记）则跳过；
+     *  - 幂等：已注入（/root/dsha-web-mobile-installed 标记）则跳过；
      *  - 失败绝不影响安装（catch 吞掉）。
      */
     /** 一次性迁移：把旧的内置 UI 适配插件（dsh-client-ui-mobile-adapt）下线。
      *
-     *  <p>内置的移动端适配换成 {@code @dsh-external/dsh-mobile-nav}
+     *  <p>内置的移动端适配换成 {@code dsh-web-mobile}
      *  （上游 mexiaosqwq/dsh-web-mobile，MIT）—— 旧那个（Hotsteel2901/
      *  dsh-client-ui-mobile-adapt）作者长期停更。两个插件都靠 DOM/CSS 改造同一批
      *  界面元素，同时激活必然打架：抽屉/浮层出两份、事件绑定两遍。所以旧的要真正
@@ -3483,7 +3484,7 @@ public class HarnessController {
      */
     private void migrateLegacyMobileAdapt() {
         final String OLD = "dsh-client-ui-mobile-adapt";
-        final String NEW = "@dsh-external/dsh-mobile-nav";
+        final String NEW = "dsh-web-mobile";
         try {
             java.io.File rootfs = proot.getRootfsDir();
             java.io.File oldReal = new java.io.File(rootfs, "root/dsha-mobile-adapt");
@@ -3610,20 +3611,20 @@ public class HarnessController {
         try {
             // 换插件前先把旧的下线：两个 UI 适配同时激活会互相打架
             migrateLegacyMobileAdapt();
-            final String NAME = "@dsh-external/dsh-mobile-nav";
+            final String NAME = "dsh-web-mobile";
             // 用户主动禁用（.disabled 存在）→ 只更新实体文件（assets 新版本写到
             // 实体目录，重新启用时拿到的是新版），不 touch marker / 不注册 bundle /
             // 不建链接（否则资产版本变化删 marker 后会把禁用的插件强制重新启用）。
             boolean userDisabled = userDisabledPlugin(NAME);
-            java.io.File aDir = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-nav");
+            java.io.File aDir = new java.io.File(proot.getRootfsDir(), "root/dsha-web-mobile");
             aDir.mkdirs();
             // 实体始终更新（幂等，秒级）
-            writeAssetTo("mobile-nav/lib/client.js", new java.io.File(aDir, "lib/client.js"));
-            writeAssetTo("mobile-nav/lib/index.js", new java.io.File(aDir, "lib/index.js"));
-            writeAssetTo("mobile-nav/cordis.patch.yml", new java.io.File(aDir, "cordis.patch.yml"));
-            writeAssetTo("mobile-nav/package.json", new java.io.File(aDir, "package.json"));
+            writeAssetTo("dsh-web-mobile/lib/client.js", new java.io.File(aDir, "lib/client.js"));
+            writeAssetTo("dsh-web-mobile/lib/index.js", new java.io.File(aDir, "lib/index.js"));
+            writeAssetTo("dsh-web-mobile/cordis.patch.yml", new java.io.File(aDir, "cordis.patch.yml"));
+            writeAssetTo("dsh-web-mobile/package.json", new java.io.File(aDir, "package.json"));
             if (userDisabled) {
-                android.util.Log.i("DSHA", "mobile-nav 已被用户禁用：仅更新实体，跳过注册/注入");
+                android.util.Log.i("DSHA", "dsh-web-mobile 已被用户禁用：仅更新实体，跳过注册/注入");
                 return;
             }
             // 1) 注入脚本（保留幂等标记；手动 cp 已废弃——双通道加载会冲突导致
@@ -3635,12 +3636,12 @@ public class HarnessController {
                     "  \\( -path '*dsh-client-connection/lib/client' -o -path '*dsh-web-app/dist*/client' -o -path '*dsh-web-app/lib/client' \\) " +
                     "  -type d 2>/dev/null | head -1); " +
                     "if [ -z \"$DST\" ]; then " +
-                    "echo 'NOT_FOUND: 未找到 web-app client 目录 '$(date) >> /root/dsha-mobile-nav.log; " +
+                    "echo 'NOT_FOUND: 未找到 web-app client 目录 '$(date) >> /root/dsha-web-mobile.log; " +
                     "echo '[DSHA] 未找到 web-app client 目录，跳过移动端适配'; exit 0; fi; " +
                     "if [ -n \"$DST\" ] && [ -f \"$DST/dsh-client-ui-mobile-adapt.js\" ]; then " +
                     "rm -f \"$DST/dsh-client-ui-mobile-adapt.js\" && echo '[DSHA] 已清理旧手动注入（改用 bundle 注册）'; fi; " +
-                    "echo 'CLEANED: '$(date) >> /root/dsha-mobile-nav.log; " +
-                    "touch /root/dsha-mobile-nav-installed && echo OK";
+                    "echo 'CLEANED: '$(date) >> /root/dsha-web-mobile.log; " +
+                    "touch /root/dsha-web-mobile-installed && echo OK";
             java.io.File sF = new java.io.File(proot.getRootfsDir(), "root/dsha-mobile-inject.sh");
             java.nio.file.Files.write(sF.toPath(), script.getBytes(StandardCharsets.UTF_8));
             // 3) 执行注入（幂等标记存在则跳过）
@@ -3653,11 +3654,11 @@ public class HarnessController {
             java.io.File indexJs = new java.io.File(aDir, "lib/index.js");
             if (!clientJs.isFile() || clientJs.length() == 0
                     || !indexJs.isFile() || indexJs.length() == 0) {
-                proot.execAndRead("rm -f /root/dsha-mobile-nav-installed; echo dropped");
-                android.util.Log.w("DSHA", "mobile-nav 实体不完整（client.js/index.js 缺失或为空）→ 已丢弃 marker 重注入");
+                proot.execAndRead("rm -f /root/dsha-web-mobile-installed; echo dropped");
+                android.util.Log.w("DSHA", "dsh-web-mobile 实体不完整（client.js/index.js 缺失或为空）→ 已丢弃 marker 重注入");
             }
             String r = proot.execAndRead(
-                    "if [ -f /root/dsha-mobile-nav-installed ]; then echo ALREADY; "
+                    "if [ -f /root/dsha-web-mobile-installed ]; then echo ALREADY; "
                     + "else bash /root/dsha-mobile-inject.sh; fi; "
                     + "rm -f /root/dsha-mobile-inject.sh");
             // 4) 【新增】profile 注册：把移动端适配作为 web profile 的 bundle 挂上
@@ -3674,8 +3675,8 @@ public class HarnessController {
      *  幂等：已在 bundles 则跳过。配合启动前 fix-stale-bundles.sh 自愈兜底。 */
     private void registerMobileNavBundle() {
         try {
-            final String NAME = "@dsh-external/dsh-mobile-nav";
-            final String REAL = "/root/dsha-mobile-nav";
+            final String NAME = "dsh-web-mobile";
+            final String REAL = "/root/dsha-web-mobile";
             java.io.File pf = new java.io.File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
             if (!pf.isFile()) return;
             String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
@@ -3910,7 +3911,7 @@ public class HarnessController {
             java.io.File pkg = new java.io.File(proot.getRootfsDir(),
                     "root/.dsh/profiles/web/package.json");
             if (!pkg.isFile()) return 0;   // profile 还没生成，启动一次 Web 再说
-            String[] names = {"dsh-device-shell-guide", "@dsh-external/dsh-mobile-nav",
+            String[] names = {"dsh-device-shell-guide", "dsh-web-mobile",
                     "dsh-task-notifier"};
             boolean[] before = new boolean[names.length];
             for (int i = 0; i < names.length; i++) {
@@ -4512,11 +4513,11 @@ public class HarnessController {
      *  由 installGuard 末尾的 runStep 写入（先删 marker 后写版本 → 中途失败
      *  版本未写，下次启动版本不一致仍会重跑，自愈闭环不中断）。 */
     private static final String STEP6_VERSION = "4";
-    /** 内置插件资产版本：mobile-nav / device-shell-guide 的 client.js 等
+    /** 内置插件资产版本：dsh-web-mobile / device-shell-guide 的 client.js 等
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
      *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
      *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
-    private static final String BUILTIN_ASSET_VERSION = "23";
+    private static final String BUILTIN_ASSET_VERSION = "24";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
      *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，
@@ -4537,7 +4538,7 @@ public class HarnessController {
             String missing = missingBuiltinEntities();
             if (sameVersion && missing.isEmpty()) return;
             proot.execAndRead(
-                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
+                    "rm -f /root/dsha-web-mobile-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
                     + "echo refreshed");
             android.util.Log.i("DSHA", "内置插件资产要重注入（版本"
                     + (sameVersion ? "一致" : "变化：" + (r == null ? "?" : r.trim()))
@@ -4550,7 +4551,7 @@ public class HarnessController {
      *  只查有 {@code -installed} marker 的那几个 —— 与上面删 marker 的范围保持一致，
      *  免得又出现「一处检查、另一处漏掉」。 */
     private String missingBuiltinEntities() {
-        String[] dirs = {"dsha-mobile-nav", "dsha-device-shell-guide", "dsha-status-overlay"};
+        String[] dirs = {"dsha-web-mobile", "dsha-device-shell-guide", "dsha-status-overlay"};
         StringBuilder sb = new StringBuilder();
         for (String d : dirs) {
             if (!new java.io.File(proot.getRootfsDir(), "root/" + d).isDirectory()) {
@@ -5286,13 +5287,13 @@ public class HarnessController {
                 try {
                     if (from <= 21 && proot.isInstalled()) {
                         // 1) 老版本无 builtin-assets.version → 删旧 marker 强制重注入官方版
-                        //    （老 rootfs 的 mobile-nav 是旧布局/旧内容，靠 STEP6 版本变化
+                        //    （老 rootfs 的 dsh-web-mobile 是旧布局/旧内容，靠 STEP6 版本变化
                         //    重跑⑥时 refreshBuiltinAssetMarkers 已处理；这里兜底删 marker）
                         String r = proot.execAndRead(
                                 "cat /root/.dsh/builtin-assets.version 2>/dev/null || echo NONE");
                         if (r == null || !r.trim().equals(BUILTIN_ASSET_VERSION)) {
                             proot.execAndRead(
-                                    "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; echo cleaned");
+                                    "rm -f /root/dsha-web-mobile-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; echo cleaned");
                             android.util.Log.i("DSHA", "迁移(≤v1.1.1)：已删内置插件 marker，等待重注入");
                         }
                         // 2) 老版本无离线包版本标记 → 写当前（避免误弹升级提示）
@@ -5306,7 +5307,7 @@ public class HarnessController {
                         // 旧版 profile 可能缺 dependencies 字段 / 用 file: 依赖，
                         // 触发一次 fix-stale-bundles 自愈（App 启动时会跑，这里显式跑一次）
                         proot.execAndRead(
-                                "rm -f /root/dsha-mobile-nav-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
+                                "rm -f /root/dsha-web-mobile-installed /root/dsha-device-shell-guide-installed /root/dsha-status-overlay-installed; "
                                 + "echo 'v1.0.x 迁移：删 marker 强制重注入'");
                         android.util.Log.i("DSHA", "迁移(v1.0.x)完成");
                     }
@@ -5381,6 +5382,46 @@ public class HarnessController {
         int i = out.indexOf("SESSION_HEALED");
         logActivity("会话自愈：" + out.substring(i, Math.min(out.length(), i + 60)).trim()
                 + "（原文件留 .pre-fix 备份）");
+    }
+
+    /** dsh-web-mobile 改名迁移（原 {@code @dsh-external/dsh-mobile-nav}）。
+     *
+     *  <p>上游 2026-08-30 把包名换成 dsh-web-mobile，旧 npm 名整包撤下（issue #40）。
+     *  我们是复制安置、不走 npm，撤包本身不影响装得上；但升级之后新旧两个名字会各占一个
+     *  实体目录、各注册一行 patch —— 同一个插件加载两遍，行为叠加，界面上会出现重复元素。
+     *
+     *  <p>清掉旧的三样：实体目录、安置标记、profile 依赖里的旧键。patch 行的源头就是实体
+     *  目录里的 cordis.patch.yml，目录一删，dsh 下次 reconcile 那行自然消失，不用碰 YAML。
+     *
+     *  <p>删目录走 DataPreserve.deleteRecursively（不跟随软链）—— 内置插件是软链安置过的，
+     *  用跟随软链的删法会顺着链接删到别处去，那个坑在 uninstall 兜底路径上踩过一次。 */
+    private void migrateMobileNavRename() {
+        try {
+            java.io.File old = rootfsFile("root/dsha-mobile-nav");
+            java.io.File mark = rootfsFile("root/dsha-mobile-nav-installed");
+            boolean had = old.exists() || mark.exists();
+            if (old.exists()) DataPreserve.deleteRecursively(old);
+            if (mark.exists()) mark.delete();
+            java.io.File pf = rootfsFile("root/.dsh/profiles/web/package.json");
+            if (pf.isFile()) {
+                String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()),
+                        StandardCharsets.UTF_8);
+                org.json.JSONObject root = new org.json.JSONObject(txt);
+                org.json.JSONObject deps = root.optJSONObject("dependencies");
+                if (deps != null && deps.has("@dsh-external/dsh-mobile-nav")) {
+                    deps.remove("@dsh-external/dsh-mobile-nav");
+                    java.nio.file.Files.write(pf.toPath(),
+                            root.toString(2).getBytes(StandardCharsets.UTF_8));
+                    had = true;
+                }
+            }
+            if (had) {
+                logActivity("已清理旧 dsh-mobile-nav 残留 —— 上游把它改名为 dsh-web-mobile，"
+                        + "新旧并存会让同一个插件加载两遍");
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("DSHA", "dsh-web-mobile 改名迁移失败（不致命）: " + t);
+        }
     }
 
     /** 延迟一段时间再排进 IO 队列。

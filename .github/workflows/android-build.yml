@@ -24,7 +24,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bundle/offline-rootfs.tar.gz
-          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'scripts/provision-builtin-plugins.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/webui-origin-port-patch.sh', 'app/src/main/assets/*.patch', 'app/src/main/assets/mobile-nav/**', 'app/src/main/assets/device-shell-guide/**', 'app/src/main/assets/task-notifier/**', 'app/src/main/assets/status-overlay/**') }}
+          key: offline-rootfs-${{ hashFiles('scripts/offline-provision.sh', 'scripts/ci-make-offline-bundle.sh', 'scripts/provision-builtin-plugins.sh', 'app/src/main/assets/rootfs-confirm-install.sh', 'app/src/main/assets/webui-polyfill.sh', 'app/src/main/assets/webui-origin-port-patch.sh', 'app/src/main/assets/*.patch', 'app/src/main/assets/dsh-web-mobile/**', 'app/src/main/assets/device-shell-guide/**', 'app/src/main/assets/task-notifier/**', 'app/src/main/assets/status-overlay/**') }}
 
       - name: Build offline rootfs bundle
         if: steps.cache.outputs.cache-hit != 'true'

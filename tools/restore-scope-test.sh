@@ -34,7 +34,7 @@ chk() {
 setup_device() {
   rm -rf "$B/root" "$B/pub"
   mkdir -p "$B/root/.dsh/profiles/web" "$B/pub/sessions"
-  echo '{"dependencies":{"dsh-mobile-nav":"link:/root/dsha-mobile-nav"}}' \
+  echo '{"dependencies":{"dsh-web-mobile":"link:/root/dsha-web-mobile"}}' \
       > "$B/root/.dsh/profiles/web/package.json"
   echo 'theme: dark'    > "$B/root/.dsh/settings.yaml"
   echo 'OLD-CRED'       > "$B/root/.dsh/.credentials.yaml"

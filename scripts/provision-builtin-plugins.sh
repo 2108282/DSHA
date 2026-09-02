@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # provision-builtin-plugins.sh — 在离线 rootfs 内预置 DSHA 内置插件
-# （@dsh-external/dsh-mobile-nav / dsh-device-shell-guide / dsh-task-notifier），
+# （dsh-web-mobile / dsh-device-shell-guide / dsh-task-notifier），
 # 让离线包「解压即用」：首启无需运行时注入。
 #
 # 由 offline-provision.sh（chroot 内）调用；插件源在 /root/patches/builtin/。
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 SRC=/root/patches/builtin
-DEST_MOBILE=/root/dsha-mobile-nav
+DEST_MOBILE=/root/dsha-web-mobile
 DEST_GUIDE=/root/dsha-device-shell-guide
 DEST_NOTIFIER=/root/dsha-task-notifier
 DEST_OVERLAY=/root/dsha-status-overlay
@@ -35,23 +35,23 @@ echo "==> 预置 DSHA 内置插件"
 # 静默失败，却照样立了「已装好」的凭证。结果离线包里的插件只剩 package.json +
 # cordis.patch.yml，main 指向的 lib/index.js 不存在 —— dsh 加载它必然失败，
 # 而 App 因为 marker 在就永远不会来补。现在一律先校验再立 marker。
-if [ -d "$SRC/mobile-nav" ]; then
+if [ -d "$SRC/dsh-web-mobile" ]; then
   mkdir -p "$DEST_MOBILE/lib"
-  cp -f "$SRC/mobile-nav/package.json" "$DEST_MOBILE/"
-  cp -f "$SRC/mobile-nav/cordis.patch.yml" "$DEST_MOBILE/"
-  cp -f "$SRC/mobile-nav/lib/index.js" "$DEST_MOBILE/lib/"
-  cp -f "$SRC/mobile-nav/lib/client.js" "$DEST_MOBILE/lib/"
-  cp -f "$SRC/mobile-nav/LICENSE" "$DEST_MOBILE/" 2>/dev/null || true   # MIT 署名，缺了不致命
+  cp -f "$SRC/dsh-web-mobile/package.json" "$DEST_MOBILE/"
+  cp -f "$SRC/dsh-web-mobile/cordis.patch.yml" "$DEST_MOBILE/"
+  cp -f "$SRC/dsh-web-mobile/lib/index.js" "$DEST_MOBILE/lib/"
+  cp -f "$SRC/dsh-web-mobile/lib/client.js" "$DEST_MOBILE/lib/"
+  cp -f "$SRC/dsh-web-mobile/LICENSE" "$DEST_MOBILE/" 2>/dev/null || true   # MIT 署名，缺了不致命
   if [ -s "$DEST_MOBILE/package.json" ] && [ -s "$DEST_MOBILE/lib/index.js" ] \
      && [ -s "$DEST_MOBILE/lib/client.js" ]; then
     touch "$MARK_MOBILE"
-    echo "  ✓ mobile-nav 已预置（client.js $(wc -c < "$DEST_MOBILE/lib/client.js") 字节）"
+    echo "  ✓ dsh-web-mobile 已预置（client.js $(wc -c < "$DEST_MOBILE/lib/client.js") 字节）"
   else
     rm -f "$MARK_MOBILE"
-    echo "  ERROR: mobile-nav 实体不完整 → 不立 marker，App 首启会自己补" >&2
+    echo "  ERROR: dsh-web-mobile 实体不完整 → 不立 marker，App 首启会自己补" >&2
   fi
 else
-  echo "  WARN: 缺 mobile-nav 源（/root/patches/builtin/mobile-nav），跳过"
+  echo "  WARN: 缺 dsh-web-mobile 源（/root/patches/builtin/dsh-web-mobile），跳过"
 fi
 
 if [ -d "$SRC/device-shell-guide" ]; then
@@ -112,12 +112,12 @@ import json, sys
 p = sys.argv[1]
 d = json.load(open(p))
 d.setdefault('dependencies', {})
-d['dependencies']['@dsh-external/dsh-mobile-nav'] = 'link:/root/dsha-mobile-nav'
+d['dependencies']['dsh-web-mobile'] = 'link:/root/dsha-web-mobile'
 d['dependencies']['dsh-device-shell-guide'] = 'link:/root/dsha-device-shell-guide'
 dsh = d.setdefault('dsh', {})
 prof = dsh.setdefault('profile', {})
 bundles = prof.setdefault('bundles', [])
-for n in ('@dsh-external/dsh-mobile-nav', 'dsh-device-shell-guide'):
+for n in ('dsh-web-mobile', 'dsh-device-shell-guide'):
     if n not in bundles:
         bundles.append(n)
 json.dump(d, open(p, 'w'), indent=2, ensure_ascii=False)
@@ -129,13 +129,13 @@ else
   "name": "dsh-profile-web",
   "private": true,
   "dependencies": {
-    "@dsh-external/dsh-mobile-nav": "link:/root/dsha-mobile-nav",
+    "dsh-web-mobile": "link:/root/dsha-web-mobile",
     "dsh-device-shell-guide": "link:/root/dsha-device-shell-guide"
   },
   "dsh": {
     "profile": {
       "bundles": [
-        "@dsh-external/dsh-mobile-nav",
+        "dsh-web-mobile",
         "dsh-device-shell-guide"
       ]
     }
@@ -146,10 +146,10 @@ JSON
 fi
 
 # ---------- 3) node_modules 符号链接（togglePlugin 靠改名开关） ----------
-# scope 包在 node_modules 下是二级目录（@dsh-external/dsh-mobile-nav）：
+# scope 包在 node_modules 下是二级目录（dsh-web-mobile）：
 # 父目录不先建出来 ln 会直接失败，而本脚本是 set -e —— 那会让整个离线包构建中断。
 mkdir -p "$NM/@dsh-external"
-ln -sfn /root/dsha-mobile-nav "$NM/@dsh-external/dsh-mobile-nav"
+ln -sfn /root/dsha-web-mobile "$NM/dsh-web-mobile"
 ln -sfn /root/dsha-device-shell-guide "$NM/dsh-device-shell-guide"
 echo "  ✓ node_modules 符号链接已建"
 
@@ -178,7 +178,7 @@ fi
 
 # ---------- 5) 内置插件快照（App「隐藏自带」功能依赖；installGuard 只在
 #            文件不存在时生成，离线预置的会沿用） ----------
-printf '@dsh-external/dsh-mobile-nav\ndsh-device-shell-guide\n' > "$BUILTIN_SNAPSHOT"
+printf 'dsh-web-mobile\ndsh-device-shell-guide\n' > "$BUILTIN_SNAPSHOT"
 echo "  ✓ 内置插件快照已写（dsha-builtin.txt）"
 
 echo "==> 内置插件预置完成"

@@ -161,7 +161,7 @@ fi
 # 空的内置插件快照，避免 App 误把后续用户插件当自带
 touch /root/dsha-builtin.txt
 
-echo "==> [7.5/8] 预置 DSHA 内置插件（mobile-nav / device-shell-guide / task-notifier，解压即用）"
+echo "==> [7.5/8] 预置 DSHA 内置插件（dsh-web-mobile / device-shell-guide / task-notifier，解压即用）"
 if [ -f /root/patches/provision-builtin-plugins.sh ]; then
   bash /root/patches/provision-builtin-plugins.sh
 else

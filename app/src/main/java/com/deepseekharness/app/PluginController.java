@@ -229,7 +229,7 @@ class PluginController {
                     "@deepseek-ai", "@standard-schema", "persona-settings", "ui-scale"));
         }
         // DSHA 自己安置进去的内置插件也算「自带」。用户拨这个开关是想「只看自己装的」，
-        // 而 device-shell-guide / mobile-nav / status-overlay / task-notifier 都不是他装的。
+        // 而 device-shell-guide / dsh-web-mobile / status-overlay / task-notifier 都不是他装的。
         // 它们不在 dsh 的快照里（那份快照只记 dsh 首次启动时的自带项），必须显式并进来 ——
         // 否则开关打开后列表里还剩四个他没装过的东西，看着就像开关没生效。
         set.addAll(java.util.Arrays.asList(BUILTIN_PLUGIN_NAMES));
@@ -637,7 +637,7 @@ class PluginController {
                         return false;
                     }
                     String src = readPluginSrc(name);
-                    // 源记录缺失：内置插件（@dsh-external/dsh-mobile-nav / dsh-device-shell-guide，
+                    // 源记录缺失：内置插件（dsh-web-mobile / dsh-device-shell-guide，
                     // 注意名字不带 dsha- 前缀！旧判断 name.startsWith("dsha-") 永远不命中）
                     // 兜底回 file: 路径；普通插件兜底 "*"（包体在磁盘即可加载）
                     if (src == null || src.isEmpty() || "null".equals(src)) {
@@ -720,15 +720,15 @@ class PluginController {
 
     /** 判断是否为 App 内置插件（名称不带 dsha- 前缀！）。用于启用时依赖源兜底。 */
     private boolean isBuiltinPlugin(String name) {
-        return "@dsh-external/dsh-mobile-nav".equals(name)
+        return "dsh-web-mobile".equals(name)
                 || "dsh-device-shell-guide".equals(name);
     }
 
     /** 内置插件实体目录真实路径（name ≠ 目录名：
-     *  @dsh-external/dsh-mobile-nav → /root/dsha-mobile-nav；
+     *  dsh-web-mobile → /root/dsha-web-mobile；
      *  旧实现 "dsha-"+name 会拼成不存在的路径）。 */
     private String builtinRealPath(String name) {
-        if ("@dsh-external/dsh-mobile-nav".equals(name)) return "/root/dsha-mobile-nav";
+        if ("dsh-web-mobile".equals(name)) return "/root/dsha-web-mobile";
         if ("dsh-device-shell-guide".equals(name)) return "/root/dsha-device-shell-guide";
         return "/root/dsha-" + name;
     }

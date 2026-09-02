@@ -8,7 +8,7 @@ package com.deepseekharness.app;
  * <ol>
  *   <li>老备份的 profile 里写着
  *       {@code dependencies["dsh-client-ui-mobile-adapt"] = "link:/root/dsha-mobile-adapt"}；</li>
- *   <li>重装后是全新 rootfs，那个实体不存在（v1.1.8 起内置的是 mobile-nav），
+ *   <li>重装后是全新 rootfs，那个实体不存在（v1.1.8 起内置的是 dsh-web-mobile），
  *       restore-merge.py 判定「源码没了」→ 摘掉依赖，同时把它报进 {@code MISSING_PLUGINS}
  *       （脚本里的原话是「npm 上可能有同名包，交给 App 后台静默试装」）；</li>
  *   <li>{@code autoInstallPluginsSilently} 起一个守护线程 {@code dsh plugin add}，
@@ -43,7 +43,7 @@ final class DeprecatedPlugins {
     static {
         java.util.Map<String, String> m = new java.util.LinkedHashMap<>();
         m.put(LEGACY_MOBILE_ADAPT,
-                "已由内置的 @dsh-external/dsh-mobile-nav 接替（原插件长期停更）；"
+                "已由内置的 dsh-web-mobile 接替（原插件长期停更）；"
                         + "两者改造同一批界面元素，同时启用会出两份抽屉和浮层");
         REASONS = java.util.Collections.unmodifiableMap(m);
     }
