@@ -1587,12 +1587,11 @@ public final class HttpShellService {
             if (cmd.contains("\n\n是否允许？")) {
                 cmd = cmd.substring(0, cmd.indexOf("\n\n是否允许？"));
             }
-            if (cmd.contains("
-
-是否允许？")) {
-                cmd = cmd.substring(0, cmd.indexOf("
-
-是否允许？"));
+            if (cmd.contains("\r\n\r\n是否允许？")) {
+                cmd = cmd.substring(0, cmd.indexOf("\r\n\r\n是否允许？"));
+            }
+            if (cmd.contains("是否允许？")) {
+                cmd = cmd.substring(0, cmd.indexOf("是否允许？"));
             }
             cmd = cmd.trim();
             if (cmd.startsWith("`") && cmd.endsWith("`") && cmd.length() > 2) {
