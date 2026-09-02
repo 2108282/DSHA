@@ -239,14 +239,14 @@ public class QuickChatSheetActivity extends Activity {
         btnClose.setOnClickListener(v -> dismissSheet());
         leftGroup.addView(btnClose);
 
-        // [② >_ 容器设置按钮]
-        View btnSettings = createHeaderIconButton(ICON_SETTINGS, textColor, "进入容器主页面");
+        // [② >_ 容器终端按钮]
+        View btnSettings = createHeaderIconButton(ICON_SETTINGS, textColor, "进入终端控制台");
         LinearLayout.LayoutParams settingsLp = (LinearLayout.LayoutParams) btnSettings.getLayoutParams();
         settingsLp.setMarginStart(dpToPx(4));
         btnSettings.setLayoutParams(settingsLp);
         btnSettings.setOnClickListener(v -> {
             Intent intent = new Intent(this, MainActivity.class);
-            intent.putExtra("go_home", true);
+            intent.putExtra("open_terminal", true);
             intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             startActivity(intent);
             dismissSheet();
