@@ -438,6 +438,8 @@ public final class HttpShellService {
                 result = appReadFile(path);
             } else if (path.startsWith("/health")) {
                 result = "OK"; // 存活探测（仍需 token）：客户端可据此区分「桥没起」与「命令失败」
+            } else if (path.startsWith("/status") || path.startsWith("/app/shizuku")) {
+                result = ShizukuShell.status();
             } else if (path.startsWith("/app/ui/")) {
                 result = appUi(path);
             } else if (path.startsWith("/app/device")) {

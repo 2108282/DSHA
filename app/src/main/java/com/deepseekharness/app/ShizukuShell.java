@@ -131,6 +131,7 @@ public final class ShizukuShell {
             Shizuku.UserServiceArgs args = new Shizuku.UserServiceArgs(
                     new ComponentName(appCtx, ShellService.class))
                     .daemon(false)
+                    .processNameSuffix("shizuku")
                     .version(1);
             Shizuku.bindUserService(args, new ServiceConnection() {
                 @Override
@@ -211,6 +212,7 @@ public final class ShizukuShell {
         }
         IShellService s = shellService;
         if (s == null) {
+            ensureBound(appCtx);
             Log.w(TAG, "exec ignored (not ready), status=" + status());
             return "[SHIZUKU_SERVICE_NOT_READY]";
         }
