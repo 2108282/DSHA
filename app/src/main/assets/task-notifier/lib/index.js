@@ -86,6 +86,16 @@ function formatToolDetail(name, argsJson) {
   return label
 }
 
+function parseFailureDetail(error) {
+  if (!error) return "网络或服务异常"
+  if (typeof error === "object") {
+    const statusPart = error.status ? ` (${error.status})` : ""
+    const msg = error.message || error.code || "请求失败"
+    return `${msg}${statusPart}`.slice(0, 50)
+  }
+  return String(error).slice(0, 50)
+}
+
 let lastCancelByNotification = 0
 
 export function apply(ctx) {
@@ -119,28 +129,54 @@ export function apply(ctx) {
       if (type === 'turn/end') {
         void callBridge('/app/task/cancel')
 
-        const reason = event.data?.reason?.kind ?? 'completed'
+        const reasonObj = event.data?.reason
+        const kind = reasonObj?.kind ?? 'completed'
         const sessionId = session?.id ?? 'session'
         const now = Date.now()
         const last = lastNotified.get(sessionId) ?? 0
         if (now - last < THROTTLE_MS) return
         lastNotified.set(sessionId, now)
 
-        if (reason !== 'completed' && reason !== 'max-tokens') {
-          if (reason === 'aborted') {
-            // 若为通知栏紧急制动触发，ConfirmReceiver 已发送过 2004 终止通知，此处避免重复
-            if (now - lastCancelByNotification < 5000) {
-              return
-            }
-            void callBridge('/app/notify', {
-              title: '🔵 任务已中断',
-              text: 'Agent 任务已被中断，点击或在下方打字重新开始'
-            })
+        if (kind === 'error') {
+          const detail = parseFailureDetail(reasonObj?.error)
+          void callBridge('/app/notify', {
+            title: '❌ 模型请求失败',
+            text: detail || '服务请求异常，点击或在下方打字重试'
+          })
+          return
+        }
+
+        if (kind === 'aborted') {
+          if (now - lastCancelByNotification < 5000) {
             return
           }
           void callBridge('/app/notify', {
-            title: `任务已结束（${reason}）`,
-            text: 'Agent 一轮对话已结束，点击或在下方打字继续对话'
+            title: '🔵 任务已中断',
+            text: 'Agent 任务已被中断，点击或在下方打字重新开始'
+          })
+          return
+        }
+
+        if (kind === 'max-tokens') {
+          void callBridge('/app/notify', {
+            title: '📏 达到单次最大长度',
+            text: '已达单次最大输出限制，可发送“继续”接着生成'
+          })
+          return
+        }
+
+        if (kind === 'blocked') {
+          void callBridge('/app/notify', {
+            title: '🛡️ 任务已挂起',
+            text: '等待安全授权或前置条件处理'
+          })
+          return
+        }
+
+        if (kind === 'interrupted') {
+          void callBridge('/app/notify', {
+            title: '⚡ 连接异常中断',
+            text: '与容器连接丢失，点击重新进入'
           })
           return
         }

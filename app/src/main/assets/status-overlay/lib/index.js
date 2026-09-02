@@ -254,6 +254,18 @@ export function apply(ctx) {
           clearTimeout(b.timer)
           b.timer = undefined
         }
+        const reasonObj = event.data?.reason
+        if (reasonObj?.kind === 'error') {
+          const err = reasonObj?.error
+          const statusPart = err?.status ? ` (${err.status})` : ""
+          const errLine = `❌ 模型请求失败: ${msg}${statusPart}`.slice(0, 60)
+          void send(key, 'tool', errLine)
+          setTimeout(() => {
+            void send(key, 'done', errLine)
+            state.delete(key)
+          }, 3500)
+          return
+        }
         // 留着最后一句让它自然淡出（App 侧几秒后自己收起来）
         void send(key, 'done', b.line)
         state.delete(key)

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-02T08:54:00Z",
+  "generated": "2026-09-02T09:51:51Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -358,8 +358,8 @@
     {
       "path": "app/src/main/assets/status-overlay/lib/index.js",
       "asset": "status-overlay/lib/index.js",
-      "size": 13892,
-      "sha256": "5a44140e9a447decd936f2ad5d5cebf10da41c00488d1d762f6afc7129a49b88",
+      "size": 14362,
+      "sha256": "37849091ecf4880b5669c876524e93f4231670a25cbf6508b66fc8ca041e9680",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/status-overlay/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/status-overlay/lib/index.js",
@@ -380,8 +380,8 @@
     {
       "path": "app/src/main/assets/task-notifier/lib/index.js",
       "asset": "task-notifier/lib/index.js",
-      "size": 7885,
-      "sha256": "26cd343afea1e1b488ff0e156fac86d4802f976c295d36d18da6837748edea56",
+      "size": 8841,
+      "sha256": "eeec8a37ee4d65d27850ee7dc73165daa7c53128d19dc30fe3b40b21740e8242",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/task-notifier/lib/index.js",
