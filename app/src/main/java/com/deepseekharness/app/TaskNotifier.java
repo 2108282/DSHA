@@ -117,7 +117,7 @@ public class TaskNotifier {
                 .setTimeoutAfter(120_000L)
                 .setAutoCancel(true);
 
-        HttpShellService.attachFocusCapsule(ctx, tnb, "任务完成", "智能体已结束任务，点击查看结果", "任务完成", "继续对话", "任务完成", actionPi, null, null);
+        HttpShellService.attachFocusCapsule(ctx, tnb, "任务完成", "智能体已结束任务，点击查看结果", "任务完成", "继续对话", "任务完成", actionPi, null, null, false);
         Notification n = tnb.build();
         if (nm != null) nm.notify(NOTIF_ID, n);
     }

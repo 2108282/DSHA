@@ -580,7 +580,7 @@ public final class HttpShellService {
                         .setTimeoutAfter(120_000L)
                         .setAutoCancel(true);
 
-                attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText, actionPi, null, null);
+                attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText, actionPi, null, null, false);
 
                 nm.notify(Constants.NOTIF_TASK, b.build());
             }
@@ -939,8 +939,8 @@ public final class HttpShellService {
             String text = getParam(q, "text", "");
             String session = getParam(q, "session", "");
             String displayText = safeDisplay(text);
-            // 通知栏同步实时运行状态与「🛑 停止任务」紧急制动按钮
-            if ("tool".equals(kind) || "text".equals(kind)) {
+            // 通知栏同步实时运行状态与「🛑 停止任务」紧急制动按钮（仅在工具调用时更新，绝不跟随时序流式文本高频轰炸）
+            if ("tool".equals(kind)) {
                 if (!displayText.trim().isEmpty()) {
                     showRunningNotification(displayText);
                 }
@@ -1507,7 +1507,7 @@ public final class HttpShellService {
                 .addAction(0, "拒绝", denyPi)
                 .setOngoing(true);
 
-        attachFocusCapsule(ctx, cb, "⚠️ 安全确认", "模型试图执行：" + shortCmd, "权限请求", "允许", "安全确认", allowPi, "拒绝", denyPi);
+        attachFocusCapsule(ctx, cb, "⚠️ 安全确认", "模型试图执行：" + shortCmd, "权限请求", "允许", "安全确认", allowPi, "拒绝", denyPi, true);
 
         Notification n = cb.build();
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -1539,7 +1539,22 @@ public final class HttpShellService {
         return s.substring(0, 4) + "…";
     }
 
-    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi) {
+    private static volatile android.graphics.Bitmap sCachedWhaleBmp = null;
+    private static volatile android.graphics.drawable.Icon sCachedWhaleIcon = null;
+    private static volatile long sLastRunningNotifTime = 0L;
+
+    private static synchronized void ensureCachedIcons(Context ctx) {
+        if (sCachedWhaleBmp == null && ctx != null) {
+            try {
+                sCachedWhaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
+                if (sCachedWhaleBmp != null && Build.VERSION.SDK_INT >= 23) {
+                    sCachedWhaleIcon = android.graphics.drawable.Icon.createWithBitmap(sCachedWhaleBmp);
+                }
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat) {
         b.setSubText("大肥鱼");
         b.setOnlyAlertOnce(true);
         b.setShowWhen(false);
@@ -1547,11 +1562,10 @@ public final class HttpShellService {
         b.setCategory(NotificationCompat.CATEGORY_STATUS);
         b.setPriority(NotificationCompat.PRIORITY_HIGH);
 
-        android.graphics.Bitmap whaleBmp = null;
-        try {
-            whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
-            if (whaleBmp != null) b.setLargeIcon(whaleBmp);
-        } catch (Throwable ignored) {}
+        ensureCachedIcons(ctx);
+        if (sCachedWhaleBmp != null) {
+            try { b.setLargeIcon(sCachedWhaleBmp); } catch (Throwable ignored) {}
+        }
 
         // 1. Google AOSP 16 (API 36) 原生实时活动标准 (Live Updates / Promoted Ongoing)
         android.os.Bundle extras = b.getExtras();
@@ -1569,7 +1583,7 @@ public final class HttpShellService {
             org.json.JSONObject paramV2 = new org.json.JSONObject();
             paramV2.put("protocol", 1);
             paramV2.put("business", "dsha_focus");
-            paramV2.put("enableFloat", true);
+            paramV2.put("enableFloat", enableFloat);
 
             org.json.JSONObject island = new org.json.JSONObject();
             island.put("highlightColor", "#58A6FF");
@@ -1583,7 +1597,7 @@ public final class HttpShellService {
             org.json.JSONObject leftImgText = new org.json.JSONObject();
             leftImgText.put("type", 1);
             leftImgText.put("textInfo", leftTextInfo);
-            if (whaleBmp != null) {
+            if (sCachedWhaleBmp != null) {
                 org.json.JSONObject leftPicInfo = new org.json.JSONObject();
                 leftPicInfo.put("type", 1);
                 leftPicInfo.put("pic", "miui.focus.pic_big_island");
@@ -1598,7 +1612,7 @@ public final class HttpShellService {
             bigIslandArea.put("textInfo", rightTextInfo);
 
             island.put("bigIslandArea", bigIslandArea);
-            if (whaleBmp != null) {
+            if (sCachedWhaleBmp != null) {
                 org.json.JSONObject smallIsland = new org.json.JSONObject();
                 org.json.JSONObject smallPicInfo = new org.json.JSONObject();
                 smallPicInfo.put("type", 1);
@@ -1649,7 +1663,7 @@ public final class HttpShellService {
 
             paramV2.put("hintInfo", hintInfo);
 
-            if (whaleBmp != null) {
+            if (sCachedWhaleBmp != null) {
                 org.json.JSONObject picInfo = new org.json.JSONObject();
                 picInfo.put("type", 1);
                 picInfo.put("pic", "miui.focus.icon_feature");
@@ -1662,14 +1676,13 @@ public final class HttpShellService {
 
             if (extras != null) {
                 extras.putString("miui.focus.param", root.toString());
-                extras.putBoolean("enableFloat", true);
+                extras.putBoolean("enableFloat", enableFloat);
 
-                if (whaleBmp != null && Build.VERSION.SDK_INT >= 23) {
+                if (sCachedWhaleIcon != null) {
                     android.os.Bundle pics = new android.os.Bundle();
-                    android.graphics.drawable.Icon whaleIcon = android.graphics.drawable.Icon.createWithBitmap(whaleBmp);
-                    pics.putParcelable("miui.focus.pic_big_island", whaleIcon);
-                    pics.putParcelable("miui.focus.pic_small_island", whaleIcon);
-                    pics.putParcelable("miui.focus.icon_feature", whaleIcon);
+                    pics.putParcelable("miui.focus.pic_big_island", sCachedWhaleIcon);
+                    pics.putParcelable("miui.focus.pic_small_island", sCachedWhaleIcon);
+                    pics.putParcelable("miui.focus.icon_feature", sCachedWhaleIcon);
                     extras.putBundle("miui.focus.pics", pics);
                 }
 
@@ -1712,6 +1725,9 @@ public final class HttpShellService {
 
     private void showRunningNotification(String title, String text) {
         try {
+            long nowTime = System.currentTimeMillis();
+            if (nowTime - sLastRunningNotifTime < 800L) return;
+            sLastRunningNotifTime = nowTime;
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (Build.VERSION.SDK_INT >= 26 && nm != null) {
                 NotificationChannel ch = new NotificationChannel(
@@ -1757,7 +1773,7 @@ public final class HttpShellService {
                     .addAction(stopAction)
                     .setOngoing(true);
 
-            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, null, null);
+            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, null, null, false);
 
             if (nm != null) nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
         } catch (Throwable ignored) {}
@@ -1819,7 +1835,7 @@ public final class HttpShellService {
             nb.addAction(0, opt, pi);
         }
 
-        attachFocusCapsule(ctx, nb, "💬 助手提问", safeDisplay(shortQ), "等待回答", opts.length > 0 ? opts[0] : "允许", "等待回答", pi0, opts.length > 1 ? opts[1] : null, pi1);
+        attachFocusCapsule(ctx, nb, "💬 助手提问", safeDisplay(shortQ), "等待回答", opts.length > 0 ? opts[0] : "允许", "等待回答", pi0, opts.length > 1 ? opts[1] : null, pi1, true);
 
         // 挂载 RemoteInput 直接就地文本输入快捷回复
         androidx.core.app.RemoteInput remoteInput = new androidx.core.app.RemoteInput.Builder(ConfirmReceiver.EXTRA_REPLY_TEXT)
