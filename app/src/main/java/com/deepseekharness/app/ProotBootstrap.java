@@ -459,6 +459,11 @@ public class ProotBootstrap {
         try {
             File d = new File("/storage/emulated/0/Download/DSHA/工作区");
             if (!d.isDirectory() && !d.mkdirs()) return;
+            // rootfs 里也必须有这个目录。proot 的 bind 只对**容器内的进程**可见，而 GUI 的
+            // 工作区选择器是 App 侧的 Java 在扫 rootfs/root/ 下的真实目录 —— 不把挂载点
+            // 建出来，界面里根本看不到「手机存储」这一项。第一版就漏了这步：挂载是通的、
+            // 容器里 cd 得进去，但用户在选择器里什么变化都没有。
+            new File(rootfsDir, "root/手机存储").mkdirs();
             File readme = new File(d, "读我-这个目录能做什么.txt");
             if (readme.isFile()) return;
             String text = "这个目录在容器里挂成 /root/手机存储，可以在 DSHA 的工作区选择里选到它。\n"
