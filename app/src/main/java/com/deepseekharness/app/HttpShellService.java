@@ -1578,12 +1578,15 @@ public final class HttpShellService {
             m.invoke(b, true);
         } catch (Throwable ignored) {}
 
-        // 2. 小米澎湃 OS (HyperOS / HyperIsland 灵动岛) 焦点通知私有协议 (focusType=PARAMS)
+        // 2. 小米澎湃 OS (HyperOS / HyperIsland 灵动岛) 焦点通知标准协议 (focusType=PARAMS)
         try {
             org.json.JSONObject paramV2 = new org.json.JSONObject();
             paramV2.put("protocol", 1);
-            paramV2.put("business", "dsha_focus");
+            paramV2.put("business", "schedule_reminder");
             paramV2.put("enableFloat", enableFloat);
+            paramV2.put("ticker", "大肥鱼 " + (capsuleText != null ? capsuleText : "正在执行"));
+            paramV2.put("aodTitle", title != null ? title : "DSHA");
+            paramV2.put("aodPic", "miui.focus.pic_big_island");
 
             org.json.JSONObject island = new org.json.JSONObject();
             island.put("highlightColor", "#58A6FF");
@@ -1591,18 +1594,18 @@ public final class HttpShellService {
             org.json.JSONObject bigIslandArea = new org.json.JSONObject();
 
             // 左耳：小蓝鲸图片 + "大肥鱼"
+            org.json.JSONObject leftImgText = new org.json.JSONObject();
+            leftImgText.put("type", 1);
+            org.json.JSONObject leftPicInfo = new org.json.JSONObject();
+            leftPicInfo.put("type", 1);
+            leftPicInfo.put("pic", "miui.focus.pic_big_island");
+            leftImgText.put("picInfo", leftPicInfo);
+
             org.json.JSONObject leftTextInfo = new org.json.JSONObject();
             leftTextInfo.put("title", "大肥鱼");
             leftTextInfo.put("showHighlightColor", true);
-            org.json.JSONObject leftImgText = new org.json.JSONObject();
-            leftImgText.put("type", 1);
             leftImgText.put("textInfo", leftTextInfo);
-            if (sCachedWhaleBmp != null) {
-                org.json.JSONObject leftPicInfo = new org.json.JSONObject();
-                leftPicInfo.put("type", 1);
-                leftPicInfo.put("pic", "miui.focus.pic_big_island");
-                leftImgText.put("picInfo", leftPicInfo);
-            }
+
             bigIslandArea.put("imageTextInfoLeft", leftImgText);
 
             // 右耳：动态 4~6 字实时状态
@@ -1610,16 +1613,16 @@ public final class HttpShellService {
             rightTextInfo.put("title", capsuleText != null ? capsuleText : "正在执行");
             rightTextInfo.put("showHighlightColor", false);
             bigIslandArea.put("textInfo", rightTextInfo);
+            bigIslandArea.put("islandTimeout", 900);
 
             island.put("bigIslandArea", bigIslandArea);
-            if (sCachedWhaleBmp != null) {
-                org.json.JSONObject smallIsland = new org.json.JSONObject();
-                org.json.JSONObject smallPicInfo = new org.json.JSONObject();
-                smallPicInfo.put("type", 1);
-                smallPicInfo.put("pic", "miui.focus.pic_small_island");
-                smallIsland.put("picInfo", smallPicInfo);
-                island.put("smallIslandArea", smallIsland);
-            }
+            org.json.JSONObject smallIsland = new org.json.JSONObject();
+            org.json.JSONObject smallPicInfo = new org.json.JSONObject();
+            smallPicInfo.put("type", 1);
+            smallPicInfo.put("pic", "miui.focus.pic_small_island");
+            smallIsland.put("picInfo", smallPicInfo);
+            island.put("smallIslandArea", smallIsland);
+
             paramV2.put("param_island", island);
 
             org.json.JSONObject baseInfo = new org.json.JSONObject();
@@ -1634,42 +1637,21 @@ public final class HttpShellService {
             hintInfo.put("colorContent", "#58A6FF");
             hintInfo.put("colorContentDark", "#58A6FF");
 
-            org.json.JSONArray actionsArr = new org.json.JSONArray();
             if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
                 org.json.JSONObject actionInfo = new org.json.JSONObject();
                 actionInfo.put("action", "miui.focus.action_1");
-                actionInfo.put("title", actionTitle);
+                actionInfo.put("actionIcon", "miui.focus.pic_action");
+                actionInfo.put("actionIconDark", "miui.focus.pic_action");
                 actionInfo.put("actionIntentType", 2);
                 hintInfo.put("actionInfo", actionInfo);
-
-                org.json.JSONObject a1 = new org.json.JSONObject();
-                a1.put("action", "miui.focus.action_1");
-                a1.put("title", actionTitle);
-                a1.put("actionIntentType", 2);
-                actionsArr.put(a1);
             }
-
-            if (secondaryActionPi != null && secondaryActionTitle != null && !secondaryActionTitle.isEmpty()) {
-                org.json.JSONObject a2 = new org.json.JSONObject();
-                a2.put("action", "miui.focus.action_2");
-                a2.put("title", secondaryActionTitle);
-                a2.put("actionIntentType", 2);
-                actionsArr.put(a2);
-            }
-
-            if (actionsArr.length() > 0) {
-                paramV2.put("actions", actionsArr);
-            }
-
             paramV2.put("hintInfo", hintInfo);
 
-            if (sCachedWhaleBmp != null) {
-                org.json.JSONObject picInfo = new org.json.JSONObject();
-                picInfo.put("type", 1);
-                picInfo.put("pic", "miui.focus.icon_feature");
-                picInfo.put("picDark", "miui.focus.icon_feature");
-                paramV2.put("picInfo", picInfo);
-            }
+            org.json.JSONObject picInfo = new org.json.JSONObject();
+            picInfo.put("type", 1);
+            picInfo.put("pic", "miui.focus.icon_feature");
+            picInfo.put("picDark", "miui.focus.icon_feature");
+            paramV2.put("picInfo", picInfo);
 
             org.json.JSONObject root = new org.json.JSONObject();
             root.put("param_v2", paramV2);
@@ -1678,21 +1660,29 @@ public final class HttpShellService {
                 extras.putString("miui.focus.param", root.toString());
                 extras.putBoolean("enableFloat", enableFloat);
 
-                if (sCachedWhaleIcon != null) {
+                if (Build.VERSION.SDK_INT >= 23) {
                     android.os.Bundle pics = new android.os.Bundle();
-                    pics.putParcelable("miui.focus.pic_big_island", sCachedWhaleIcon);
-                    pics.putParcelable("miui.focus.pic_small_island", sCachedWhaleIcon);
-                    pics.putParcelable("miui.focus.icon_feature", sCachedWhaleIcon);
+                    android.graphics.drawable.Icon whaleIcon = android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_whale_logo);
+                    android.graphics.drawable.Icon alarmIcon = android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_alarm_white);
+                    pics.putParcelable("miui.focus.pic_big_island", whaleIcon);
+                    pics.putParcelable("miui.focus.pic_small_island", whaleIcon);
+                    pics.putParcelable("miui.focus.icon_feature", whaleIcon);
+                    pics.putParcelable("miui.focus.pic_action", alarmIcon);
                     extras.putBundle("miui.focus.pics", pics);
-                }
 
-                if (primaryActionPi != null) {
-                    android.os.Bundle actionBundle = new android.os.Bundle();
-                    actionBundle.putParcelable("miui.focus.action_1", primaryActionPi);
-                    if (secondaryActionPi != null) {
-                        actionBundle.putParcelable("miui.focus.action_2", secondaryActionPi);
+                    if (primaryActionPi != null) {
+                        android.os.Bundle actionBundle = new android.os.Bundle();
+                        android.app.Notification.Action a1 = new android.app.Notification.Action.Builder(
+                                alarmIcon, actionTitle, primaryActionPi).build();
+                        actionBundle.putParcelable("miui.focus.action_1", a1);
+
+                        if (secondaryActionPi != null && secondaryActionTitle != null) {
+                            android.app.Notification.Action a2 = new android.app.Notification.Action.Builder(
+                                    null, secondaryActionTitle, secondaryActionPi).build();
+                            actionBundle.putParcelable("miui.focus.action_2", a2);
+                        }
+                        extras.putBundle("miui.focus.actions", actionBundle);
                     }
-                    extras.putBundle("miui.focus.actions", actionBundle);
                 }
             }
         } catch (Throwable ignored) {}
@@ -1775,14 +1765,14 @@ public final class HttpShellService {
 
             attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, null, null, false);
 
-            if (nm != null) nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
+            if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());
         } catch (Throwable ignored) {}
     }
 
     private void cancelRunningNotification() {
         try {
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) nm.cancel(Constants.NOTIF_TASK_RUNNING);
+            if (nm != null) nm.cancel(Constants.NOTIF_TASK);
         } catch (Throwable ignored) {}
     }
 
