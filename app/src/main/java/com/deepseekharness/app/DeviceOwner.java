@@ -116,6 +116,75 @@ public final class DeviceOwner {
         return n == 0 ? -1 : n;
     }
 
+    /**
+     * 从 {@code dumpsys account list} 里理出「哪些应用持有账号」。
+     *
+     * <p>为什么需要这个：真机上一台日常主力机能有二十个账号，而用户在设置里退掉自己的
+     * 登录账号只减掉一个 —— 剩下的都是各家 App 通过 AccountManager 注册的（厂商服务、
+     * 微信、支付宝、各种推送 SDK）。只报「还有 19 个」等于让用户瞎猜，把类型和包名列出来
+     * 他才知道要冻结谁，以及这件事到底值不值得干。
+     *
+     * <p>两段信息拼起来：账号行里的 {@code type=xxx} 给出账号类型，
+     * {@code RegisteredServicesCache} 段里 {@code AuthenticatorDescription {type=xxx}} 后面
+     * 跟着 {@code ComponentInfo{包名/...}} —— 包名才是用户能在设置或冻结工具里找到的东西。
+     *
+     * @return 可读的一段话；解析不出东西时返回空串（调用方就别显示这一段）
+     */
+    public static String describeAccountOwners(String dumpsys) {
+        if (dumpsys == null || dumpsys.isEmpty()) return "";
+        // type → 出现次数
+        java.util.LinkedHashMap<String, Integer> types = new java.util.LinkedHashMap<>();
+        // type → 包名
+        java.util.HashMap<String, String> pkgOf = new java.util.HashMap<>();
+
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("type=([A-Za-z0-9_.\\-]+)").matcher(dumpsys);
+        java.util.regex.Matcher svc = java.util.regex.Pattern.compile(
+                        "AuthenticatorDescription\\s*\\{type=([A-Za-z0-9_.\\-]+)}[^{]*ComponentInfo\\{([A-Za-z0-9_.\\-]+)/")
+                .matcher(dumpsys);
+        while (svc.find()) {
+            pkgOf.put(svc.group(1), svc.group(2));
+        }
+        // 账号行里的 type 才算「持有账号」；服务缓存里的 type 只是声明了能力
+        for (String line : dumpsys.split("\r?\n")) {
+            if (!line.contains("Account {") && !line.trim().startsWith("Account {")) continue;
+            java.util.regex.Matcher mm = java.util.regex.Pattern
+                    .compile("type=([A-Za-z0-9_.\\-]+)").matcher(line);
+            if (mm.find()) {
+                String t = mm.group(1);
+                types.put(t, types.getOrDefault(t, 0) + 1);
+            }
+        }
+        if (types.isEmpty()) {
+            // 有些 ROM 的 dumpsys 不打印 Account 明细，只给总数 —— 退一步用服务缓存里的类型，
+            // 至少能告诉用户「哪些应用注册了账号服务」，方向是对的
+            if (pkgOf.isEmpty()) return "";
+            StringBuilder sb = new StringBuilder("这台机器上注册过账号服务的应用（不一定都真的存着账号）：\n");
+            int n = 0;
+            for (java.util.Map.Entry<String, String> e : pkgOf.entrySet()) {
+                if (n++ >= 12) {
+                    sb.append("  … 还有更多");
+                    break;
+                }
+                sb.append("  ").append(e.getValue()).append("（").append(e.getKey()).append("）\n");
+            }
+            return sb.toString();
+        }
+        StringBuilder sb = new StringBuilder("持有账号的应用：\n");
+        int n = 0;
+        for (java.util.Map.Entry<String, Integer> e : types.entrySet()) {
+            if (n++ >= 12) {
+                sb.append("  … 还有 ").append(types.size() - 12).append(" 类没列\n");
+                break;
+            }
+            String pkg = pkgOf.get(e.getKey());
+            sb.append("  ").append(pkg == null ? e.getKey() : pkg)
+                    .append(e.getValue() > 1 ? "（" + e.getValue() + " 个）" : "")
+                    .append('\n');
+        }
+        return sb.toString();
+    }
+
     /** 预检结论。{@code ok=false} 时 {@link #advice} 一定是可执行的下一步，不是「失败了」。 */
     public static final class Precheck {
         public final boolean ok;
@@ -146,10 +215,20 @@ public final class DeviceOwner {
                             + "读不到就先别激活 —— 失败的 set-device-owner 会留下 active admin，更难收拾。");
         }
         if (accounts > 0) {
+            // 实话要说在前面：一台日常主力机能有二十个账号，用户在设置里退掉自己登录的那个
+            // 只减掉一个，剩下的全是各家 App 通过 AccountManager 注册的。这种量级不是
+            // 「再删删就好了」，而是要冻结十几个应用 —— 与其让人白折腾半天最后恢复出厂，
+            // 不如直接讲清楚这条路在这台机器上走不通。
+            String extra = accounts >= 5
+                    ? "\n\n说实话：" + accounts + " 个账号意味着要冻结十几个应用（厂商服务、社交、"
+                    + "支付、推送 SDK 都会注册），日常主力机基本做不到，也不值得为多一层保活折腾到"
+                    + "那个程度。真想要这层能力，用备用机或刚重置过的设备更实际。\n"
+                    + "现有的保活（前台服务 + 电池白名单 + ADB 分层重连）在多数机器上已经够用。"
+                    : "";
             return new Precheck(false, "设备上还有 " + accounts + " 个账号",
                     "DeviceOwner 要求账号数为 0。先到「设置 → 账号」把所有账号删掉；"
                             + "删完还显示有的话，说明某些应用仍持有引用（微信、Telegram、厂商服务常见），"
-                            + "需要先冻结或卸载它们，然后**重启一次**再回来。");
+                            + "需要先冻结或卸载它们，然后**重启一次**再回来。" + extra);
         }
         if (users > 1) {
             return new Precheck(false, "除主用户外还有 " + (users - 1) + " 个用户",

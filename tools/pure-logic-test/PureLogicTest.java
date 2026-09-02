@@ -1091,6 +1091,25 @@ public final class PureLogicTest {
         ok("DO: 空输出提示先查 ADB 通道",
                 DeviceOwner.explainFailure("").contains("ADB"));
 
+        ok("DO: 账号很多时直说这台机器不值得折腾",
+                DeviceOwner.precheck("  Accounts: 20\n", "Users:\n\tUserInfo{0:a}")
+                        .advice.contains("备用机"));
+        String dump = "User UserInfo{0:Owner:c13}:\n"
+                + "  Accounts: 3\n"
+                + "    Account {name=a@gmail.com, type=com.google}\n"
+                + "    Account {name=b, type=com.tencent.mm}\n"
+                + "    Account {name=c, type=com.google}\n"
+                + "  RegisteredServicesCache: 2 services\n"
+                + "    ServiceInfo: AuthenticatorDescription {type=com.google}, "
+                + "ComponentInfo{com.google.android.gms/com.google.android.gms.auth.Svc}\n"
+                + "    ServiceInfo: AuthenticatorDescription {type=com.tencent.mm}, "
+                + "ComponentInfo{com.tencent.mm/com.tencent.mm.plugin.Acc}\n";
+        String owners = DeviceOwner.describeAccountOwners(dump);
+        ok("DO: 账号持有方解析出包名（而不是只报类型）",
+                owners.contains("com.google.android.gms") && owners.contains("com.tencent.mm"));
+        ok("DO: 同类型多个账号会标数量", owners.contains("2 个"));
+        eq("DO: 没有账号明细也不硬凑", "", DeviceOwner.describeAccountOwners("  Accounts: 5\n"));
+
         System.out.println();
         System.out.println(fail == 0
                 ? "全部通过：" + pass + " 条"

@@ -5630,8 +5630,17 @@ public class HarnessController {
      */
     public String activateDeviceOwnerNow() {
         if (isDeviceOwner()) return "已经是设备所有者了，不用再激活。";
-        DeviceOwner.Precheck pk = deviceOwnerPrecheck();
-        if (!pk.ok) return pk.reason + "\n\n" + pk.advice;
+        String accounts = adbInternal(DeviceOwner.accountProbeCmd(), 200);
+        String users = adbInternal(DeviceOwner.userProbeCmd(), 20);
+        DeviceOwner.Precheck pk = DeviceOwner.precheck(accounts, users);
+        if (!pk.ok) {
+            StringBuilder sb = new StringBuilder(pk.reason).append("\n\n").append(pk.advice);
+            // 只报数字没法行动：一台主力机二十来个账号，退掉自己登录的那个只减一个，
+            // 剩下的都是各家 App 注册的。把持有方列出来，用户才能判断要冻结谁、值不值得。
+            String owners = DeviceOwner.describeAccountOwners(accounts);
+            if (!owners.isEmpty()) sb.append("\n\n").append(owners);
+            return sb.toString();
+        }
 
         String out = adbInternal(DeviceOwner.activateCmd(), 20);
         boolean claimed = DeviceOwner.looksActivated(out);
