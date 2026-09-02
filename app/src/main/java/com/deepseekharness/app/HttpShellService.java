@@ -1674,6 +1674,7 @@ public final class HttpShellService {
             paramV2.put("protocol", 1);
             paramV2.put("business", "schedule_reminder");
             paramV2.put("enableFloat", enableFloat);
+            paramV2.put("islandFirstFloat", enableFloat);
             paramV2.put("ticker", "大肥鱼 " + (capsuleText != null ? capsuleText : "正在执行"));
             paramV2.put("aodTitle", title != null ? title : "DSHA");
             paramV2.put("aodPic", "miui.focus.pic_big_island");
@@ -1718,6 +1719,32 @@ public final class HttpShellService {
             org.json.JSONObject baseInfo = new org.json.JSONObject();
             baseInfo.put("type", 2);
             baseInfo.put("title", title != null ? title : "DSHA");
+
+            // 双按钮与动作列表注入 baseInfo.actions
+            org.json.JSONArray actionsArr = new org.json.JSONArray();
+            if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
+                org.json.JSONObject a1 = new org.json.JSONObject();
+                a1.put("action", "miui.focus.action_1");
+                a1.put("actionTitle", actionTitle);
+                a1.put("actionIcon", "miui.focus.pic_action");
+                a1.put("actionIconDark", "miui.focus.pic_action");
+                a1.put("actionIntentType", 2);
+                actionsArr.put(a1);
+            }
+
+            if (secondaryActionPi != null && secondaryActionTitle != null && !secondaryActionTitle.isEmpty()) {
+                org.json.JSONObject a2 = new org.json.JSONObject();
+                a2.put("action", "miui.focus.action_2");
+                a2.put("actionTitle", secondaryActionTitle);
+                a2.put("actionIcon", "miui.focus.pic_action");
+                a2.put("actionIconDark", "miui.focus.pic_action");
+                a2.put("actionIntentType", 2);
+                actionsArr.put(a2);
+            }
+
+            if (actionsArr.length() > 0) {
+                baseInfo.put("actions", actionsArr);
+            }
             paramV2.put("baseInfo", baseInfo);
 
             org.json.JSONObject hintInfo = new org.json.JSONObject();
@@ -1727,7 +1754,7 @@ public final class HttpShellService {
             hintInfo.put("colorContent", "#58A6FF");
             hintInfo.put("colorContentDark", "#58A6FF");
 
-            // 单按钮配置在 hintInfo.actionInfo（复刻系统日程原生标准药丸按钮）
+            // 单按钮保底在 hintInfo.actionInfo（复刻系统日程原生标准药丸按钮）
             if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
                 org.json.JSONObject actionInfo = new org.json.JSONObject();
                 actionInfo.put("action", "miui.focus.action_1");
@@ -1751,6 +1778,7 @@ public final class HttpShellService {
             if (extras != null) {
                 extras.putString("miui.focus.param", root.toString());
                 extras.putBoolean("enableFloat", enableFloat);
+                extras.putBoolean("islandFirstFloat", enableFloat);
 
                 if (Build.VERSION.SDK_INT >= 23) {
                     android.os.Bundle pics = new android.os.Bundle();
@@ -1831,9 +1859,8 @@ public final class HttpShellService {
 
             String shortMsg = (text == null || text.trim().isEmpty()) ? "智能体正在执行自动化任务..." : shortText(text);
 
-            // 开启新任务时，立即顶掉并清除之前的完成卡片和终止卡片
+            // 清理可能残留的提问与终止卡片，不 cancel NOTIF_TASK 保持原地平滑覆写，杜绝重复触发 Level 2 弹窗
             if (nm != null) {
-                nm.cancel(Constants.NOTIF_TASK);
                 nm.cancel(Constants.NOTIF_TASK_STOPPED);
                 nm.cancel(Constants.NOTIF_ASK_QUESTION);
             }
