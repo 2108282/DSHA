@@ -5436,6 +5436,56 @@ public class HarnessController {
                 + "（原文件留 .pre-fix 备份）");
     }
 
+    /** 从 profile 的 cordis.patch.yml 里摘掉旧名那条 insert 条目。
+     *
+     *  <p>patch 行原本随插件目录里的 cordis.patch.yml 走，但 profile 那份是合并后持久化的，
+     *  删掉插件目录不会让它自己消失 —— 留着就是一条指向不存在模块的 loader entry。
+     *
+     *  <p>按缩进切块而不是解析 YAML：条目形如
+     *  <pre>    - id: dsh-mobile-nav
+     *      name: '@dsh-external/dsh-mobile-nav'
+     *      …</pre>
+     *  从命中的 {@code - id:} 行起，一直吃到下一个同缩进的 {@code - } 或文件尾。
+     *  引一个 YAML 库进来只为删一条记录不值得，而这个结构是我们自己写进去的、形状固定。 */
+    private boolean stripOldPatchRow() {
+        try {
+            java.io.File pf = rootfsFile("root/.dsh/profiles/web/cordis.patch.yml");
+            if (!pf.isFile()) return false;
+            String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()),
+                    StandardCharsets.UTF_8);
+            if (!txt.contains("dsh-mobile-nav")) return false;
+            String[] lines = txt.split("\n", -1);
+            java.util.List<String> out = new java.util.ArrayList<>(lines.length);
+            int skipIndent = -1;
+            for (String line : lines) {
+                String t = line.trim();
+                if (skipIndent >= 0) {
+                    // 同缩进的下一个列表项 → 跳过结束
+                    int ind = line.length() - line.replaceAll("^\\s+", "").length();
+                    if (t.startsWith("- ") && ind <= skipIndent) {
+                        skipIndent = -1;
+                    } else if (!t.isEmpty() && ind <= skipIndent && !t.startsWith("-")) {
+                        skipIndent = -1;   // 退回上一层（比如新的顶层键）
+                    } else {
+                        continue;
+                    }
+                }
+                if (t.startsWith("- id:") && t.contains("dsh-mobile-nav")) {
+                    skipIndent = line.length() - line.replaceAll("^\\s+", "").length();
+                    continue;
+                }
+                out.add(line);
+            }
+            String neu = String.join("\n", out);
+            if (neu.equals(txt)) return false;
+            java.nio.file.Files.write(pf.toPath(), neu.getBytes(StandardCharsets.UTF_8));
+            return true;
+        } catch (Throwable t) {
+            android.util.Log.w("DSHA", "清旧 patch 行失败（不致命）: " + t);
+            return false;
+        }
+    }
+
     /** dsh-web-mobile 改名迁移（原 {@code @dsh-external/dsh-mobile-nav}）。
      *
      *  <p>上游 2026-08-30 把包名换成 dsh-web-mobile，旧 npm 名整包撤下（issue #40）。
@@ -5454,6 +5504,36 @@ public class HarnessController {
             boolean had = old.exists() || mark.exists();
             if (old.exists()) DataPreserve.deleteRecursively(old);
             if (mark.exists()) mark.delete();
+            // node_modules 里的旧实体也必须清 —— dsh 扫的是这里，不是 /root 下那个实体目录。
+            // 留着就会新旧两份同时加载，现象是
+            //   locale namespace "mobileNav" already has locale "zh"
+            // （两份插件都往同一个 locale 命名空间注册，后一个直接报冲突）。
+            // 上一版只删了 /root/dsha-mobile-nav 与 package.json 里的依赖键，漏了这一层。
+            java.io.File nm = rootfsFile("root/.dsh/profiles/web/node_modules");
+            java.io.File[] oldEntities = {
+                    new java.io.File(nm, "@dsh-external/dsh-mobile-nav"),
+                    new java.io.File(nm, "dsh-mobile-nav"),
+            };
+            for (java.io.File d : oldEntities) {
+                if (d.exists()) {
+                    DataPreserve.deleteRecursively(d);
+                    had = true;
+                }
+            }
+            // pnpm 把实体放在 .pnpm/ 下、外面只是链接，那份副本同样要清
+            java.io.File pnpmDir = new java.io.File(nm, ".pnpm");
+            if (pnpmDir.isDirectory()) {
+                java.io.File[] kids = pnpmDir.listFiles();
+                if (kids != null) {
+                    for (java.io.File k : kids) {
+                        if (k.getName().contains("dsh-mobile-nav")) {
+                            DataPreserve.deleteRecursively(k);
+                            had = true;
+                        }
+                    }
+                }
+            }
+            if (stripOldPatchRow()) had = true;
             java.io.File pf = rootfsFile("root/.dsh/profiles/web/package.json");
             if (pf.isFile()) {
                 String txt = new String(java.nio.file.Files.readAllBytes(pf.toPath()),
