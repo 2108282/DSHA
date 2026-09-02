@@ -1205,7 +1205,7 @@ public final class HttpShellService {
         String q = getParam(queryOf(path), "q", "");
         String optRaw = getParam(queryOf(path), "options", "");
         if (q.isEmpty()) return "NO_QUESTION";
-        String[] parts = optRaw.isEmpty() ? new String[] { "好" } : optRaw.split("\|");
+        String[] parts = optRaw.isEmpty() ? new String[] { "好" } : optRaw.split("\\|");
         final String[] opts = parts.length <= 3 ? parts : new String[] { parts[0], parts[1], parts[2] };
         final String displayQuestion = safeDisplay(q);
         final String[] displayOptions = new String[opts.length];
