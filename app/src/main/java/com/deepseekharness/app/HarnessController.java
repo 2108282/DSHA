@@ -1360,7 +1360,11 @@ public class HarnessController {
         try {
             if (dstPkg.isFile() && srcPkg.isFile()) {
                 String a = readVersionOf(dstPkg), b = readVersionOf(srcPkg);
-                if (!a.isEmpty() && a.equals(b)) return true;
+                // 版本相同还不够，得确认文件数也一样。dsh-web-mobile 2.3.0 的 lib/index.js
+                // 会 import 同目录的 compress.js —— 只要少写一个文件，dsh 启动就会
+                // ERR_MODULE_NOT_FOUND 把整棵 plugin tree 拖崩，而 package.json 与
+                // version 看起来完全正常，幂等检查就这么把残缺实体放过去了。
+                if (!a.isEmpty() && a.equals(b) && countFiles(dst) >= countFiles(src)) return true;
             }
         } catch (Throwable ignored) {
         }
@@ -1385,8 +1389,11 @@ public class HarnessController {
             if (adir != null) {
                 purgeForPlace(dst);
                 int n = writeAssetTree(adir, dst);
-                if (n > 0 && dstPkg.isFile()) return true;
-                tried.append("B(写了").append(n).append("个文件仍不完整) ");
+                int want = countAssetTree(adir);
+                // 判据不能只看「写了几个」加 package.json 在不在：少写一个 lib 文件同样能过，
+                // 而 dsh 加载时 import 不到就会整棵 plugin tree 崩。要求写满。
+                if (n >= want && dstPkg.isFile()) return true;
+                tried.append("B(写了").append(n).append("/").append(want).append("个文件) ");
             } else {
                 tried.append("B(无 assets 映射) ");
             }
@@ -1405,6 +1412,39 @@ public class HarnessController {
         } catch (Throwable ignored) {
         }
         return false;
+    }
+
+    /** 递归数一个目录下的文件数（不含目录本身）。用来判断安置出来的实体是否写全了 ——
+     *  只比 package.json 的 version 会漏掉「文件少了一个」这种残缺。 */
+    private int countFiles(java.io.File dir) {
+        try {
+            if (dir == null || !dir.isDirectory()) return 0;
+            java.io.File[] kids = dir.listFiles();
+            if (kids == null) return 0;
+            int n = 0;
+            for (java.io.File f : kids) {
+                if (FileCopy.isSymlink(f)) continue;   // 软链不跟进，免得数到别处去
+                n += f.isDirectory() ? countFiles(f) : 1;
+            }
+            return n;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** assets 下某个目录里应该有多少个文件。与 {@link #writeAssetTree} 的返回值对照。 */
+    private int countAssetTree(String assetDir) {
+        try {
+            String[] kids = appContext.getAssets().list(assetDir);
+            if (kids == null || kids.length == 0) return 1;   // 没有子项 = 它自己是个文件
+            int n = 0;
+            for (String k : kids) {
+                n += countAssetTree(assetDir + "/" + k);
+            }
+            return n;
+        } catch (Throwable t) {
+            return 0;
+        }
     }
 
     /** 把 assets 下某个目录整棵写进目标目录，返回写出的文件数。 */
