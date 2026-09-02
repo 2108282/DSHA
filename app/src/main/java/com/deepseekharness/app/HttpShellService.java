@@ -562,48 +562,29 @@ public final class HttpShellService {
                         .build();
 
                 String statusLabel = "任务完成";
-                int labelColor = 0xFF52C41A;
                 String btnText = "继续对话";
                 if (title.contains("失败") || title.contains("中断") || title.contains("异常") || title.contains("终止") || title.contains("挂起")) {
                     statusLabel = "任务状态";
-                    labelColor = 0xFFFF4D4F;
                     btnText = "重新开始";
                 }
 
-                android.widget.RemoteViews rv = buildDarkLiveRemoteViews(title, text, statusLabel, labelColor, btnText, R.drawable.ic_alarm_white, actionPi);
                 String capsuleText = compactCapsuleText(title);
+
+                NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
+                        R.drawable.ic_alarm_white, "💬 " + btnText, actionPi)
+                        .build();
 
                 NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, Constants.CHANNEL_TASK_RESULT)
                         .setSmallIcon(R.drawable.ic_launch)
-                        .setSubText("大肥鱼")
                         .setContentTitle(title)
                         .setContentText(text)
+                        .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
                         .setContentIntent(contentPi)
-                        .setCustomContentView(rv)
-                        .setCustomBigContentView(rv)
-                        .setPriority(NotificationCompat.PRIORITY_HIGH)
-                        .setOnlyAlertOnce(true)
-                        .setShowWhen(false)
-                        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                        .setCategory(NotificationCompat.CATEGORY_STATUS)
+                        .addAction(replyAction)
                         .setTimeoutAfter(120_000L)
                         .setAutoCancel(true);
 
-                try {
-                    android.graphics.Bitmap whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
-                    if (whaleBmp != null) b.setLargeIcon(whaleBmp);
-                } catch (Throwable ignored) {}
-
-                // Android 16 (API 36 / 澎湃 OS 焦点通知) 状态栏实时更新胶囊 (Promoted Ongoing Notification)
-                android.os.Bundle extras = b.getExtras();
-                if (extras != null) {
-                    extras.putBoolean("android.requestPromotedOngoing", true);
-                    extras.putString("android.shortCriticalText", capsuleText);
-                }
-                try {
-                    java.lang.reflect.Method m = b.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
-                    m.invoke(b, true);
-                } catch (Throwable ignored) {}
+                attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText);
 
                 nm.notify(Constants.NOTIF_TASK, b.build());
             }
@@ -1522,34 +1503,15 @@ public final class HttpShellService {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         NotificationCompat.Builder cb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                 .setSmallIcon(R.drawable.ic_launch)
-                .setSubText("大肥鱼")
                 .setContentTitle("⚠️ 安全确认")
                 .setContentText("模型试图执行：" + shortCmd)
                 .setStyle(new NotificationCompat.BigTextStyle()
                         .bigText("模型试图在设备上执行：\n" + displayCmd + "\n\n是否允许？"))
                 .addAction(0, "允许", allowPi)
                 .addAction(0, "拒绝", denyPi)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setOngoing(true)
-                .setOnlyAlertOnce(true)
-                .setShowWhen(false)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setCategory(NotificationCompat.CATEGORY_STATUS);
+                .setOngoing(true);
 
-        try {
-            android.graphics.Bitmap whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
-            if (whaleBmp != null) cb.setLargeIcon(whaleBmp);
-        } catch (Throwable ignored) {}
-
-        android.os.Bundle cExtras = cb.getExtras();
-        if (cExtras != null) {
-            cExtras.putBoolean("android.requestPromotedOngoing", true);
-            cExtras.putString("android.shortCriticalText", "安全确认");
-        }
-        try {
-            java.lang.reflect.Method m = cb.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
-            m.invoke(cb, true);
-        } catch (Throwable ignored) {}
+        attachFocusCapsule(ctx, cb, "⚠️ 安全确认", "模型试图执行：" + shortCmd, "权限请求", "允许操作", "安全确认");
 
         Notification n = cb.build();
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -1574,24 +1536,92 @@ public final class HttpShellService {
         if (s.contains("完成") || s.contains("成功") || s.contains("done")) return "任务已完成";
         if (s.contains("中断") || s.contains("停止") || s.contains("cancel") || s.contains("abort")) return "任务已中断";
         if (s.contains("失败") || s.contains("错误") || s.contains("503") || s.contains("400") || s.contains("error")) return "请求异常";
-        if (s.length() <= 5) return s;
+        if (s.length() <= 6) return s;
         return s.substring(0, 5) + "…";
     }
 
-    private android.widget.RemoteViews buildDarkLiveRemoteViews(String title, String detail, String statusLabel, int labelColor, String btnText, int btnIconRes, PendingIntent actionPi) {
-        android.widget.RemoteViews rv = new android.widget.RemoteViews(ctx.getPackageName(), R.layout.notification_live_dark);
-        rv.setTextViewText(R.id.notif_title, title != null && !title.isEmpty() ? safeDisplay(title) : "正在执行自动化任务...");
-        rv.setTextViewText(R.id.notif_status_label, statusLabel != null ? statusLabel : "实时状态");
-        rv.setTextColor(R.id.notif_status_label, labelColor);
-        rv.setTextViewText(R.id.notif_detail, detail != null && !detail.isEmpty() ? safeDisplay(detail) : "智能体正在分析并执行任务...");
-        rv.setTextViewText(R.id.notif_btn_text, btnText != null ? btnText : "停止任务");
-        if (btnIconRes != 0) {
-            rv.setImageViewResource(R.id.notif_btn_icon, btnIconRes);
+    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText) {
+        b.setSubText("大肥鱼");
+        b.setOnlyAlertOnce(true);
+        b.setShowWhen(false);
+        b.setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
+        b.setCategory(NotificationCompat.CATEGORY_STATUS);
+        b.setPriority(NotificationCompat.PRIORITY_HIGH);
+
+        try {
+            android.graphics.Bitmap whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
+            if (whaleBmp != null) b.setLargeIcon(whaleBmp);
+        } catch (Throwable ignored) {}
+
+        // 1. Google AOSP 16 (API 36) 原生实时活动标准 (Live Updates / Promoted Ongoing)
+        android.os.Bundle extras = b.getExtras();
+        if (extras != null) {
+            extras.putBoolean("android.requestPromotedOngoing", true);
+            extras.putString("android.shortCriticalText", capsuleText != null ? capsuleText : "正在执行");
         }
-        if (actionPi != null) {
-            rv.setOnClickPendingIntent(R.id.notif_btn_action, actionPi);
-        }
-        return rv;
+        try {
+            java.lang.reflect.Method m = b.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
+            m.invoke(b, true);
+        } catch (Throwable ignored) {}
+
+        // 2. 小米澎湃 OS (HyperOS / HyperIsland 灵动岛) 焦点通知私有协议 (focusType=PARAMS)
+        try {
+            org.json.JSONObject paramV2 = new org.json.JSONObject();
+            paramV2.put("protocol", 1);
+            paramV2.put("business", "dsha_focus");
+            paramV2.put("enableFloat", true);
+
+            org.json.JSONObject island = new org.json.JSONObject();
+            island.put("highlightColor", "#58A6FF");
+
+            org.json.JSONObject bigIslandArea = new org.json.JSONObject();
+
+            // 左耳：大肥鱼小图标 + "大肥鱼"
+            org.json.JSONObject leftTextInfo = new org.json.JSONObject();
+            leftTextInfo.put("title", "大肥鱼");
+            leftTextInfo.put("showHighlightColor", true);
+            org.json.JSONObject leftImgText = new org.json.JSONObject();
+            leftImgText.put("type", 1);
+            leftImgText.put("textInfo", leftTextInfo);
+            bigIslandArea.put("imageTextInfoLeft", leftImgText);
+
+            // 右耳：动态 4~6 字实时状态
+            org.json.JSONObject rightTextInfo = new org.json.JSONObject();
+            rightTextInfo.put("title", capsuleText != null ? capsuleText : "正在执行");
+            rightTextInfo.put("showHighlightColor", false);
+            bigIslandArea.put("textInfo", rightTextInfo);
+
+            island.put("bigIslandArea", bigIslandArea);
+            paramV2.put("param_island", island);
+
+            org.json.JSONObject baseInfo = new org.json.JSONObject();
+            baseInfo.put("type", 2);
+            baseInfo.put("title", title != null ? title : "DSHA");
+            paramV2.put("baseInfo", baseInfo);
+
+            org.json.JSONObject hintInfo = new org.json.JSONObject();
+            hintInfo.put("title", detail != null ? detail : "");
+            hintInfo.put("content", statusLabel != null ? statusLabel : "实时状态");
+            hintInfo.put("type", 2);
+            hintInfo.put("colorContent", "#58A6FF");
+            hintInfo.put("colorContentDark", "#58A6FF");
+
+            if (actionTitle != null && !actionTitle.isEmpty()) {
+                org.json.JSONObject actionInfo = new org.json.JSONObject();
+                actionInfo.put("title", actionTitle);
+                actionInfo.put("actionIntentType", 2);
+                hintInfo.put("actionInfo", actionInfo);
+            }
+            paramV2.put("hintInfo", hintInfo);
+
+            org.json.JSONObject root = new org.json.JSONObject();
+            root.put("param_v2", paramV2);
+
+            if (extras != null) {
+                extras.putString("miui.focus.param", root.toString());
+                extras.putBoolean("enableFloat", true);
+            }
+        } catch (Throwable ignored) {}
     }
 
     private String appTaskRunning(String path) {
@@ -1646,42 +1676,24 @@ public final class HttpShellService {
 
             String shortMsg = (text == null || text.trim().isEmpty()) ? "智能体正在执行自动化任务..." : shortText(text);
 
-            String displayTitle = title != null && !title.isEmpty() ? safeDisplay(title) : "正在执行自动化任务...";
+            String displayTitle = title != null && !title.isEmpty() ? safeDisplay(title) : "正在执行";
             String displayDetail = text != null && !text.isEmpty() ? safeDisplay(text) : "智能体正在分析并执行任务...";
             String capsuleText = compactCapsuleText(text != null && !text.isEmpty() ? text : title);
 
-            android.widget.RemoteViews rv = buildDarkLiveRemoteViews(displayTitle, displayDetail, "实时状态", 0xFF58A6FF, "停止任务", R.drawable.ic_alarm_white, stopPi);
+            NotificationCompat.Action stopAction = new NotificationCompat.Action.Builder(
+                    R.drawable.ic_alarm_white, "🛑 停止任务", stopPi)
+                    .build();
 
             NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_AGENT_RUNNING)
                     .setSmallIcon(R.drawable.ic_launch)
-                    .setSubText("大肥鱼")
                     .setContentTitle(displayTitle)
                     .setContentText(safeDisplay(shortMsg))
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(displayDetail))
                     .setContentIntent(contentPi)
-                    .setCustomContentView(rv)
-                    .setCustomBigContentView(rv)
-                    .setOngoing(true)
-                    .setOnlyAlertOnce(true)
-                    .setShowWhen(false)
-                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                    .setCategory(NotificationCompat.CATEGORY_STATUS)
-                    .setPriority(NotificationCompat.PRIORITY_HIGH);
+                    .addAction(stopAction)
+                    .setOngoing(true);
 
-            try {
-                android.graphics.Bitmap whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
-                if (whaleBmp != null) nb.setLargeIcon(whaleBmp);
-            } catch (Throwable ignored) {}
-
-            // Android 16 (API 36 / 澎湃 OS 焦点通知) 状态栏实时更新胶囊 (Promoted Ongoing Notification)
-            android.os.Bundle extras = nb.getExtras();
-            if (extras != null) {
-                extras.putBoolean("android.requestPromotedOngoing", true);
-                extras.putString("android.shortCriticalText", capsuleText);
-            }
-            try {
-                java.lang.reflect.Method m = nb.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
-                m.invoke(nb, true);
-            } catch (Throwable ignored) {}
+            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText);
 
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
@@ -1706,34 +1718,14 @@ public final class HttpShellService {
 
         NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                 .setSmallIcon(R.drawable.ic_launch)
-                .setSubText("大肥鱼")
                 .setContentTitle("💬 助手提问")
                 .setContentText(safeDisplay(shortQ))
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(safeDisplay(q)))
                 .setContentIntent(contentPi)
                 .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setOngoing(true)
-                .setOnlyAlertOnce(true)
-                .setShowWhen(false)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setCategory(NotificationCompat.CATEGORY_STATUS);
+                .setOngoing(true);
 
-        try {
-            android.graphics.Bitmap whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
-            if (whaleBmp != null) nb.setLargeIcon(whaleBmp);
-        } catch (Throwable ignored) {}
-
-        // Android 16 (API 36 / 澎湃 OS 焦点通知) 状态栏实时更新胶囊 (Promoted Ongoing Notification)
-        android.os.Bundle askExtras = nb.getExtras();
-        if (askExtras != null) {
-            askExtras.putBoolean("android.requestPromotedOngoing", true);
-            askExtras.putString("android.shortCriticalText", "等待回答");
-        }
-        try {
-            java.lang.reflect.Method m = nb.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
-            m.invoke(nb, true);
-        } catch (Throwable ignored) {}
+        attachFocusCapsule(ctx, nb, "💬 助手提问", safeDisplay(shortQ), "等待回答", opts.length > 0 ? opts[0] : "回答", "等待回答");
 
         for (int i = 0; i < opts.length; i++) {
             String opt = opts[i];

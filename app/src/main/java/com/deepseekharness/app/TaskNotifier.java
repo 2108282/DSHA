@@ -107,45 +107,21 @@ public class TaskNotifier {
                 R.drawable.ic_launch, "💬 继续对话", actionPi)
                 .build();
 
-        android.widget.RemoteViews rv = new android.widget.RemoteViews(ctx.getPackageName(), R.layout.notification_live_dark);
-        rv.setTextViewText(R.id.notif_title, "任务完成");
-        rv.setTextViewText(R.id.notif_status_label, "任务完成");
-        rv.setTextColor(R.id.notif_status_label, 0xFF52C41A);
-        rv.setTextViewText(R.id.notif_detail, "智能体已结束任务，点击查看结果");
-        rv.setTextViewText(R.id.notif_btn_text, "继续对话");
-        rv.setImageViewResource(R.id.notif_btn_icon, R.drawable.ic_alarm_white);
-        rv.setOnClickPendingIntent(R.id.notif_btn_action, actionPi);
+        NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
+                R.drawable.ic_alarm_white, "💬 继续对话", actionPi)
+                .build();
 
         NotificationCompat.Builder tnb = new NotificationCompat.Builder(ctx, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_launch)
-                .setSubText("大肥鱼")
                 .setContentTitle("任务完成")
                 .setContentText("智能体已结束任务，点击查看结果")
+                .setStyle(new NotificationCompat.BigTextStyle().bigText("智能体已结束任务，点击查看结果"))
                 .setContentIntent(pi)
-                .setCustomContentView(rv)
-                .setCustomBigContentView(rv)
-                .setOnlyAlertOnce(true)
-                .setShowWhen(false)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .addAction(replyAction)
                 .setTimeoutAfter(120_000L)
                 .setAutoCancel(true);
 
-        try {
-            android.graphics.Bitmap whaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
-            if (whaleBmp != null) tnb.setLargeIcon(whaleBmp);
-        } catch (Throwable ignored) {}
-
-        // Android 16 (API 36 / 澎湃 OS 焦点通知) 状态栏实时更新胶囊
-        android.os.Bundle tnExtras = tnb.getExtras();
-        if (tnExtras != null) {
-            tnExtras.putBoolean("android.requestPromotedOngoing", true);
-            tnExtras.putString("android.shortCriticalText", "任务完成");
-        }
-        try {
-            java.lang.reflect.Method m = tnb.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
-            m.invoke(tnb, true);
-        } catch (Throwable ignored) {}
+        HttpShellService.attachFocusCapsule(ctx, tnb, "任务完成", "智能体已结束任务，点击查看结果", "任务完成", "继续对话", "任务完成");
         Notification n = tnb.build();
         if (nm != null) nm.notify(NOTIF_ID, n);
     }
