@@ -209,6 +209,34 @@ public final class ShizukuShell {
         }
     }
 
+
+    /** 通过 Shizuku 底层直接执行命令（绕过所有不稳定的 UserService 握手） */
+    private static String execDirect(String cmd) throws Exception {
+        IBinder binder = Shizuku.getBinder();
+        if (binder == null) throw new IllegalStateException("Shizuku binder is null");
+        
+        moe.shizuku.server.IShizukuService shizukuService = moe.shizuku.server.IShizukuService.Stub.asInterface(binder);
+        
+        // 关键点：使用 2>&1 自动把错误流合并到标准输出，避免分别读取两条管道导致死锁
+        moe.shizuku.server.IRemoteProcess rp = shizukuService.newProcess(new String[]{"sh", "-c", cmd + " 2>&1"}, null, null);
+        
+        android.os.ParcelFileDescriptor pfd = rp.getInputStream();
+        if (pfd == null) throw new IllegalStateException("Remote process InputStream is null");
+        
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        try (java.io.InputStream in = new android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd)) {
+            while ((n = in.read(buf)) != -1) {
+                bos.write(buf, 0, n);
+            }
+        }
+        
+        rp.waitFor();
+        int code = rp.exitValue();
+        return bos.toString("UTF-8") + "\n[EXIT=" + code + "]";
+    }
+
     /** 通过 UserService 执行 shell 命令并返回输出 */
     public static String exec(String cmd) {
         if (!hasPermission()) {
@@ -217,13 +245,22 @@ public final class ShizukuShell {
         IShellService s = shellService;
         if (s == null) {
             ensureBound(appCtx);
-            Log.w(TAG, "exec ignored (not ready), status=" + status());
-            return "[SHIZUKU_SERVICE_NOT_READY]";
+            // 如果 UserService 还没好，直接走底层兜底，不阻断请求！
+            try {
+                return execDirect(cmd);
+            } catch (Throwable e) {
+                Log.w(TAG, "Direct newProcess failed, status=" + status(), e);
+                return "[SHIZUKU_SERVICE_NOT_READY]";
+            }
         }
         try {
             return s.exec(cmd);
         } catch (Throwable e) {
-            return "ERROR: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+            try {
+                return execDirect(cmd);
+            } catch (Throwable ex) {
+                return "ERROR: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+            }
         }
     }
 }
