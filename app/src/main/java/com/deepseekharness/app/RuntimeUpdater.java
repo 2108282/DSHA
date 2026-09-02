@@ -44,18 +44,28 @@ public final class RuntimeUpdater {
     private RuntimeUpdater() {
     }
 
-    /** 清单地址（多源，按顺序尝试）。与 tools/gen-runtime-manifest.py 的产出对应。 */
+    /** 清单地址（多源，按顺序尝试）。与 tools/gen-runtime-manifest.py 的产出对应。
+     *
+     *  <p>指向 {@code stable} 分支而不是 {@code main}：main 现在走 1.2 alpha 线，
+     *  上面那份清单由那条线自己生成，与 1.1.x 的 assets 内容对不上，客户端逐文件核对
+     *  sha256 必然失败 —— 真机反馈的「清单签名验证失败，已拒绝这次更新」就是这么来的
+     *  （issue #45）。而 main 不是我们该改的分支，改了会把 1.2 的用户带坏。
+     *
+     *  <p>分支名不能带斜杠：raw 的路径是 {@code /owner/repo/<ref>/<path>}，ref 里出现
+     *  斜杠就没法区分 ref 和 path（{@code dev/1.1.x/x.json} 会被当成 ref=dev、
+     *  path=1.1.x/x.json），jsdelivr 的 {@code @ref} 同理。所以另开 stable 这个名字，
+     *  发版时把清单推到它上面。 */
     private static final String[] MANIFEST_URLS = {
-            "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/runtime-manifest.json",
-            "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/runtime-manifest.json",
-            "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/runtime-manifest.json",
+            "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/stable/runtime-manifest.json",
+            "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@stable/runtime-manifest.json",
+            "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/stable/runtime-manifest.json",
     };
 
     /** 清单签名（base64 的 SHA256withRSA），与清单一一对应 */
     private static final String[] SIG_URLS = {
-            "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/runtime-manifest.sig",
-            "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/runtime-manifest.sig",
-            "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/runtime-manifest.sig",
+            "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/stable/runtime-manifest.sig",
+            "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@stable/runtime-manifest.sig",
+            "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/stable/runtime-manifest.sig",
     };
 
     /** APK 内置的验签公钥（从 release keystore 的证书导出，4096 bit RSA） */
