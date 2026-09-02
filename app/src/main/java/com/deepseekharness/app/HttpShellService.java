@@ -1759,7 +1759,6 @@ public final class HttpShellService {
 
             attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, null, null);
 
-            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
         } catch (Throwable ignored) {}
     }
