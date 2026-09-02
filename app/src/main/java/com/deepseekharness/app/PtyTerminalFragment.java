@@ -55,6 +55,7 @@ public final class PtyTerminalFragment extends Fragment
      */
     private static final String[][] KEYS = {
             {"中文", null},
+            {"粘贴", null},
             {"ESC", "\033"},
             {"TAB", "\t"},
             {"CTRL", null},
@@ -190,6 +191,10 @@ public final class PtyTerminalFragment extends Fragment
             final String label = k[0];
             if ("中文".equals(label)) {
                 b.setOnClickListener(v -> promptTextInput());
+            } else if ("粘贴".equals(label)) {
+                // 库自带的粘贴要先长按进选择模式再点菜单，真机上那条路不一定出得来 ——
+                // 直接给个键调同一段逻辑（onPasteRequest 就是从剪贴板读出来写进 PTY）
+                b.setOnClickListener(v -> onPasteRequest());
             } else if (seq == null) {
                 if ("CTRL".equals(label)) ctrlBtn = b;
                 else altBtn = b;
@@ -463,7 +468,16 @@ public final class PtyTerminalFragment extends Fragment
 
     @Override
     public boolean shouldEnforceCharBasedInput() {
-        return true;    // 对中文输入法友好：逐字符提交，避免候选词把整行吞掉
+        // 这里原来返回 true，注释还写着「对中文输入法友好」—— 恰好反了。
+        // 库里这个开关为 true 时会把 IME 的 inputType 设成 TYPE_NULL，逼输入法只发
+        // KeyEvent。Termux 上游加它是为了绕开某些输入法（Google 拼音、三星输入法）在
+        // 非 NULL 类型下显示错乱的老 bug，代价是**中文候选词整个消失** —— 拼音敲下去
+        // 出不了字，正是真机上遇到的现象。
+        //
+        // 改回 false：inputType 走普通文本，输入法能给候选、中文能提交。风险是个别输入法
+        // 在这个类型下行为古怪（那个老 bug 的由来），所以「中文」那个输入框保留着当兜底 ——
+        // 两条路同时在，哪条通用哪条。
+        return false;
     }
 
     @Override
