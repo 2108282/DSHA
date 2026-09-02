@@ -1683,7 +1683,7 @@ public final class HttpShellService {
 
             org.json.JSONObject bigIslandArea = new org.json.JSONObject();
 
-            // 左耳：小蓝鲸图片 + "大肥鱼"
+            // 左耳：小蓝鲸透明图片 + "大肥鱼"
             org.json.JSONObject leftImgText = new org.json.JSONObject();
             leftImgText.put("type", 1);
             org.json.JSONObject leftPicInfo = new org.json.JSONObject();
@@ -1727,7 +1727,7 @@ public final class HttpShellService {
             hintInfo.put("colorContent", "#58A6FF");
             hintInfo.put("colorContentDark", "#58A6FF");
 
-            // 单按钮配置在 hintInfo.actionInfo 保证兼容
+            // 单按钮配置在 hintInfo.actionInfo（复刻系统日程原生标准药丸按钮）
             if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
                 org.json.JSONObject actionInfo = new org.json.JSONObject();
                 actionInfo.put("action", "miui.focus.action_1");
@@ -1738,42 +1738,7 @@ public final class HttpShellService {
             }
             paramV2.put("hintInfo", hintInfo);
 
-            // 双按钮使用 textButton 数组渲染并排药丸按钮
-            org.json.JSONArray textButtonArr = new org.json.JSONArray();
-            if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
-                org.json.JSONObject tb1 = new org.json.JSONObject();
-                tb1.put("type", 0);
-                tb1.put("actionTitle", actionTitle);
-                tb1.put("actionIcon", "miui.focus.pic_action");
-                tb1.put("actionIconDark", "miui.focus.pic_action");
-                tb1.put("actionBgColor", "#2E2E2E");
-                tb1.put("actionBgColorDark", "#2E2E2E");
-                tb1.put("actionTitleColor", "#FFFFFF");
-                tb1.put("actionTitleColorDark", "#FFFFFF");
-                tb1.put("actionIntentType", 2);
-                tb1.put("actionIntent", "miui.focus.action_1");
-                textButtonArr.put(tb1);
-            }
-
-            if (secondaryActionPi != null && secondaryActionTitle != null && !secondaryActionTitle.isEmpty()) {
-                org.json.JSONObject tb2 = new org.json.JSONObject();
-                tb2.put("type", 0);
-                tb2.put("actionTitle", secondaryActionTitle);
-                tb2.put("actionIcon", "miui.focus.pic_action");
-                tb2.put("actionIconDark", "miui.focus.pic_action");
-                tb2.put("actionBgColor", "#2E2E2E");
-                tb2.put("actionBgColorDark", "#2E2E2E");
-                tb2.put("actionTitleColor", "#FF5555");
-                tb2.put("actionTitleColorDark", "#FF5555");
-                tb2.put("actionIntentType", 2);
-                tb2.put("actionIntent", "miui.focus.action_2");
-                textButtonArr.put(tb2);
-            }
-
-            if (textButtonArr.length() > 0) {
-                paramV2.put("textButton", textButtonArr);
-            }
-
+            // 右上角彩色大肥鱼 App 图标
             org.json.JSONObject picInfo = new org.json.JSONObject();
             picInfo.put("type", 1);
             picInfo.put("pic", "miui.focus.icon_feature");
