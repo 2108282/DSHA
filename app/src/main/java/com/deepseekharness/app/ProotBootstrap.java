@@ -464,6 +464,7 @@ public class ProotBootstrap {
             // 建出来，界面里根本看不到「手机存储」这一项。第一版就漏了这步：挂载是通的、
             // 容器里 cd 得进去，但用户在选择器里什么变化都没有。
             new File(rootfsDir, "root/手机存储").mkdirs();
+            new File(rootfsDir, "root/外部工作区").mkdirs();
             File readme = new File(d, "读我-这个目录能做什么.txt");
             if (readme.isFile()) return;
             String text = "容器里的 /root/手机存储 就是手机内部存储的根（整个 /storage/emulated/0），\n"

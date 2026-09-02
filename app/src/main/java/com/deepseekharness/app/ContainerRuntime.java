@@ -259,5 +259,9 @@ public interface ContainerRuntime {
             // 必然失败（pnpm 的 node_modules 就是一片符号链接），git clone 同理 ——
             // 就算 root 也救不了。Download/DSHA/工作区/ 里放了一份说明写清这件事。
             {"/storage/emulated/0", "/root/手机存储"},
+            // 「外部工作区」：手机存储里的一个专用目录。给「只想要一个跟手机互通的工作区、
+            // 不想让 agent 面对整个存储」的用法留一条路 —— 整个存储根做工作区时，
+            // agent 一做全目录扫描就得把手机翻一遍，FUSE 上很慢。两个挂载点各有场合，都留。
+            {"/storage/emulated/0/Download/DSHA/工作区", "/root/外部工作区"},
     };
 }

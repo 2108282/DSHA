@@ -544,7 +544,16 @@ public final class HttpShellService {
                     .setContentText(text)
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
-                    .setAutoCancel(true);
+                    .setAutoCancel(true)
+                    // 点了要能回 App。原先只有 setAutoCancel —— 点一下通知消失、什么都没发生，
+                    // 而这类通知的场景恰恰是「任务干完了，去看结果」，不能跳转等于白通知一次。
+                    // （App 侧那条 TaskNotifier 一直是有 contentIntent 的，插件走的 /app/notify
+                    // 这条路漏了，两处发通知的代码没对齐。）
+                    .setContentIntent(PendingIntent.getActivity(ctx, 0,
+                            new Intent(ctx, MainActivity.class).addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK
+                                            | Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
             nm.notify(2002, b.build());
             return "OK";
         } catch (Throwable e) {
