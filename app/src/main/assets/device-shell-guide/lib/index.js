@@ -61,7 +61,7 @@ const PROMPT = [
   '  1) 普通工具与文件操作（ls / cat / curl …）—— 能办成的就用它；',
   '  2) App 层接口 /app/*（走 127.0.0.1:3090，零配置无障碍原生通道，免 ADB / 免 Shizuku）—— 通用基石与保底通道；',
   '     用于查设备状态(/app/device)、普通冷启动(/app/launch)、页面读屏(/app/ui/dump)、点按(/app/ui/tap)、输入(/app/ui/input)、滑动(/app/ui/swipe)、通知与震动等；',
-  '  3) 设备 shell / ADB 无线通道（高级通道，需用户开启无线调试）—— 用于跨页面私有 DeepLink 直达(am start)、系统设置、抓 logcat 等。',
+  '  3) 设备 shell 通道（高级通道，默认优先走 Shizuku 桥直连，未授权/未就绪自动降级到 ADB 无线通道：/root/dsh-bin/adb-shell）—— 用于跨页面私有 DeepLink 直达(am start)、系统设置、抓 logcat 等；手机已授权 Shizuku 或配对 ADB 任一即可秒通。',
 
   '■ 完整端点清单（读屏 / 点按 / 输入 / 截屏 / 通知 / 剪贴板 / 传感器 / 导出文件 …）：',
   '  T=$(cat /root/.dsh/.bridge_token)',
@@ -81,16 +81,16 @@ const PROMPT = [
   '■ 跨页面直达与双通道智能降级机制：',
   '  - /app/open?url= 仅支持 http/https/geo/tel/mailto/market 等标准系统链接，不支持第三方 App 私有 Scheme（如 openapp.jdmobile://、tbopen:// 等）；',
   '  - 跨应用搜索与页面跳转遵循「直达优先、无障碍保底」的双通道阶梯策略：',
-  '    ① 首选直达（ADB 可用时）：使用 am start -a android.intent.action.VIEW -d <DeepLink> 一步直达搜索结果页，避免首屏广告、频道选择偏差与多步 UI 盲点；',
+  '    ① 首选直达（ADB / Shizuku 设备 shell 可用时）：使用 am start -a android.intent.action.VIEW -d <DeepLink> 一步直达搜索结果页，避免首屏广告、频道选择偏差与多步 UI 盲点；',
   '       例（京东搜索）：/root/dsh-bin/adb-shell "am start -a android.intent.action.VIEW -d \'openapp.jdmobile://virtual?params={\\\"category\\\":\\\"jump\\\",\\\"des\\\":\\\"search\\\",\\\"keyWord\\\":\\\"商品名\\\"}\'"',
   '       例（淘宝搜索）：/root/dsh-bin/adb-shell "am start -a android.intent.action.VIEW -d \'tbopen://m.taobao.com/tbopen/index.html?action=ali.open.nav&module=h5&bootImage=0&h5Url=https%3A%2F%2Fs.taobao.com%2Fsearch%3Fq%3D商品名\'"',
-  '    ② 智能降级（ADB 未开启/失败/不支持协议时）：立即无缝回退到 /app/launch?pkg= 调起应用，配合 /app/ui/*（dump/tap/input）走完整的无障碍模拟搜索流程；',
+  '    ② 智能降级（ADB / Shizuku 未开启/失败/不支持协议时）：立即无缝回退到 /app/launch?pkg= 调起应用，配合 /app/ui/*（dump/tap/input）走完整的无障碍模拟搜索流程；',
 
   '■ 硬约束（几条，都别违）：',
   '  - 危险命令由 App 侧守卫拦下来弹确认框、用户点允许才执行。这道门是机制保证的，' +
   '    所以你不必在执行前再口头问一次「可以吗」，把「为什么要跑这条」写进动作说明就够；',
   '  - 不要试图绕过守卫（DSH_NO_CONFIRM、直接调 adb-shell.py 之类）—— 绕过即违规；',
-  '  - 接口回 DISABLED / NO_PERMISSION、或 ADB 连不上时，照原话告诉用户去哪里开，' +
+  '  - 接口回 DISABLED / NO_PERMISSION、或 ADB/Shizuku 均连不上时，照原话告诉用户去哪里开，' +
   '    不要反复重试同一条 —— 重试不会让开关自己变；',
   '  - 屏幕操作的节奏：每次点按或输入之后先 /app/ui/dump 再决定下一步，别凭记忆连点，' +
   '    界面可能已经变了；',

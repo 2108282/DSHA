@@ -31,10 +31,11 @@
   - **重写 `onNewIntent`**：彻底解决 Activity 后台唤醒时丢参数的问题。
 
 ### 4. 其它核心特性与补丁对齐
-- **两阶段候选池消歧提示词**：`device-shell-guide` 引入消歧规则，杜绝将语音搜索话筒当成搜索按钮盲点；
+- **`adb-shell` Shizuku 优先双引擎架构**：`adb-shell.py` 升级为 Shizuku-Preferred Dual Engine 架构（`SCRIPT_VERSION = 13`），默认第一优先级直接走 3090 宿主桥（`/exec`，Shizuku 直通），在 Shizuku 未就绪时自动降级到 ADB 无线通道，彻底实现「优先 Shizuku 零延迟直通，免开无线调试」；
+- **两阶段候选池消歧提示词**：`device-shell-guide` 引入消歧规则与双通道说明，`BUILTIN_ASSET_VERSION = 27`，杜绝将语音搜索话筒当成搜索按钮盲点；
 - **图片附件软链接修复**：`fs-write-patch.sh` 段③原子补丁将 `link()` 改为 `rename()`，彻底解决 WebUI 发图报 `ATTACHMENT_WRITE_FAILED` 崩溃；
 - **3081 局域网代理扩容**：`LanProxyService` 提升 Chunk 上限至 32MB 并补齐结尾 CRLF，解决加载大插件卡死；
-- **资产自愈补齐**：`HarnessController` 补齐 `dsha-task-notifier-installed` marker 扫描与清理，`BUILTIN_ASSET_VERSION = 26`，覆盖安装自动刷新容器内部插件。
+- **资产自愈补齐**：`HarnessController` 补齐 `dsha-task-notifier-installed` marker 扫描与清理，覆盖安装自动刷新容器内部插件。
 
 ---
 

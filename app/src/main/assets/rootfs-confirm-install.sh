@@ -13,6 +13,40 @@ cat > /root/dsh-confirm.sh <<'EOF'
 FORCE=0
 if [ "$1" = "--force" ]; then FORCE=1; shift; fi
 CMD="$*"
+
+# 1. 租约检查：单一事实来源 /root/.dsh/.auth_lease
+# 若处于 10 分钟授权租约期内（时间戳 > 当前时间），直接放行
+LEASE_FILE=/root/.dsh/.auth_lease
+if [ -f "$LEASE_FILE" ]; then
+  LEASE=$(cat "$LEASE_FILE" 2>/dev/null)
+  NOW=$(date +%s 2>/dev/null || python3 -c 'import time; print(int(time.time()))' 2>/dev/null)
+  if [ -n "$LEASE" ] && [ -n "$NOW" ] && [ "$LEASE" -gt "$NOW" ] 2>/dev/null; then
+    exit 0
+  fi
+fi
+
+# 2. 临时文件清理放行：单次任务结束清理单张截图或临时租约不弹窗
+is_safe_cleanup() {
+  case "$1" in
+    rm\ *|unlink\ *) ;;
+    *) return 1 ;;
+  esac
+  case "$1" in
+    *-r*|*-R*|*\*|*\;*|*\|*|*\&*|*\>*) return 1 ;;
+  esac
+  for arg in $1; do
+    [ "$arg" = "rm" ] || [ "$arg" = "unlink" ] || [ "$arg" = "-f" ] && continue
+    case "$arg" in
+      /sdcard/Download/*.png|/sdcard/Download/*.jpg|/sdcard/Download/*.jpeg|/sdcard/Download/*.tmp|/tmp/*|/root/.dsh/.auth_lease) ;;
+      *) return 1 ;;
+    esac
+  done
+  return 0
+}
+if is_safe_cleanup "$*"; then
+  exit 0
+fi
+
 # 3090 桥有 token 鉴权（防其他 App 冒充 agent 弹确认框）：
 # 必须带 X-Token 头（= /root/.dsh/.bridge_token 内容），否则一律 [UNAUTHORIZED] 被拒
 TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
@@ -154,4 +188,4 @@ chmod +x "$DSH_BIN/$C"
 done
 
 echo "OK dsh-bin: $(ls "$DSH_BIN" | tr '\n' ' ')"
-echo 11 > "$DSH_BIN/.version"
+echo 12 > "$DSH_BIN/.version"

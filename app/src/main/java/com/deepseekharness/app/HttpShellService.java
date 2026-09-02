@@ -626,22 +626,62 @@ public final class HttpShellService {
         return false;
     }
 
+    /** 检查 10 分钟临时操作租约（单一事实来源：uiGrantUntil 与 /root/.dsh/.auth_lease） */
+    private boolean isAuthLeaseValid() {
+        if (System.currentTimeMillis() < uiGrantUntil) {
+            return true;
+        }
+        try {
+            HarnessController hc = HarnessController.get(ctx);
+            if (hc != null && hc.getProot() != null && hc.getProot().getRootfsDir() != null) {
+                java.io.File lf = new java.io.File(hc.getProot().getRootfsDir(), "root/.dsh/.auth_lease");
+                if (lf.exists()) {
+                    String s = FileCopy.readString(lf).trim();
+                    if (!s.isEmpty()) {
+                        long expSec = Long.parseLong(s);
+                        if (expSec * 1000L > System.currentTimeMillis()) {
+                            uiGrantUntil = expSec * 1000L;
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /** 写入 10 分钟临时操作租约文件 /root/.dsh/.auth_lease */
+    private void syncAuthLeaseFile(long untilMs) {
+        try {
+            HarnessController hc = HarnessController.get(ctx);
+            if (hc != null && hc.getProot() != null && hc.getProot().getRootfsDir() != null) {
+                java.io.File dshDir = new java.io.File(hc.getProot().getRootfsDir(), "root/.dsh");
+                if (!dshDir.exists()) dshDir.mkdirs();
+                java.io.File lf = new java.io.File(dshDir, ".auth_lease");
+                long expSec = untilMs / 1000L;
+                FileCopy.writeString(lf, String.valueOf(expSec));
+            }
+        } catch (Throwable ignored) {}
+    }
+
     /** @param action 给用户看的具体动作描述 —— 弹窗必须说清 AI 要干什么，
      *               而不是笼统一句「操作屏幕」，否则用户等于盲签。 */
     private boolean uiAuthorized(String action) {
         String pkg = DshaAccessibilityService.currentPackage();
         boolean sensitive = isSensitiveApp(pkg);
-        if (!sensitive && System.currentTimeMillis() < uiGrantUntil) {
+        if (!sensitive && isAuthLeaseValid()) {
             return true;
         }
         String where = pkg.isEmpty() ? "当前界面" : pkg;
         String why = sensitive
                 ? "在【" + where + "】里：" + action
                 + "  # 这类应用涉及支付或隐私，每次都需要你确认"
-                : action + "  # 允许后 10 分钟内的屏幕操作不再询问";
+                : action + "  # 允许后 10 分钟内的屏幕与设备操作不再询问";
         boolean ok = requestUserConfirm(why);
         if (ok && !sensitive) {
-            uiGrantUntil = System.currentTimeMillis() + UI_GRANT_MS;
+            long until = System.currentTimeMillis() + UI_GRANT_MS;
+            uiGrantUntil = until;
+            syncAuthLeaseFile(until);
         }
         return ok;
     }

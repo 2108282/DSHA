@@ -4506,7 +4506,7 @@ public class HarnessController {
     // 注意：GUARD_VERSION 必须与 assets/rootfs-confirm-install.sh 末尾写入的
     // /root/dsh-bin/.version 数字一致！曾出现 8 vs 9 不匹配 → 每次启动都强制
     // rm -rf 重装守卫（幂等但白干 + 可能打断进行中的命令）。
-    private static final String GUARD_VERSION = "11";
+    private static final String GUARD_VERSION = "12";
     /** 步骤⑥整体版本号：内置插件/补丁/极简 preset 任一变更时 +1，
      *  启动时对比 rootfs 标记（step6.version），不符则自动重跑⑥（防"改了不生效"）。
      *  由 installGuard 末尾的 runStep 写入（先删 marker 后写版本 → 中途失败
@@ -4516,7 +4516,7 @@ public class HarnessController {
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
      *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
      *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
-    private static final String BUILTIN_ASSET_VERSION = "26";
+    private static final String BUILTIN_ASSET_VERSION = "27";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
      *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，

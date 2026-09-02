@@ -109,14 +109,7 @@ echo "== [4/4] 安装 /root/dsh-bin/adb-shell 包装命令"
 mkdir -p /root/dsh-bin
 cat > /root/dsh-bin/adb-shell <<'EOF'
 #!/bin/bash
-# DSHA ADB 设备 shell（无线通道，免 Shizuku）
-# 安全铁律（与守卫合并）：守卫开（App 配置「危险 Shell 操作需确认」+ 标记存在）
-# → 执行前经 dsh-confirm.sh --force 确认（所有命令都弹窗，用户点允许才执行）。
-# 守卫关 → 不弹窗，只靠 agent 引导「口头报备」（用户可接受才执行）。
-# 跳过确认：DSH_NO_CONFIRM=1（安装脚本/看门狗内部用，agent 无此变量）
-if [ "${DSH_NO_CONFIRM:-0}" != "1" ] && [ -f /root/.dsh/confirm-shell-enabled ]; then
-  /root/dsh-confirm.sh --force "adb-shell $*" || exit 1
-fi
+# DSHA 设备 shell 统一入口（Shizuku 优先 + ADB 无线自愈，内置 10 分钟临时租约判定）
 exec python3 /root/.dsh/adb-shell.py "$@"
 EOF
 chmod +x /root/dsh-bin/adb-shell

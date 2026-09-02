@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-02T09:51:51Z",
+  "generated": "2026-09-02T11:10:51Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -17,8 +17,8 @@
     {
       "path": "app/src/main/assets/adb-setup.sh",
       "asset": "adb-setup.sh",
-      "size": 5212,
-      "sha256": "e0f2b3fd86228230a9341c9c807f116080c7d7059546388195bfd3bfc85f901b",
+      "size": 4711,
+      "sha256": "8ab80c8dc77167468f32bf520ebdb05a062d8af4490a40c0e59a212fe541c303",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/adb-setup.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/adb-setup.sh",
@@ -28,8 +28,8 @@
     {
       "path": "app/src/main/assets/adb-shell.py",
       "asset": "adb-shell.py",
-      "size": 13902,
-      "sha256": "d451a0f3a6458b4b9519c7df3588fdee420363f20a52ba4a0c30cdccd7c88a48",
+      "size": 14557,
+      "sha256": "a5f28e5afbc2069b4702504c3eea020e7f9cdf5bee3711688f927e5f303f18c9",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/adb-shell.py",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/adb-shell.py",
@@ -226,8 +226,8 @@
     {
       "path": "app/src/main/assets/rootfs-confirm-install.sh",
       "asset": "rootfs-confirm-install.sh",
-      "size": 8007,
-      "sha256": "bbcd5fb47cf88cfeed73e830b66c83beecc187b90a00fe5a89e9bb7261c198aa",
+      "size": 9054,
+      "sha256": "5ac6909f8796b450f1f723ae37a677923e6d941cae365588dde0dbfa45ea6771",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/rootfs-confirm-install.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/rootfs-confirm-install.sh",
@@ -303,8 +303,8 @@
     {
       "path": "app/src/main/assets/device-shell-guide/lib/index.js",
       "asset": "device-shell-guide/lib/index.js",
-      "size": 12614,
-      "sha256": "982b134041a4e6b856ba65884680834cae0d1dd6dd4aae3ed6555b355bfaa1a4",
+      "size": 12791,
+      "sha256": "81dd226723563e0e92f545ef77bbc26cf2c66966dd48a7a3b01adce2fcd87751",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/device-shell-guide/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/device-shell-guide/lib/index.js",

@@ -7,7 +7,19 @@ description: Use when you need to execute shell commands on an Android device fr
 
 Run commands on an Android device from a Linux-based agent environment.
 
-## Channel 1: ADB (recommended)
+## Channel 1: DSHA Device Shell (`adb-shell`, Shizuku-Preferred Dual Engine)
+
+Inside DSHA proot/container environment, the unified entry `/root/dsh-bin/adb-shell` implements a **Shizuku-preferred dual-engine** mechanism:
+
+```bash
+/root/dsh-bin/adb-shell '<device shell command>'
+```
+
+- **Preferred (Shizuku Host Bridge)**: Automatically routes to the 3090 host bridge (`/exec`) with zero setup/latency when Shizuku is authorized on the device.
+- **Fallback (ADB Wireless)**: Automatically falls back to ADB TLS over Wi-Fi when Shizuku is unavailable or unready.
+- Output format is standard: `<command output>\n[EXIT=<code>]`.
+
+## Channel 2: Direct ADB
 
 The device is reachable through ADB. Replace `<serial>` with the actual device serial shown by `adb devices`.
 
