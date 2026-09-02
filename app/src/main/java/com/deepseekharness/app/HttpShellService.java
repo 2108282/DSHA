@@ -1282,16 +1282,18 @@ public final class HttpShellService {
 
             // 2. 若前台 Activity 活跃，同时展示弹窗
             final MainActivity act = MainActivity.current;
-            if (act != null) {
+            // 只有当 App 真正处于前台活跃可见状态时才弹窗，避免后台弹窗抢前台
+            if (act != null && TaskNotifier.appInForeground) {
+                final AuthPromptInfo info = parseAuthPrompt(q, "💬 助手提问", opts);
                 act.runOnUiThread(() -> {
                     try {
-                        if (act.isFinishing() || act.isDestroyed()) return;
+                        if (act.isFinishing() || act.isDestroyed() || !TaskNotifier.appInForeground) return;
                         androidx.appcompat.app.AlertDialog.Builder b =
                                 new androidx.appcompat.app.AlertDialog.Builder(act)
-                                        .setTitle("💬 助手提问").setMessage(displayQuestion);
-                        b.setPositiveButton(displayOptions[0], (d, w) -> resolveAsk(opts[0], myEpoch));
+                                        .setTitle(info.title).setMessage(info.detail);
+                        b.setPositiveButton(info.primaryBtn, (d, w) -> resolveAsk(opts[0], myEpoch));
                         if (opts.length > 1) {
-                            b.setNegativeButton(displayOptions[1], (d, w) -> resolveAsk(opts[1], myEpoch));
+                            b.setNegativeButton(info.secondaryBtn, (d, w) -> resolveAsk(opts[1], myEpoch));
                         }
                         if (opts.length > 2) {
                             b.setNeutralButton(displayOptions[2], (d, w) -> resolveAsk(opts[2], myEpoch));
@@ -1486,9 +1488,7 @@ public final class HttpShellService {
 
     private void showConfirmNotification(String cmd, long epoch) {
         createConfirmChannel();
-        String displayCmd = safeDisplay(cmd);
-        String shortCmd = displayCmd.length() > 100 ? displayCmd.substring(0, 100) + "…" : displayCmd;
-        // epoch 随 Intent 带回：残留通知上的旧按钮会因 epoch 过期被丢弃
+        AuthPromptInfo info = parseAuthPrompt(cmd, "⚠️ 危险命令确认", new String[]{"允许", "拒绝"});
         Intent allowI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_ALLOW)
                 .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
         Intent denyI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_DENY)
@@ -1499,15 +1499,14 @@ public final class HttpShellService {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         NotificationCompat.Builder cb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                 .setSmallIcon(R.drawable.ic_launch)
-                .setContentTitle("⚠️ 安全确认")
-                .setContentText("模型试图执行：" + shortCmd)
-                .setStyle(new NotificationCompat.BigTextStyle()
-                        .bigText("模型试图在设备上执行：\n" + displayCmd + "\n\n是否允许？"))
-                .addAction(0, "允许", allowPi)
-                .addAction(0, "拒绝", denyPi)
+                .setContentTitle(info.title)
+                .setContentText(info.detail)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(info.detail))
+                .addAction(0, info.primaryBtn, allowPi)
+                .addAction(0, info.secondaryBtn, denyPi)
                 .setOngoing(true);
 
-        attachFocusCapsule(ctx, cb, "⚠️ 安全确认", "模型试图执行：" + shortCmd, "权限请求", "允许", "安全确认", allowPi, "拒绝", denyPi, true);
+        attachFocusCapsule(ctx, cb, info.title, info.detail, info.statusLabel, info.primaryBtn, info.capsuleText, allowPi, info.secondaryBtn, denyPi, true);
 
         Notification n = cb.build();
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -1554,13 +1553,105 @@ public final class HttpShellService {
         }
     }
 
+    static class AuthPromptInfo {
+        final String title;
+        final String detail;
+        final String statusLabel;
+        final String capsuleText;
+        final String primaryBtn;
+        final String secondaryBtn;
+
+        AuthPromptInfo(String title, String detail, String statusLabel, String capsuleText, String primaryBtn, String secondaryBtn) {
+            this.title = title;
+            this.detail = detail;
+            this.statusLabel = statusLabel;
+            this.capsuleText = capsuleText;
+            this.primaryBtn = primaryBtn;
+            this.secondaryBtn = secondaryBtn;
+        }
+    }
+
+    private static AuthPromptInfo parseAuthPrompt(String raw, String defaultTitle, String[] opts) {
+        String s = raw == null ? "" : raw.trim();
+        String btn0 = (opts != null && opts.length > 0 && !opts[0].isEmpty()) ? opts[0] : "允许";
+        String btn1 = (opts != null && opts.length > 1 && !opts[1].isEmpty()) ? opts[1] : "拒绝";
+
+        // 1. Shell 危险命令确认
+        if (s.contains("模型试图在设备上执行") || s.contains("rm ") || s.contains("kill") || s.contains("pm ") || s.contains("cmd ") || s.contains("am ")) {
+            String cmd = s;
+            if (cmd.contains("模型试图在设备上执行：")) {
+                cmd = cmd.substring(cmd.indexOf("模型试图在设备上执行：") + "模型试图在设备上执行：".length());
+            } else if (cmd.contains("模型试图在设备上执行:")) {
+                cmd = cmd.substring(cmd.indexOf("模型试图在设备上执行:") + "模型试图在设备上执行:".length());
+            }
+            if (cmd.contains("\n\n是否允许？")) {
+                cmd = cmd.substring(0, cmd.indexOf("\n\n是否允许？"));
+            }
+            if (cmd.contains("
+
+是否允许？")) {
+                cmd = cmd.substring(0, cmd.indexOf("
+
+是否允许？"));
+            }
+            cmd = cmd.trim();
+            if (cmd.startsWith("`") && cmd.endsWith("`") && cmd.length() > 2) {
+                cmd = cmd.substring(1, cmd.length() - 1);
+            }
+            return new AuthPromptInfo("⚠️ 危险命令确认", cmd, "命令详情", "命令确认", "允许", "拒绝");
+        }
+
+        // 2. 敏感/支付应用
+        if (s.contains("涉及支付或隐私") || (s.contains("在【") && s.contains("】里："))) {
+            String detail = s;
+            if (detail.contains("#")) {
+                detail = detail.substring(0, detail.indexOf("#")).trim();
+            }
+            return new AuthPromptInfo("🔒 敏感操作确认", detail, "敏感操作", "敏感确认", "允许", "拒绝");
+        }
+
+        // 3. 危险设备操作
+        if (s.contains("危险操作") || s.contains("高危操作") || s.contains("高危设备操作")) {
+            String detail = s;
+            detail = detail.replace("【危险操作授权】", "")
+                           .replace("【安全确认】", "")
+                           .replace("是否允许本次授权？", "")
+                           .replace("是否允许？", "")
+                           .replace("DeepSeek-Harness 请求", "请求")
+                           .trim();
+            if (detail.endsWith("，") || detail.endsWith(",")) {
+                detail = detail.substring(0, detail.length() - 1).trim();
+            }
+            if (detail.isEmpty()) detail = "请求执行高危设备操作";
+            return new AuthPromptInfo("⚠️ 危险操作授权", detail, "权限请求", "危险授权", "允许授权", "拒绝");
+        }
+
+        // 4. 屏幕/UI操作
+        if (s.contains("屏幕") || s.contains("文字与控件") || s.contains("读屏") || s.contains("点按")) {
+            String detail = s;
+            if (detail.contains("#")) {
+                detail = detail.substring(0, detail.indexOf("#")).trim();
+            }
+            detail = detail.replace("【屏幕操作】", "").trim();
+            return new AuthPromptInfo("📱 屏幕操作授权", detail, "权限请求", "屏幕授权", "允许授权", "拒绝");
+        }
+
+        // 5. 常规助手提问
+        String fallbackTitle = defaultTitle != null && !defaultTitle.isEmpty() ? defaultTitle : "💬 助手提问";
+        return new AuthPromptInfo(fallbackTitle, s, "等待回答", "等待回答", btn0, btn1);
+    }
+
     public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat) {
         b.setSubText("大肥鱼");
         b.setOnlyAlertOnce(true);
         b.setShowWhen(false);
         b.setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
         b.setCategory(NotificationCompat.CATEGORY_STATUS);
-        b.setPriority(NotificationCompat.PRIORITY_HIGH);
+        if (!enableFloat) {
+            b.setPriority(NotificationCompat.PRIORITY_DEFAULT);
+        } else {
+            b.setPriority(NotificationCompat.PRIORITY_HIGH);
+        }
 
         ensureCachedIcons(ctx);
         if (sCachedWhaleBmp != null) {
@@ -1637,6 +1728,7 @@ public final class HttpShellService {
             hintInfo.put("colorContent", "#58A6FF");
             hintInfo.put("colorContentDark", "#58A6FF");
 
+            // 单按钮配置在 hintInfo.actionInfo 保证兼容
             if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
                 org.json.JSONObject actionInfo = new org.json.JSONObject();
                 actionInfo.put("action", "miui.focus.action_1");
@@ -1646,6 +1738,42 @@ public final class HttpShellService {
                 hintInfo.put("actionInfo", actionInfo);
             }
             paramV2.put("hintInfo", hintInfo);
+
+            // 双按钮使用 textButton 数组渲染并排药丸按钮
+            org.json.JSONArray textButtonArr = new org.json.JSONArray();
+            if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
+                org.json.JSONObject tb1 = new org.json.JSONObject();
+                tb1.put("type", 0);
+                tb1.put("actionTitle", actionTitle);
+                tb1.put("actionIcon", "miui.focus.pic_action");
+                tb1.put("actionIconDark", "miui.focus.pic_action");
+                tb1.put("actionBgColor", "#2E2E2E");
+                tb1.put("actionBgColorDark", "#2E2E2E");
+                tb1.put("actionTitleColor", "#FFFFFF");
+                tb1.put("actionTitleColorDark", "#FFFFFF");
+                tb1.put("actionIntentType", 2);
+                tb1.put("actionIntent", "miui.focus.action_1");
+                textButtonArr.put(tb1);
+            }
+
+            if (secondaryActionPi != null && secondaryActionTitle != null && !secondaryActionTitle.isEmpty()) {
+                org.json.JSONObject tb2 = new org.json.JSONObject();
+                tb2.put("type", 0);
+                tb2.put("actionTitle", secondaryActionTitle);
+                tb2.put("actionIcon", "miui.focus.pic_action");
+                tb2.put("actionIconDark", "miui.focus.pic_action");
+                tb2.put("actionBgColor", "#2E2E2E");
+                tb2.put("actionBgColorDark", "#2E2E2E");
+                tb2.put("actionTitleColor", "#FF5555");
+                tb2.put("actionTitleColorDark", "#FF5555");
+                tb2.put("actionIntentType", 2);
+                tb2.put("actionIntent", "miui.focus.action_2");
+                textButtonArr.put(tb2);
+            }
+
+            if (textButtonArr.length() > 0) {
+                paramV2.put("textButton", textButtonArr);
+            }
 
             org.json.JSONObject picInfo = new org.json.JSONObject();
             picInfo.put("type", 1);
@@ -1678,7 +1806,7 @@ public final class HttpShellService {
 
                         if (secondaryActionPi != null && secondaryActionTitle != null) {
                             android.app.Notification.Action a2 = new android.app.Notification.Action.Builder(
-                                    null, secondaryActionTitle, secondaryActionPi).build();
+                                    alarmIcon, secondaryActionTitle, secondaryActionPi).build();
                             actionBundle.putParcelable("miui.focus.action_2", a2);
                         }
                         extras.putBundle("miui.focus.actions", actionBundle);
@@ -1722,7 +1850,7 @@ public final class HttpShellService {
             if (Build.VERSION.SDK_INT >= 26 && nm != null) {
                 NotificationChannel ch = new NotificationChannel(
                         Constants.CHANNEL_AGENT_RUNNING, "Agent 运行状态",
-                        NotificationManager.IMPORTANCE_HIGH);
+                        NotificationManager.IMPORTANCE_LOW);
                 ch.setDescription("智能体运行中实时操作步骤通知");
                 nm.createNotificationChannel(ch);
             }
@@ -1778,7 +1906,7 @@ public final class HttpShellService {
 
     private void showAskNotification(String q, String[] opts, long epoch) {
         createConfirmChannel();
-        String shortQ = q.length() > 100 ? q.substring(0, 100) + "…" : q;
+        AuthPromptInfo info = parseAuthPrompt(q, "💬 助手提问", opts);
         Intent openAppIntent = new Intent(ctx, MainActivity.class)
                 .putExtra("open_web", true)
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -1787,9 +1915,9 @@ public final class HttpShellService {
 
         NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                 .setSmallIcon(R.drawable.ic_launch)
-                .setContentTitle("💬 助手提问")
-                .setContentText(safeDisplay(shortQ))
-                .setStyle(new NotificationCompat.BigTextStyle().bigText(safeDisplay(q)))
+                .setContentTitle(info.title)
+                .setContentText(info.detail)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(info.detail))
                 .setContentIntent(contentPi)
                 .setAutoCancel(true)
                 .setOngoing(true);
@@ -1803,7 +1931,7 @@ public final class HttpShellService {
                     .putExtra(ConfirmReceiver.EXTRA_ANSWER, opts[0]);
             pi0 = PendingIntent.getBroadcast(ctx, 40, intent0,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-            nb.addAction(0, opts[0], pi0);
+            nb.addAction(0, info.primaryBtn, pi0);
         }
         if (opts.length > 1) {
             Intent intent1 = new Intent(ctx, ConfirmReceiver.class)
@@ -1812,7 +1940,7 @@ public final class HttpShellService {
                     .putExtra(ConfirmReceiver.EXTRA_ANSWER, opts[1]);
             pi1 = PendingIntent.getBroadcast(ctx, 41, intent1,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-            nb.addAction(0, opts[1], pi1);
+            nb.addAction(0, info.secondaryBtn, pi1);
         }
         for (int i = 2; i < opts.length; i++) {
             String opt = opts[i];
@@ -1825,7 +1953,7 @@ public final class HttpShellService {
             nb.addAction(0, opt, pi);
         }
 
-        attachFocusCapsule(ctx, nb, "💬 助手提问", safeDisplay(shortQ), "等待回答", opts.length > 0 ? opts[0] : "允许", "等待回答", pi0, opts.length > 1 ? opts[1] : null, pi1, true);
+        attachFocusCapsule(ctx, nb, info.title, info.detail, info.statusLabel, info.primaryBtn, info.capsuleText, pi0, info.secondaryBtn, pi1, true);
 
         // 挂载 RemoteInput 直接就地文本输入快捷回复
         androidx.core.app.RemoteInput remoteInput = new androidx.core.app.RemoteInput.Builder(ConfirmReceiver.EXTRA_REPLY_TEXT)
