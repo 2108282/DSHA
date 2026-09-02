@@ -845,9 +845,22 @@ public class ConfigFragment extends Fragment {
             applyRootShellMark();
             applyConfirmShellMark();
             DeviceBridgeService.apply(requireContext());
+            // 能力开关变了就重写清单 —— agent 的能力说明按它拼。
+            boolean capsChanged = c.writeCapsFile();
             Toast.makeText(requireContext(),
                     (adbCb != null && adbCb.isChecked()) ? "配置已保存（ADB 已开）" : "配置已保存（ADB 已关）",
                     Toast.LENGTH_SHORT).show();
+            if (capsChanged) {
+                // 提示词是插件在 dsh 启动时读的，光保存不重启，当前会话里 agent 手上还是旧的那份。
+                // 这一句不说，用户会以为关掉位置权限之后 agent 立刻就不知道位置接口了。
+                new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                        .setTitle("权限变动已记下")
+                        .setMessage("agent 的能力说明会跟着这次改动更新，但它是在 dsh 启动时读的 —— "
+                                + "要到下次「重启 Web」之后，agent 才知道现在什么能用、什么不能用。\n\n"
+                                + "当前会话里它手上还是旧的那份。")
+                        .setPositiveButton("知道了", null)
+                        .show();
+            }
         });
 
         // 关于入口：点版本号弹「关于」对话框（GitHub / QQ 群）

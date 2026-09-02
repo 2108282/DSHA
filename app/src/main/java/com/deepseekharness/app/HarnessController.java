@@ -1868,6 +1868,19 @@ public class HarnessController {
 
     /** 启动自愈：确保内置插件（设备引导 / 任务通知 / 移动端适配）实体在位且注册有效。
      *  不再只依赖步骤⑥ —— ⑥ 可能跑在 profile 生成之前，也可能被版本标记判定跳过。 */
+    /** 能力清单的 JSON。抽出来是为了能和上次写的内容比较。 */
+    private String capsJson() {
+        return "{"
+                + "\"adb\":" + DeviceBridgeService.isAdbEnabled(appContext)
+                + ",\"ui\":" + DshaAccessibilityService.enabled(appContext)
+                + ",\"location\":" + DeviceSense.locationAllowed(appContext)
+                + ",\"sensors\":" + DeviceSense.sensorsAllowed(appContext)
+                + ",\"root\":" + isRootShellAllowed()
+                + ",\"overlay\":" + prefs.getBoolean("overlay_stream", false)
+                + ",\"confirm\":" + prefs.getBoolean("confirm_shell", true)
+                + "}";
+    }
+
     /**
      * 把「现在真能用的能力」写成 JSON 给内置插件读。
      *
@@ -1878,24 +1891,28 @@ public class HarnessController {
      *
      * <p>为什么用文件而不是加个 3090 端点：插件的 {@code systemPrompt.section} 是同步调用，
      * 没法 await 一次 HTTP；readFileSync 快、不依赖网络、也不受桥起没起来影响。
+     *
+     * @return 内容与上次不同就返回 true。调用方据此提示「重启 Web 之后 agent 才知道」——
+     *         提示词是插件在 dsh 进程里读的，光改开关不重启，agent 手上还是旧的那份。
+     *         第一次写（原先没有这个文件）不算变化，免得初次启动就弹一句没头没尾的提示。
      */
-    void writeCapsFile() {
+    boolean writeCapsFile() {
         try {
-            String json = "{"
-                    + "\"adb\":" + DeviceBridgeService.isAdbEnabled(appContext)
-                    + ",\"ui\":" + DshaAccessibilityService.enabled(appContext)
-                    + ",\"location\":" + DeviceSense.locationAllowed(appContext)
-                    + ",\"sensors\":" + DeviceSense.sensorsAllowed(appContext)
-                    + ",\"root\":" + isRootShellAllowed()
-                    + ",\"overlay\":" + prefs.getBoolean("overlay_stream", false)
-                    + ",\"confirm\":" + prefs.getBoolean("confirm_shell", true)
-                    + "}";
+            String neu = capsJson();
             java.io.File f = rootfsFile("root/.dsh/.dsha-caps.json");
+            String old = null;
+            if (f.isFile()) {
+                old = new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                        StandardCharsets.UTF_8).trim();
+            }
+            if (neu.equals(old)) return false;
             if (f.getParentFile() != null) f.getParentFile().mkdirs();
-            java.nio.file.Files.write(f.toPath(), json.getBytes(StandardCharsets.UTF_8));
+            java.nio.file.Files.write(f.toPath(), neu.getBytes(StandardCharsets.UTF_8));
+            return old != null;
         } catch (Throwable t) {
             // 不致命：插件读不到就退回全量提示词，那是旧行为
             android.util.Log.w("DSHA", "写能力清单失败（插件将退回全量提示词）: " + t);
+            return false;
         }
     }
 
