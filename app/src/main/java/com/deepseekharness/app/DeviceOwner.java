@@ -117,6 +117,50 @@ public final class DeviceOwner {
     }
 
     /**
+     * 从 dumpsys 里收集「账号类型 → 提供它的应用包名」。
+     *
+     * <p><b>刻意不用正则。</b>这里原先写的是
+     * {@code AuthenticatorDescription\s*\{type=(…)}[^{]*ComponentInfo\{(…)/} ——
+     * 在桌面 JDK 上编译得过、378 条断言全绿，真机上 Android 的 java.util.regex 却对那个
+     * 单独的右花括号直接抛 PatternSyntaxException（index 53），整条冻结流程一上手就崩。
+     *
+     * <p>这类「测试环境比运行环境宽容」的差异，靠补断言是测不出来的（桌面照样通过），
+     * 只能不给它机会：用 indexOf 做，行为在哪儿都一样，顺带还快一点。
+     */
+    private static java.util.HashMap<String, String> collectAuthenticatorPkgs(String dumpsys) {
+        java.util.HashMap<String, String> pkgOf = new java.util.HashMap<>();
+        if (dumpsys == null) return pkgOf;
+        final String MARK = "ComponentInfo{";
+        for (String line : dumpsys.split("\r?\n")) {
+            int ci = line.indexOf(MARK);
+            if (ci < 0) continue;
+            String type = accountType(line);
+            if (type == null) continue;
+            int slash = line.indexOf('/', ci);
+            if (slash < 0) continue;
+            String pkg = line.substring(ci + MARK.length(), slash).trim();
+            if (!pkg.isEmpty() && pkg.indexOf('.') > 0) pkgOf.put(type, pkg);
+        }
+        return pkgOf;
+    }
+
+    /** 从一行里抽 {@code type=xxx}，到右花括号 / 逗号 / 空白为止。 */
+    private static String accountType(String line) {
+        if (line == null) return null;
+        int ti = line.indexOf("type=");
+        if (ti < 0) return null;
+        int s = ti + "type=".length();
+        int e = s;
+        while (e < line.length()) {
+            char c = line.charAt(e);
+            if (c == '}' || c == ',' || c == ' ' || c == '\t' || c == ')') break;
+            e++;
+        }
+        String t = line.substring(s, e).trim();
+        return t.isEmpty() ? null : t;
+    }
+
+    /**
      * 从 {@code dumpsys account list} 里理出「哪些应用持有账号」。
      *
      * <p>为什么需要这个：真机上一台日常主力机能有二十个账号，而用户在设置里退掉自己的
@@ -137,23 +181,12 @@ public final class DeviceOwner {
         // type → 包名
         java.util.HashMap<String, String> pkgOf = new java.util.HashMap<>();
 
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("type=([A-Za-z0-9_.\\-]+)").matcher(dumpsys);
-        java.util.regex.Matcher svc = java.util.regex.Pattern.compile(
-                        "AuthenticatorDescription\\s*\\{type=([A-Za-z0-9_.\\-]+)}[^{]*ComponentInfo\\{([A-Za-z0-9_.\\-]+)/")
-                .matcher(dumpsys);
-        while (svc.find()) {
-            pkgOf.put(svc.group(1), svc.group(2));
-        }
+        pkgOf.putAll(collectAuthenticatorPkgs(dumpsys));
         // 账号行里的 type 才算「持有账号」；服务缓存里的 type 只是声明了能力
         for (String line : dumpsys.split("\r?\n")) {
-            if (!line.contains("Account {") && !line.trim().startsWith("Account {")) continue;
-            java.util.regex.Matcher mm = java.util.regex.Pattern
-                    .compile("type=([A-Za-z0-9_.\\-]+)").matcher(line);
-            if (mm.find()) {
-                String t = mm.group(1);
-                types.put(t, types.getOrDefault(t, 0) + 1);
-            }
+            if (!line.contains("Account {")) continue;
+            String t = accountType(line);
+            if (t != null) types.put(t, types.getOrDefault(t, 0) + 1);
         }
         if (types.isEmpty()) {
             // 有些 ROM 的 dumpsys 不打印 Account 明细，只给总数 —— 退一步用服务缓存里的类型，
@@ -194,21 +227,13 @@ public final class DeviceOwner {
     public static java.util.List<String> accountHolderPkgs(String dumpsys) {
         java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
         if (dumpsys == null || dumpsys.isEmpty()) return new java.util.ArrayList<>(out);
-        java.util.HashMap<String, String> pkgOf = new java.util.HashMap<>();
-        java.util.regex.Matcher svc = java.util.regex.Pattern.compile(
-                        "AuthenticatorDescription\\s*\\{type=([A-Za-z0-9_.\\-]+)}[^{]*ComponentInfo\\{([A-Za-z0-9_.\\-]+)/")
-                .matcher(dumpsys);
-        while (svc.find()) {
-            pkgOf.put(svc.group(1), svc.group(2));
-        }
+        java.util.HashMap<String, String> pkgOf = collectAuthenticatorPkgs(dumpsys);
         for (String line : dumpsys.split("\r?\n")) {
             if (!line.contains("Account {")) continue;
-            java.util.regex.Matcher mm = java.util.regex.Pattern
-                    .compile("type=([A-Za-z0-9_.\\-]+)").matcher(line);
-            if (mm.find()) {
-                String pkg = pkgOf.get(mm.group(1));
-                if (pkg != null) out.add(pkg);
-            }
+            String type = accountType(line);
+            if (type == null) continue;
+            String pkg = pkgOf.get(type);
+            if (pkg != null) out.add(pkg);
         }
         // 有些 ROM 不打印账号明细，只能退一步：把注册过账号服务的应用都算上。
         // 宁可多冻几个（都会解冻），也别因为解析不到而让整条路走不通。
