@@ -6,7 +6,7 @@
 
 ---
 
-## 一、 架构总览：同一载体，三轨自适应
+## 一、 架构总览：自适应选择
 
 DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，由 `HttpShellService.java` 中的 `attachFocusCapsule` 统一调度：
 
@@ -31,14 +31,14 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 * **硬升 SDK 36 的巨大风险**：强行将 `compileSdk` / `targetSdk` 升至 36 会逼迫项目的 Gradle、Android Gradle Plugin (AGP) 以及 JDK 整体大版本升级，极易引发老依赖库断裂与构建环境不兼容；
 * **底层机制本质**：翻看 Android 16 Framework 源码可知，Google 官方 `setRequestPromotedOngoing(boolean)` 的底层实现，**本质上仅仅是向通知的 `extras` Bundle 字典中写入了 `mExtras.putBoolean("android.requestPromotedOngoing", value)`**。
 
-### 2. 不升级 SDK 依然激活 AOSP 16 胶囊的“三保险方案”
+### 2. 不升级 SDK 依然激活 AOSP 16 胶囊
 1. **底层数据直注（绕过编译限制，系统直读）**：
    ```java
    extras.putBoolean("android.requestPromotedOngoing", true);
    extras.putString("android.shortCriticalText", capsuleText != null ? capsuleText : "正在执行");
    ```
    Android 16 系统的 `NotificationManagerService` 在接收通知时直接读取该 Key，**100% 认定为 Promoted Ongoing 状态栏胶囊并予以提拔**。
-2. **运行时双重保险（安全反射调用）**：
+2. **运行时双通道逻辑**：
    ```java
    try {
        java.lang.reflect.Method m = b.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
@@ -362,8 +362,8 @@ public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b,
 ## 七、 关键避坑守则（构建与运行时防线）
 
 1. **绝对禁止直接传递裸 `PendingIntent` 到 `miui.focus.actions`**：必须通过 `new Notification.Action.Builder(icon, title, pi).build()` 封装为 Action 实体，否则状态栏 SystemUI 强转异常导致手机软重启。
-2. **实心双圆钮必须传递带底色的位图 Icon**：使用 `createRoundedBackgroundIcon` 在 Bitmap 上调用 `Canvas.drawCircle` 填充实心颜色，符号占 70% 黄金直径；若直接传透明矢量，系统会渲染为青色空心线圈 (`OO`)。
-3. **禁止在悬浮条淡出 (`appOverlay?kind=done`) 时取消通知**：悬浮条与状态栏通知管理器彻底解耦，防止完成通知刚发出就被异步 cancel 误杀。
-4. **内置插件资产版本强控 (`BUILTIN_ASSET_VERSION`)**：修改 `assets/` 插件后必须将 `HarnessController.java` 中的版本号递增（当前 `36`），确保 Proot 容器启动时自动删除旧 marker 并覆盖刷新实体 JS 文件。
+2. **实心双圆钮必须传递带底色的位图 Icon**：使用 `createRoundedBackgroundIcon` 在 Bitmap 上调用 `Canvas.drawCircle` 填充实心颜色，符号占 70% ；若直接传透明矢量，系统会渲染为青色空心线圈 (`OO`)。
+3. **删除悬浮条淡出 (`appOverlay?kind=done`) 时取消通知**：悬浮条与状态栏通知管理器彻底解耦，防止完成通知刚发出就被异步 cancel 误杀。
+4. **内置插件版本强控 (`BUILTIN_ASSET_VERSION`)**：修改 `assets/` 插件后必须将 `HarnessController.java` 中的版本号递增（当前 `36`），确保 Proot 容器启动时自动删除旧 marker 并覆盖刷新实体 JS 文件。
 5. **离线清单同步更新**：修改 assets 文件后必须运行 `python3 tools/gen-runtime-manifest.py` 刷新 `runtime-manifest.json`，确保 CI `Fast checks` 100% 通过。
-6. **消除 `ask`/`task` 英文子串模糊匹配**：胶囊提取算法严禁使用裸词 `"ask"`，必须使用中文全词 `s.contains("等待回答")`，防止正常包含 `task` 的英语思考流或普通 Bash 命令被误判为提问通知。
+6. **英文子串模糊匹配防止通知乱弹**：胶囊提取算法严禁使用裸词 `"ask"`，必须使用中文全词 `s.contains("等待回答")`，防止正常包含 `task` 的英语思考流或普通 Bash 命令被误判为提问通知。
