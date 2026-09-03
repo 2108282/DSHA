@@ -140,6 +140,15 @@ public class DshaApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+
+        // 防御：如果是 Shizuku/Stellar 的 UserService 进程 (UID 2000 app_process)，
+        // 绝对不能执行 AppCompat 强依赖宿主 Context 的操作，否则会导致进程秒崩。
+        // 也不能执行日志回写（UID 2000 无法写入 /data/data/... 私有目录）。
+        String processName = Application.getProcessName();
+        if (processName != null && (processName.contains(":shizuku") || processName.contains(":service"))) {
+            return;
+        }
+
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
         if (CRASH_HOOK_INSTALLED.compareAndSet(false, true)) {
             Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
