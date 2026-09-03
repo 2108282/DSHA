@@ -1980,7 +1980,7 @@ public final class HttpShellService {
             NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_AGENT_RUNNING)
                     .setSmallIcon(R.drawable.ic_whale_logo)
                     .setContentTitle(displayTitle)
-                    .setContentText(safeDisplay(shortMsg))
+                    .setContentText(safeDisplay(displayDetail))
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(displayDetail))
                     .setContentIntent(contentPi)
                     .addAction(stopAction)
