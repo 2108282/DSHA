@@ -941,9 +941,10 @@ public final class HttpShellService {
             String displayText = safeDisplay(text);
             // 通知栏同步实时运行状态与「🛑 停止任务」紧急制动按钮（仅在工具调用时更新，绝不跟随时序流式文本高频轰炸）
             if ("tool".equals(kind)) {
-                // 关键拦截：提问工具绝不发送「正在执行」通知，而是直接清除正在执行状态
+                // 关键拦截：提问工具绝不发送「正在执行」通知，而是秒切提问等待状态
                 if (displayText.contains("ask_user") || displayText.contains("ask_question")) {
                     cancelRunningNotification();
+                    showAskWaitingNotification();
                 } else if (!displayText.trim().isEmpty()) {
                     showRunningNotification(displayText);
                 }
@@ -1937,8 +1938,43 @@ public final class HttpShellService {
         showRunningNotification("正在执行", text);
     }
 
+    private void showAskWaitingNotification() {
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            PendingIntent contentPi = PendingIntent.getActivity(ctx, 110, openAppIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            NotificationCompat.Action returnAction = new NotificationCompat.Action.Builder(
+                    R.drawable.ic_alarm_white, "💬 返回对话", contentPi)
+                    .build();
+
+            NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_AGENT_RUNNING)
+                    .setSmallIcon(R.drawable.ic_whale_logo)
+                    .setContentTitle("💬 助手提问")
+                    .setContentText("智能体正在等待你的回答与选择，点击返回对话")
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText("智能体正在等待你的回答与选择，点击返回对话"))
+                    .setContentIntent(contentPi)
+                    .addAction(returnAction)
+                    .setAutoCancel(true)
+                    .setOngoing(true);
+
+            attachFocusCapsule(ctx, nb, "💬 助手提问", "智能体正在等待你的回答与选择", "等待回答", "返回对话", "等待回答", contentPi, false);
+
+            if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());
+        } catch (Throwable ignored) {}
+    }
+
     private void showRunningNotification(String title, String text) {
         try {
+            if ((text != null && (text.contains("ask_user") || text.contains("ask_question"))) ||
+                (title != null && (title.contains("ask_user") || title.contains("ask_question")))) {
+                cancelRunningNotification();
+                showAskWaitingNotification();
+                return;
+            }
+
             long nowTime = System.currentTimeMillis();
             if (nowTime - sLastRunningNotifTime < 800L) return;
             sLastRunningNotifTime = nowTime;
