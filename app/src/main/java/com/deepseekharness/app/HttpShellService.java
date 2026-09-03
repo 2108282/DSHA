@@ -1529,6 +1529,33 @@ public final class HttpShellService {
         if (nm != null) nm.cancel(CONFIRM_NOTIF_ID);
     }
 
+    private static String compactActionDetail(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return "正在分析执行任务";
+        String s = raw.trim();
+        if (s.contains("智能体正在分析") || s.contains("智能体正在执行") || s.contains("正在分析并执行")) {
+            return "正在分析执行任务";
+        }
+        // 彻底剔除冗长的前缀废话，保留后面全部完整的命令、参数或路径原文！
+        if (s.startsWith("⚙ 正在执行命令: ")) s = s.substring("⚙ 正在执行命令: ".length()).trim();
+        else if (s.startsWith("正在执行命令: ")) s = s.substring("正在执行命令: ".length()).trim();
+        else if (s.startsWith("⚙ 正在执行命令 ")) s = s.substring("⚙ 正在执行命令 ".length()).trim();
+        else if (s.startsWith("正在执行命令 ")) s = s.substring("正在执行命令 ".length()).trim();
+        else if (s.startsWith("⚙ 正在使用工具 ")) s = s.substring("⚙ 正在使用工具 ".length()).trim();
+        else if (s.startsWith("正在使用工具 ")) s = s.substring("正在使用工具 ".length()).trim();
+        else if (s.startsWith("⚙ 正在使用 ")) s = s.substring("⚙ 正在使用 ".length()).trim();
+        else if (s.startsWith("正在使用 ")) s = s.substring("正在使用 ".length()).trim();
+        else if (s.startsWith("⚙ 正在修改文件: ")) s = "修改: " + s.substring("⚙ 正在修改文件: ".length()).trim();
+        else if (s.startsWith("正在修改文件: ")) s = "修改: " + s.substring("正在修改文件: ".length()).trim();
+        else if (s.startsWith("⚙ 正在读取文件: ")) s = "读取: " + s.substring("⚙ 正在读取文件: ".length()).trim();
+        else if (s.startsWith("正在读取文件: ")) s = "读取: " + s.substring("正在读取文件: ".length()).trim();
+        else if (s.startsWith("⚙ 正在搜索: ")) s = "搜索: " + s.substring("⚙ 正在搜索: ".length()).trim();
+        else if (s.startsWith("正在搜索: ")) s = "搜索: " + s.substring("正在搜索: ".length()).trim();
+        else if (s.startsWith("⚙ 正在联网查资料: ")) s = "联网: " + s.substring("⚙ 正在联网查资料: ".length()).trim();
+        else if (s.startsWith("正在联网查资料: ")) s = "联网: " + s.substring("正在联网查资料: ".length()).trim();
+
+        return s;
+    }
+
     private static String compactCapsuleText(String detail) {
         if (detail == null || detail.trim().isEmpty()) return "正在执行";
         String s = detail.trim();
@@ -1635,7 +1662,7 @@ public final class HttpShellService {
             if (cmd.startsWith("`") && cmd.endsWith("`") && cmd.length() > 2) {
                 cmd = cmd.substring(1, cmd.length() - 1);
             }
-            return new AuthPromptInfo("⚠️ 危险命令: " + cmd, "请求调用底层特权执行此命令", "命令确认", "命令确认", "允许", "拒绝");
+            return new AuthPromptInfo("⚠️ 请求特权执行此命令", cmd, "命令确认", "命令确认", "允许", "拒绝");
         }
 
         // 2. 敏感/支付应用
@@ -1671,7 +1698,7 @@ public final class HttpShellService {
             }
             target = target.replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件").trim();
             if (target.isEmpty()) target = "请求执行高危设备操作";
-            return new AuthPromptInfo("⚠️ 危险操作授权", target, "权限请求", "危险授权", "允许", "拒绝");
+            return new AuthPromptInfo("⚠️ 请求高危设备授权", target, "权限请求", "危险授权", "允许", "拒绝");
         }
 
         // 4. 屏幕/UI操作
@@ -1684,7 +1711,7 @@ public final class HttpShellService {
                            .replace("在【当前界面】里：", "")
                            .replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件")
                            .trim();
-            return new AuthPromptInfo("📱 屏幕操作授权", target, "权限请求", "屏幕授权", "允许", "拒绝");
+            return new AuthPromptInfo("📱 请求屏幕操作授权", target, "权限请求", "屏幕授权", "允许", "拒绝");
         }
 
         // 5. 常规助手提问
@@ -1692,7 +1719,7 @@ public final class HttpShellService {
         return new AuthPromptInfo(qTitle, s, "助手提问", "等待回答", btn0, btn1);
     }
 
-        public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, boolean enableFloat) {
+    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, boolean enableFloat) {
         attachFocusCapsule(ctx, b, title, detail, statusLabel, actionTitle, capsuleText, primaryActionPi, null, null, enableFloat);
     }
 
@@ -1782,17 +1809,13 @@ public final class HttpShellService {
             org.json.JSONObject baseInfo = new org.json.JSONObject();
             baseInfo.put("type", 2);
             baseInfo.put("title", title != null ? title : "DSHA");
-            paramV2.put("baseInfo", baseInfo);
-
-            org.json.JSONObject hintInfo = new org.json.JSONObject();
-            hintInfo.put("title", detail != null ? detail : "");
-            hintInfo.put("content", statusLabel != null ? statusLabel : "实时状态");
-            hintInfo.put("type", 2);
-            hintInfo.put("colorContent", "#58A6FF");
-            hintInfo.put("colorContentDark", "#58A6FF");
 
             if (hasDualActions) {
-                // 双按钮场景：在 param_v2.actions 注入红绿双圆钮 (拒绝红、允许绿)
+                // 模板 ②（来电/决策双动作规范）：content 放入 baseInfo，彻底不放 hintInfo（消灭多余横线！）
+                baseInfo.put("content", detail != null ? detail : "");
+                paramV2.put("baseInfo", baseInfo);
+
+                // 双按钮：左边绿勾允许(action_1)，右边红叉拒绝(action_2)
                 org.json.JSONArray actionsArr = new org.json.JSONArray();
                 if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
                     org.json.JSONObject a1 = new org.json.JSONObject();
@@ -1818,24 +1841,34 @@ public final class HttpShellService {
                 actionsArr.put(a2);
 
                 paramV2.put("actions", actionsArr);
-            } else if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
-                // 单按钮场景：在 hintInfo.actionInfo 注入白色小闹钟药丸按钮
-                org.json.JSONObject actionInfo = new org.json.JSONObject();
-                actionInfo.put("action", "miui.focus.action_1");
-                actionInfo.put("actionIcon", "miui.focus.pic_action");
-                actionInfo.put("actionIconDark", "miui.focus.pic_action");
-                actionInfo.put("actionIntentType", 2);
-                hintInfo.put("actionInfo", actionInfo);
-            }
-            paramV2.put("hintInfo", hintInfo);
+            } else {
+                // 模板 ①（日程/详情单按钮规范）：上大标题，中间横线，下步骤与单个停止/返回对话药丸
+                paramV2.put("baseInfo", baseInfo);
 
-            // 右上角彩色图标（仅单按钮展示，双按钮场景左侧全宽纯文字）
-            if (!hasDualActions && sCachedWhaleBmp != null) {
-                org.json.JSONObject picInfo = new org.json.JSONObject();
-                picInfo.put("type", 1);
-                picInfo.put("pic", "miui.focus.icon_feature");
-                picInfo.put("picDark", "miui.focus.icon_feature");
-                paramV2.put("picInfo", picInfo);
+                org.json.JSONObject hintInfo = new org.json.JSONObject();
+                hintInfo.put("title", detail != null ? detail : "");
+                hintInfo.put("content", statusLabel != null ? statusLabel : "实时状态");
+                hintInfo.put("type", 2);
+                hintInfo.put("colorContent", "#58A6FF");
+                hintInfo.put("colorContentDark", "#58A6FF");
+
+                if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
+                    org.json.JSONObject actionInfo = new org.json.JSONObject();
+                    actionInfo.put("action", "miui.focus.action_1");
+                    actionInfo.put("actionIcon", "miui.focus.pic_action");
+                    actionInfo.put("actionIconDark", "miui.focus.pic_action");
+                    actionInfo.put("actionIntentType", 2);
+                    hintInfo.put("actionInfo", actionInfo);
+                }
+                paramV2.put("hintInfo", hintInfo);
+
+                if (sCachedWhaleBmp != null) {
+                    org.json.JSONObject picInfo = new org.json.JSONObject();
+                    picInfo.put("type", 1);
+                    picInfo.put("pic", "miui.focus.icon_feature");
+                    picInfo.put("picDark", "miui.focus.icon_feature");
+                    paramV2.put("picInfo", picInfo);
+                }
             }
 
             org.json.JSONObject root = new org.json.JSONObject();
@@ -1928,7 +1961,8 @@ public final class HttpShellService {
             PendingIntent stopPi = PendingIntent.getBroadcast(ctx, 111, stopIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-            String shortMsg = (text == null || text.trim().isEmpty()) ? "智能体正在执行自动化任务..." : shortText(text);
+            String compactDetail = compactActionDetail(text != null && !text.isEmpty() ? text : title);
+            String capsuleText = compactCapsuleText(text != null && !text.isEmpty() ? text : title);
 
             // 清理可能残留的提问与终止卡片，不 cancel NOTIF_TASK 保持原地平滑覆写，杜绝重复触发 Level 2 弹窗
             if (nm != null) {
@@ -1936,9 +1970,8 @@ public final class HttpShellService {
                 nm.cancel(Constants.NOTIF_ASK_QUESTION);
             }
 
-            String displayTitle = title != null && !title.isEmpty() ? safeDisplay(title) : "正在执行";
-            String displayDetail = text != null && !text.isEmpty() ? safeDisplay(text) : "智能体正在分析并执行任务...";
-            String capsuleText = compactCapsuleText(text != null && !text.isEmpty() ? text : title);
+            String displayTitle = "正在执行";
+            String displayDetail = compactDetail;
 
             NotificationCompat.Action stopAction = new NotificationCompat.Action.Builder(
                     R.drawable.ic_alarm_white, "🛑 停止任务", stopPi)

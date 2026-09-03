@@ -225,6 +225,14 @@ export function apply(ctx) {
       }
 
       if (type === 'tool/call') {
+        const toolName = String(data?.name || '')
+        if (toolName.includes('ask_user') || toolName.includes('ask_question')) {
+          const b = bucket(key)
+          b.line = ''
+          b.think = ''
+          void send(key, 'clear', '')
+          return
+        }
         const b = bucket(key)
         // 「正在执行命令」看不出到底要跑什么 —— 把命令原文（或路径/模式）带上，
         // 这也是悬浮条上就地批准危险命令时唯一的判断依据。
