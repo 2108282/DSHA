@@ -1848,18 +1848,15 @@ public final class HttpShellService {
 
                 if (Build.VERSION.SDK_INT >= 23) {
                     android.os.Bundle pics = new android.os.Bundle();
-                    android.graphics.drawable.Icon whaleIcon = android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_whale_logo);
+                    android.graphics.drawable.Icon whaleIcon = (sCachedWhaleIcon != null) ? sCachedWhaleIcon : android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_whale_logo);
                     android.graphics.drawable.Icon alarmIcon = android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_alarm_white);
-                    android.graphics.drawable.Icon checkIcon = android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_check_white);
-                    android.graphics.drawable.Icon closeIcon = android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_close_white);
+                    android.graphics.drawable.Icon checkIcon = (sCachedCheckIcon != null) ? sCachedCheckIcon : android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_check_white);
+                    android.graphics.drawable.Icon closeIcon = (sCachedCloseIcon != null) ? sCachedCloseIcon : android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_close_white);
 
                     pics.putParcelable("miui.focus.pic_big_island", whaleIcon);
                     pics.putParcelable("miui.focus.pic_small_island", whaleIcon);
                     pics.putParcelable("miui.focus.icon_feature", whaleIcon);
                     pics.putParcelable("miui.focus.pic_action", alarmIcon);
-                    android.graphics.drawable.Icon checkIcon = (sCachedCheckIcon != null) ? sCachedCheckIcon : android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_check_white);
-                    android.graphics.drawable.Icon closeIcon = (sCachedCloseIcon != null) ? sCachedCloseIcon : android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_close_white);
-
                     pics.putParcelable("miui.focus.pic_check", checkIcon);
                     pics.putParcelable("miui.focus.pic_close", closeIcon);
                     extras.putBundle("miui.focus.pics", pics);
@@ -1942,11 +1939,6 @@ public final class HttpShellService {
             String displayTitle = title != null && !title.isEmpty() ? safeDisplay(title) : "正在执行";
             String displayDetail = text != null && !text.isEmpty() ? safeDisplay(text) : "智能体正在分析并执行任务...";
             String capsuleText = compactCapsuleText(text != null && !text.isEmpty() ? text : title);
-
-            Intent stopIntent = new Intent(ctx, ConfirmReceiver.class)
-                    .setAction(ConfirmReceiver.ACTION_STOP_TASK);
-            PendingIntent stopPi = PendingIntent.getBroadcast(ctx, 111, stopIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
             NotificationCompat.Action stopAction = new NotificationCompat.Action.Builder(
                     R.drawable.ic_alarm_white, "🛑 停止任务", stopPi)
