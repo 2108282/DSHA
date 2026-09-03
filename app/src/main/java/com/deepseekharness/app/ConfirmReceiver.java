@@ -212,9 +212,10 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 .setContentIntent(contentPi)
                 .addAction(replyAction)
                 .setTimeoutAfter(120_000L)
+                .setOngoing(true)
                 .setAutoCancel(true);
 
-        HttpShellService.attachFocusCapsule(ctx, nb, "⚠️ 任务已终止", "已按指令停止操作。点击查看或继续对话。", "任务状态", "返回对话", "已终止", actionPi, false);
+        HttpShellService.attachFocusCapsule(ctx, nb, "⚠️ 任务已终止", "已按指令停止操作。点击查看或继续对话。", "任务状态", "返回对话", "已终止", actionPi, true);
 
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());

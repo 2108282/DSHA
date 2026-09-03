@@ -577,9 +577,10 @@ public final class HttpShellService {
                         .setContentIntent(contentPi)
                         .addAction(replyAction)
                         .setTimeoutAfter(120_000L)
+                        .setOngoing(true)
                         .setAutoCancel(true);
 
-                attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText, actionPi, false);
+                attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText, actionPi, true);
 
                 nm.notify(Constants.NOTIF_TASK, b.build());
             }
