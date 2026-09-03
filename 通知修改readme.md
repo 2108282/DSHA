@@ -111,7 +111,7 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 
 * **业务特征**：高频动态更新，静默低打扰，提供一键紧急制动。
 * **通知 ID**：`Constants.NOTIF_TASK = 2002`（`ongoing = true`）
-* **渠道等级**：`Constants.CHANNEL_AGENT_RUNNING`（`IMPORTANCE_DEFAULT` 中级，开启灵动岛时通过 `enableFloat = false` 保持静默小药丸，关闭灵动岛时在通知栏正常显示，不进静音折叠栏）
+* **渠道等级**：`Constants.CHANNEL_AGENT_RUNNING`（`IMPORTANCE_HIGH` 高级别，通过 `enableFloat = true` 确保弹出 AOSP 胶囊与普通悬浮大白卡，关闭灵动岛时在通知栏正常显示，不进静音折叠栏）
 
 ---
 
