@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-03T01:56:23Z",
+  "generated": "2026-09-03T02:58:32Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -380,8 +380,8 @@
     {
       "path": "app/src/main/assets/task-notifier/lib/index.js",
       "asset": "task-notifier/lib/index.js",
-      "size": 9133,
-      "sha256": "0adec64e8283854ec8ecade512427cba78913663feac2cbc2dd4efae5633bf57",
+      "size": 9025,
+      "sha256": "e340cba329a2da0fde96b5ac0c460d4ee681a5ebf82c8444fc14a4e034a23421",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/task-notifier/lib/index.js",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/task-notifier/lib/index.js",

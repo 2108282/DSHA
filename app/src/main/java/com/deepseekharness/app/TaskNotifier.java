@@ -98,13 +98,13 @@ public class TaskNotifier {
         PendingIntent pi = PendingIntent.getActivity(ctx, 0, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        // 点击「💬 继续对话」直接从屏幕底部唤起抽屉弹层
+        // 点击「💬 返回对话」直接从屏幕底部唤起抽屉弹层
         Intent actionIntent = new Intent(ctx, QuickChatSheetActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent actionPi = PendingIntent.getActivity(ctx, 26, actionIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
-                R.drawable.ic_alarm_white, "💬 继续对话", actionPi)
+                R.drawable.ic_alarm_white, "💬 返回对话", actionPi)
                 .build();
 
         NotificationCompat.Builder tnb = new NotificationCompat.Builder(ctx, CHANNEL_ID)
@@ -117,7 +117,7 @@ public class TaskNotifier {
                 .setTimeoutAfter(120_000L)
                 .setAutoCancel(true);
 
-        HttpShellService.attachFocusCapsule(ctx, tnb, "任务完成", "智能体已结束任务，点击查看结果", "任务完成", "继续对话", "任务完成", actionPi, false);
+        HttpShellService.attachFocusCapsule(ctx, tnb, "任务完成", "智能体已结束任务，点击查看结果", "任务完成", "返回对话", "任务完成", actionPi, false);
         Notification n = tnb.build();
         if (nm != null) nm.notify(Constants.NOTIF_TASK, n);
     }

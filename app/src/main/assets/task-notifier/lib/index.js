@@ -14,7 +14,7 @@ import { readFile, unlink } from 'node:fs/promises'
 // 保持无模块级硬依赖，防止阻塞插件树初始化
 export const inject = []
 
-const THROTTLE_MS = 30_000
+// Instant notification on turn/end without 30s throttling
 const lastNotified = new Map()
 
 const CANCEL_FLAG = '/root/.dsh/.cancel_requested'
@@ -138,9 +138,6 @@ export function apply(ctx) {
         const kind = reasonObj?.kind ?? 'completed'
         const sessionId = session?.id ?? 'session'
         const now = Date.now()
-        const last = lastNotified.get(sessionId) ?? 0
-        if (now - last < THROTTLE_MS) return
-        lastNotified.set(sessionId, now)
 
         if (kind === 'error') {
           const detail = parseFailureDetail(reasonObj?.error)

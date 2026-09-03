@@ -194,14 +194,14 @@ public class ConfirmReceiver extends BroadcastReceiver {
         PendingIntent contentPi = PendingIntent.getActivity(ctx, 201, openAppIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        // 点击「💬 重新开始」直接从屏幕底部唤起抽屉弹层
+        // 点击「💬 返回对话」直接从屏幕底部唤起抽屉弹层
         Intent actionIntent = new Intent(ctx, QuickChatSheetActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent actionPi = PendingIntent.getActivity(ctx, 202, actionIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
-                R.drawable.ic_alarm_white, "💬 重新开始", actionPi)
+                R.drawable.ic_alarm_white, "💬 返回对话", actionPi)
                 .build();
 
         NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_TASK_RESULT)
@@ -214,7 +214,7 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 .setTimeoutAfter(120_000L)
                 .setAutoCancel(true);
 
-        HttpShellService.attachFocusCapsule(ctx, nb, "⚠️ 任务已终止", "已按指令停止操作。点击查看或继续对话。", "任务状态", "重新开始", "已终止", actionPi, false);
+        HttpShellService.attachFocusCapsule(ctx, nb, "⚠️ 任务已终止", "已按指令停止操作。点击查看或继续对话。", "任务状态", "返回对话", "已终止", actionPi, false);
 
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());
