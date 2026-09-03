@@ -941,7 +941,10 @@ public final class HttpShellService {
             String displayText = safeDisplay(text);
             // 通知栏同步实时运行状态与「🛑 停止任务」紧急制动按钮（仅在工具调用时更新，绝不跟随时序流式文本高频轰炸）
             if ("tool".equals(kind)) {
-                if (!displayText.trim().isEmpty()) {
+                if (displayText.contains("ask_user") || displayText.contains("ask_question")) {
+                    cancelRunningNotification();
+                    showAskWaitingNotification(displayText);
+                } else if (!displayText.trim().isEmpty()) {
                     showRunningNotification(displayText);
                 }
             } else if ("done".equals(kind) || "clear".equals(kind)) {
@@ -1569,7 +1572,7 @@ public final class HttpShellService {
         if (detail == null || detail.trim().isEmpty()) return "正在执行";
         String s = detail.trim();
         if (s.contains("安全确认") || s.contains("危险操作") || s.contains("特权执行") || s.contains("请求特权") || s.contains("敏感操作")) return "安全确认";
-        if (s.contains("等待回答") || s.contains("等待选择") || s.contains("助手提问")) return "等待回答";
+        if (s.contains("等待回答") || s.contains("等待选择") || s.contains("助手提问") || s.contains("ask_user") || s.contains("ask_question")) return "等待回答";
         if (s.contains("完成") || s.contains("成功") || s.contains("done")) return "任务已完成";
         if (s.contains("中断") || s.contains("停止") || s.contains("cancel") || s.contains("abort")) return "任务已中断";
         if (s.contains("失败") || s.contains("错误") || s.contains("503") || s.contains("400") || s.contains("error")) return "请求异常";
@@ -1987,7 +1990,9 @@ public final class HttpShellService {
 
     private void showRunningNotification(String title, String text) {
         try {
-            if ("💬 助手提问".equals(title) || "等待回答".equals(title)) {
+            if ("💬 助手提问".equals(title) || "等待回答".equals(title) ||
+                (text != null && (text.contains("ask_user") || text.contains("ask_question"))) ||
+                (title != null && (title.contains("ask_user") || title.contains("ask_question")))) {
                 cancelRunningNotification();
                 showAskWaitingNotification(text);
                 return;
