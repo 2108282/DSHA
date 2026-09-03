@@ -1640,6 +1640,10 @@ public final class HttpShellService {
         return new AuthPromptInfo(fallbackTitle, s, "等待回答", "等待回答", btn0, btn1);
     }
 
+        public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, boolean enableFloat) {
+        attachFocusCapsule(ctx, b, title, detail, statusLabel, actionTitle, capsuleText, primaryActionPi, null, null, enableFloat);
+    }
+
     public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat) {
         b.setSubText("大肥鱼");
         b.setOnlyAlertOnce(true);
