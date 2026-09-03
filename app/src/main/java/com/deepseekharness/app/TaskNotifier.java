@@ -114,7 +114,6 @@ public class TaskNotifier {
                 .setStyle(new NotificationCompat.BigTextStyle().bigText("智能体已结束任务，点击查看结果"))
                 .setContentIntent(pi)
                 .addAction(replyAction)
-                .setTimeoutAfter(120_000L)
                 .setOngoing(true)
                 .setAutoCancel(true);
 

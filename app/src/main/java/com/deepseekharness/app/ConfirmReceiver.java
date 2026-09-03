@@ -213,7 +213,6 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 .setStyle(new NotificationCompat.BigTextStyle().bigText("已按指令停止操作。点击查看或继续对话。"))
                 .setContentIntent(contentPi)
                 .addAction(replyAction)
-                .setTimeoutAfter(120_000L)
                 .setOngoing(true)
                 .setAutoCancel(true);
 

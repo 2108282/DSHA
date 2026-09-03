@@ -576,7 +576,6 @@ public final class HttpShellService {
                         .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
                         .setContentIntent(contentPi)
                         .addAction(replyAction)
-                        .setTimeoutAfter(120_000L)
                         .setOngoing(true)
                         .setAutoCancel(true);
 

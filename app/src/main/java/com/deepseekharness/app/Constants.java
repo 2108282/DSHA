@@ -38,7 +38,7 @@ public final class Constants {
     /** 智能体运行状态通知渠道（带停止任务按钮） */
     public static final String CHANNEL_AGENT_RUNNING = "dsh_agent_channel";
     /** 智能体任务结果与交互渠道（完成/报错/终止，带 RemoteInput 继续对话） */
-    public static final String CHANNEL_TASK_RESULT = "dsh_task_result_channel";
+    public static final String CHANNEL_TASK_RESULT = "dsh_task_result_v2";
     public static final String CHANNEL_TASK = "dsh_task_channel";
     public static final String CHANNEL_ADB_PAIR = "dsh_adbpair_channel";
     public static final String CHANNEL_ADB_WATCH = "dsh_adb_watch_channel";
