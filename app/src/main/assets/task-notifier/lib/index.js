@@ -50,15 +50,18 @@ async function callBridge(endpoint, params = {}) {
 }
 
 const TOOL_LABELS = [
-  [/bash|shell|command|exec|terminal/i, '正在执行命令'],
-  [/write|create.*file|edit|patch|apply/i, '正在修改文件'],
-  [/read|cat|view|open.*file/i, '正在读取文件'],
-  [/glob|grep|search|find/i, '正在搜索文件'],
-  [/fetch|web|http|browse|url/i, '正在联网查资料'],
-  [/todo|plan/i, '正在规划任务清单'],
-  [/task|agent|subagent|dispatch/i, '正在调度子任务'],
-  [/image|screenshot|vision/i, '正在分析屏幕画面'],
-  [/notify|toast|share|clip/i, '正在调用手机系统功能'],
+  [/^ask_user/i, "💬 助手提问"],
+  [/^read_image|image|screenshot|vision/i, "正在分析画面"],
+  [/^todo|plan|goal/i, "正在规划任务清单"],
+  [/^web_search|fetch|web|http|browse|url/i, "正在联网查资料"],
+  [/^write|create.*file|edit|patch|apply/i, "正在修改文件"],
+  [/^read|cat|view|open.*file/i, "正在读取文件"],
+  [/^glob|grep|find|search/i, "正在搜索文件"],
+  [/^task|agent|subagent|dispatch|workflow|ralph/i, "正在调度子任务"],
+  [/^skill/i, "正在加载技能"],
+  [/^tap|input|swipe|dump|launch/i, "正在执行屏幕操作"],
+  [/^notify|toast|share|clip|vibrate|sensor|location|torch/i, "正在调用手机功能"],
+  [/^bash|shell|command|exec|terminal|shizuku/i, "正在执行命令"],
 ]
 
 function formatToolDetail(name, argsJson) {

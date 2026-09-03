@@ -47,15 +47,18 @@ const TIMEOUT_MS = 1500
 
 /** 工具名 → 人话。命中越具体的放前面；没命中的兜底成「正在使用 X」。 */
 const TOOL_LABELS = [
-  [/bash|shell|command|exec|terminal/i, '⚙ 正在执行命令'],
-  [/write|create.*file|edit|patch|apply/i, '⚙ 正在修改文件'],
-  [/read|cat|view|open.*file/i, '⚙ 正在读取文件'],
-  [/glob|grep|search|find/i, '⚙ 正在搜索'],
-  [/fetch|web|http|browse|url/i, '⚙ 正在联网查资料'],
-  [/todo|plan/i, '⚙ 正在整理任务清单'],
-  [/task|agent|subagent|dispatch/i, '⚙ 正在派子任务'],
-  [/image|screenshot|vision/i, '⚙ 正在看图'],
-  [/notify|toast|share|clip/i, '⚙ 正在调用手机功能'],
+  [/^ask_user/i, "💬 助手提问"],
+  [/^read_image|image|screenshot|vision/i, "⚙ 正在分析画面"],
+  [/^todo|plan|goal/i, "⚙ 正在规划任务清单"],
+  [/^web_search|fetch|web|http|browse|url/i, "⚙ 正在联网查资料"],
+  [/^write|create.*file|edit|patch|apply/i, "⚙ 正在修改文件"],
+  [/^read|cat|view|open.*file/i, "⚙ 正在读取文件"],
+  [/^glob|grep|find|search/i, "⚙ 正在搜索文件"],
+  [/^task|agent|subagent|dispatch|workflow|ralph/i, "⚙ 正在调度子任务"],
+  [/^skill/i, "⚙ 正在加载技能"],
+  [/^tap|input|swipe|dump|launch/i, "⚙ 正在执行屏幕操作"],
+  [/^notify|toast|share|clip|vibrate|sensor|location|torch/i, "⚙ 正在调用手机功能"],
+  [/^bash|shell|command|exec|terminal|shizuku/i, "⚙ 正在执行命令"],
 ]
 
 function toolLabel(name) {

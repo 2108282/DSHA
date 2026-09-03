@@ -940,11 +940,7 @@ public final class HttpShellService {
             String displayText = safeDisplay(text);
             // 通知栏同步实时运行状态与「🛑 停止任务」紧急制动按钮（仅在工具调用时更新，绝不跟随时序流式文本高频轰炸）
             if ("tool".equals(kind)) {
-                // 关键拦截：提问工具绝不发送「正在执行」通知，而是秒切提问等待状态
-                if (displayText.contains("ask_user") || displayText.contains("ask_question")) {
-                    cancelRunningNotification();
-                    showAskWaitingNotification();
-                } else if (!displayText.trim().isEmpty()) {
+                if (!displayText.trim().isEmpty()) {
                     showRunningNotification(displayText);
                 }
             } else if ("done".equals(kind) || "clear".equals(kind)) {
@@ -1535,43 +1531,58 @@ public final class HttpShellService {
         if (s.contains("智能体正在分析") || s.contains("智能体正在执行") || s.contains("正在分析并执行")) {
             return "正在分析执行任务";
         }
-        // 彻底剔除冗长的前缀废话，保留后面全部完整的命令、参数或路径原文！
-        if (s.startsWith("⚙ 正在执行命令: ")) s = s.substring("⚙ 正在执行命令: ".length()).trim();
-        else if (s.startsWith("正在执行命令: ")) s = s.substring("正在执行命令: ".length()).trim();
-        else if (s.startsWith("⚙ 正在执行命令 ")) s = s.substring("⚙ 正在执行命令 ".length()).trim();
-        else if (s.startsWith("正在执行命令 ")) s = s.substring("正在执行命令 ".length()).trim();
-        else if (s.startsWith("⚙ 正在使用工具 ")) s = s.substring("⚙ 正在使用工具 ".length()).trim();
-        else if (s.startsWith("正在使用工具 ")) s = s.substring("正在使用工具 ".length()).trim();
-        else if (s.startsWith("⚙ 正在使用 ")) s = s.substring("⚙ 正在使用 ".length()).trim();
-        else if (s.startsWith("正在使用 ")) s = s.substring("正在使用 ".length()).trim();
-        else if (s.startsWith("⚙ 正在修改文件: ")) s = "修改: " + s.substring("⚙ 正在修改文件: ".length()).trim();
-        else if (s.startsWith("正在修改文件: ")) s = "修改: " + s.substring("正在修改文件: ".length()).trim();
-        else if (s.startsWith("⚙ 正在读取文件: ")) s = "读取: " + s.substring("⚙ 正在读取文件: ".length()).trim();
-        else if (s.startsWith("正在读取文件: ")) s = "读取: " + s.substring("正在读取文件: ".length()).trim();
-        else if (s.startsWith("⚙ 正在搜索: ")) s = "搜索: " + s.substring("⚙ 正在搜索: ".length()).trim();
-        else if (s.startsWith("正在搜索: ")) s = "搜索: " + s.substring("正在搜索: ".length()).trim();
-        else if (s.startsWith("⚙ 正在联网查资料: ")) s = "联网: " + s.substring("⚙ 正在联网查资料: ".length()).trim();
-        else if (s.startsWith("正在联网查资料: ")) s = "联网: " + s.substring("正在联网查资料: ".length()).trim();
-
+        String[] prefixes = new String[]{
+            "⚙ 正在执行命令: ", "正在执行命令: ", "⚙ 正在执行命令 ", "正在执行命令 ",
+            "⚙ 正在使用工具 ", "正在使用工具 ", "⚙ 正在使用 ", "正在使用 ",
+            "⚙ 正在修改文件: ", "正在修改文件: ",
+            "⚙ 正在读取文件: ", "正在读取文件: ",
+            "⚙ 正在搜索文件: ", "正在搜索文件: ", "⚙ 正在搜索: ", "正在搜索: ",
+            "⚙ 正在联网查资料: ", "正在联网查资料: ",
+            "⚙ 正在分析画面: ", "正在分析画面: ", "⚙ 正在看图: ", "正在看图: ",
+            "⚙ 正在规划任务清单: ", "正在规划任务清单: ", "⚙ 正在整理任务清单: ", "正在整理任务清单: ",
+            "⚙ 正在调度子任务: ", "正在调度子任务: ", "⚙ 正在派子任务: ", "正在派子任务: ",
+            "⚙ 正在执行屏幕操作: ", "正在执行屏幕操作: ",
+            "⚙ 正在调用手机功能: ", "正在调用手机功能: ", "⚙ 正在调用手机系统功能: ", "正在调用手机系统功能: ",
+            "⚙ 正在加载技能: ", "正在加载技能: "
+        };
+        for (String p : prefixes) {
+            if (s.startsWith(p)) {
+                String remain = s.substring(p.length()).trim();
+                if (p.contains("修改")) return "修改: " + remain;
+                if (p.contains("读取")) return "读取: " + remain;
+                if (p.contains("搜索")) return "搜索: " + remain;
+                if (p.contains("联网")) return "联网: " + remain;
+                if (p.contains("画面") || p.contains("看图")) return "看图: " + remain;
+                if (p.contains("清单") || p.contains("规划")) return "清单: " + remain;
+                if (p.contains("子任务")) return "子任务: " + remain;
+                if (p.contains("屏幕")) return "屏幕: " + remain;
+                if (p.contains("手机")) return "系统: " + remain;
+                if (p.contains("技能")) return "技能: " + remain;
+                return remain;
+            }
+        }
         return s;
     }
 
     private static String compactCapsuleText(String detail) {
         if (detail == null || detail.trim().isEmpty()) return "正在执行";
         String s = detail.trim();
-        if (s.contains("智能体") || s.contains("分析") || s.contains("执行任务") || s.contains("任务...")) return "分析执行中";
-        if (s.contains("命令") || s.contains("bash") || s.contains("shell") || s.contains("exec")) return "执行命令中";
-        if (s.contains("写") || s.contains("修改") || s.contains("创建") || s.contains("patch")) return "修改文件中";
-        if (s.contains("读") || s.contains("cat") || s.contains("查看")) return "读取文件中";
-        if (s.contains("搜") || s.contains("find") || s.contains("grep") || s.contains("glob")) return "搜索文件中";
-        if (s.contains("网") || s.contains("http") || s.contains("fetch") || s.contains("查资料")) return "联网搜索中";
-        if (s.contains("图") || s.contains("截屏") || s.contains("看图") || s.contains("vision")) return "分析画面中";
-        if (s.contains("思考") || s.contains("think") || s.contains("reason")) return "深度思考中";
+        if (s.contains("安全确认") || s.contains("危险操作") || s.contains("特权执行") || s.contains("请求特权") || s.contains("敏感操作")) return "安全确认";
+        if (s.contains("等待回答") || s.contains("等待选择") || s.contains("助手提问")) return "等待回答";
         if (s.contains("完成") || s.contains("成功") || s.contains("done")) return "任务已完成";
         if (s.contains("中断") || s.contains("停止") || s.contains("cancel") || s.contains("abort")) return "任务已中断";
         if (s.contains("失败") || s.contains("错误") || s.contains("503") || s.contains("400") || s.contains("error")) return "请求异常";
-        if (s.contains("回答") || s.contains("提问") || s.contains("ask")) return "等待回答";
-        if (s.contains("确认") || s.contains("授权") || s.contains("confirm")) return "安全确认";
+        if (s.contains("智能体") || s.contains("分析执行") || s.contains("执行任务")) return "分析执行中";
+        if (s.contains("清单") || s.contains("规划") || s.contains("todo") || s.contains("goal")) return "规划清单中";
+        if (s.contains("子任务") || s.contains("subagent") || s.contains("workflow") || s.contains("ralph")) return "调度任务中";
+        if (s.contains("read_image") || s.contains("看图") || s.contains("图") || s.contains("截屏") || s.contains("vision") || s.contains("画面")) return "分析画面中";
+        if (s.contains("写") || s.contains("修改") || s.contains("创建") || s.contains("write") || s.contains("edit") || s.contains("patch") || s.contains("apply")) return "修改文件中";
+        if (s.contains("读") || s.contains("cat") || s.contains("查看") || s.contains("read")) return "读取文件中";
+        if (s.contains("搜") || s.contains("find") || s.contains("grep") || s.contains("glob")) return "搜索文件中";
+        if (s.contains("网") || s.contains("联网") || s.contains("http") || s.contains("fetch") || s.contains("查资料") || s.contains("web_search") || s.contains("browse")) return "联网搜索中";
+        if (s.contains("屏幕") || s.contains("tap") || s.contains("swipe") || s.contains("dump") || s.contains("launch")) return "操作屏幕中";
+        if (s.contains("思考") || s.contains("think") || s.contains("reason")) return "深度思考中";
+        if (s.contains("命令") || s.contains("bash") || s.contains("shell") || s.contains("exec") || s.contains("git") || s.contains("curl") || s.contains("python") || s.contains("npm") || s.contains("pnpm") || s.contains("node") || s.contains("adb") || s.contains("rm ") || s.contains("ls ")) return "执行命令中";
         if (s.length() <= 5) return s;
         return s.substring(0, 4) + "…";
     }
@@ -1967,8 +1978,7 @@ public final class HttpShellService {
 
     private void showRunningNotification(String title, String text) {
         try {
-            if ((text != null && (text.contains("ask_user") || text.contains("ask_question"))) ||
-                (title != null && (title.contains("ask_user") || title.contains("ask_question")))) {
+            if ("💬 助手提问".equals(title) || "等待回答".equals(title)) {
                 cancelRunningNotification();
                 showAskWaitingNotification();
                 return;
