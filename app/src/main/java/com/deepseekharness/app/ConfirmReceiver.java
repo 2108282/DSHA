@@ -205,7 +205,7 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 .build();
 
         NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_TASK_RESULT)
-                .setSmallIcon(R.drawable.ic_launch)
+                .setSmallIcon(R.drawable.ic_whale_logo)
                 .setContentTitle("⚠️ 任务已终止")
                 .setContentText("已按指令停止操作。点击查看或继续对话。")
                 .setStyle(new NotificationCompat.BigTextStyle().bigText("已按指令停止操作。点击查看或继续对话。"))

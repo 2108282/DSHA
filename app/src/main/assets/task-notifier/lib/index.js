@@ -117,11 +117,16 @@ export function apply(ctx) {
         return
       }
 
-      if (type === 'tool/call') {
+      if (type === "tool/call") {
+        const toolName = String(event?.data?.name || "")
+        // 关键过滤：若为 ask_user_question / 用户提问工具，绝不发送「正在执行 + 停止按钮」通知
+        if (toolName.includes("ask_user") || toolName.includes("ask_question")) {
+          return
+        }
         const text = formatToolDetail(event?.data?.name, event?.data?.arguments)
-        void callBridge('/app/task/running', {
-          title: '正在执行',
-          text: text || '智能体正在调用工具...'
+        void callBridge("/app/task/running", {
+          title: "正在执行",
+          text: text || "智能体正在调用工具..."
         })
         return
       }

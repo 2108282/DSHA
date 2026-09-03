@@ -108,7 +108,7 @@ public class TaskNotifier {
                 .build();
 
         NotificationCompat.Builder tnb = new NotificationCompat.Builder(ctx, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_launch)
+                .setSmallIcon(R.drawable.ic_whale_logo)
                 .setContentTitle("任务完成")
                 .setContentText("智能体已结束任务，点击查看结果")
                 .setStyle(new NotificationCompat.BigTextStyle().bigText("智能体已结束任务，点击查看结果"))

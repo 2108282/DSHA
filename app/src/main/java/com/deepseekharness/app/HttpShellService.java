@@ -571,7 +571,7 @@ public final class HttpShellService {
                         .build();
 
                 NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, Constants.CHANNEL_TASK_RESULT)
-                        .setSmallIcon(R.drawable.ic_launch)
+                        .setSmallIcon(R.drawable.ic_whale_logo)
                         .setContentTitle(title)
                         .setContentText(text)
                         .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
@@ -1283,11 +1283,11 @@ public final class HttpShellService {
             // 2. 若前台 Activity 活跃，同时展示弹窗
             final MainActivity act = MainActivity.current;
             // 只有当 App 真正处于前台活跃可见状态时才弹窗，避免后台弹窗抢前台
-            if (act != null && TaskNotifier.appInForeground) {
+            if (act != null) {
                 final AuthPromptInfo info = parseAuthPrompt(q, "💬 助手提问", opts);
                 act.runOnUiThread(() -> {
                     try {
-                        if (act.isFinishing() || act.isDestroyed() || !TaskNotifier.appInForeground) return;
+                        if (act.isFinishing() || act.isDestroyed()) return;
                         androidx.appcompat.app.AlertDialog.Builder b =
                                 new androidx.appcompat.app.AlertDialog.Builder(act)
                                         .setTitle(info.title).setMessage(info.detail);
@@ -1498,7 +1498,7 @@ public final class HttpShellService {
         PendingIntent denyPi = PendingIntent.getBroadcast(ctx, 32, denyI,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         NotificationCompat.Builder cb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
-                .setSmallIcon(R.drawable.ic_launch)
+                .setSmallIcon(R.drawable.ic_whale_logo)
                 .setContentTitle(info.title)
                 .setContentText(info.detail)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(info.detail))
@@ -1640,7 +1640,7 @@ public final class HttpShellService {
         return new AuthPromptInfo(fallbackTitle, s, "等待回答", "等待回答", btn0, btn1);
     }
 
-    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, boolean enableFloat) {
+    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat) {
         b.setSubText("大肥鱼");
         b.setOnlyAlertOnce(true);
         b.setShowWhen(false);
@@ -1653,7 +1653,10 @@ public final class HttpShellService {
         }
 
         ensureCachedIcons(ctx);
-        if (sCachedWhaleBmp != null) {
+        boolean hasDualActions = (secondaryActionPi != null && secondaryActionTitle != null && !secondaryActionTitle.isEmpty());
+
+        // 双按钮场景左边不需要图片，单按钮场景挂载大图标
+        if (!hasDualActions && sCachedWhaleBmp != null) {
             try { b.setLargeIcon(sCachedWhaleBmp); } catch (Throwable ignored) {}
         }
 
@@ -1684,13 +1687,15 @@ public final class HttpShellService {
 
             org.json.JSONObject bigIslandArea = new org.json.JSONObject();
 
-            // 左耳：小蓝鲸透明图片 + "大肥鱼"
+            // 左耳配置：双按钮场景纯文字无图，单按钮场景图文并茂
             org.json.JSONObject leftImgText = new org.json.JSONObject();
             leftImgText.put("type", 1);
-            org.json.JSONObject leftPicInfo = new org.json.JSONObject();
-            leftPicInfo.put("type", 1);
-            leftPicInfo.put("pic", "miui.focus.pic_big_island");
-            leftImgText.put("picInfo", leftPicInfo);
+            if (!hasDualActions && sCachedWhaleBmp != null) {
+                org.json.JSONObject leftPicInfo = new org.json.JSONObject();
+                leftPicInfo.put("type", 1);
+                leftPicInfo.put("pic", "miui.focus.pic_big_island");
+                leftImgText.put("picInfo", leftPicInfo);
+            }
 
             org.json.JSONObject leftTextInfo = new org.json.JSONObject();
             leftTextInfo.put("title", "大肥鱼");
@@ -1699,7 +1704,7 @@ public final class HttpShellService {
 
             bigIslandArea.put("imageTextInfoLeft", leftImgText);
 
-            // 右耳：动态 4~6 字实时状态
+            // 右耳配置：动态 4~6 字实时状态
             org.json.JSONObject rightTextInfo = new org.json.JSONObject();
             rightTextInfo.put("title", capsuleText != null ? capsuleText : "正在执行");
             rightTextInfo.put("showHighlightColor", false);
@@ -1707,12 +1712,14 @@ public final class HttpShellService {
             bigIslandArea.put("islandTimeout", 900);
 
             island.put("bigIslandArea", bigIslandArea);
-            org.json.JSONObject smallIsland = new org.json.JSONObject();
-            org.json.JSONObject smallPicInfo = new org.json.JSONObject();
-            smallPicInfo.put("type", 1);
-            smallPicInfo.put("pic", "miui.focus.pic_small_island");
-            smallIsland.put("picInfo", smallPicInfo);
-            island.put("smallIslandArea", smallIsland);
+            if (!hasDualActions && sCachedWhaleBmp != null) {
+                org.json.JSONObject smallIsland = new org.json.JSONObject();
+                org.json.JSONObject smallPicInfo = new org.json.JSONObject();
+                smallPicInfo.put("type", 1);
+                smallPicInfo.put("pic", "miui.focus.pic_small_island");
+                smallIsland.put("picInfo", smallPicInfo);
+                island.put("smallIslandArea", smallIsland);
+            }
 
             paramV2.put("param_island", island);
 
@@ -1728,8 +1735,31 @@ public final class HttpShellService {
             hintInfo.put("colorContent", "#58A6FF");
             hintInfo.put("colorContentDark", "#58A6FF");
 
-            // 单按钮配置在 hintInfo.actionInfo（复刻系统日程原生标准单药丸按钮）
-            if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
+            if (hasDualActions) {
+                // 双按钮场景：在 param_v2.actions 注入红绿双圆钮 (拒绝红、允许绿)
+                org.json.JSONArray actionsArr = new org.json.JSONArray();
+                if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
+                    org.json.JSONObject a1 = new org.json.JSONObject();
+                    a1.put("type", 1);
+                    a1.put("action", "miui.focus.action_1");
+                    a1.put("actionTitle", actionTitle);
+                    a1.put("actionBgColor", "#34C759");
+                    a1.put("actionBgColorDark", "#34C759");
+                    a1.put("actionIntentType", 2);
+                    actionsArr.put(a1);
+                }
+                org.json.JSONObject a2 = new org.json.JSONObject();
+                a2.put("type", 1);
+                a2.put("action", "miui.focus.action_2");
+                a2.put("actionTitle", secondaryActionTitle);
+                a2.put("actionBgColor", "#FF3B30");
+                a2.put("actionBgColorDark", "#FF3B30");
+                a2.put("actionIntentType", 2);
+                actionsArr.put(a2);
+
+                paramV2.put("actions", actionsArr);
+            } else if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
+                // 单按钮场景：在 hintInfo.actionInfo 注入白色小闹钟药丸按钮
                 org.json.JSONObject actionInfo = new org.json.JSONObject();
                 actionInfo.put("action", "miui.focus.action_1");
                 actionInfo.put("actionIcon", "miui.focus.pic_action");
@@ -1739,12 +1769,14 @@ public final class HttpShellService {
             }
             paramV2.put("hintInfo", hintInfo);
 
-            // 右上角彩色大肥鱼 App 图标
-            org.json.JSONObject picInfo = new org.json.JSONObject();
-            picInfo.put("type", 1);
-            picInfo.put("pic", "miui.focus.icon_feature");
-            picInfo.put("picDark", "miui.focus.icon_feature");
-            paramV2.put("picInfo", picInfo);
+            // 右上角彩色图标（仅单按钮展示，双按钮场景左侧全宽纯文字）
+            if (!hasDualActions && sCachedWhaleBmp != null) {
+                org.json.JSONObject picInfo = new org.json.JSONObject();
+                picInfo.put("type", 1);
+                picInfo.put("pic", "miui.focus.icon_feature");
+                picInfo.put("picDark", "miui.focus.icon_feature");
+                paramV2.put("picInfo", picInfo);
+            }
 
             org.json.JSONObject root = new org.json.JSONObject();
             root.put("param_v2", paramV2);
@@ -1767,8 +1799,14 @@ public final class HttpShellService {
                     if (primaryActionPi != null) {
                         android.os.Bundle actionBundle = new android.os.Bundle();
                         android.app.Notification.Action a1 = new android.app.Notification.Action.Builder(
-                                alarmIcon, actionTitle, primaryActionPi).build();
+                                hasDualActions ? null : alarmIcon, actionTitle, primaryActionPi).build();
                         actionBundle.putParcelable("miui.focus.action_1", a1);
+
+                        if (hasDualActions) {
+                            android.app.Notification.Action a2 = new android.app.Notification.Action.Builder(
+                                    null, secondaryActionTitle, secondaryActionPi).build();
+                            actionBundle.putParcelable("miui.focus.action_2", a2);
+                        }
                         extras.putBundle("miui.focus.actions", actionBundle);
                     }
                 }
@@ -1810,7 +1848,7 @@ public final class HttpShellService {
             if (Build.VERSION.SDK_INT >= 26 && nm != null) {
                 NotificationChannel ch = new NotificationChannel(
                         Constants.CHANNEL_AGENT_RUNNING, "Agent 运行状态",
-                        NotificationManager.IMPORTANCE_LOW);
+                        NotificationManager.IMPORTANCE_DEFAULT);
                 ch.setDescription("智能体运行中实时操作步骤通知");
                 nm.createNotificationChannel(ch);
             }
@@ -1842,7 +1880,7 @@ public final class HttpShellService {
                     .build();
 
             NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_AGENT_RUNNING)
-                    .setSmallIcon(R.drawable.ic_launch)
+                    .setSmallIcon(R.drawable.ic_whale_logo)
                     .setContentTitle(displayTitle)
                     .setContentText(safeDisplay(shortMsg))
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(displayDetail))
@@ -1873,7 +1911,7 @@ public final class HttpShellService {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
-                .setSmallIcon(R.drawable.ic_launch)
+                .setSmallIcon(R.drawable.ic_whale_logo)
                 .setContentTitle(info.title)
                 .setContentText(info.detail)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(info.detail))
