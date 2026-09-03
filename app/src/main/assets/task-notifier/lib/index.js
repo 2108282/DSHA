@@ -132,8 +132,6 @@ export function apply(ctx) {
       }
 
       if (type === 'turn/end') {
-        void callBridge('/app/task/cancel')
-
         const reasonObj = event.data?.reason
         const kind = reasonObj?.kind ?? 'completed'
         const sessionId = session?.id ?? 'session'

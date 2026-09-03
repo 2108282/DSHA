@@ -941,8 +941,10 @@ public final class HttpShellService {
             String displayText = safeDisplay(text);
             // 通知栏同步实时运行状态与「🛑 停止任务」紧急制动按钮（仅在工具调用时更新，绝不跟随时序流式文本高频轰炸）
             if ("tool".equals(kind)) {
-                // 关键拦截：提问工具绝不发送「正在执行」通知
-                if (!displayText.trim().isEmpty() && !displayText.contains("ask_user") && !displayText.contains("ask_question")) {
+                // 关键拦截：提问工具绝不发送「正在执行」通知，而是直接清除正在执行状态
+                if (displayText.contains("ask_user") || displayText.contains("ask_question")) {
+                    cancelRunningNotification();
+                } else if (!displayText.trim().isEmpty()) {
                     showRunningNotification(displayText);
                 }
             } else if ("done".equals(kind) || "clear".equals(kind)) {
@@ -1549,16 +1551,49 @@ public final class HttpShellService {
 
     private static volatile android.graphics.Bitmap sCachedWhaleBmp = null;
     private static volatile android.graphics.drawable.Icon sCachedWhaleIcon = null;
+    private static volatile android.graphics.drawable.Icon sCachedCheckIcon = null;
+    private static volatile android.graphics.drawable.Icon sCachedCloseIcon = null;
     private static volatile long sLastRunningNotifTime = 0L;
 
+    private static android.graphics.drawable.Icon createRoundedBackgroundIcon(Context context, int drawableResId, int iconColor, int backgroundColor, float paddingFactor) {
+        if (Build.VERSION.SDK_INT < 23 || context == null) return null;
+        try {
+            int size = 128;
+            android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+            android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            paint.setColor(backgroundColor);
+            paint.setStyle(android.graphics.Paint.Style.FILL);
+            canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
+
+            android.graphics.drawable.Drawable drawable = androidx.core.content.ContextCompat.getDrawable(context, drawableResId);
+            if (drawable != null) {
+                drawable = drawable.mutate();
+                int pad = (int) (size * paddingFactor);
+                drawable.setBounds(pad, pad, size - pad, size - pad);
+                drawable.setColorFilter(new android.graphics.PorterDuffColorFilter(iconColor, android.graphics.PorterDuff.Mode.SRC_IN));
+                drawable.draw(canvas);
+            }
+            return android.graphics.drawable.Icon.createWithBitmap(bitmap);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     private static synchronized void ensureCachedIcons(Context ctx) {
-        if (sCachedWhaleBmp == null && ctx != null) {
+        if (ctx == null) return;
+        if (sCachedWhaleBmp == null) {
             try {
                 sCachedWhaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
                 if (sCachedWhaleBmp != null && Build.VERSION.SDK_INT >= 23) {
                     sCachedWhaleIcon = android.graphics.drawable.Icon.createWithBitmap(sCachedWhaleBmp);
                 }
             } catch (Throwable ignored) {}
+        }
+        if (sCachedCheckIcon == null && Build.VERSION.SDK_INT >= 23) {
+            // paddingFactor = 0.15f -> symbol occupies 70% of diameter / perfectly balanced visual coverage
+            sCachedCheckIcon = createRoundedBackgroundIcon(ctx, R.drawable.ic_check_white, 0xFFFFFFFF, 0xFF34C759, 0.15f);
+            sCachedCloseIcon = createRoundedBackgroundIcon(ctx, R.drawable.ic_close_white, 0xFFFFFFFF, 0xFFFF3B30, 0.15f);
         }
     }
 
@@ -1822,6 +1857,9 @@ public final class HttpShellService {
                     pics.putParcelable("miui.focus.pic_small_island", whaleIcon);
                     pics.putParcelable("miui.focus.icon_feature", whaleIcon);
                     pics.putParcelable("miui.focus.pic_action", alarmIcon);
+                    android.graphics.drawable.Icon checkIcon = (sCachedCheckIcon != null) ? sCachedCheckIcon : android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_check_white);
+                    android.graphics.drawable.Icon closeIcon = (sCachedCloseIcon != null) ? sCachedCloseIcon : android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_close_white);
+
                     pics.putParcelable("miui.focus.pic_check", checkIcon);
                     pics.putParcelable("miui.focus.pic_close", closeIcon);
                     extras.putBundle("miui.focus.pics", pics);
@@ -1905,8 +1943,13 @@ public final class HttpShellService {
             String displayDetail = text != null && !text.isEmpty() ? safeDisplay(text) : "智能体正在分析并执行任务...";
             String capsuleText = compactCapsuleText(text != null && !text.isEmpty() ? text : title);
 
-            NotificationCompat.Action returnAction = new NotificationCompat.Action.Builder(
-                    R.drawable.ic_alarm_white, "💬 返回对话", contentPi)
+            Intent stopIntent = new Intent(ctx, ConfirmReceiver.class)
+                    .setAction(ConfirmReceiver.ACTION_STOP_TASK);
+            PendingIntent stopPi = PendingIntent.getBroadcast(ctx, 111, stopIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            NotificationCompat.Action stopAction = new NotificationCompat.Action.Builder(
+                    R.drawable.ic_alarm_white, "🛑 停止任务", stopPi)
                     .build();
 
             NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_AGENT_RUNNING)
@@ -1915,10 +1958,10 @@ public final class HttpShellService {
                     .setContentText(safeDisplay(shortMsg))
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(displayDetail))
                     .setContentIntent(contentPi)
-                    .addAction(returnAction)
+                    .addAction(stopAction)
                     .setOngoing(true);
 
-            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "返回对话", capsuleText, contentPi, false);
+            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, false);
 
             if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());
         } catch (Throwable ignored) {}
