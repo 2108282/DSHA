@@ -947,8 +947,6 @@ public final class HttpShellService {
                 } else if (!displayText.trim().isEmpty()) {
                     showRunningNotification(displayText);
                 }
-            } else if ("done".equals(kind) || "clear".equals(kind)) {
-                cancelRunningNotification();
             }
 
             if (!OverlayController.enabled(ctx)) return "DISABLED";
@@ -1958,6 +1956,7 @@ public final class HttpShellService {
 
     private void showAskWaitingNotification(String customQuestion) {
         try {
+            createConfirmChannel();
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -1972,7 +1971,7 @@ public final class HttpShellService {
                     ? safeDisplay(customQuestion)
                     : "智能体正在等待你的回答与选择，点击返回对话";
 
-            NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_AGENT_RUNNING)
+            NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                     .setSmallIcon(R.drawable.ic_whale_logo)
                     .setContentTitle("💬 助手提问")
                     .setContentText(displayDesc)
@@ -1980,11 +1979,16 @@ public final class HttpShellService {
                     .setContentIntent(contentPi)
                     .addAction(returnAction)
                     .setAutoCancel(true)
-                    .setOngoing(true);
+                    .setOngoing(true)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH);
 
-            attachFocusCapsule(ctx, nb, "💬 助手提问", displayDesc, "等待回答", "返回对话", "等待回答", contentPi, false);
+            attachFocusCapsule(ctx, nb, "💬 助手提问", displayDesc, "等待回答", "返回对话", "等待回答", contentPi, true);
+            nb.setOnlyAlertOnce(false);
 
-            if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());
+            if (nm != null) {
+                nm.cancel(Constants.NOTIF_TASK);
+                nm.notify(Constants.NOTIF_TASK, nb.build());
+            }
         } catch (Throwable ignored) {}
     }
 

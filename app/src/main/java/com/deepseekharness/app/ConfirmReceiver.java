@@ -83,7 +83,9 @@ public class ConfirmReceiver extends BroadcastReceiver {
         // 1. 取消运行中实时状态通知
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) {
+            nm.cancel(Constants.NOTIF_TASK);
             nm.cancel(Constants.NOTIF_TASK_RUNNING);
+            nm.cancel(Constants.NOTIF_TASK_STOPPED);
         }
 
         // 2. 立即注销清理租约文件，关闭设备操作权限；同时通知 DSH 插件停止 Agent 工作并杀掉活动的工具命令

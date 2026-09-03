@@ -103,6 +103,7 @@ let lastCancelByNotification = 0
 
 export function apply(ctx) {
   let lastActiveSessionId = null
+  let lastAssistantText = ''
 
   // 1. 会话事件监听（实时同步通知栏）
   ctx.on('session/event', (session, event) => {
@@ -113,6 +114,7 @@ export function apply(ctx) {
       }
 
       if (type === 'turn/start') {
+        lastAssistantText = ''
         void callBridge('/app/task/running', {
           title: '正在执行',
           text: '智能体正在分析并执行任务...'
@@ -120,33 +122,55 @@ export function apply(ctx) {
         return
       }
 
-      if (type === "tool/call") {
-        const toolName = String(event?.data?.name || "")
+      if (type === 'assistant/chunk') {
+        const chunk = event?.data?.chunk
+        if (chunk?.type === 'text-delta' && chunk.text) {
+          lastAssistantText = (lastAssistantText + chunk.text).trim()
+        }
+        return
+      }
+
+      if (type === 'assistant/message') {
+        const msg = event?.data?.message
+        const texts = (msg?.content || []).filter(c => c.type === 'text').map(c => c.text)
+        if (texts.length > 0) {
+          lastAssistantText = texts.join('').trim()
+        }
+        return
+      }
+
+      if (type === 'tool/call') {
+        const toolName = String(event?.data?.name || '')
         // 提问工具：立即通知手机切换为「💬 助手提问 / 等待回答」状态，挂载「返回对话」抽屉按钮
-        if (toolName.includes("ask_user") || toolName.includes("ask_question")) {
-          let questionText = "智能体正在等待你的回答与选择"
+        if (toolName.includes('ask_user') || toolName.includes('ask_question')) {
+          let questionText = '智能体正在等待你的回答与选择'
           try {
-            const args = typeof event?.data?.arguments === "string" ? JSON.parse(event.data.arguments) : event?.data?.arguments
+            const args = typeof event?.data?.arguments === 'string' ? JSON.parse(event.data.arguments) : event?.data?.arguments
             const q0 = args?.questions?.[0]
             if (q0?.question || q0?.header) {
               questionText = q0.question || q0.header
             }
           } catch {}
-          void callBridge("/app/task/running", {
-            title: "💬 助手提问",
+          void callBridge('/app/task/running', {
+            title: '💬 助手提问',
             text: questionText
           })
           return
         }
         const text = formatToolDetail(event?.data?.name, event?.data?.arguments)
-        void callBridge("/app/task/running", {
-          title: "正在执行",
-          text: text || "智能体正在调用工具..."
+        void callBridge('/app/task/running', {
+          title: '正在执行',
+          text: text || '智能体正在调用工具...'
         })
         return
       }
 
       if (type === 'turn/end') {
+        // 子任务 (Subagent / Workflow) 结束不向手机发任务完成通知
+        if (session?.parentSessionId || session?.parent) {
+          return
+        }
+
         const reasonObj = event.data?.reason
         const kind = reasonObj?.kind ?? 'completed'
         const sessionId = session?.id ?? 'session'
@@ -166,15 +190,15 @@ export function apply(ctx) {
             return
           }
           void callBridge('/app/notify', {
-            title: '🔵 任务已中断',
-            text: 'Agent 任务已被中断，点击或在下方打字重新开始'
+            title: '⚠️ 任务已终止',
+            text: '已按指令停止操作，点击查看或继续对话'
           })
           return
         }
 
         if (kind === 'max-tokens') {
           void callBridge('/app/notify', {
-            title: '📏 达到单次最大长度',
+            title: '📏 达到最大长度',
             text: '已达单次最大输出限制，可发送“继续”接着生成'
           })
           return
@@ -196,9 +220,16 @@ export function apply(ctx) {
           return
         }
 
+        // 提取 AI 真实输出摘要，若无则优雅兜底
+        let endText = '智能体已结束任务，点击查看结果'
+        if (lastAssistantText && lastAssistantText.trim()) {
+          const clean = lastAssistantText.replace(/\s+/g, ' ').trim()
+          endText = clean.length > 60 ? clean.slice(0, 60) + '…' : clean
+        }
+
         void callBridge('/app/notify', {
-          title: '任务完成',
-          text: 'Agent 已完成当前任务，点击或在下方打字继续对话'
+          title: '任务已完成',
+          text: endText
         })
       }
     } catch {}

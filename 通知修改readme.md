@@ -235,7 +235,7 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 
 * **业务特征**：模型调用提问工具时，阻断普通执行态，秒级切换为提问互动卡片，点击直达聊天抽屉。
 * **通知 ID**：`Constants.NOTIF_TASK = 2002`（覆盖正在执行）
-* **渠道等级**：`Constants.CHANNEL_AGENT_RUNNING`（`IMPORTANCE_DEFAULT`，但强切提问态）
+* **渠道等级**：`Constants.CHANNEL_SHELL_CONFIRM（`IMPORTANCE_HIGH` 高优先级强提醒通道，即使运行通知隐入下拉栏，提问到达时也能在屏幕顶部强制弹出悬浮大白卡叫醒用户）
 
 #### 📱 视觉表现：
 1. **小米澎湃 OS (模板 ① 日程单按钮规范)**：
