@@ -122,8 +122,20 @@ export function apply(ctx) {
 
       if (type === "tool/call") {
         const toolName = String(event?.data?.name || "")
-        // 关键过滤：若为 ask_user_question / 用户提问工具，绝不发送「正在执行 + 停止按钮」通知
+        // 提问工具：立即通知手机切换为「💬 助手提问 / 等待回答」状态，挂载「返回对话」抽屉按钮
         if (toolName.includes("ask_user") || toolName.includes("ask_question")) {
+          let questionText = "智能体正在等待你的回答与选择"
+          try {
+            const args = typeof event?.data?.arguments === "string" ? JSON.parse(event.data.arguments) : event?.data?.arguments
+            const q0 = args?.questions?.[0]
+            if (q0?.question || q0?.header) {
+              questionText = q0.question || q0.header
+            }
+          } catch {}
+          void callBridge("/app/task/running", {
+            title: "💬 助手提问",
+            text: questionText
+          })
           return
         }
         const text = formatToolDetail(event?.data?.name, event?.data?.arguments)

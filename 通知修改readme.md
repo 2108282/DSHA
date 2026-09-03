@@ -1,4 +1,4 @@
-# DSHA 状态栏通知与AOSP胶囊、澎湃灵动岛适配方案(通知修改README)【无root】
+# DSHA 状态栏灵动胶囊与双轨通知系统全景规范 (通知修改README)
 
 本文档为 DSHA 状态栏灵动胶囊与通知系统的**最终权威规范**，从原有安卓传统通知单通道升级为 3 通道（原生普通通知 + Android 16 AOSP 胶囊 + 小米澎湃 OS 灵动岛，通过系统设置开关及参数字典自动识别；其他定制厂商系统未做深度私有测试，可启用 AOSP 胶囊通道使用）。
 
@@ -6,7 +6,7 @@
 
 ---
 
-## 一、 架构总览：自适应选择
+## 一、 架构总览：同一载体，三轨自适应
 
 DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，由 `HttpShellService.java` 中的 `attachFocusCapsule` 统一调度：
 
@@ -19,7 +19,7 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 - 协议: miui.focus.param (JSON)       - 协议: android.requestPromotedOngoing        - 协议: 标准 NotificationCompat
 - 图标: miui.focus.pics (Bundle)      - 属性: android.shortCriticalText             - 渠道: IMPORTANCE_DEFAULT / HIGH
 - 动作: miui.focus.actions (Bundle)   - 权限: POST_PROMOTED_NOTIFICATIONS          - 交互: BigTextStyle + RemoteInput
-- 表现: 挖孔双耳胶囊 + 澎湃灵动岛      - 表现: AOSP小胶囊 + 实时动态卡片          - 表现: 标准通知栏卡片 (完善通知优先级，保证弹出)
+- 表现: 挖孔双耳胶囊 + 纯黑大卡片      - 表现: 状态栏顶置芯片 + 锁屏实时卡片          - 表现: 标准通知栏卡片 (完善通知优先级，保证弹出)
 ```
 
 ---
@@ -31,14 +31,14 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 * **硬升 SDK 36 的巨大风险**：强行将 `compileSdk` / `targetSdk` 升至 36 会逼迫项目的 Gradle、Android Gradle Plugin (AGP) 以及 JDK 整体大版本升级，极易引发老依赖库断裂与构建环境不兼容；
 * **底层机制本质**：翻看 Android 16 Framework 源码可知，Google 官方 `setRequestPromotedOngoing(boolean)` 的底层实现，**本质上仅仅是向通知的 `extras` Bundle 字典中写入了 `mExtras.putBoolean("android.requestPromotedOngoing", value)`**。
 
-### 2. 不升级 SDK 依然激活 AOSP 16 胶囊
+### 2. 不升级 SDK 依然激活 AOSP 16 胶囊的“三保险方案”
 1. **底层数据直注（绕过编译限制，系统直读）**：
    ```java
    extras.putBoolean("android.requestPromotedOngoing", true);
    extras.putString("android.shortCriticalText", capsuleText != null ? capsuleText : "正在执行");
    ```
    Android 16 系统的 `NotificationManagerService` 在接收通知时直接读取该 Key，**100% 认定为 Promoted Ongoing 状态栏胶囊并予以提拔**。
-2. **运行时双通道逻辑**：
+2. **运行时双重保险（安全反射调用）**：
    ```java
    try {
        java.lang.reflect.Method m = b.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
@@ -73,15 +73,15 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 
 | 系统版本 | 手机形态示例 | 真实视觉与交互表现 | 兼容性评级 |
 | :--- | :--- | :--- | :---: |
-| **Android 16+ (澎湃OS)** | 小米 14/15 等 (HyperOS 2/3) | 状态栏挖孔双耳大肥鱼胶囊 + 日程/来电级纯黑毛玻璃大卡片（走 `miui.focus.param` 私有协议） | ** (适配)** |
-| **Android 16+ (原生AOSP)** | Google Pixel / AOSP 原生 | 状态栏顶置胶囊芯片 (Chip) + 锁屏实时活动卡片（走 `POST_PROMOTED_NOTIFICATIONS` 官方标准） |  ** (OS厂商似乎未完全开放原生胶囊，有部分通知为融合状态，不知道为啥)** |
-| **Android 8.0 ~ 15** | 各品牌 Android 手机 | 标准通知栏卡片 + 顶部横幅，支持 `RemoteInput` 键盘快捷回复，未知胶囊扩展 Key 自动平滑忽略 | **标准基石态 (原生兼容)** |
+| **Android 16+ (澎湃OS)** | 小米 14/15 等 (HyperOS 2/3) | 状态栏挖孔双耳大肥鱼胶囊 + 日程/来电级纯黑毛玻璃大卡片（走 `miui.focus.param` 私有协议） | ⭐⭐⭐⭐⭐ **最高阶态 (深度适配)** |
+| **Android 16+ (原生AOSP)** | Google Pixel / AOSP 原生 | 状态栏顶置胶囊芯片 (Chip) + 锁屏实时活动卡片（走 `POST_PROMOTED_NOTIFICATIONS` 官方标准） | ⭐⭐⭐⭐⭐ **最高阶态 (官方标准)** |
+| **Android 8.0 ~ 15** | 各品牌 Android 手机 | 标准通知栏卡片 + 顶部横幅，支持 `RemoteInput` 键盘快捷回复，未知胶囊扩展 Key 自动平滑忽略 | ⭐⭐⭐⭐⭐ **标准基石态 (原生兼容)** |
 
 > ★ *注：其他定制厂商未做深度私有测试。澎湃 OS 对灵动岛（焦点通知）有严格的模板和按钮位置规范，不一定支持其他厂商私有协议；其他厂商设备可尝试启用 AOSP 通道（实时动态通知），普通通知表现为系统标准悬浮通知。*
 
 ---
 
-## 四、 DeepSeek Harness (DSH) 全套 17 种工具分类与人话映射规范（hyperos胶囊专用，其他样式通知栏无须匹配）
+## 四、 DeepSeek Harness (DSH) 全套 17 种工具分类与人话映射规范
 
 为了防止工具名称模糊匹配导致误报（例如 `read_image` 误判为读取文本、`todo_write` 误判为写文件、英文单词 `task` 包含 `ask` 导致误判为提问），我们制定了严格的**优先级判定矩阵**：
 
@@ -362,8 +362,8 @@ public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b,
 ## 七、 关键避坑守则（构建与运行时防线）
 
 1. **绝对禁止直接传递裸 `PendingIntent` 到 `miui.focus.actions`**：必须通过 `new Notification.Action.Builder(icon, title, pi).build()` 封装为 Action 实体，否则状态栏 SystemUI 强转异常导致手机软重启。
-2. **实心双圆钮必须传递带底色的位图 Icon**：使用 `createRoundedBackgroundIcon` 在 Bitmap 上调用 `Canvas.drawCircle` 填充实心颜色，符号占 70% ；若直接传透明矢量，系统会渲染为青色空心线圈 (`OO`)。
-3. **删除悬浮条淡出 (`appOverlay?kind=done`) 时取消通知**：悬浮条与状态栏通知管理器彻底解耦，防止完成通知刚发出就被异步 cancel 误杀。
-4. **内置插件版本强控 (`BUILTIN_ASSET_VERSION`)**：修改 `assets/` 插件后必须将 `HarnessController.java` 中的版本号递增（当前 `36`），确保 Proot 容器启动时自动删除旧 marker 并覆盖刷新实体 JS 文件。
+2. **实心双圆钮必须传递带底色的位图 Icon**：使用 `createRoundedBackgroundIcon` 在 Bitmap 上调用 `Canvas.drawCircle` 填充实心颜色，符号占 70% 黄金直径；若直接传透明矢量，系统会渲染为青色空心线圈 (`OO`)。
+3. **禁止在悬浮条淡出 (`appOverlay?kind=done`) 时取消通知**：悬浮条与状态栏通知管理器彻底解耦，防止完成通知刚发出就被异步 cancel 误杀。
+4. **内置插件资产版本强控 (`BUILTIN_ASSET_VERSION`)**：修改 `assets/` 插件后必须将 `HarnessController.java` 中的版本号递增（当前 `36`），确保 Proot 容器启动时自动删除旧 marker 并覆盖刷新实体 JS 文件。
 5. **离线清单同步更新**：修改 assets 文件后必须运行 `python3 tools/gen-runtime-manifest.py` 刷新 `runtime-manifest.json`，确保 CI `Fast checks` 100% 通过。
-6. **英文子串模糊匹配防止通知乱弹**：胶囊提取算法严禁使用裸词 `"ask"`，必须使用中文全词 `s.contains("等待回答")`，防止正常包含 `task` 的英语思考流或普通 Bash 命令被误判为提问通知。
+6. **消除 `ask`/`task` 英文子串模糊匹配**：胶囊提取算法严禁使用裸词 `"ask"`，必须使用中文全词 `s.contains("等待回答")`，防止正常包含 `task` 的英语思考流或普通 Bash 命令被误判为提问通知。

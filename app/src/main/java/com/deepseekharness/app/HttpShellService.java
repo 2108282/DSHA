@@ -1950,6 +1950,10 @@ public final class HttpShellService {
     }
 
     private void showAskWaitingNotification() {
+        showAskWaitingNotification("智能体正在等待你的回答与选择，点击返回对话");
+    }
+
+    private void showAskWaitingNotification(String customQuestion) {
         try {
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
@@ -1961,17 +1965,21 @@ public final class HttpShellService {
                     R.drawable.ic_alarm_white, "💬 返回对话", contentPi)
                     .build();
 
+            String displayDesc = (customQuestion != null && !customQuestion.trim().isEmpty() && !customQuestion.equals("智能体正在等待你的回答与选择"))
+                    ? safeDisplay(customQuestion)
+                    : "智能体正在等待你的回答与选择，点击返回对话";
+
             NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_AGENT_RUNNING)
                     .setSmallIcon(R.drawable.ic_whale_logo)
                     .setContentTitle("💬 助手提问")
-                    .setContentText("智能体正在等待你的回答与选择，点击返回对话")
-                    .setStyle(new NotificationCompat.BigTextStyle().bigText("智能体正在等待你的回答与选择，点击返回对话"))
+                    .setContentText(displayDesc)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(displayDesc))
                     .setContentIntent(contentPi)
                     .addAction(returnAction)
                     .setAutoCancel(true)
                     .setOngoing(true);
 
-            attachFocusCapsule(ctx, nb, "💬 助手提问", "智能体正在等待你的回答与选择", "等待回答", "返回对话", "等待回答", contentPi, false);
+            attachFocusCapsule(ctx, nb, "💬 助手提问", displayDesc, "等待回答", "返回对话", "等待回答", contentPi, false);
 
             if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());
         } catch (Throwable ignored) {}
@@ -1981,7 +1989,7 @@ public final class HttpShellService {
         try {
             if ("💬 助手提问".equals(title) || "等待回答".equals(title)) {
                 cancelRunningNotification();
-                showAskWaitingNotification();
+                showAskWaitingNotification(text);
                 return;
             }
 
