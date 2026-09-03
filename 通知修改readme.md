@@ -19,7 +19,7 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 - 协议: miui.focus.param (JSON)       - 协议: android.requestPromotedOngoing        - 协议: 标准 NotificationCompat
 - 图标: miui.focus.pics (Bundle)      - 属性: android.shortCriticalText             - 渠道: IMPORTANCE_DEFAULT / HIGH
 - 动作: miui.focus.actions (Bundle)   - 权限: POST_PROMOTED_NOTIFICATIONS          - 交互: BigTextStyle + RemoteInput
-- 表现: 挖孔双耳胶囊 + 纯黑大卡片      - 表现: 状态栏顶置芯片 + 锁屏实时卡片          - 表现: 标准通知栏卡片 (完善通知优先级，保证弹出)
+- 表现: 挖孔双耳胶囊 + 澎湃灵动岛      - 表现: AOSP小胶囊 + 实时动态卡片          - 表现: 标准通知栏卡片 (完善通知优先级，保证弹出)
 ```
 
 ---
