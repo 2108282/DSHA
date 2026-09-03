@@ -74,4 +74,16 @@
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">@dimen/radius_card</item>
     </style>
+
+    <!-- 快捷抽屉弹层专用全屏透明主题（无黑边、无白状态栏、左右 100% 满屏无留白） -->
+    <style name="Theme.DeepseekHarness.SheetTransparent" parent="Theme.DeepseekHarness">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorBackground">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
 </resources>
