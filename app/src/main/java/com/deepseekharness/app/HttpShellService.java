@@ -533,8 +533,7 @@ public final class HttpShellService {
             title = safeDisplay(title);
             text = safeDisplay(text);
 
-            // 任务结束，清除运行中状态通知
-            cancelRunningNotification();
+            // 任务结束，直接通过原子 notify 覆写 NOTIF_TASK 原地替换，绝不在 notify 前执行异步 cancel 造成状态抖动
 
             // 1. 先走通知：写入「任务结果与交互」独立通道，挂载 RemoteInput 继续对话输入组件
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
