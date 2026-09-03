@@ -1,6 +1,8 @@
 # DSHA 状态栏灵动胶囊与双轨通知系统全景规范 (通知修改README)
 
-本文档为 DSHA 状态栏灵动胶囊与通知系统的**最终权威规范**。已剔除所有中间探索阶段的废弃逻辑（如自绘 RemoteViews、通栏大黑框 textButton、低优先级静音降级、30秒死板节流等），完整记录 **Google AOSP 16 官方原生实时活动 (Live Updates)** 与 **小米澎湃 OS (HyperOS / HyperIsland 灵动岛)** 的最终落地架构与全版本兼容方案。
+本文档为 DSHA 状态栏灵动胶囊与通知系统的**最终权威规范**，从原有安卓传统通知单通道升级为3通道（原生+A16-aosp胶囊+澎湃OS灵动岛，通过设置开关以及自动识别，其他厂商并未测试，可启用aosp胶囊使用）
+
+已剔除所有中间探索阶段的废弃逻辑（如自绘 RemoteViews、通栏大黑框 textButton、低优先级静音降级、30秒死板节流等），完整记录 **Google AOSP 16 官方原生实时活动 (Live Updates)** 与 **小米澎湃 OS (HyperOS / HyperIsland 灵动岛)** 的最终落地架构与全版本兼容方案。
 
 ---
 
@@ -17,27 +19,26 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 - 协议: miui.focus.param (JSON)       - 协议: android.requestPromotedOngoing        - 协议: 标准 NotificationCompat
 - 图标: miui.focus.pics (Bundle)      - 属性: android.shortCriticalText             - 渠道: IMPORTANCE_DEFAULT / HIGH
 - 动作: miui.focus.actions (Bundle)   - 权限: POST_PROMOTED_NOTIFICATIONS          - 交互: BigTextStyle + RemoteInput
-- 表现: 挖孔双耳胶囊 + 纯黑大卡片      - 表现: 状态栏顶置芯片 + 锁屏实时卡片          - 表现: 标准通知栏卡片 (绝不进垃圾堆)
+- 表现: 挖孔双耳胶囊 + 纯黑大卡片      - 表现: 状态栏顶置芯片 + 锁屏实时卡片          - 表现: 标准通知栏卡片 (完善通知优先级，保证弹出)
 ```
 
 ---
 
-## 二、 核心技术解密：为什么未升级 SDK 36 却能完美激活 Android 16 胶囊？
+## 二、 技术规范：本项目未升级 SDK 36 但兼容Android 16 AOSP胶囊
 
 ### 1. 为什么本方案选择“不强升 SDK 36”？
 * **官方编译期限制**：在 Java 代码中若直接调用 `b.setRequestPromotedOngoing(true)`，Javac 编译器在编译期必须依赖 Android 16（API 36）的 `android.jar`。而当前项目采用 `compileSdk 34` + `AGP 8.2.2`；
 * **硬升 SDK 36 的巨大风险**：强行将 `compileSdk` / `targetSdk` 升至 36 会逼迫项目的 Gradle、Android Gradle Plugin (AGP) 以及 JDK 整体大版本升级，极易引发老依赖库断裂与构建环境不兼容；
 * **底层机制本质**：翻看 Android 16 Framework 源码可知，Google 官方 `setRequestPromotedOngoing(boolean)` 的底层实现，**本质上仅仅是向通知的 `extras` Bundle 字典中写入了 `mExtras.putBoolean("android.requestPromotedOngoing", value)`**。
 
-### 2. 不升级 SDK 依然 100% 激活 AOSP 16 胶囊的“三保险方案”
-我们采用了工业级通用的 **“数据直注 + 动态安全反射 + 清单特权声明”** 方案：
+### 2. 不升级 SDK 依然 激活 AOSP 16 胶囊的“三保险方案”
 1. **底层数据直注（绕过编译限制，系统直读）**：
    ```java
    extras.putBoolean("android.requestPromotedOngoing", true);
    extras.putString("android.shortCriticalText", capsuleText != null ? capsuleText : "正在执行");
    ```
    Android 16 系统的 `NotificationManagerService` 在接收通知时直接读取该 Key，**100% 认定为 Promoted Ongoing 状态栏胶囊并予以提拔**。
-2. **动态安全反射（运行时双重保险）**：
+2. **运行时双重保险**：
    ```java
    try {
        java.lang.reflect.Method m = b.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
@@ -45,7 +46,7 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
    } catch (Throwable ignored) {}
    ```
    若运行环境存在对应方法则反射调用；在老系统上自动静默忽略，绝不抛出 `NoSuchMethodError`。
-3. **特权权限清单声明**：
+3. **特权权限清单声明，调用AOSP胶囊**：
    ```xml
    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
    ```
@@ -55,7 +56,7 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 
 ## 三、 Android 8.0+ 全版本兼容性保障
 
-本方案做到了**向下兼容至 Android 8.0 基石，向上无缝激活 Android 16+ 与 HyperOS 灵动岛顶峰**：
+本方案**理论向下兼容至 Android 8.0 **：
 
 ```text
                         【Android 8.0 ~ 15 老手机接收通知】
@@ -76,11 +77,11 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 | **Android 16+ (原生AOSP)** | Google Pixel / AOSP 原生 | 状态栏顶置胶囊芯片 (Chip) + 锁屏实时活动卡片（走 `POST_PROMOTED_NOTIFICATIONS` 官方标准） | ⭐⭐⭐⭐⭐ **最高阶态 (官方标准)** |
 | **Android 8.0 ~ 15** | 各品牌 Android 手机 | 标准通知栏卡片 + 顶部横幅，支持 `RemoteInput` 键盘快捷回复，未知胶囊扩展 Key 自动平滑忽略 | ⭐⭐⭐⭐⭐ **标准基石态 (原生兼容)** |
 
+★其他定制厂商未做测试，澎湃OS对灵动岛（焦点通知）有严格的模板和按钮位置，不一定支持其他厂商，可尝试AOSP通道（实时动态通知），普通通知为悬浮通知
+
 ---
 
 ## 四、 全场景 3 种通知形态在三大运行轨道中的最终呈现
-
----
 
 ### 1. 【任务执行中】（正在执行命令 / 读写文件 / 搜索）
 
