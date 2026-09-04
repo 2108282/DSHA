@@ -1,6 +1,8 @@
 package com.deepseekharness.app;
 
 import android.content.Context;
+import android.os.Parcel;
+import android.os.RemoteException;
 import androidx.annotation.Keep;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -19,6 +21,17 @@ public class ShellService extends IShellService.Stub {
     public ShellService(Context context) {
     }
 
+    @Override
+    public boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
+        // ShizukuApiConstants.USER_SERVICE_TRANSACTION_destroy = 16777115
+        if (code == 16777115) {
+            destroy();
+            return true;
+        }
+        return super.onTransact(code, data, reply, flags);
+    }
+
+    @Override
     public void destroy() {
         System.exit(0);
     }
