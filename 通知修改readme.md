@@ -445,6 +445,6 @@ public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b,
 5. **离线清单同步更新**：修改 assets 文件后必须运行 `python3 tools/gen-runtime-manifest.py` 刷新 `runtime-manifest.json`，确保 CI `Fast checks` 100% 通过。
 7. **消除 ONLY_ALERT_ONCE 对完成通知的静默压制**：新任务开始跑时必须调用 `nm.cancel(Constants.NOTIF_TASK)` 拔除上一轮旧 2002 通知；完成通知在构建时必须显式调用 `b.setOnlyAlertOnce(false)`，彻底打破 Android 系统对同 ID 通知更新时的静默压制，确保每一轮任务完成都能 100% 弹出悬浮大白卡。
 9. **方案 A 独立双 ID 接力与 ONLY_ALERT_ONCE 解除规范**：
-   * 运行中通知使用独立 ID `2003`，新任务开始第一毫秒必须显式执行 `nm.cancel(Constants.NOTIF_TASK)`（2002）彻底清除上一轮旧卡片；
+   * 运行中通知使用独立 ID `2003`，新任务开始必须执行 `nm.cancel(Constants.NOTIF_TASK)`（2002）彻底清除上一轮旧卡片；
    * 任务完成通知使用独立 ID `2002`，先收起 2003，并在构建时显式设置 `b.setOnlyAlertOnce(false)`，彻底解除 Android 系统对通知更新时的静默压制，确保普通模式下 100% 弹出悬浮大白卡。
 10. **消除 `ask`/`task` 英文子串模糊匹配**：胶囊提取算法严禁使用裸词 `"ask"`，必须使用中文全词 `s.contains("等待回答")`，防止正常包含 `task` 的英语思考流或普通 Bash 命令被误判为提问通知。（仍有误识别情况）
