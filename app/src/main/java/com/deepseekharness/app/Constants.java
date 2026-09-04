@@ -17,8 +17,14 @@ public final class Constants {
     public static final int NOTIF_HARNESS_SERVICE = 1001;
     /** TaskNotifier 任务完成通知 */
     public static final int NOTIF_TASK = 2002;
+    /** Agent 运行中实时操作步骤通知 */
+    public static final int NOTIF_TASK_RUNNING = 2003;
+    /** 任务终止通知 */
+    public static final int NOTIF_TASK_STOPPED = 2004;
     /** HttpShellService 危险命令确认通知 */
     public static final int NOTIF_SHELL_CONFIRM = 3003;
+    /** 提问等待通知 */
+    public static final int NOTIF_ASK_QUESTION = 3007;
     /** ConfigFragment ADB 配对卡 */
     public static final int NOTIF_ADB_PAIR_CARD = 3101;
     /** AdbPairReceiver 配对结果 */
@@ -29,6 +35,8 @@ public final class Constants {
     public static final int NOTIF_ADB_CARD = 3006;
 
     // ================= 通知渠道 =================
+    public static final String CHANNEL_AGENT_RUNNING = "dsh_agent_channel";
+    public static final String CHANNEL_TASK_RESULT = "dsh_task_result_v2";
     public static final String CHANNEL_TASK = "dsh_task_channel";
     public static final String CHANNEL_ADB_PAIR = "dsh_adbpair_channel";
     public static final String CHANNEL_ADB_WATCH = "dsh_adb_watch_channel";

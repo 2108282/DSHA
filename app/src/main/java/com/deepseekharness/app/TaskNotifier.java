@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class TaskNotifier {
 
-    public static final String CHANNEL_ID = "dsh_task_channel";
+    public static final String CHANNEL_ID = Constants.CHANNEL_TASK_RESULT;
     private static final int NOTIF_ID = 2002;
     private static final long POLL_MS = 4000;
     private static final long IDLE_MS = 90000;      // 静默 90 秒判定完成（容忍 agent 长思考）
@@ -88,20 +88,38 @@ public class TaskNotifier {
     }
 
     private void notifyDone() {
+        NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) {
+            nm.cancel(Constants.NOTIF_TASK_RUNNING);
+        }
+
         Intent intent = new Intent(ctx, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent pi = PendingIntent.getActivity(ctx, 0, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification n = new NotificationCompat.Builder(ctx, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_launch)
-                .setContentTitle("DSHA · 任务完成")
-                .setContentText("智能体已结束任务，点击查看结果")
-                .setContentIntent(pi)
-                .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
+
+        Intent actionIntent = new Intent(ctx, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent actionPi = PendingIntent.getActivity(ctx, 26, actionIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
+                R.drawable.ic_alarm_white, "💬 返回对话", actionPi)
                 .build();
-        NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) nm.notify(NOTIF_ID, n);
+
+        NotificationCompat.Builder tnb = new NotificationCompat.Builder(ctx, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_whale_logo)
+                .setContentTitle("任务完成")
+                .setContentText("智能体已结束任务，点击查看结果")
+                .setStyle(new NotificationCompat.BigTextStyle().bigText("智能体已结束任务，点击查看结果"))
+                .setContentIntent(pi)
+                .addAction(replyAction)
+                .setOngoing(true)
+                .setAutoCancel(true);
+
+        HttpShellService.attachFocusCapsule(ctx, tnb, "任务完成", "智能体已结束任务，点击查看结果", "任务完成", "返回对话", "任务完成", actionPi, true);
+        tnb.setOnlyAlertOnce(false);
+        Notification n = tnb.build();
+        if (nm != null) nm.notify(Constants.NOTIF_TASK, n);
     }
 
     private void createChannel() {
