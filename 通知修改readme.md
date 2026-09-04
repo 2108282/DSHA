@@ -1,12 +1,11 @@
 # DSHA 状态栏灵动胶囊与双轨通知系统全景规范 (通知修改README)
 
-本文档为 DSHA 状态栏灵动胶囊与通知系统的**最终权威规范**，从原有安卓传统通知单通道升级为 3 通道（原生普通通知 + Android 16 AOSP 胶囊 + 小米澎湃 OS 灵动岛，通过系统设置开关及参数字典自动识别；其他定制厂商系统未做深度私有测试，可启用 AOSP 胶囊通道使用）。
+本文档为 DSHA 状态栏灵动胶囊与通知系统代码和功能规范描述，不再依赖root和模块实现功能，从原有安卓传统通知单通道升级为 3 通道（原生普通通知 + Android 16 AOSP 胶囊 + 小米澎湃 OS 灵动岛，通过系统设置开关及参数字典自动识别；其他定制厂商系统未做深度私有测试，如未屏蔽AOSP通道可尝试使用A16灵动胶囊和原生悬浮岛）。
 
-已剔除所有中间探索阶段的废弃逻辑（如自绘 RemoteViews、通栏大黑框 textButton、低优先级静音降级、30 秒死板节流等），完整记录 **Google AOSP 16 官方原生实时活动 (Live Updates)**、**小米澎湃 OS (HyperOS / HyperIsland 灵动岛)** 与 **Android 原生标准通知** 的最终落地架构、全套工具人话分类标准与全版本兼容方案。
-
+已剔除所有中间探索阶段的废弃逻辑
 ---
 
-## 一、 架构总览：同一载体，三轨自适应
+## 一、 架构总览：
 
 DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，由 `HttpShellService.java` 中的 `attachFocusCapsule` 统一调度：
 
@@ -19,16 +18,16 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 - 协议: miui.focus.param (JSON)       - 协议: android.requestPromotedOngoing        - 协议: 标准 NotificationCompat
 - 图标: miui.focus.pics (Bundle)      - 属性: android.shortCriticalText             - 渠道: IMPORTANCE_DEFAULT / HIGH
 - 动作: miui.focus.actions (Bundle)   - 权限: POST_PROMOTED_NOTIFICATIONS          - 交互: BigTextStyle + RemoteInput
-- 表现: 挖孔双耳胶囊 + 纯黑大卡片      - 表现: 状态栏顶置芯片 + 锁屏实时卡片          - 表现: 标准通知栏卡片 (完善通知优先级，保证弹出)
+- 表现: 挖孔双耳胶囊 + 纯黑大卡片      - 表现: A16状态栏顶置胶囊 + 原生悬浮岛        - 表现: 标准通知栏卡片 (完善通知优先级，保证弹出)
 ```
 
 ---
 
 ## 二、 技术规范：本项目未升级 SDK 36 但原生兼容 Android 16 AOSP 胶囊的技术方案
 
-### 1. 采用方案：基于「IPC Bundle 字典协议直注 + 跨版本安全反射探活」的自适应胶囊架构 (Bundle Protocol Direct Injection & Graceful Fallback)
+### 1. 采用方案：基于「IPC Bundle 字典协议直注 + 跨版本安全反射探活」架构 (Bundle Protocol Direct Injection & Graceful Fallback)
 
-针对 Android 16（API 36）官方引入的**实时活动 (Live Updates / Promoted Ongoing Notifications)** 特性，本项目并没有采取“盲目拉升编译版本”的做法，而是采用了**以最小改动成本实现全版本兼容的协议级直通方案**：
+针对 Android 16（API 36）官方引入的**实时活动 (Live Updates / Promoted Ongoing Notifications)** 特性，本项目并没有采取“升级编译版本”的做法，采用**以最小改动成本实现全版本兼容的协议级直通方案**：
 
 ```text
                                【方案总架构：三位一体直通】
@@ -43,10 +42,10 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 
 ---
 
-### 2. 为什么本方案选择“不强升 SDK 36”？
-* **官方编译期限制**：在 Java 代码中若直接调用 `b.setRequestPromotedOngoing(true)`，Javac 编译器在编译期必须依赖 Android 16（API 36）的 `android.jar`。而当前项目采用 `compileSdk 34` + `AGP 8.2.2`；
+### 2. 未升级SDK 36
+* **官方编译限制**：在 Java 代码中若直接调用 `b.setRequestPromotedOngoing(true)`，Javac 编译器在编译期必须依赖 Android 16（API 36）的 `android.jar`。而当前项目采用 `compileSdk 34` + `AGP 8.2.2`；
 * **硬升 SDK 36 的巨大风险**：强行将 `compileSdk` / `targetSdk` 升至 36 会逼迫项目的 Gradle、Android Gradle Plugin (AGP) 以及 JDK 整体大版本升级（往往要求 Gradle 8.7+、AGP 8.5+），极易引发老依赖库断裂、CI 构建脚本不兼容以及部分 Proot 原生库构建失败；
-* **底层机制本质**：翻看 Android 16（API 36）Framework 源码可知，Google 官方 `Notification.Builder.setRequestPromotedOngoing(boolean)` 的底层实现，**本质上仅仅是向通知的 `extras` Bundle 字典中写入了 `mExtras.putBoolean("android.requestPromotedOngoing", value)`**，并通过 Binder IPC 传递给系统的 `NotificationManagerService`。
+* **底层机制**：翻看 Android 16（API 36）Framework 源码可知，Google 官方 `Notification.Builder.setRequestPromotedOngoing(boolean)` 的底层实现，**本质上仅仅是向通知的 `extras` Bundle 字典中写入了 `mExtras.putBoolean("android.requestPromotedOngoing", value)`**，并通过 Binder IPC 传递给系统的 `NotificationManagerService`。
 
 ---
 
@@ -60,7 +59,7 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 <!-- 声明 Android 16 原生胶囊 (Promoted Ongoing) 提拔特权，无需 SDK 36 即可被安装解析 -->
 <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
 ```
-* **工作机制**：Android 系统的包解析器（PackageParser）在安装 APK 时直接读取 XML 字符串。即便编译期是 SDK 34，Android 16 手机在安装时识别到该字符串即认定应用具备申请胶囊提拔的特权资格。
+* **工作机制**：Android 系统的包解析器（PackageParser）在安装 APK 时直接读取 XML 字符串。即便编译期是 SDK 34，Android 16 手机在安装时识别到该字符串即认定应用具备申请胶囊的资格。
 
 #### ② 第二道防线：IPC 数据层直注（绕过编译限制，系统 Binder 直读）
 在 `HttpShellService.java` 中构建通知时，直接向 NotificationCompat.Builder 的 Extras 字典直注官方协议字段：
@@ -82,7 +81,7 @@ try {
     java.lang.reflect.Method m = b.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
     m.invoke(b, true);
 } catch (Throwable ignored) {
-    // 老系统 (Android 8.0 ~ 15) 静默忽略，零性能损耗、绝不抛出 NoSuchMethodError
+    // 老系统 (Android 8.0 ~ 15) 静默忽略，不会抛出 NoSuchMethodError
 }
 ```
 * **工作机制**：若系统运行在具备该方法的 Android 16 环境上，则安全执行该方法；在老系统上捕获异常并静默忽略，保证全版本零崩溃。
@@ -108,9 +107,9 @@ try {
 
 | 系统版本 | 手机形态示例 | 真实视觉与交互表现 | 兼容性评级 |
 | :--- | :--- | :--- | :---: |
-| **Android 16+ (澎湃OS)** | 小米 14/15 等 (HyperOS 2/3) | 状态栏挖孔双耳大肥鱼胶囊 + 日程/来电级纯黑毛玻璃大卡片（走 `miui.focus.param` 私有协议） | ⭐⭐⭐⭐⭐ **最高阶态 (深度适配)** |
-| **Android 16+ (原生AOSP)** | Google Pixel / AOSP 原生 | 状态栏顶置胶囊芯片 (Chip) + 锁屏实时活动卡片（走 `POST_PROMOTED_NOTIFICATIONS` 官方标准） | ⭐⭐⭐⭐⭐ **最高阶态 (官方标准)** |
-| **Android 8.0 ~ 15** | 各品牌 Android 手机 | 标准通知栏卡片 + 顶部横幅，支持 `RemoteInput` 键盘快捷回复，未知胶囊扩展 Key 自动平滑忽略 | ⭐⭐⭐⭐⭐ **标准基石态 (原生兼容)** |
+| **Android 16+ (澎湃OS)** | 小米 14/15 等 (HyperOS 2/3) | 状态栏挖孔双耳大肥鱼胶囊 + 日程/来电级纯黑毛玻璃大卡片（走 `miui.focus.param` 私有协议） |  ** (适配)** |
+| **Android 16+ (原生AOSP)** | Google Pixel / AOSP 原生 | 状态栏顶置胶囊芯片 (Chip) + 锁屏实时活动卡片（走 `POST_PROMOTED_NOTIFICATIONS` 官方标准） | ** (官方标准)** |
+| **Android 8.0 ~ 15** | 各品牌 Android 手机 | 标准通知栏卡片 + 顶部横幅，支持 `RemoteInput` 键盘快捷回复，未知胶囊扩展 Key 自动平滑忽略 |  ** (理论兼容)** |
 
 > ★ *注：其他定制厂商未做深度私有测试。澎湃 OS 对灵动岛（焦点通知）有严格的模板和按钮位置规范，不一定支持其他厂商私有协议；其他厂商设备可尝试启用 AOSP 通道（实时动态通知），普通通知表现为系统标准悬浮通知。*
 
@@ -270,12 +269,11 @@ try {
   │ 任务已完成                                             │
   │ 全部构建与端到端测试均已通过                           │
   │                                                        │
-  │ [ 💬 返回对话 ]      [ 💬 快捷输入 ]                    │  <-- 带 RemoteInput 原生输入框
+  │ [ 💬 返回对话 ]                                         │ 
   └────────────────────────────────────────────────────────┘
   ```
 * **双交互入口**：
   * 点击 `[ 💬 返回对话 ]` 或卡片任意处：直接呼出 `QuickChatSheetActivity` 快速聊天抽屉；
-  * 点击 `[ 💬 快捷输入 ]`：直接在下拉通知栏内就地弹出软键盘打字，回车自动通过 `ConfirmReceiver` 注入会话开启新一轮对话。
 
 ---
 
@@ -440,13 +438,13 @@ public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b,
 
 ## 七、 关键避坑守则（构建与运行时防线）
 
-1. **绝对禁止直接传递裸 `PendingIntent` 到 `miui.focus.actions`**：必须通过 `new Notification.Action.Builder(icon, title, pi).build()` 封装为 Action 实体，否则状态栏 SystemUI 强转异常导致手机软重启。
-2. **实心双圆钮必须传递带底色的位图 Icon**：使用 `createRoundedBackgroundIcon` 在 Bitmap 上调用 `Canvas.drawCircle` 填充实心颜色，符号占 70% 黄金直径；若直接传透明矢量，系统会渲染为青色空心线圈 (`OO`)。
+1. **绝对禁止直接传递裸 `PendingIntent` 到 `miui.focus.actions`**：必须通过 `new Notification.Action.Builder(icon, title, pi).build()` 封装为 Action 实体，否则状态栏 SystemUI 强转异常导致手机软重启（hyper灵动岛规范？）。
+2. **实心双圆钮必须传递带底色的位图 Icon**：使用 `createRoundedBackgroundIcon` 在 Bitmap 上调用 `Canvas.drawCircle` 填充实心颜色，符号占 70% ；若直接传透明矢量，系统会渲染为青色空心线圈 (`OO`)。
 3. **禁止在悬浮条淡出 (`appOverlay?kind=done`) 时取消通知**：悬浮条与状态栏通知管理器彻底解耦，防止完成通知刚发出就被异步 cancel 误杀。
-4. **内置插件资产版本强控 (`BUILTIN_ASSET_VERSION`)**：修改 `assets/` 插件后必须将 `HarnessController.java` 中的版本号递增（当前 `36`），确保 Proot 容器启动时自动删除旧 marker 并覆盖刷新实体 JS 文件。
+4. **内置插件版本强控 (`BUILTIN_ASSET_VERSION`)**：修改 `assets/` 插件后必须将 `HarnessController.java` 中的版本号递增（当前 `36`），确保 Proot 容器启动时自动删除旧 marker 并覆盖刷新实体 JS 文件。
 5. **离线清单同步更新**：修改 assets 文件后必须运行 `python3 tools/gen-runtime-manifest.py` 刷新 `runtime-manifest.json`，确保 CI `Fast checks` 100% 通过。
 7. **消除 ONLY_ALERT_ONCE 对完成通知的静默压制**：新任务开始跑时必须调用 `nm.cancel(Constants.NOTIF_TASK)` 拔除上一轮旧 2002 通知；完成通知在构建时必须显式调用 `b.setOnlyAlertOnce(false)`，彻底打破 Android 系统对同 ID 通知更新时的静默压制，确保每一轮任务完成都能 100% 弹出悬浮大白卡。
 9. **方案 A 独立双 ID 接力与 ONLY_ALERT_ONCE 解除规范**：
-   * 运行中通知使用独立 ID `2003`，新任务开始第一毫秒必须显式执行 `nm.cancel(Constants.NOTIF_TASK)`（2002）彻底清除上一轮旧卡片；
+   * 运行中通知使用独立 ID `2003`，新任务开始必须执行 `nm.cancel(Constants.NOTIF_TASK)`（2002）彻底清除上一轮旧卡片；
    * 任务完成通知使用独立 ID `2002`，先收起 2003，并在构建时显式设置 `b.setOnlyAlertOnce(false)`，彻底解除 Android 系统对通知更新时的静默压制，确保普通模式下 100% 弹出悬浮大白卡。
-10. **消除 `ask`/`task` 英文子串模糊匹配**：胶囊提取算法严禁使用裸词 `"ask"`，必须使用中文全词 `s.contains("等待回答")`，防止正常包含 `task` 的英语思考流或普通 Bash 命令被误判为提问通知。
+10. **消除 `ask`/`task` 英文子串模糊匹配**：胶囊提取算法严禁使用裸词 `"ask"`，必须使用中文全词 `s.contains("等待回答")`，防止正常包含 `task` 的英语思考流或普通 Bash 命令被误判为提问通知。（仍有误识别情况）
