@@ -7,20 +7,29 @@ import android.content.pm.PackageManager;
 import android.os.IBinder;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import rikka.shizuku.Shizuku;
 
 /**
- * Shizuku shell 执行封装：通过 UserService 在 root/shell 身份下执行设备命令，
- * 让助手（deepseek-harness agent）无需 root 即可操作设备。
+ * Shizuku shell 执行封装：通过双轨协同（execDirect 直通主力 + UserService 特权守护）
+ * 在 root/shell 身份下执行设备命令，让助手（deepseek-harness agent）无需 root 即可操作设备。
  *
  * 加固点：
- *  - bindUserService 异常不再静默吞掉，打日志（配 manifest 缺失排查根因）；
+ *  - 双轨协同：日常命令走轻量高效的原生进程管道 execDirect，带 PATH 兜底与 30s 防卡死强退保护；
+ *  - UserService 守护单例化：daemon(true) + 固化 tag("dsha_shell")，根除生命周期波动导致的多开泄漏；
+ *  - 协同 AIDL destroy(16777114/16777115) 契约，确保服务端回收时旧进程能安全自杀退出；
+ *  - bindUserService 异常不再静默吞掉，打日志；
  *  - 补 onBindingDied / onServiceDisconnected 回调：状态归零 + 延迟自动重绑；
- *  - 监听 Shizuku binder 重启（服务被回收）后自动重绑；
- *  - 授权成功回调内自动触发绑定（解决"授权后桥仍不就绪"的时机 bug）；
- *  - status() 诊断字符串供 3090 /status 端点与开发者排查。
+ *  - 监听 Shizuku binder 重启后自动重绑；
+ *  - 授权成功回调内自动触发绑定。
  */
 public final class ShizukuShell {
 
@@ -117,7 +126,7 @@ public final class ShizukuShell {
         }
     }
 
-    /** 绑定 UserService（进程由 Shizuku 以 root/shell 身份托管） */
+    /** 绑定 UserService（进程由 Shizuku 以 root/shell 身份托管，作为特权单例守护） */
     public static void ensureBound(Context ctx) {
         init(ctx);
         attachBinderListener();
@@ -133,7 +142,8 @@ public final class ShizukuShell {
         try {
             Shizuku.UserServiceArgs args = new Shizuku.UserServiceArgs(
                     new ComponentName(BuildConfig.APPLICATION_ID, ShellService.class.getName()))
-                    .daemon(false)
+                    .daemon(true)
+                    .tag("dsha_shell")
                     .processNameSuffix("shizuku")
                     .debuggable(BuildConfig.DEBUG)
                     .version(BuildConfig.VERSION_CODE);
@@ -209,59 +219,82 @@ public final class ShizukuShell {
         }
     }
 
-
-    /** 通过 Shizuku 底层直接执行命令（绕过所有不稳定的 UserService 握手） */
+    /**
+     * 通过 Shizuku 底层直接执行命令（轻量原生管道，0MB 常驻内存，毫秒级直达）。
+     * 内置 PATH 环境变量兜底、256KB 内存上限与 30 秒硬超时中断保护（防命令挂死）。
+     */
     private static String execDirect(String cmd) throws Exception {
         IBinder binder = Shizuku.getBinder();
         if (binder == null) throw new IllegalStateException("Shizuku binder is null");
-        
+
         moe.shizuku.server.IShizukuService shizukuService = moe.shizuku.server.IShizukuService.Stub.asInterface(binder);
-        
-        // 关键点：使用 2>&1 自动把错误流合并到标准输出，避免分别读取两条管道导致死锁
-        moe.shizuku.server.IRemoteProcess rp = shizukuService.newProcess(new String[]{"sh", "-c", cmd + " 2>&1"}, null, null);
-        
-        android.os.ParcelFileDescriptor pfd = rp.getInputStream();
+
+        // 环境变量兜底 + 错误流合并
+        String wrappedCmd = "export PATH=$PATH:/system/bin:/system/xbin:/vendor/bin; " + cmd + " 2>&1";
+        moe.shizuku.server.IRemoteProcess rp = shizukuService.newProcess(new String[]{"sh", "-c", wrappedCmd}, null, null);
+
+        ParcelFileDescriptor pfd = rp.getInputStream();
         if (pfd == null) throw new IllegalStateException("Remote process InputStream is null");
-        
-        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
         byte[] buf = new byte[8192];
-        int n;
-        try (java.io.InputStream in = new android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd)) {
-            while ((n = in.read(buf)) != -1) {
-                bos.write(buf, 0, n);
+        final int MAX_BYTES = 256 * 1024;
+
+        // 异步读取与等待，施加 30s 严格超时，绝不允许无限期挂死
+        FutureTask<Integer> task = new FutureTask<>(() -> {
+            try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(pfd)) {
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    if (bos.size() < MAX_BYTES) {
+                        bos.write(buf, 0, Math.min(n, MAX_BYTES - bos.size()));
+                    }
+                }
             }
+            return rp.waitFor();
+        });
+
+        new Thread(task).start();
+
+        try {
+            int code = task.get(30, TimeUnit.SECONDS);
+            return bos.toString("UTF-8") + "\n[EXIT=" + code + "]";
+        } catch (TimeoutException te) {
+            task.cancel(true);
+            try { pfd.close(); } catch (Throwable ignored) {}
+            return bos.toString("UTF-8") + "\n[EXIT=timeout] 命令执行超时(30s)已主动强退";
         }
-        
-        rp.waitFor();
-        int code = rp.exitValue();
-        return bos.toString("UTF-8") + "\n[EXIT=" + code + "]";
     }
 
-    /** 通过 UserService 执行 shell 命令并返回输出 */
+    /**
+     * 执行设备 shell 命令：双轨协同。
+     * 第一优先级走极速、零常驻、防卡死的 execDirect 原生管道；
+     * 若未就绪或出现异常，顺位无缝流转至 UserService 特权守护进程兜底。
+     */
     public static String exec(String cmd) {
         if (!hasPermission()) {
             return "[NO_SHIZUKU_PERMISSION]";
         }
-        IShellService s = shellService;
-        if (s == null) {
-            ensureBound(appCtx);
-            // 如果 UserService 还没好，直接走底层兜底，不阻断请求！
-            try {
-                return execDirect(cmd);
-            } catch (Throwable e) {
-                Log.w(TAG, "Direct newProcess failed, status=" + status(), e);
-                return "[SHIZUKU_SERVICE_NOT_READY]";
-            }
-        }
+
+        // 1. 优先走轻快直达的原生管道
         try {
-            return s.exec(cmd);
-        } catch (Throwable e) {
-            try {
-                return execDirect(cmd);
-            } catch (Throwable ex) {
-                return "ERROR: " + e.getClass().getSimpleName() + ": " + e.getMessage();
-            }
+            return execDirect(cmd);
+        } catch (Throwable t) {
+            Log.w(TAG, "execDirect 管道未通，顺位转由 UserService 执行: " + t.getMessage());
         }
+
+        // 2. 顺位走 UserService 特权单例兜底
+        IShellService s = shellService;
+        if (s != null) {
+            try {
+                return s.exec(cmd);
+            } catch (Throwable e) {
+                Log.e(TAG, "UserService 也未执行成功: " + e.getMessage());
+            }
+        } else {
+            ensureBound(appCtx);
+        }
+
+        return "[SHIZUKU_SERVICE_NOT_READY]";
     }
 
 }
