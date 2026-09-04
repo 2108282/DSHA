@@ -110,7 +110,7 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 ### 1. 【任务执行中】（正在执行命令 / 读写文件 / 搜索）
 
 * **业务特征**：高频动态更新，静默低打扰，提供一键紧急制动。
-* **通知 ID**：`Constants.NOTIF_TASK = 2002`（`ongoing = true`）
+* **通知 ID**：`Constants.NOTIF_TASK_RUNNING = 2003`（执行中独立 ID）
 * **渠道等级**：`Constants.CHANNEL_AGENT_RUNNING`（`IMPORTANCE_HIGH` 高级别，通过 `enableFloat = true` 确保弹出 AOSP 胶囊与普通悬浮大白卡，关闭灵动岛时在通知栏正常显示，不进静音折叠栏）
 
 ---
@@ -173,7 +173,7 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 ### 2. 【任务完成 / 报错 / 终止】（终态交付通知）
 
 * **业务特征**：任务交付或异常告知，普通通知永久常驻留存直至下一轮覆盖，不再自毁。
-* **通知 ID**：`Constants.NOTIF_TASK = 2002`（原子原地覆写）
+* **通知 ID**：`Constants.NOTIF_TASK = 2002`（完成交付独立 ID，先收起 2003 后以全新通知发出，保证 100% 弹出悬浮大卡）
 * **渠道等级**：`Constants.CHANNEL_TASK_RESULT`（`IMPORTANCE_HIGH`）
 * **超时控制**：`已彻底删除 setTimeoutAfter 定时器`（展示 2 分钟后系统自动平滑淡出，无需手动清理）
 

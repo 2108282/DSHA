@@ -533,7 +533,8 @@ public final class HttpShellService {
             title = safeDisplay(title);
             text = safeDisplay(text);
 
-            // 任务结束，直接通过原子 notify 覆写 NOTIF_TASK 原地替换，绝不在 notify 前执行异步 cancel 造成状态抖动
+            // 任务结束：先收起运行中通知 (2003)，然后以全新独立通知 (2002) 发送完成卡片，确保每次完成都 100% 弹出悬浮大白卡！
+            cancelRunningNotification();
 
             // 1. 先走通知：写入「任务结果与交互」独立通道，挂载 RemoteInput 继续对话输入组件
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -1985,8 +1986,8 @@ public final class HttpShellService {
             nb.setOnlyAlertOnce(false);
 
             if (nm != null) {
-                nm.cancel(Constants.NOTIF_TASK);
-                nm.notify(Constants.NOTIF_TASK, nb.build());
+                nm.cancel(Constants.NOTIF_TASK_RUNNING);
+                nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
             }
         } catch (Throwable ignored) {}
     }
@@ -2050,14 +2051,14 @@ public final class HttpShellService {
 
             attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, true);
 
-            if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());
+            if (nm != null) nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
         } catch (Throwable ignored) {}
     }
 
     private void cancelRunningNotification() {
         try {
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) nm.cancel(Constants.NOTIF_TASK);
+            if (nm != null) nm.cancel(Constants.NOTIF_TASK_RUNNING);
         } catch (Throwable ignored) {}
     }
 
