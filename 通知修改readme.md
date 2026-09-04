@@ -111,7 +111,7 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 
 * **业务特征**：高频动态更新，静默低打扰，提供一键紧急制动。
 * **通知 ID**：`Constants.NOTIF_TASK_RUNNING = 2003`（执行中独立 ID）
-* **渠道等级**：`Constants.CHANNEL_AGENT_RUNNING`（`IMPORTANCE_HIGH` 高级别，通过 `enableFloat = true` 确保弹出 AOSP 胶囊与普通悬浮大白卡，关闭灵动岛时在通知栏正常显示，不进静音折叠栏）
+* **渠道等级**：`Constants.CHANNEL_AGENT_RUNNING`（`IMPORTANCE_DEFAULT` 中级，通过 `enableFloat = false, islandFirstFloat = false` 保持纯静默一级胶囊，杜绝高频刷新时二级大胶囊反复弹缩打扰；关闭灵动岛时在通知栏正常显示，不进静音折叠栏）
 
 ---
 
@@ -322,9 +322,17 @@ DSHA 采用“单一系统通知对象，三轨数据并行注入”的设计，
 
 ```java
 // 统一入口：根据是否传入 secondaryAction 自动判定走 模板① 还是 模板②
+// 执行中通知传 enableFloat=false（保持纯静默一级胶囊，不弹二级大卡）；
+// 只有 ask、授权弹窗、任务完成 传 enableFloat=true / islandFirstFloat=true（弹出二级展开胶囊）
 public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, 
     String title, String detail, String statusLabel, String actionTitle, String capsuleText, 
     PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat) {
+    attachFocusCapsule(ctx, b, title, detail, statusLabel, actionTitle, capsuleText, primaryActionPi, secondaryActionTitle, secondaryActionPi, enableFloat, enableFloat);
+}
+
+public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, 
+    String title, String detail, String statusLabel, String actionTitle, String capsuleText, 
+    PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat, boolean islandFirstFloat) {
     
     boolean hasDualActions = (secondaryActionPi != null && secondaryActionTitle != null);
 
@@ -345,7 +353,7 @@ public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b,
         paramV2.put("protocol", 1);
         paramV2.put("business", "schedule_reminder");
         paramV2.put("enableFloat", enableFloat);
-        paramV2.put("islandFirstFloat", enableFloat);
+        paramV2.put("islandFirstFloat", islandFirstFloat);
         paramV2.put("ticker", "大肥鱼 " + (capsuleText != null ? capsuleText : "正在执行"));
 
         // 胶囊左右耳配置

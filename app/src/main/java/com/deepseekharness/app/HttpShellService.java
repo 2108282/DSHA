@@ -1734,10 +1734,14 @@ public final class HttpShellService {
     }
 
     public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, boolean enableFloat) {
-        attachFocusCapsule(ctx, b, title, detail, statusLabel, actionTitle, capsuleText, primaryActionPi, null, null, enableFloat);
+        attachFocusCapsule(ctx, b, title, detail, statusLabel, actionTitle, capsuleText, primaryActionPi, null, null, enableFloat, enableFloat);
     }
 
     public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat) {
+        attachFocusCapsule(ctx, b, title, detail, statusLabel, actionTitle, capsuleText, primaryActionPi, secondaryActionTitle, secondaryActionPi, enableFloat, enableFloat);
+    }
+
+    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat, boolean islandFirstFloat) {
         b.setSubText("大肥鱼");
         b.setOnlyAlertOnce(true);
         b.setShowWhen(false);
@@ -1774,7 +1778,7 @@ public final class HttpShellService {
             paramV2.put("protocol", 1);
             paramV2.put("business", "schedule_reminder");
             paramV2.put("enableFloat", enableFloat);
-            paramV2.put("islandFirstFloat", enableFloat);
+            paramV2.put("islandFirstFloat", islandFirstFloat);
             paramV2.put("ticker", "大肥鱼 " + (capsuleText != null ? capsuleText : "正在执行"));
             paramV2.put("aodTitle", title != null ? title : "DSHA");
             paramV2.put("aodPic", "miui.focus.pic_big_island");
@@ -1891,7 +1895,7 @@ public final class HttpShellService {
             if (extras != null) {
                 extras.putString("miui.focus.param", root.toString());
                 extras.putBoolean("enableFloat", enableFloat);
-                extras.putBoolean("islandFirstFloat", enableFloat);
+                extras.putBoolean("islandFirstFloat", islandFirstFloat);
 
                 if (Build.VERSION.SDK_INT >= 23) {
                     android.os.Bundle pics = new android.os.Bundle();
@@ -2010,7 +2014,7 @@ public final class HttpShellService {
             if (Build.VERSION.SDK_INT >= 26 && nm != null) {
                 NotificationChannel ch = new NotificationChannel(
                         Constants.CHANNEL_AGENT_RUNNING, "Agent 运行状态",
-                        NotificationManager.IMPORTANCE_HIGH);
+                        NotificationManager.IMPORTANCE_DEFAULT);
                 ch.setDescription("智能体运行中实时操作步骤通知");
                 nm.createNotificationChannel(ch);
             }
@@ -2051,7 +2055,7 @@ public final class HttpShellService {
                     .addAction(stopAction)
                     .setOngoing(true);
 
-            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, true);
+            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, false);
 
             if (nm != null) nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
         } catch (Throwable ignored) {}
