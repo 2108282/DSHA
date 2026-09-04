@@ -1661,7 +1661,19 @@ public final class HttpShellService {
         String btn0 = (opts != null && opts.length > 0 && !opts[0].isEmpty()) ? opts[0] : "允许";
         String btn1 = (opts != null && opts.length > 1 && !opts[1].isEmpty()) ? opts[1] : "拒绝";
 
-        // 1. Shell 危险命令确认
+        // 1. 租约申请（10分钟免打扰租约，有限窄格子一目了然）
+        if (s.contains("免打扰") || s.contains("租约") || s.contains("系统高级") || (s.contains("危险命令") && s.contains("权限"))) {
+            return new AuthPromptInfo("危险权限授权申请", "申请 10分钟免打扰租约", "权限申请", "危险授权", btn0, btn1);
+        }
+
+        // 2. 高危系统指令（reboot, dd, shutdown, wipe, mkfs 等）
+        if (s.contains("reboot") || s.contains("shutdown") || s.contains("mkfs") || s.contains("wipe") || s.contains("dd if=") || s.contains("toybox")) {
+            String cmd = s.replace("模型试图在设备上执行：", "").replace("模型试图在设备上执行:", "").replace("是否允许？", "").trim();
+            if (cmd.startsWith("`") && cmd.endsWith("`") && cmd.length() > 2) cmd = cmd.substring(1, cmd.length() - 1);
+            return new AuthPromptInfo("高危系统指令确认", cmd, "指令确认", "命令确认", btn0, btn1);
+        }
+
+        // 3. Shell 危险命令确认（rm, kill, pm, cmd, am 等）
         if (s.contains("模型试图在设备上执行") || s.contains("rm ") || s.contains("kill") || s.contains("pm ") || s.contains("cmd ") || s.contains("am ")) {
             String cmd = s;
             if (cmd.contains("模型试图在设备上执行：")) {
@@ -1676,10 +1688,10 @@ public final class HttpShellService {
             if (cmd.startsWith("`") && cmd.endsWith("`") && cmd.length() > 2) {
                 cmd = cmd.substring(1, cmd.length() - 1);
             }
-            return new AuthPromptInfo("⚠️ 请求特权执行此命令", cmd, "命令确认", "命令确认", "允许", "拒绝");
+            return new AuthPromptInfo("特权命令执行确认", cmd, "命令确认", "命令确认", btn0, btn1);
         }
 
-        // 2. 敏感/支付应用
+        // 4. 敏感/支付应用
         if (s.contains("涉及支付或隐私") || (s.contains("在【") && s.contains("】里："))) {
             String target = s;
             if (target.contains("#")) {
@@ -1691,11 +1703,11 @@ public final class HttpShellService {
                 target = target.replace("在【", "").replace("】里：", ": ");
             }
             target = target.replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件").trim();
-            return new AuthPromptInfo("🔒 敏感操作确认", target, "敏感操作", "敏感确认", "允许", "拒绝");
+            return new AuthPromptInfo("应用敏感操作确认", target, "敏感操作", "敏感确认", btn0, btn1);
         }
 
-        // 3. 危险设备操作
-        if (s.contains("危险操作") || s.contains("高危操作") || s.contains("高危设备操作")) {
+        // 5. 危险设备操作
+        if (s.contains("危险操作") || s.contains("高危操作") || s.contains("高危设备操作") || s.contains("高危权限")) {
             String target = s;
             target = target.replace("【危险操作授权】", "")
                            .replace("【安全确认】", "")
@@ -1711,11 +1723,11 @@ public final class HttpShellService {
                 target = target.substring(0, target.length() - 1).trim();
             }
             target = target.replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件").trim();
-            if (target.isEmpty()) target = "请求执行高危设备操作";
-            return new AuthPromptInfo("⚠️ 请求高危设备授权", target, "权限请求", "危险授权", "允许", "拒绝");
+            if (target.isEmpty()) target = "申请 10分钟免打扰租约";
+            return new AuthPromptInfo("危险权限授权申请", target, "权限请求", "危险授权", btn0, btn1);
         }
 
-        // 4. 屏幕/UI操作
+        // 6. 屏幕/UI操作
         if (s.contains("屏幕") || s.contains("文字与控件") || s.contains("读屏") || s.contains("点按")) {
             String target = s;
             if (target.contains("#")) {
@@ -1725,12 +1737,29 @@ public final class HttpShellService {
                            .replace("在【当前界面】里：", "")
                            .replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件")
                            .trim();
-            return new AuthPromptInfo("📱 请求屏幕操作授权", target, "权限请求", "屏幕授权", "允许", "拒绝");
+            return new AuthPromptInfo("屏幕操作授权申请", target, "权限请求", "屏幕授权", btn0, btn1);
         }
 
-        // 5. 常规助手提问
-        String qTitle = s.length() > 30 ? s.substring(0, 30) + "…" : s;
-        return new AuthPromptInfo(qTitle, s, "助手提问", "等待回答", btn0, btn1);
+        // 7. 本地文件修改 / 业务决策（精准提炼上行主题，下行只留目标与动作）
+        if (s.contains("文件") || s.contains("覆盖") || s.contains("修改") || s.contains("本地") || s.contains("检测")) {
+            String target = s;
+            target = target.replace("检测到本地存在修改", "")
+                           .replace("检测到本地修改", "")
+                           .replace("检测到修改", "")
+                           .replace("是否确认", "")
+                           .replace("请确认", "")
+                           .replace("？", "?")
+                           .trim();
+            if (target.startsWith("，") || target.startsWith(",")) target = target.substring(1).trim();
+            if (!target.endsWith("?") && !target.endsWith("？")) target = target + "？";
+            if (target.length() > 25) target = target.substring(0, 24) + "…";
+            return new AuthPromptInfo("确认本地文件修改", target, "文件确认", "等待决策", btn0, btn1);
+        }
+
+        // 8. 兜底通用提问（彻底消灭长文本截断重复）
+        String cleanText = s.replace("请问", "").replace("是否", "").trim();
+        if (cleanText.length() > 25) cleanText = cleanText.substring(0, 24) + "…";
+        return new AuthPromptInfo("💬 助手提问与确认", cleanText, "助手提问", "等待回答", btn0, btn1);
     }
 
     public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, boolean enableFloat) {
