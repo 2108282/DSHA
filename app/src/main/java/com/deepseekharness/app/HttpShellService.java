@@ -581,6 +581,7 @@ public final class HttpShellService {
                         .setAutoCancel(true);
 
                 attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText, actionPi, true);
+                b.setOnlyAlertOnce(false);
 
                 nm.notify(Constants.NOTIF_TASK, b.build());
             }
@@ -2027,8 +2028,9 @@ public final class HttpShellService {
             String compactDetail = compactActionDetail(text != null && !text.isEmpty() ? text : title);
             String capsuleText = compactCapsuleText(text != null && !text.isEmpty() ? text : title);
 
-            // 清理可能残留的提问与终止卡片，不 cancel NOTIF_TASK 保持原地平滑覆写，杜绝重复触发 Level 2 弹窗
+            // 开启新任务时，彻底拔除上一轮残留的完成卡片(2002)，确保本轮任务结束时能以全新状态弹出强提醒悬浮卡
             if (nm != null) {
+                nm.cancel(Constants.NOTIF_TASK);
                 nm.cancel(Constants.NOTIF_TASK_STOPPED);
                 nm.cancel(Constants.NOTIF_ASK_QUESTION);
             }
