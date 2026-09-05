@@ -370,34 +370,61 @@ public final class ShizukuShell {
 
 ---
 
-## 🚨 七、 深入排查：后台大量堆积 com.dsh.client:shizuku 僵尸进程根因与终极双轨架构修复
+### 📢 【追加修复】后台无限生成 `com.dsh.client:shizuku` 
+在真机环境下，结合使用官方社区适配的 Android 16 Shizuku 修复版（解决 A16 `IProcessObserver` 崩溃），进行了测试和修补
 
-### 1. 新发现的问题现场
-在系统运行一段时间后，通过进程管理器（Scene/爱玩机）观察到后台堆积了大量进程名为 `com.dsh.client:shizuku` 的驻留进程：
-- **PPID = 1**（已脱离父进程，变成系统托管的孤儿进程）；
-- **User = root**（因宿主使用 Root 方式激活了 Shizuku）；
-- **RES = 36MB**（每个进程都加载了一整套独立的 Android Runtime ART 虚拟机）；
-- **状态 = S (sleeping)**，随着 App 前后台切换、重启或超时调用，后台进程数量不断累加（实测单机残留多达 27 个），造成严重的内存资源浪费。
+目前 **`UserService`（`bound=true`）与 `execDirect`双通道握手正常，解决后台堆叠僵尸进程的历史缺陷**。以下整理完整的原因分析和修复方案。
+---
 
-### 2. 核心四大根因深度剖析
-1. **缺失 `destroy` Binder 事务处理（杀不死，成僵尸）**：
-   - Shizuku 官方规范明确规定：当注销或移除 UserService 时，服务端会向服务发送单向事务 `USER_SERVICE_TRANSACTION_destroy (16777115)`（AIDL 中编号为 `16777114`）；
-   - 原代码中 `IShellService.aidl` 仅有 `exec` 接口，`ShellService.java` 中虽写了 `public void destroy() { System.exit(0); }`，但它只是一个普通 Java 方法，**从未重写 `onTransact()` 拦截 `16777115`**；
-   - 导致 Shizuku 发出的销毁指令被忽略，旧子进程根本不会调用 `System.exit(0)`，永远不死。
-2. **`.daemon(false)` 导致“滚雪球式”重新创建**：
-   - 配置为 `daemon(false)` 且无唯一固定 `.tag()`；
-   - 当主 App 经历后台回收或重启时，连接断开，Shizuku 服务端自动从内部表注销该服务；
-   - 下次 App 重新绑定时，Shizuku 判定无现有服务，再次启动全新的 `app_process`，导致僵尸进程只增不减。
-3. **`execDirect` 从未出场且缺少防卡死超时保护**：
-   - 原逻辑将 `execDirect` 置于 `UserService` 失败深处，导致 `UserService` 复活后原生管道完全闲置；
-   - 原版 `execDirect` 直接使用 `rp.waitFor()` 死等，缺少超时中断机制，若遇未加 `-d` 的 `logcat` 等阻塞命令将永久卡死端口。
-4. **颠覆性排查证实：系统沙箱并未封死**：
-   - 现场实测证明在切断 UserService 状态下，`execDirect` 在澎湃 OS / Android 16 上毫秒级正常返回 `[EXIT=0]`；
-   - 之前以为沙箱拦截是因为 `DshaApp.onCreate()` 闪退所致，修掉闪退后两者在底层均完全畅通。
+#### 一、 核心根因深度剖析
 
-### 3. 终极双轨架构落地代码
+##### 1. 为什么此前 UserService 会在部分定制系统上卡死？
+* **Provider 跨域拦截机制**：
+  在 Android 16 环境下，使用 `app_process` 拉起的独立无头进程如果反向调用管理器端的 `ContentProvider`，在部分激进安全策略（如a16的 `MIUIOP(10021)` 关联唤醒审查）下容易被系统框架挂起；
+  
+* **测试**：
+https://github.com/RikkaApps/Shizuku/issues/1125
 
-#### 1) `app/src/main/aidl/com/deepseekharness/app/IShellService.aidl`
+  改用Shizuku issue#1125 并显式完成运行时权限授予（`moe.shizuku.manager.permission.API_V23`）后，`UserService` 的 Binder 回传链路在 Android 16 上**完全可以握手成功（真机实测 `bound=true`，成功回调 `onServiceConnected`）**。这证明其机制并未被 AOSP 彻底封死，规范配置下完全可行。
+
+##### 2. 为什么后台会无限堆叠几十个 `com.dsh.client:shizuku` 僵尸进程？
+1. **缺失 `destroy` Binder 事务处理（杀不死）**：
+   - 官方规范（`rikka.shizuku.Shizuku`）明确规定：注销 UserService 时，服务端会向 Binder 派发 `USER_SERVICE_TRANSACTION_destroy (16777115)` 事务（AIDL 中编号为 `16777114`）；
+   - 原项目中 `IShellService.aidl` 没声明 `destroy`，`ShellService.java` 中写了 `public void destroy() { System.exit(0); }` 但**没有重写 `onTransact` 拦截 `16777115`**；
+   - 导致销毁指令被 Binder 驱动静默丢弃，子进程从未执行 `System.exit(0)`，变成杀不死的孤儿僵尸进程常驻后台。
+2. **`.daemon(false)` 导致生命周期波动时“滚雪球”式重新创建**：
+   - 配置为 `daemon(false)` 且无固定 `.tag()`；主 App 被后台回收或重连时，Shizuku 服务端注销旧服务（但由于硬伤 1 没杀死）；
+   - 下次 App 重绑时，Shizuku 发现记录表为空，**又重新 fork 出一个新的 `app_process`**，导致僵尸进程只增不减。
+3. **AIDL 编译器语法强校验**：
+   - 为 `destroy` 分配显式 ID 时，必须为 interface 内所有方法显式分配 ID（如 `exec` 赋 `id = 1`），否则 Android SDK 34 的 `compileDebugAidl` 会抛出：
+     `You must either assign id's to all methods or to none of them`。
+
+##### 3. 之前提交的`execDirect` 潜藏的两处错误
+1. **超时强退遗漏 `rp.destroy()` 导致远程孤儿与本地线程泄漏**：
+   原版仅在超时时执行 `task.cancel(true)`。但在 Android 运行时中，`Thread.interrupt()` **无法打断正在阻塞等待内核 Binder 驱动返回的 `rp.waitFor()`**！如果命令死循环（如未加次数的 `ping`），不仅本地子线程永久挂死，远程 Shell 也会在 Shizuku 域下永久空耗 CPU。**必须显式调用 `rp.destroy()` 强杀远程进程，才能打破子线程等待并彻底回收资源**；
+2. **标准输入（stdin）未关闭导致交互式命令被动卡死 30 秒**：
+   通过 `newProcess` 派生进程时分配了 stdin 管道，若未显式关闭 `rp.getOutputStream()`，需要等待 EOF 的脚本会傻等输入，直到触发 30 秒超时强退。
+
+---
+
+#### 二、 最终设计：（`execDirect` 提级优先使用 ， `UserService`用于 兜底）
+
+execDirect调用cmd速度更快，占用更小，同时**保留让Android 调用Java API 的扩展需求**。
+1. **`execDirect` 为主**：
+   - 绕过 Java 虚拟机与 RPC 流程，直接由 Shizuku 服务端走 Linux 原生标准管道通信；
+   - 补齐 PATH 环境变量兜底与 256KB 输出缓冲截断；
+   - **关闭 stdin**，防止交互式命令挂起；
+   - **超时在 catch 中显式调用 `rp.destroy()`**，彻底斩除远程孤儿进程与本地线程泄漏。
+2. **`UserService` 兜底（特权 Java 专属底座与命令兜底）**：
+   - AIDL 补齐显式 ID 与 `onTransact` 的 `destroy` 自杀处理，根除僵尸进程；
+   - 改为 `.daemon(true)` + 固化 `.tag("dsha_shell")`，防止重复多开；
+   - 作为命令备用通道：若直通管道遇到突发环境异常，无需重新初始化，顺位由已连接的 `shellService.exec(cmd)` 接管。
+
+---
+
+#### 三、 完整代码（已通过 CI 编译和实测）
+
+##### 1. `app/src/main/aidl/com/deepseekharness/app/IShellService.aidl`
 ```aidl
 package com.deepseekharness.app;
 
@@ -407,8 +434,27 @@ interface IShellService {
 }
 ```
 
-#### 2) `app/src/main/java/com/deepseekharness/app/ShellService.java`
+##### 2. `app/src/main/java/com/deepseekharness/app/ShellService.java`
 ```java
+package com.deepseekharness.app;
+
+import android.content.Context;
+import android.os.Parcel;
+import android.os.RemoteException;
+import androidx.annotation.Keep;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+
+public class ShellService extends IShellService.Stub {
+
+    public ShellService() {
+    }
+
+    @Keep
+    public ShellService(Context context) {
+    }
+
     @Override
     public boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
         // 16777115: USER_SERVICE_TRANSACTION_destroy
@@ -423,39 +469,144 @@ interface IShellService {
     public void destroy() {
         System.exit(0);
     }
-```
 
-#### 3) `app/src/main/java/com/deepseekharness/app/ShizukuShell.java`
-- 固化参数为常驻守护单例：`.daemon(true)` + `.tag("dsha_shell")`；
-- 升级 `execDirect`：增加 PATH 兜底、256KB 截断与 **30 秒异步 FutureTask 超时中断强退**（防卡死）；
-- 调度策略重构：**优先走轻快直达的原生管道 `execDirect`，遇到异常顺位流转至特权常驻守护 `UserService` 接管**。
-
-```java
-    public static String exec(String cmd) {
-        if (!hasPermission()) {
-            return "[NO_SHIZUKU_PERMISSION]";
-        }
-
-        // 1. 优先走轻快直达的原生管道（0MB 常驻，毫秒级直通，带 30s 防卡死）
+    @Override
+    public String exec(String cmd) {
         try {
-            return execDirect(cmd);
-        } catch (Throwable t) {
-            Log.w(TAG, "execDirect 管道未通，顺位转由 UserService 执行: " + t.getMessage());
-        }
-
-        // 2. 顺位走 UserService 特权单例守护兜底
-        IShellService s = shellService;
-        if (s != null) {
-            try {
-                return s.exec(cmd);
-            } catch (Throwable e) {
-                Log.e(TAG, "UserService 也未执行成功: " + e.getMessage());
+            ProcessBuilder pb = new ProcessBuilder("sh", "-c", cmd).redirectErrorStream(true);
+            java.util.Map<String, String> env = pb.environment();
+            String oldPath = env.get("PATH");
+            env.put("PATH", (oldPath == null || oldPath.isEmpty() ? "" : oldPath + ":")
+                    + "/system/bin:/system/xbin:/sbin:/vendor/bin");
+            Process p = pb.start();
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            final int MAX = 256 * 1024;
+            try (InputStream in = p.getInputStream()) {
+                while ((n = in.read(buf)) != -1) {
+                    if (bos.size() < MAX) {
+                        int w = Math.min(n, MAX - bos.size());
+                        bos.write(buf, 0, w);
+                    }
+                }
             }
-        } else {
-            ensureBound(appCtx);
+            if (!p.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return bos.toString(StandardCharsets.UTF_8.name())
+                        + "\n[EXIT=timeout] 命令执行超时(30s)已强杀";
+            }
+            int code = p.exitValue();
+            return bos.toString(StandardCharsets.UTF_8.name()) + "\n[EXIT=" + code + "]";
+        } catch (Throwable e) {
+            return "ERROR: " + e.getClass().getSimpleName() + ": " + e.getMessage();
         }
-
-        return "[SHIZUKU_SERVICE_NOT_READY]";
     }
+}
 ```
 
+##### 3. `app/src/main/java/com/deepseekharness/app/ShizukuShell.java`
+```java
+// 1. 守护单例配置（避免重复多开，包名与组件动态获取，非硬编码）
+Shizuku.UserServiceArgs args = new Shizuku.UserServiceArgs(
+        new ComponentName(BuildConfig.APPLICATION_ID, ShellService.class.getName()))
+        .daemon(true)
+        .tag("dsha_shell")
+        .processNameSuffix("shizuku")
+        .debuggable(BuildConfig.DEBUG)
+        .version(BuildConfig.VERSION_CODE);
+
+// 2. 加固execDirect（带 30s 严格超时强退、rp.destroy 与 stdin 立即关闭）
+private static String execDirect(String cmd) throws Exception {
+    IBinder binder = Shizuku.getBinder();
+    if (binder == null) throw new IllegalStateException("Shizuku binder is null");
+
+    moe.shizuku.server.IShizukuService shizukuService = moe.shizuku.server.IShizukuService.Stub.asInterface(binder);
+    String wrappedCmd = "export PATH=$PATH:/system/bin:/system/xbin:/vendor/bin; " + cmd + " 2>&1";
+    moe.shizuku.server.IRemoteProcess rp = shizukuService.newProcess(new String[]{"sh", "-c", wrappedCmd}, null, null);
+
+    // 立即关闭标准输入流，防止交互式命令或需 EOF 的脚本被动卡死 30 秒
+    try {
+        ParcelFileDescriptor outPfd = rp.getOutputStream();
+        if (outPfd != null) {
+            new ParcelFileDescriptor.AutoCloseOutputStream(outPfd).close();
+        }
+    } catch (Throwable ignored) {}
+
+    ParcelFileDescriptor inPfd = rp.getInputStream();
+    if (inPfd == null) {
+        try { rp.destroy(); } catch (Throwable ignored) {}
+        throw new IllegalStateException("Remote process InputStream is null");
+    }
+
+    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+    byte[] buf = new byte[8192];
+    final int MAX_BYTES = 256 * 1024;
+
+    FutureTask<Integer> task = new FutureTask<>(() -> {
+        try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(inPfd)) {
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                if (bos.size() < MAX_BYTES) {
+                    bos.write(buf, 0, Math.min(n, MAX_BYTES - bos.size()));
+                }
+            }
+        }
+        return rp.waitFor();
+    });
+
+    Thread workerThread = new Thread(task, "dsha-shizuku-exec");
+    workerThread.start();
+
+    try {
+        int code = task.get(30, TimeUnit.SECONDS);
+        return bos.toString("UTF-8") + "\n[EXIT=" + code + "]";
+    } catch (TimeoutException te) {
+        task.cancel(true);
+        // 核心补齐：超时强制杀死远程进程，Binder 阻塞，解决远程进程与本地线程泄漏
+        try { rp.destroy(); } catch (Throwable ignored) {}
+        try { inPfd.close(); } catch (Throwable ignored) {}
+        return bos.toString("UTF-8") + "\n[EXIT=timeout] 命令执行超时(30s)已主动强退";
+    } catch (Throwable e) {
+        task.cancel(true);
+        try { rp.destroy(); } catch (Throwable ignored) {}
+        try { inPfd.close(); } catch (Throwable ignored) {}
+        throw e;
+    }
+}
+
+// 3. 稳健双通道入口：execDirect，UserService 
+public static String exec(String cmd) {
+    if (!hasPermission()) {
+        return "[NO_SHIZUKU_PERMISSION]";
+    }
+
+    // 优先走execDirect
+    try {
+        return execDirect(cmd);
+    } catch (Throwable t) {
+        Log.w(TAG, "execDirect 管道未通，顺位转由 UserService 执行: " + t.getMessage());
+    }
+
+    // 顺位走 UserService
+    IShellService s = shellService;
+    if (s != null) {
+        try {
+            return s.exec(cmd);
+        } catch (Throwable e) {
+            Log.e(TAG, "UserService 也未执行成功: " + e.getMessage());
+        }
+    } else {
+        ensureBound(appCtx);
+    }
+
+    return "[SHIZUKU_SERVICE_NOT_READY]";
+}
+```
+
+---
+
+#### 四、 实测
+- **连通状态达成**：3090 诊断端点返回 `binder=true, permission=granted, bound=true, binding=false`，`UserService` 握手完全连通；
+- **僵尸进程去除**：高频执行命令或切换前后台，后台 `com.dsh.client:shizuku` 进程从始至终严格只有唯一 1 个常驻单例，内存占用正常；
+- **防卡死逻辑正常**：补齐 `rp.destroy()` 与 stdin 关闭后，无退出命令测试 30s自动杀死，资源正常释放。
