@@ -103,7 +103,8 @@ public final class LanProxyService {
             t.setDaemon(true);
             return t;
         });
-        lanIp = HarnessController.getLanAddress();
+        String ip = HarnessController.getLanAddress();
+        lanIp = ip != null ? ip.trim() : "";
         log("LAN 桥启动中: 0.0.0.0:" + LAN_PORT + " → 127.0.0.1:" + backend + " (LAN IP=" + lanIp + ")");
         acceptThread = new Thread(() -> {
             try {

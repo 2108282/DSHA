@@ -197,6 +197,14 @@ public interface ContainerRuntime {
                 argv.add(b.length == 1 ? b[0] + ":" + b[0] : b[0] + ":" + b[1]);
             }
             File shm = shmDir();
+            if (shm.exists()) {
+                File[] oldFiles = shm.listFiles();
+                if (oldFiles != null) {
+                    for (File f : oldFiles) {
+                        try { f.delete(); } catch (Throwable ignored) {}
+                    }
+                }
+            }
             //noinspection ResultOfMethodCallIgnored
             shm.mkdirs();
             argv.add("-b");

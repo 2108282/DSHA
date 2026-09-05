@@ -202,9 +202,20 @@ public class HarnessController {
                 if (pid == self) continue;
                 String cmd = readProcCmdline(pid);
                 if (cmd == null || cmd.isEmpty()) continue;
-                // 判据（含「绝不碰容器启动器」那一条）统一在 WebProcSel.looksLikeWeb ——
-                // 与容器内那份 shell 判据同源，改一处不会漏另一处；断言见 pure-logic-test
-                if (!WebProcSel.looksLikeWeb(cmd)) continue;
+                boolean isTarget = WebProcSel.looksLikeWeb(cmd);
+                // 关键防死锁修补：对于包含 libproroot/libproot 的进程，如果它绑定的 rootfs 正是本 App 的目录，
+                // 且它的父进程已经不是当前正在运行的 App 实例（即 ppid != self），说明是上次崩溃或软重启残留的死体孤儿，必须清理！
+                if (!isTarget && (cmd.contains("libproroot") || cmd.contains("libproot.so"))) {
+                    String myRootfs = getRootfsDirPath();
+                    if (myRootfs != null && cmd.contains(myRootfs)) {
+                        int ppid = readProcPpid(pid);
+                        if (ppid != self) {
+                            isTarget = true;
+                            android.util.Log.w("DSHA", "识别到残留孤儿 proot 进程 pid=" + pid + ", ppid=" + ppid);
+                        }
+                    }
+                }
+                if (!isTarget) continue;
                 try {
                     android.os.Process.killProcess(pid);
                     killed++;
@@ -300,6 +311,20 @@ public class HarnessController {
         } catch (Throwable e) {
             return null;
         }
+    }
+
+    private int readProcPpid(int pid) {
+        try {
+            java.util.List<String> lines = java.nio.file.Files.readAllLines(
+                    new java.io.File("/proc/" + pid + "/status").toPath());
+            for (String l : lines) {
+                if (l.startsWith("PPid:")) {
+                    return Integer.parseInt(l.substring(5).trim());
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return -1;
     }
 
     /** 安全杀 web 进程：判据与停止那条路<b>共用同一份</b>（{@link WebProcSel#pidsDsh}）。
