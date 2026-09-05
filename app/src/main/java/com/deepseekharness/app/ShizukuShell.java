@@ -23,7 +23,7 @@ import rikka.shizuku.Shizuku;
  * 在 root/shell 身份下执行设备命令，让助手（deepseek-harness agent）无需 root 即可操作设备。
  *
  * 加固点：
- *  - 双轨协同：日常命令走轻量高效的原生进程管道 execDirect，带 PATH 兜底与 30s 防卡死强退保护；
+ *  - 双轨协同：日常命令走轻量高效的原生进程管道 execDirect，带 PATH 兜底、stdin 即时关闭与 30s 防卡死强退保护（带 rp.destroy 彻底终结远程进程与本地线程泄漏）；
  *  - UserService 守护单例化：daemon(true) + 固化 tag("dsha_shell")，根除生命周期波动导致的多开泄漏；
  *  - 协同 AIDL destroy(16777114/16777115) 契约，确保服务端回收时旧进程能安全自杀退出；
  *  - bindUserService 异常不再静默吞掉，打日志；
@@ -221,7 +221,7 @@ public final class ShizukuShell {
 
     /**
      * 通过 Shizuku 底层直接执行命令（轻量原生管道，0MB 常驻内存，毫秒级直达）。
-     * 内置 PATH 环境变量兜底、256KB 内存上限与 30 秒硬超时中断保护（防命令挂死）。
+     * 内置 PATH 环境变量兜底、stdin 立即关闭、256KB 内存上限与 30 秒硬超时强退保护（带 rp.destroy 斩除远程进程）。
      */
     private static String execDirect(String cmd) throws Exception {
         IBinder binder = Shizuku.getBinder();
@@ -233,8 +233,19 @@ public final class ShizukuShell {
         String wrappedCmd = "export PATH=$PATH:/system/bin:/system/xbin:/vendor/bin; " + cmd + " 2>&1";
         moe.shizuku.server.IRemoteProcess rp = shizukuService.newProcess(new String[]{"sh", "-c", wrappedCmd}, null, null);
 
-        ParcelFileDescriptor pfd = rp.getInputStream();
-        if (pfd == null) throw new IllegalStateException("Remote process InputStream is null");
+        // 1. 立即关闭标准输入，防止交互式命令或需 EOF 的脚本无休止死等
+        try {
+            ParcelFileDescriptor outPfd = rp.getOutputStream();
+            if (outPfd != null) {
+                new ParcelFileDescriptor.AutoCloseOutputStream(outPfd).close();
+            }
+        } catch (Throwable ignored) {}
+
+        ParcelFileDescriptor inPfd = rp.getInputStream();
+        if (inPfd == null) {
+            try { rp.destroy(); } catch (Throwable ignored) {}
+            throw new IllegalStateException("Remote process InputStream is null");
+        }
 
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         byte[] buf = new byte[8192];
@@ -242,7 +253,7 @@ public final class ShizukuShell {
 
         // 异步读取与等待，施加 30s 严格超时，绝不允许无限期挂死
         FutureTask<Integer> task = new FutureTask<>(() -> {
-            try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(pfd)) {
+            try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(inPfd)) {
                 int n;
                 while ((n = in.read(buf)) != -1) {
                     if (bos.size() < MAX_BYTES) {
@@ -253,15 +264,23 @@ public final class ShizukuShell {
             return rp.waitFor();
         });
 
-        new Thread(task).start();
+        Thread workerThread = new Thread(task, "dsha-shizuku-exec");
+        workerThread.start();
 
         try {
             int code = task.get(30, TimeUnit.SECONDS);
             return bos.toString("UTF-8") + "\n[EXIT=" + code + "]";
         } catch (TimeoutException te) {
             task.cancel(true);
-            try { pfd.close(); } catch (Throwable ignored) {}
+            // 2. 核心补齐：超时强制杀死远程进程，打破子线程 Binder 阻塞，彻底解决远程孤儿与本地线程泄漏
+            try { rp.destroy(); } catch (Throwable ignored) {}
+            try { inPfd.close(); } catch (Throwable ignored) {}
             return bos.toString("UTF-8") + "\n[EXIT=timeout] 命令执行超时(30s)已主动强退";
+        } catch (Throwable e) {
+            task.cancel(true);
+            try { rp.destroy(); } catch (Throwable ignored) {}
+            try { inPfd.close(); } catch (Throwable ignored) {}
+            throw e;
         }
     }
 
