@@ -49,6 +49,7 @@ public class PluginFragment extends Fragment {
     private final Adapter adapter = new Adapter();
     private ArrayList<String> pendingExports = new ArrayList<>();
     private android.net.Uri pendingImport;
+    private AlertDialog previewDialog;
 
     private final ActivityResultLauncher<android.content.Intent> importPicker = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(), result -> {
@@ -97,6 +98,7 @@ public class PluginFragment extends Fragment {
     @Override public void onViewCreated(@NonNull View view, @Nullable Bundle saved) {
         root = view;
         repository = new ViewModelProvider(requireActivity()).get(PluginRepository.class);
+        if (getArguments() != null && getArguments().getBoolean("show_installed", false)) market = false;
         if (saved != null) {
             market = saved.getBoolean("market", true);
             enabledFirst = saved.getBoolean("enabledFirst");
@@ -118,6 +120,10 @@ public class PluginFragment extends Fragment {
         view.findViewById(R.id.btnPluginWebsite).setOnClickListener(v -> openPluginWebsite());
         view.findViewById(R.id.btnInstalled).setOnClickListener(v -> selectTab(false));
         view.findViewById(R.id.btnRefresh).setOnClickListener(v -> repository.refresh());
+        view.findViewById(R.id.btnPluginUpdates).setOnClickListener(v -> repository.checkUpdates(null));
+        view.findViewById(R.id.btnPluginRestore).setOnClickListener(v -> new AlertDialog.Builder(requireContext())
+                .setTitle("恢复第三方插件？").setMessage("恢复安全启动前已启用的插件；之后手动禁用的插件保持禁用。恢复后重启 Web 生效。")
+                .setNegativeButton("取消", null).setPositiveButton("恢复", (d, which) -> repository.safeMode(false, null)).show());
         view.findViewById(R.id.btnPluginInstall).setOnClickListener(v -> installLink());
         view.findViewById(R.id.btnPluginPaste).setOnClickListener(v -> pasteLink());
         view.findViewById(R.id.btnImport).setOnClickListener(v -> chooseImport(false));
@@ -143,7 +149,9 @@ public class PluginFragment extends Fragment {
                         .setMessage(current.message).setPositiveButton("关闭", null).show();
         });
         repository.state().observe(getViewLifecycleOwner(), state -> { current = state; render(); });
-        if (!repository.isBusy() && (repository.state().getValue() == null
+        repository.preview().observe(getViewLifecycleOwner(), ignored -> showInstallPreview());
+        if (!repository.isBusy() && ((saved == null && getArguments() != null && getArguments().getBoolean("show_installed", false))
+                || repository.state().getValue() == null
                 || repository.state().getValue().items.isEmpty())) repository.refresh();
         recognizeLink();
     }
@@ -157,6 +165,7 @@ public class PluginFragment extends Fragment {
     }
 
     @Override public void onDestroyView() {
+        if (previewDialog != null) { previewDialog.dismiss(); previewDialog = null; }
         ((RecyclerView) root.findViewById(R.id.pluginList)).setAdapter(null);
         root = null;
         linkInput = null;
@@ -172,6 +181,19 @@ public class PluginFragment extends Fragment {
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) { callback.run(); }
             @Override public void afterTextChanged(Editable e) { }
         };
+    }
+
+    private void showInstallPreview() {
+        if (root == null || repository.isBusy() || previewDialog != null) return;
+        PluginRepository.Preview preview = repository.preview().getValue();
+        if (preview == null) return;
+        previewDialog = new AlertDialog.Builder(requireContext()).setTitle("确认安装插件")
+                .setMessage(preview.description)
+                .setNegativeButton("取消", (d, w) -> repository.discardPreview())
+                .setPositiveButton("确认安装", (d, w) -> repository.confirmPreview())
+                .setOnCancelListener(d -> repository.discardPreview()).create();
+        previewDialog.setOnDismissListener(d -> previewDialog = null);
+        previewDialog.show();
     }
 
     private void recognizeLink() {
@@ -250,6 +272,7 @@ public class PluginFragment extends Fragment {
         root.findViewById(R.id.marketHelp).setVisibility(market ? View.VISIBLE : View.GONE);
         root.findViewById(R.id.pluginWebsiteSection).setVisibility(market ? View.VISIBLE : View.GONE);
         root.findViewById(R.id.pluginLinkSection).setVisibility(market ? View.VISIBLE : View.GONE);
+        root.findViewById(R.id.btnPluginRestore).setVisibility(repository.isSafeMode() ? View.VISIBLE : View.GONE);
         root.findViewById(R.id.installedControls).setVisibility(market ? View.GONE : View.VISIBLE);
         root.findViewById(R.id.pluginList).setVisibility(market ? View.GONE : View.VISIBLE);
         root.findViewById(R.id.btnMarket).setBackgroundResource(market ? R.drawable.bg_tab_on : R.drawable.bg_tab);
@@ -260,7 +283,7 @@ public class PluginFragment extends Fragment {
                 market ? R.color.text_secondary : R.color.primary));
         root.findViewById(R.id.pluginBusy).setVisibility(current.busy ? View.VISIBLE : View.GONE);
         ((TextView) root.findViewById(R.id.statusText)).setText(current.message);
-        for (int id : new int[]{R.id.btnImport, R.id.btnImportFallback, R.id.btnExport, R.id.btnRefresh})
+        for (int id : new int[]{R.id.btnImport, R.id.btnImportFallback, R.id.btnExport, R.id.btnRefresh, R.id.btnPluginUpdates, R.id.btnPluginRestore})
             root.findViewById(id).setEnabled(!current.busy);
         ((TextView) root.findViewById(R.id.btnSort)).setText(enabledFirst ? "已启用优先" : "名称排序");
         visibleItems.clear();
@@ -280,6 +303,7 @@ public class PluginFragment extends Fragment {
         empty.setText(current.busy ? "正在读取插件…" : "没有符合条件的插件");
         adapter.notifyDataSetChanged();
         recognizeLink();
+        showInstallPreview();
     }
 
     private void chooseExport() {
@@ -331,11 +355,23 @@ public class PluginFragment extends Fragment {
         actions.add("复制插件名称");
         if (!item.source.isEmpty()) actions.add("复制来源链接");
         if (item.exportable) actions.add("导出插件包");
+        if (item.deletable) actions.add("检查插件更新");
+        if (item.updateAvailable) actions.add("更新至 " + item.latestVersion);
+        if (!item.rollbackVersion.isEmpty()) actions.add("回退至 " + item.rollbackVersion);
         if (item.deletable) actions.add("删除插件");
         new AlertDialog.Builder(requireContext()).setTitle(item.name)
                 .setItems(actions.toArray(new String[0]), (d, which) -> {
                     String action = actions.get(which);
-                    if (action.equals("导出插件包")) {
+                    if (action.equals("检查插件更新")) {
+                        repository.checkUpdates(item);
+                    } else if (action.startsWith("更新至 ")) {
+                        repository.prepareUpdate(item);
+                    } else if (action.startsWith("回退至 ")) {
+                        new AlertDialog.Builder(requireContext()).setTitle("回退插件？")
+                                .setMessage(item.name + "：" + item.version + " → " + item.rollbackVersion
+                                        + "\n只恢复插件文件，当前启用状态和对话数据保留；重启 Web 生效。")
+                                .setNegativeButton("取消", null).setPositiveButton("回退", (confirm, button) -> repository.rollback(item)).show();
+                    } else if (action.equals("导出插件包")) {
                         ArrayList<String> names = new ArrayList<>();
                         names.add(item.name);
                         beginExport(names);
@@ -379,7 +415,11 @@ public class PluginFragment extends Fragment {
             PluginRepository.Item item = visibleItems.get(position);
             holder.name.setText(item.name);
             holder.state.setText((item.available ? (item.enabled ? "已启用" : "已禁用") : "实体缺失，请重新导入")
-                    + (item.version.isEmpty() ? "" : " · " + item.version));
+                    + (item.version.isEmpty() ? "" : " · " + item.version)
+                    + (item.updateAvailable ? "\n可更新：" + item.latestVersion
+                            : (item.latestVersion.isEmpty() ? "" : "\n上次检查版本：" + item.latestVersion)
+                            + (item.updateMessage.isEmpty() ? "" : "\n" + item.updateMessage))
+                    + (item.rollbackVersion.isEmpty() ? "" : "\n可回退：" + item.rollbackVersion));
             holder.state.setTextColor(requireContext().getColor(
                     !item.available ? R.color.warn : item.enabled ? R.color.primary : R.color.text_muted));
             holder.description.setText(item.description.isEmpty()

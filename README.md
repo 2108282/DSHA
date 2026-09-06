@@ -21,6 +21,27 @@
 
 ---
 
+## 📣 v1.2.0-rc1.3（更新与恢复 · 预览版）
+
+本次以 **Pre-release** 发布，由贡献者 [@ym2025szz](https://github.com/ym2025szz) 推进，感谢原作者 [@qiannianhuanxiang](https://github.com/qiannianhuanxiang) 及其他贡献者。
+
+新增稳定 / 预览更新通道与 APK 下载校验、[官网插件安装入口](https://dsha.cc/install/)、脱敏诊断复制/导出及工具修复、插件更新/上一版回退和安全启动。
+
+[GitHub 预览版说明与下载](https://github.com/DSH-APP/DSHA/releases/tag/v1.2.0-rc1.3) · [官网备用下载](https://dsha.cc/download/) · [完整更新说明](docs/releases/v1.2.0-rc1.3.md)
+
+| 预览版 | 设备范围 | 下载 | 大小 |
+|---|---|---|---:|
+| 高安卓标准版 | Android 11+ / arm64，系统 WebView | [dsha-1.2.0-rc1.3.apk](https://github.com/DSH-APP/DSHA/releases/download/v1.2.0-rc1.3/dsha-1.2.0-rc1.3.apk) · [SHA-256](https://github.com/DSH-APP/DSHA/releases/download/v1.2.0-rc1.3/dsha-1.2.0-rc1.3.apk.sha256) | 212.45 MiB |
+| 低安卓兼容版 | Android 6+ / arm64，内置 Gecko 备用内核 | [dsha-1.2.0-rc1.3low.apk](https://github.com/DSH-APP/DSHA/releases/download/v1.2.0-rc1.3/dsha-1.2.0-rc1.3low.apk) · [SHA-256](https://github.com/DSH-APP/DSHA/releases/download/v1.2.0-rc1.3/dsha-1.2.0-rc1.3low.apk.sha256) | 289.49 MiB |
+
+版本码 **112**，沿用历史发布签名与环境版本 **9**，可覆盖同签名旧版并保留已有环境。两版共享包名与数据，不能并排安装；包内 dsh 仍为 `0.1.2-rc.1`。
+
+**验证范围：**两版构建、Lint 与相关测试通过，Android 13 验证更新、插件安装/回退、安全启动和两种浏览内核。其他系统与正式签名 App Link 自动关联的实测限制，见[验收记录](docs/release-rc1.3-2026-09-07.md)。
+
+📮 预览版反馈：[GitHub Issues](https://github.com/DSH-APP/DSHA/issues) / QQ 群 **975836806**，可附 App 诊断报告和复现步骤。
+
+以下保留上次预览版说明及更早的原有介绍。
+
 ## 📣 v1.2.0-rc1.2（重构版 · 预览版）
 
 1.2 系列的重构与适配由贡献者 [@ym2025szz](https://github.com/ym2025szz) 推进，本次仍以 **Pre-release** 发布。感谢原作者 [@qiannianhuanxiang](https://github.com/qiannianhuanxiang) 及其他贡献者。

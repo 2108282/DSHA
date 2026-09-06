@@ -18,6 +18,7 @@ final class RuntimeTools {
         synchronized (LOCK) {
             install(context, rootfs, "ca-certificates.crt", CERT_PATH.substring(1), false);
             install(context, rootfs, "plugin-manager.py", "root/.dsh/plugin-manager.py", false);
+            install(context, rootfs, "plugin-lifecycle.py", "root/.dsh/plugin-lifecycle.py", false);
             install(context, rootfs, "register-builtin-plugins.py", "root/.dsh/register-builtin-plugins.py", false);
             install(context, rootfs, "dsha-plugin.sh", "root/dsh-bin/dsha-plugin", true);
             for (String command : new String[]{"npm", "npx"}) {

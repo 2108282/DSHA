@@ -30,3 +30,7 @@ tmp_*/
 tools/offline-rootfs-old-v8.bin
 python-runtime.tgz
 scr_backup.png
+
+# 本机工具状态与服务器取证，不进入公开仓库
+.zcode/
+website-evidence/

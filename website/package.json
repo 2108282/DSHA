@@ -1,0 +1,11 @@
+{
+  "name": "dsha-marketplace",
+  "version": "1.2.0-rc1.3",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node --test scripts/site.test.mjs",
+    "dev": "node scripts/serve.mjs"
+  }
+}

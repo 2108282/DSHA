@@ -31,6 +31,18 @@ MAX_DOWNLOAD = 256 * 1024 * 1024
 MAX_EXPANDED = 768 * 1024 * 1024
 MAX_FILES = 50000
 
+_lifecycle = None
+
+
+def lifecycle():
+    global _lifecycle
+    if _lifecycle is None:
+        module_spec = importlib.util.spec_from_file_location("plugin_lifecycle", os.path.join(os.path.dirname(__file__), "plugin-lifecycle.py"))
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        _lifecycle = module.Lifecycle(globals())
+    return _lifecycle
+
 
 def result(status, message, **extra):
     print("PLUGIN_RESULT: " + json.dumps(dict(status=status, message=message, **extra),
@@ -230,13 +242,17 @@ def prepare_dependencies(root, pkg):
         shutil.move(os.path.join(work, "node_modules"), modules)
 
 
-def register_plugin(root, source):
+def register_plugin(root, source, expected_version=None):
     pkg = plugin_package(root)
     name = pkg["name"]
     prepare_dependencies(root, pkg)
     dest = local(os.path.join(PLUGIN_SRC, name))
+    managed_root = os.path.realpath(local(PLUGIN_SRC))
+    if os.path.commonpath([os.path.realpath(local(DSH_HOME)), managed_root]) != os.path.realpath(local(DSH_HOME)) \
+            or os.path.commonpath([managed_root, os.path.realpath(os.path.dirname(dest))]) != managed_root:
+        raise ValueError("插件目标目录越界，已停止安装")
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    # 新目录先准备完整再切换；old 仅在这次操作期间用于异常复原，成功即清掉。
+    # 新目录先准备完整再切换；第三方插件只保留唯一上一版，供显式回退。
     with tempfile.TemporaryDirectory(prefix=".install-", dir=os.path.dirname(dest)) as work:
         prepared = os.path.join(work, "new")
         shutil.copytree(root, prepared, symlinks=True)
@@ -247,7 +263,14 @@ def register_plugin(root, source):
                 if os.path.islink(candidate):
                     safe_target(prepared, os.path.relpath(candidate, prepared))
         old = os.path.join(work, "old")
+        history_change = None
         with builtin.operation_lock():
+            builtin.ensure_runtime_modules()
+            if expected_version is not None:
+                current_dir = resolve_plugin_dir(name)
+                current_package = read_json(os.path.join(current_dir, 'package.json'), {}) if current_dir else {}
+                if current_package.get('version') != expected_version:
+                    raise ValueError('插件版本在确认后发生变化，请重新检查更新')
             doc = builtin.read_manifest()
             if doc is None:
                 builtin.ensure_profile_files()
@@ -288,8 +311,12 @@ def register_plugin(root, source):
                 sources[name] = source or repository_url(pkg) or sources.get(name, "")
                 write_json(local(SOURCES), sources)
                 source_written = True
+                if existed and name not in builtin.builtin_names():
+                    history_change = lifecycle().retain(name, old, work, previous_sources.get(name, ""))
                 builtin.write_manifest(doc)
             except Exception:
+                if history_change is not None:
+                    history_change.undo()
                 if source_written:
                     try:
                         write_json(local(SOURCES), previous_sources)
@@ -307,7 +334,7 @@ def register_plugin(root, source):
     return name
 
 
-def cmd_import(archive, subdir="", source=""):
+def cmd_import(archive, subdir="", source="", expected_versions=None):
     archive = local(archive)
     if not os.path.isfile(archive):
         raise ValueError("所选插件包不存在")
@@ -325,7 +352,8 @@ def cmd_import(archive, subdir="", source=""):
             seen.add(name)
         for root in found:
             try:
-                names.append(register_plugin(root, source))
+                name = read_json(os.path.join(root, 'package.json'), {}).get('name')
+                names.append(register_plugin(root, source, (expected_versions or {}).get(name)))
             except Exception as error:
                 failures.append(os.path.basename(root) + "：" + str(error))
         status = "partial" if names and failures else ("error" if failures else "ok")
@@ -418,7 +446,8 @@ def cmd_delete(name):
         previous_sources = dict(sources)
         paths = [(local(PLUGIN_SRC), os.path.join(local(PLUGIN_SRC), name)),
                  (local(builtin.NODE_MODULES), os.path.join(local(builtin.NODE_MODULES), name)),
-                 (local(builtin.NODE_MODULES), builtin.marker_path(name))]
+                 (local(builtin.NODE_MODULES), builtin.marker_path(name)),
+                 (local(DSH_HOME), lifecycle().history_path(name))]
         for parent, path in paths:
             # scope 目录本身可能被换成包外软链，不能只校验 npm 名称。
             root = os.path.realpath(parent)
@@ -495,14 +524,14 @@ def download(url, target):
             stream.write(data)
 
 
-def cmd_download(url, subdir="", source=""):
+def cmd_download(url, subdir="", source="", *, consume=None):
     with tempfile.TemporaryDirectory(prefix="plugin-download-", dir=local(DSH_HOME)) as staging:
         target = os.path.join(staging, "archive")
         download(url, target)
-        return cmd_import(target, subdir, source or url)
+        return (consume or cmd_import)(target, subdir, source or url)
 
 
-def cmd_github(owner, repo, tree=""):
+def cmd_github(owner, repo, tree="", *, consume=None):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", owner) or not re.fullmatch(
             r"[A-Za-z0-9_.-]+", repo) or repo in (".", ".."):
         raise ValueError("无效的 GitHub 仓库")
@@ -530,10 +559,10 @@ def cmd_github(owner, repo, tree=""):
     url = "https://codeload.github.com/%s/%s/tar.gz/%s" % (
         owner, repo, urllib.parse.quote(revision, safe=""))
     source = "https://github.com/%s/%s" % (owner, repo) + ("/tree/" + tree if tree else "")
-    return cmd_download(url, subdir, source)
+    return cmd_download(url, subdir, source, **({"consume": consume} if consume else {}))
 
 
-def cmd_release(owner, repo, tag):
+def cmd_release(owner, repo, tag, *, consume=None):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", owner) or not re.fullmatch(
             r"[A-Za-z0-9_.-]+", repo) or repo in (".", ".."):
         raise ValueError("无效的 GitHub 仓库")
@@ -547,7 +576,7 @@ def cmd_release(owner, repo, tag):
     if len(archives) != 1:
         raise ValueError("这个 Release 含多个压缩包，请复制所需附件的下载链接：\n"
                          + "\n".join(a["name"] for a in archives))
-    return cmd_download(archives[0]["browser_download_url"])
+    return cmd_download(archives[0]["browser_download_url"], **({"consume": consume} if consume else {}))
 
 
 def cmd_list():
@@ -560,6 +589,7 @@ def cmd_list():
     names = list(dict.fromkeys(list(builtin.OFFICIAL_BUNDLES) + builtin.builtin_names()
                               + list(deps) + bundles))
     items = []
+    updates = lifecycle().read(lifecycle().path('plugin-updates.json'), {})
     for name in names:
         if not builtin.valid_name(name):
             continue
@@ -575,11 +605,19 @@ def cmd_list():
                           source=sources.get(name, "") or repository_url(pkg),
                           exportable=not official and directory is not None,
                           deletable=not official and name not in builtin.builtin_names()))
-    result("ok", "插件状态已同步", items=items)
+        update = updates.get(name, {})
+        previous = lifecycle().history_info(name) if not official and name not in builtin.builtin_names() else {}
+        items[-1].update(latestVersion=update.get('latestVersion', ''), updateAvailable=bool(update.get('available'))
+                         and update.get('installedVersion') == str(pkg.get('version', '')),
+                         updatePreviewId=update.get('previewId', ''), updateMessage=update.get('message', '')
+                         if update.get('installedVersion') == str(pkg.get('version', '')) else '',
+                         rollbackVersion=previous.get('version', ''), compatibility=update.get('compatibility', ''))
+    mode = lifecycle().read(lifecycle().path('plugin-safe-mode.json'), {})
+    result("ok", "插件状态已同步", items=items, safeMode=bool(mode.get('active')))
     return 0
 
 
-def cmd_npm(package):
+def cmd_npm(package, *, consume=None):
     """npm pack 只下载发布包；再走与界面完全相同的校验、依赖准备和登记。"""
     spec = package.removeprefix("npm:")
     match = re.fullmatch(r"((?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*)(?:@([A-Za-z0-9][A-Za-z0-9._+~-]*))?", spec)
@@ -599,13 +637,27 @@ def cmd_npm(package):
         target = safe_target(staging, filename)
         if not filename or not os.path.isfile(target) or os.path.getsize(target) > MAX_DOWNLOAD:
             raise ValueError("npm 插件归档无效或超过 256 MiB")
-        return cmd_import(target, source="npm:" + spec)
+        return (consume or cmd_import)(target, source="npm:" + spec)
 
 
 def main():
     os.makedirs(local(DSH_HOME), exist_ok=True)
     args = sys.argv[1:]
     try:
+        if args[0] == "inspect" and len(args) == 2:
+            return lifecycle().inspect(args[1])
+        if args[0] == "install-preview" and len(args) == 2:
+            return lifecycle().install_preview(args[1])
+        if args[0] == "show-preview" and len(args) == 2:
+            return lifecycle().show_preview(args[1])
+        if args[0] == "discard-preview" and len(args) == 2:
+            return lifecycle().discard_preview(args[1])
+        if args[0] == "check-updates" and len(args) in (1, 2):
+            return lifecycle().check_updates(args[1] if len(args) == 2 else '')
+        if args[0] == "rollback" and len(args) in (2, 3):
+            return lifecycle().rollback(*args[1:])
+        if args[0] == "safe-mode" and len(args) == 2:
+            return lifecycle().safe_mode(args[1])
         if args[0] == "import" and len(args) == 2:
             return cmd_import(args[1])
         if args[0] == "export" and len(args) == 3:

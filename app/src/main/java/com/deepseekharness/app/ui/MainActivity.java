@@ -64,6 +64,14 @@ public class MainActivity extends AppCompatActivity {
         }
 
         setContentView(R.layout.activity_main);
+        String pendingLink = getSharedPreferences("dsha-install-link", MODE_PRIVATE).getString("pending", "");
+        if (!pendingLink.isEmpty()) {
+            getSharedPreferences("dsha-install-link", MODE_PRIVATE).edit().remove("pending").apply();
+            try {
+                com.deepseekharness.app.util.PluginInstallLink.parse(pendingLink);
+                startActivity(new Intent(this, PluginInstallActivity.class).setData(android.net.Uri.parse(pendingLink)));
+            } catch (IllegalArgumentException ignored) { }
+        }
 
         TextView title = findViewById(R.id.app_title);
         findViewById(R.id.btn_about).setOnClickListener(v -> AboutDialog.show(this));
@@ -77,6 +85,10 @@ public class MainActivity extends AppCompatActivity {
                 title.setText(R.string.nav_launch);
             } else if (id == R.id.nav_plugins) {
                 f = new PluginFragment();
+                if (getIntent().getBooleanExtra("open_plugins", false)) {
+                    Bundle args = new Bundle(); args.putBoolean("show_installed", true); f.setArguments(args);
+                    getIntent().removeExtra("open_plugins");
+                }
                 title.setText(R.string.nav_plugins);
             } else if (id == R.id.nav_settings) {
                 f = new SettingsFragment();
@@ -94,8 +106,14 @@ public class MainActivity extends AppCompatActivity {
         });
 
         if (savedInstanceState == null) {
-            nav.setSelectedItemId(R.id.nav_launch);
+            nav.setSelectedItemId(getIntent().getBooleanExtra("open_plugins", false) ? R.id.nav_plugins : R.id.nav_launch);
         }
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent); setIntent(intent);
+        BottomNavigationView nav = findViewById(R.id.bottom_nav);
+        if (nav != null && intent.getBooleanExtra("open_plugins", false)) nav.setSelectedItemId(R.id.nav_plugins);
     }
 
     @Override

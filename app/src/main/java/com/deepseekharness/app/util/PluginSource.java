@@ -10,15 +10,24 @@ public final class PluginSource {
             Pattern.CASE_INSENSITIVE);
     public final GitHubRef github;
     public final String url;
+    public final String npm;
 
     private PluginSource(GitHubRef github, String url) {
         this.github = github;
         this.url = url;
+        this.npm = "";
+    }
+
+    private PluginSource(String npm) {
+        this.github = GitHubRef.invalid(); this.url = ""; this.npm = npm;
     }
 
     public static PluginSource parse(String raw) {
         if (raw == null || raw.trim().isEmpty()) throw new IllegalArgumentException("请粘贴插件链接或 owner/repo");
         String value = raw.trim();
+        String spec = value.startsWith("npm:") ? value.substring(4) : value;
+        if (spec.length() <= 300 && spec.matches("(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*(?:@[A-Za-z0-9.^~*+_-]+)?"))
+            return new PluginSource(spec);
         Matcher matcher = URL.matcher(value);
         if (matcher.find()) {
             value = matcher.group().replaceFirst("[)\\]}>.,;!]+$", "");
@@ -40,10 +49,11 @@ public final class PluginSource {
                 return new PluginSource(GitHubRef.invalid(), value);
         } catch (Exception ignored) {
         }
-        throw new IllegalArgumentException("无法识别：支持 GitHub 仓库、分支/子目录、Release 下载链接或 HTTPS 压缩包直链");
+        throw new IllegalArgumentException("无法识别：支持 npm 包名、GitHub 仓库、分支/子目录、Release 下载链接或 HTTPS 压缩包直链");
     }
 
     public String command() {
+        if (!npm.isEmpty()) return "npm " + ShellQuote.arg(npm);
         if (!url.isEmpty()) return "download " + ShellQuote.arg(url);
         if ("release".equals(github.kind)) return "release " + ShellQuote.arg(github.owner)
                 + " " + ShellQuote.arg(github.repo) + " " + ShellQuote.arg(github.revision);
@@ -52,6 +62,7 @@ public final class PluginSource {
     }
 
     public String description() {
+        if (!npm.isEmpty()) return "npm 插件包 · " + npm;
         if (!url.isEmpty()) {
             try { return "插件压缩包 · " + new URI(url).getHost(); }
             catch (Exception ignored) { return "插件压缩包"; }

@@ -4,6 +4,14 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class PluginSourceTest {
+    @Test public void npmNamesStayQuotedAndNeverBecomeShellOptions() {
+        assertEquals("npm '@scope/demo@1.2.3'",PluginSource.parse("@scope/demo@1.2.3").command());
+        assertEquals("npm 'dsh-demo@latest'",PluginSource.parse("npm:dsh-demo@latest").command());
+        assertEquals("npm 'dsh-demo'",PluginSource.parse("dsh-demo").command());
+        for(String input:new String[]{"npm:--help","npm:../pkg","npm:a;id","npm:a$(id)","npm:a b"}) {
+            try {PluginSource.parse(input);fail(input);}catch(IllegalArgumentException expected) { }
+        }
+    }
     @Test public void keepsBranchDirectoryAndEncodedSlash() {
         PluginSource source = PluginSource.parse("https://github.com/o/r/tree/feature%2Fandroid/packages/plugin");
         assertEquals("feature/android/packages/plugin", source.github.treePath);

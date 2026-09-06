@@ -27,7 +27,7 @@
                 android:layout_height="wrap_content" android:text="发现更多插件" />
             <TextView style="@style/DshaText.Body" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:layout_marginTop="@dimen/gap_tight"
-                android:text="在网站选取插件，复制下载链接或下载插件包后回到这里安装。" />
+                android:text="在网站选取插件并打开 DSHA，核对实际包信息后确认安装；也可在此粘贴链接或导入插件包。" />
             <Button android:id="@+id/btnPluginWebsite" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:minHeight="48dp"
                 android:layout_marginTop="@dimen/gap_control"
@@ -96,8 +96,13 @@
                 android:text="链接安装：支持 GitHub 仓库、分支与子目录、Release 附件和 HTTPS 压缩包直链。\n\n本地导入：支持 ZIP、TAR、TAR.GZ、TGZ。请使用作者已构建好的插件包。\n\n导出分享：可多选插件并选择保存位置，导出包可在其他 DSHA 中导入。\n\n安装、切换开关或删除后，重启 Web 生效。" />
         </LinearLayout>
 
+        <Button android:id="@+id/btnPluginRestore" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginBottom="@dimen/gap_control" android:visibility="gone" android:text="安全模式：恢复此前启用的第三方插件" />
+
         <LinearLayout android:id="@+id/installedControls" android:layout_width="match_parent"
             android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone">
+            <Button android:id="@+id/btnPluginUpdates" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginBottom="@dimen/gap_control" android:text="检查第三方插件更新" />
             <EditText android:id="@+id/pluginSearch" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:minHeight="48dp"
                 android:background="@drawable/bg_input" android:hint="搜索插件名称或描述"

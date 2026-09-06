@@ -15,7 +15,7 @@ import zipfile
 ASSET = Path(__file__).resolve().parents[1] / "app/src/main/assets/plugin-manager.py"
 
 
-class PluginManagerTest(unittest.TestCase):
+class PluginTestBase(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -49,6 +49,7 @@ class PluginManagerTest(unittest.TestCase):
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
 
+class PluginManagerTest(PluginTestBase):
     def test_scoped_multi_export_import_preserves_disabled_state_and_bytes(self):
         names = ["@sample/demo", "dsh-extra"]
         for name in names:
@@ -192,6 +193,129 @@ class PluginManagerTest(unittest.TestCase):
         for invalid in ["--global", "../package", "https://example.com/x", "demo;rm -rf /", ""]:
             with self.assertRaises(ValueError):
                 self.manager.cmd_npm(invalid)
+
+
+class PluginLifecycleTest(PluginTestBase):
+    def test_imported_plugins_share_runtime_modules_without_overwriting_user_deps(self):
+        runtime = self.root / 'usr/local/lib/node_modules/@deepseek-ai/dsh'
+        self.package(runtime, name='@deepseek-ai/dsh')
+        self.package(runtime / 'node_modules/@deepseek-ai/dsh-tools', name='@deepseek-ai/dsh-tools')
+        self.package(runtime / 'node_modules/react', name='react')
+        owned = self.package(self.home / 'node_modules/react', name='react', version='user')
+        self.manager.register_plugin(self.package(self.root / 'plugin'), '')
+        target = self.home / 'node_modules/@deepseek-ai/dsh-tools'
+        self.assertTrue(target.is_symlink())
+        self.assertEqual((runtime / 'node_modules/@deepseek-ai/dsh-tools').resolve(), target.resolve())
+        self.assertEqual('user', json.loads((owned / 'package.json').read_text())['version'])
+        self.assertEqual(0, self.manager.builtin.ensure_runtime_modules())
+
+    def test_shared_runtime_modules_reject_scope_escape(self):
+        runtime = self.root / 'usr/local/lib/node_modules/@deepseek-ai/dsh'
+        self.package(runtime / 'node_modules/@deepseek-ai/dsh-tools', name='@deepseek-ai/dsh-tools')
+        outside = self.root / 'outside-shared'; outside.mkdir()
+        modules = self.home / 'node_modules'; modules.mkdir()
+        os.symlink(outside, modules / '@deepseek-ai', target_is_directory=True)
+        with self.assertRaises(RuntimeError): self.manager.builtin.ensure_runtime_modules()
+        self.assertEqual([], list(outside.iterdir()))
+
+    def test_npm_tarball_updates_use_latest_registry_package(self):
+        self.manager.register_plugin(self.package(self.root / 'v1', name='@scope/demo'), 'https://registry.npmjs.org/@scope/demo/-/demo-1.0.0.tgz')
+        self.assertEqual("npm @scope/demo@latest", self.manager.lifecycle().source_command('@scope/demo'))
+
+    def archive(self, name='dsh-demo', version='1.0.0'):
+        root = self.package(self.root / ('source-' + version), name, version)
+        archive = self.root / ('archive-' + version + '.zip')
+        with zipfile.ZipFile(archive, 'w') as out:
+            for file in root.iterdir(): out.write(file, 'package/' + file.name)
+        return archive
+
+    def test_rollback_retains_only_one_previous_version_and_disabled_state(self):
+        for version in ('1.0.0', '2.0.0', '3.0.0'):
+            self.manager.register_plugin(self.package(self.root / version, version=version), 'npm:dsh-demo@' + version)
+        life = self.manager.lifecycle()
+        self.assertEqual('2.0.0', life.history_info('dsh-demo')['version'])
+        self.marker('dsh-demo')
+        life.rollback('dsh-demo')
+        self.assertEqual('2.0.0', json.loads((self.home / 'plugin-src/dsh-demo/package.json').read_text())['version'])
+        self.assertEqual('3.0.0', life.history_info('dsh-demo')['version'])
+        self.assertTrue(Path(self.manager.builtin.marker_path('dsh-demo')).is_file())
+        self.manager.cmd_delete('dsh-demo')
+        self.assertFalse(Path(life.history_path('dsh-demo')).exists())
+
+    def test_failed_update_restores_current_package_and_prior_history(self):
+        for version in ('1.0.0', '2.0.0'):
+            self.manager.register_plugin(self.package(self.root / version, version=version), 'source-' + version)
+        before = self.manager.builtin.read_manifest()
+        with patch.object(self.manager.builtin, 'write_manifest', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                self.manager.register_plugin(self.package(self.root / '3.0.0', version='3.0.0'), 'new-source')
+        self.assertEqual(before, self.manager.builtin.read_manifest())
+        self.assertEqual('2.0.0', json.loads((self.home / 'plugin-src/dsh-demo/package.json').read_text())['version'])
+        self.assertEqual('1.0.0', self.manager.lifecycle().history_info('dsh-demo')['version'])
+        self.assertEqual('source-2.0.0', self.manager.read_json(self.home / 'plugin-sources.json')['dsh-demo'])
+
+    def test_preview_does_not_install_until_confirmed_and_verifies_content(self):
+        archive = self.archive()
+        life = self.manager.lifecycle()
+        def download(url, target):
+            import shutil
+            shutil.copyfile(archive, target)
+        request = {'command': "download 'https://example.com/demo.zip'", 'name': 'dsh-demo', 'version': '1.0.0'}
+        with patch.object(self.manager, 'download', side_effect=download):
+            preview = life.inspect(request, False)
+            self.assertFalse((self.home / 'plugin-src/dsh-demo').exists())
+            self.assertEqual('1.0.0', preview['items'][0]['version'])
+            self.assertEqual(0, life.install_preview(preview['previewId']))
+            self.assertTrue((self.home / 'plugin-src/dsh-demo').exists())
+            with self.assertRaises(ValueError): life.inspect(dict(request, sha256='a' * 64), False)
+            preview = life.inspect(request, False)
+            (Path(life.preview_path(preview['previewId'])) / 'archive').write_bytes(b'changed')
+            with self.assertRaises(ValueError): life.install_preview(preview['previewId'])
+
+    def test_update_preview_is_bound_to_plugin_identity_and_installed_version(self):
+        self.manager.register_plugin(self.package(self.root / 'v1', version='1.0.0'), 'https://example.com/demo.zip')
+        archive = self.archive(version='2.0.0')
+        def download(url, target):
+            import shutil
+            shutil.copyfile(archive, target)
+        life = self.manager.lifecycle()
+        with patch.object(self.manager, 'download', side_effect=download):
+            life.check_updates('dsh-demo')
+            state = self.manager.read_json(self.home / 'plugin-updates.json')['dsh-demo']
+            self.assertTrue(state['available'])
+            self.assertEqual('2.0.0', state['latestVersion'])
+            self.manager.register_plugin(self.package(self.root / 'v3', version='3.0.0'), 'https://example.com/demo.zip')
+            self.manager.cmd_list()
+            listing = json.loads(self.out.getvalue().split('PLUGIN_RESULT: ')[-1])
+            changed = next(item for item in listing['items'] if item['name'] == 'dsh-demo')
+            self.assertFalse(changed['updateAvailable'])
+            self.assertEqual('', changed['updateMessage'])
+            with self.assertRaises(ValueError): life.install_preview(state['previewId'])
+            with self.assertRaises(ValueError): life.inspect({'command': "download 'https://example.com/demo.zip'", 'name': 'other-plugin'}, False)
+
+    def test_safe_mode_preserves_manual_disables_and_restores_only_its_own_changes(self):
+        for name in ('demo-one', 'demo-two', 'demo-three'):
+            self.manager.register_plugin(self.package(self.root / name, name=name, version='1.0.0'), '')
+        self.manager.builtin.disable_plugin('demo-three')
+        life = self.manager.lifecycle()
+        life.safe_mode('on')
+        bundles = self.manager.builtin.read_manifest()['dsh']['profile']['bundles']
+        self.assertFalse(set(bundles) & {'demo-one', 'demo-two', 'demo-three'})
+        self.assertTrue(set(self.manager.builtin.OFFICIAL_BUNDLES).issubset(bundles))
+        self.manager.builtin.disable_plugin('demo-two')
+        life.safe_mode('off')
+        bundles = self.manager.builtin.read_manifest()['dsh']['profile']['bundles']
+        self.assertIn('demo-one', bundles)
+        self.assertNotIn('demo-two', bundles)
+        self.assertNotIn('demo-three', bundles)
+
+    def test_rejects_import_through_scope_link_outside_managed_directory(self):
+        outside = self.root / 'outside'; outside.mkdir()
+        parent = self.home / 'plugin-src'; parent.mkdir()
+        os.symlink(outside, parent / '@scope', target_is_directory=True)
+        with self.assertRaises(ValueError):
+            self.manager.register_plugin(self.package(self.root / 'scoped', name='@scope/demo'), '')
+        self.assertEqual([], list(outside.iterdir()))
 
 
 if __name__ == "__main__":

@@ -95,6 +95,40 @@ def valid_name(name):
         r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*", name) is not None
 
 
+def ensure_runtime_modules():
+    """导入实体位于 plugin-src；在共同父目录提供同一份 dsh 运行时，供 ESM 查找 peer 模块。"""
+    package = local('/usr/local/lib/node_modules/@deepseek-ai/dsh')
+    bundled = os.path.join(package, 'node_modules')
+    if not os.path.isdir(bundled):
+        return 0
+    home = os.path.realpath(local(DSH_HOME))
+    shared = os.path.join(local(DSH_HOME), 'node_modules')
+    candidates = {}
+    for name in os.listdir(bundled):
+        source = os.path.join(bundled, name)
+        if name.startswith('@') and os.path.isdir(source):
+            for child in os.listdir(source):
+                candidates[name + '/' + child] = os.path.join(source, child)
+        else:
+            candidates[name] = source
+    candidates['@deepseek-ai/dsh'] = package
+    count = 0
+    for name, source in candidates.items():
+        if not valid_name(name) or not os.path.isfile(os.path.join(source, 'package.json')):
+            continue
+        target = os.path.join(shared, name)
+        parent = os.path.dirname(target)
+        if os.path.commonpath([home, os.path.realpath(parent)]) != home:
+            raise RuntimeError('运行时模块目录指向用户环境之外，已停止修复')
+        # 用户已有实体/依赖保持原样；仅填充缺失的运行时链接。
+        if os.path.lexists(target):
+            continue
+        os.makedirs(parent, exist_ok=True)
+        os.symlink(source, target, target_is_directory=True)
+        count += 1
+    return count
+
+
 @contextmanager
 def operation_lock():
     """所有 DSHA 插件清单写入共用锁；进程退出由系统释放。"""
@@ -338,10 +372,10 @@ def disable_plugin(name):
         d = entity_dir(name)
         if d is not None:
             os.makedirs(os.path.dirname(marker_path(name)), exist_ok=True)
-            if not os.path.isfile(marker_path(name)):
-                with open(marker_path(name), "w", encoding="utf-8") as f:
-                    f.write("")
-                lines.append("已写禁用标记")
+            # 显式禁用覆盖安全模式的临时标记，批量恢复时保留用户的新选择。
+            with open(marker_path(name), "w", encoding="utf-8") as f:
+                f.write("")
+            lines.append("已写禁用标记")
         doc = read_manifest()
         changed = False
         if doc is not None:
@@ -375,6 +409,12 @@ def disable_plugin(name):
 def register():
     os.makedirs(local(DSH_HOME), exist_ok=True)
     lines = ["== " + time.strftime("%Y-%m-%d %H:%M:%S")]
+    try:
+        linked = ensure_runtime_modules()
+        if linked: lines.append('已补充 %d 个共享运行时模块链接' % linked)
+    except (OSError, RuntimeError) as error:
+        print('BUILTIN_REGISTER_FAIL: ' + str(error))
+        return 1
 
     names = builtin_names()
     present = {}

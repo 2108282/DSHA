@@ -58,6 +58,10 @@ public class LaunchFragment extends Fragment {
         launchLog = v.findViewById(R.id.launch_log);
 
         restart.setText("重启");
+        v.findViewById(R.id.launch_safe).setOnClickListener(x -> new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                .setTitle("安全启动 Web？")
+                .setMessage("暂时禁用第三方插件后启动，保留插件文件、会话和配置。可在插件管理中逐个启用或恢复之前的状态。")
+                .setNegativeButton("取消", null).setPositiveButton("安全启动", (dialog, which) -> doStart(activity, status, start, true)).show());
 
         // 启动按钮：未就绪时是「启动」；鉴权链接就绪后自动变为「进入」，点击进 WebUI。
         start.setOnClickListener(x -> {
@@ -95,6 +99,10 @@ public class LaunchFragment extends Fragment {
 
     /** 启动 dsh：记录启动时刻，鉴权链接就绪后把「启动」变「进入」并输出 URL 到日志。 */
     private void doStart(Activity activity, TextView status, Button start) {
+        doStart(activity, status, start, false);
+    }
+
+    private void doStart(Activity activity, TextView status, Button start, boolean safeMode) {
         if (controller.isStarting() || controller.isStopping()) return;
         final View root = getView();
         startAtMs = System.currentTimeMillis();
@@ -104,7 +112,7 @@ public class LaunchFragment extends Fragment {
         start.setText("启动");
         webReady = false;
         appendLog("—— 启动 " + time + " ——");
-        boolean accepted = controller.startWeb(msg -> {
+        java.util.function.Consumer<String> startStatus = msg -> {
             long generation = controller.getWebGeneration();
             activity.runOnUiThread(() -> {
                 if (getView() != root || generation != controller.getWebGeneration()) return;
@@ -118,7 +126,8 @@ public class LaunchFragment extends Fragment {
                 refreshRunState();
                 refreshLanAddr();
             });
-        });
+        };
+        boolean accepted = safeMode ? controller.startWebSafely(startStatus) : controller.startWeb(startStatus);
         refreshRunState();
         if (!accepted) return;
         // 前台保活服务：dsh 后台常驻 + 看门狗自动重启（退到桌面/锁屏不被杀）

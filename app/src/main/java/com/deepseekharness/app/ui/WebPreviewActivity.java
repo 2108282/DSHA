@@ -125,6 +125,7 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
             browserInfo = provider == null ? "系统 WebView 版本未知"
                     : provider.packageName + " " + provider.versionName;
             Log.i("DSHA", "标准版预览内核: " + browserInfo);
+            com.deepseekharness.app.core.DiagnosticLog.record(this, "WEB_ENGINE", browserInfo);
             WebSettings settings = view.getSettings();
             settings.setJavaScriptEnabled(true);
             settings.setDomStorageEnabled(true);

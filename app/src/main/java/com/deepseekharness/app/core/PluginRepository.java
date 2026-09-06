@@ -39,9 +39,15 @@ public final class PluginRepository extends AndroidViewModel {
     private final MutableLiveData<State> state = new MutableLiveData<>(
             new State(Collections.emptyList(), false, "选择链接安装或导入本地插件包"));
     private volatile List<Item> items = Collections.emptyList();
+    private volatile boolean safeMode;
+    private volatile boolean installationSucceeded;
+    private String installedDescription = "";
+    private final MutableLiveData<Preview> preview = new MutableLiveData<>();
 
     public static final class Item {
         public final String name, description, version, source;
+        public final String latestVersion, updatePreviewId, updateMessage, rollbackVersion, compatibility;
+        public final boolean updateAvailable;
         public final boolean enabled, builtin, official, available, exportable, deletable;
         Item(JSONObject json) {
             name = json.optString("name");
@@ -54,6 +60,33 @@ public final class PluginRepository extends AndroidViewModel {
             available = json.optBoolean("available");
             exportable = json.optBoolean("exportable");
             deletable = json.optBoolean("deletable");
+            latestVersion = json.optString("latestVersion");
+            updatePreviewId = json.optString("updatePreviewId");
+            updateMessage = json.optString("updateMessage");
+            rollbackVersion = json.optString("rollbackVersion");
+            compatibility = json.optString("compatibility");
+            updateAvailable = json.optBoolean("updateAvailable");
+        }
+    }
+
+    public static final class Preview {
+        public final String id, description;
+        Preview(JSONObject json) throws Exception {
+            id = json.getString("previewId");
+            if (!id.matches("[a-f0-9]{32}")) throw new IOException("插件预览标识无效");
+            StringBuilder text = new StringBuilder();
+            JSONArray packages = json.getJSONArray("items");
+            for (int i = 0; i < packages.length(); i++) {
+                JSONObject pkg = packages.getJSONObject(i);
+                text.append(pkg.getString("name")).append(" · ").append(pkg.optString("version"))
+                        .append("\n作者：").append(pkg.optString("author", "未注明"))
+                        .append("\n").append(pkg.optString("description"))
+                        .append("\n").append(pkg.optString("compatibilityMessage")).append("\n\n");
+            }
+            text.append("来源：").append(json.optString("source").isEmpty() ? "本地插件包" : json.optString("source"))
+                    .append("\nSHA-256：").append(json.optString("sha256"))
+                    .append("\n\n确认后安装并登记；完成后重启 Web 生效。同名更新会保留上一版供回退。");
+            description = SensitiveData.redact(text.toString());
         }
     }
 
@@ -71,25 +104,37 @@ public final class PluginRepository extends AndroidViewModel {
     public PluginRepository(@NonNull Application app) { super(app); }
     public LiveData<State> state() { return state; }
     public boolean isBusy() { return working.get(); }
+    public boolean isSafeMode() { return safeMode; }
+    public boolean installationSucceeded() { return installationSucceeded; }
+    public String installedDescription() { return installedDescription; }
+    public LiveData<Preview> preview() { return preview; }
 
     public void selectionMessage(String message) {
+        DiagnosticLog.record(getApplication(), "FILE_SELECTION", message);
         if (!working.get()) state.setValue(new State(items, false, message));
     }
 
     private interface Work { String run(ProotBootstrap proot) throws Exception; }
 
     private void submit(String progress, Work work) {
+        submit(progress, work, null);
+    }
+
+    private void submit(String progress, Work work, Runnable onSuccess) {
         if (!working.compareAndSet(false, true)) {
             state.setValue(new State(items, true, "上一项插件操作仍在进行，请完成后重新选择。"));
             return;
         }
         state.setValue(new State(items, true, progress));
+        DiagnosticLog.record(getApplication(), "PLUGIN_START", progress);
         IO.execute(() -> {
             String message;
+            boolean success = false;
             ProotBootstrap proot = HarnessController.get(getApplication()).proot();
             try {
                 if (!proot.isEnvironmentReady()) throw new IOException("环境未就绪，请先完成解压 / 安装");
                 message = work.run(proot);
+                success = true;
             } catch (Exception error) {
                 message = "操作失败：" + SensitiveData.redact(String.valueOf(error.getMessage()));
             }
@@ -100,9 +145,12 @@ public final class PluginRepository extends AndroidViewModel {
                 message += "\n列表未能同步：" + SensitiveData.redact(String.valueOf(error.getMessage()));
             }
             State completed = new State(items, false, message);
+            final boolean completedSuccessfully = success;
+            DiagnosticLog.record(getApplication(), "PLUGIN_RESULT", message);
             new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
                 working.set(false);
                 state.setValue(completed);
+                if (completedSuccessfully && onSuccess != null) onSuccess.run();
             });
         });
     }
@@ -118,12 +166,88 @@ public final class PluginRepository extends AndroidViewModel {
     }
 
     public void install(PluginSource source) {
-        submit("正在下载并安装：" + source.description(), proot ->
-                operationMessage(result(proot.runPluginManager(source.command()))));
+        inspect(source, "", "", "");
+    }
+
+    public void inspect(PluginSource source, String sha256, String name, String version) {
+        if (working.get()) return;
+        installationSucceeded = false;
+        discardPreview();
+        submit("正在下载并解析：" + source.description(), proot -> {
+            JSONObject request = new JSONObject().put("command", source.command())
+                    .put("sha256", sha256).put("name", name).put("version", version);
+            return receivePreview(result(proot.runPluginManager("inspect " + ShellQuote.arg(request.toString()))));
+        });
+    }
+
+    private String receivePreview(JSONObject output) throws Exception {
+        if (!"ok".equals(output.optString("status"))) throw new IOException(output.optString("message"));
+        preview.postValue(new Preview(output.getJSONObject("preview")));
+        return "插件包已解析，请确认作者、版本和兼容范围后安装";
+    }
+
+    public void confirmPreview() {
+        Preview selected = preview.getValue();
+        if (selected == null || working.get()) return;
+        installationSucceeded = false;
+        installedDescription = selected.description;
+        preview.setValue(null);
+        submit("正在安装已确认的插件包…", proot -> {
+            JSONObject output = result(proot.runPluginManager("install-preview " + ShellQuote.arg(selected.id)));
+            installationSucceeded = "ok".equals(output.optString("status"));
+            return operationMessage(output);
+        });
+    }
+
+    public void discardPreview() {
+        Preview old = preview.getValue();
+        preview.setValue(null);
+        if (old != null) IO.execute(() -> {
+            try { HarnessController.get(getApplication()).proot().runPluginManager("discard-preview " + ShellQuote.arg(old.id)); }
+            catch (Exception ignored) { }
+        });
+    }
+
+    public void checkUpdates(Item item) {
+        submit("正在检查插件版本…", proot -> operationMessage(result(proot.runPluginManager(
+                "check-updates" + (item == null ? "" : " " + ShellQuote.arg(item.name))))));
+    }
+
+    public void prepareUpdate(Item item) {
+        if (working.get() || !item.updateAvailable) return;
+        discardPreview();
+        submit("正在读取更新信息…", proot -> {
+            JSONObject output = result(proot.runPluginManager("show-preview " + ShellQuote.arg(item.updatePreviewId)));
+            if (!"ok".equals(output.optString("status"))) {
+                JSONObject refreshed = result(proot.runPluginManager("check-updates " + ShellQuote.arg(item.name)));
+                JSONArray updates = refreshed.optJSONArray("updates");
+                JSONObject next = updates == null || updates.length() == 0 ? null : updates.getJSONObject(0);
+                if (next == null || !next.optBoolean("available")) throw new IOException(next == null
+                        ? refreshed.optString("message") : next.optString("message"));
+                output = result(proot.runPluginManager("show-preview " + ShellQuote.arg(next.getString("previewId"))));
+            }
+            return receivePreview(output);
+        });
+    }
+
+    public void rollback(Item item) {
+        submit("正在回退 " + item.name + "…", proot -> operationMessage(result(proot.runPluginManager("rollback "
+                + ShellQuote.arg(item.name) + " " + ShellQuote.arg(item.rollbackVersion)))));
+    }
+
+    public void safeMode(boolean enable, Runnable afterSuccess) {
+        submit(enable ? "正在暂时停用第三方插件…" : "正在恢复此前启用的第三方插件…", proot -> {
+            JSONObject output = result(proot.runPluginManager("safe-mode " + (enable ? "on" : "off")));
+            if (!"ok".equals(output.optString("status"))) throw new IOException(output.optString("message"));
+            return output.getString("message");
+        }, afterSuccess);
     }
 
     public void importArchive(Uri uri) {
-        submit("正在导入插件包…", proot -> {
+        if (working.get()) return;
+        installationSucceeded = false;
+        discardPreview();
+        submit("正在解析本地插件包，安装前需确认…", proot -> {
             File temporary = File.createTempFile("plugin-import-", ".bin", getApplication().getCacheDir());
             String container = "/root/.dsh/plugin-upload-" + UUID.randomUUID() + ".bin";
             try {
@@ -132,7 +256,8 @@ public final class PluginRepository extends AndroidViewModel {
                     copy(in, out);
                 }
                 if (!proot.pushFileIntoContainer(temporary, container)) throw new IOException("插件包写入容器失败");
-                return operationMessage(result(proot.runPluginManager("import " + ShellQuote.arg(container))));
+                JSONObject request = new JSONObject().put("command", "file " + ShellQuote.arg(container));
+                return receivePreview(result(proot.runPluginManager("inspect " + ShellQuote.arg(request.toString()))));
             } finally {
                 temporary.delete();
                 cleanup(proot, container);
@@ -188,6 +313,7 @@ public final class PluginRepository extends AndroidViewModel {
         JSONObject output = result(proot.runPluginManager("list"));
         if (!"ok".equals(output.optString("status"))) throw new IOException(output.optString("message"));
         JSONArray array = output.getJSONArray("items");
+        safeMode = output.optBoolean("safeMode");
         List<Item> next = new ArrayList<>();
         for (int i = 0; i < array.length(); i++) next.add(new Item(array.getJSONObject(i)));
         return Collections.unmodifiableList(next);

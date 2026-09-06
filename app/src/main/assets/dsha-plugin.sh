@@ -3,9 +3,11 @@
 . /etc/profile.d/dsha-runtime-env.sh
 case "$1" in
     install) shift; exec python3 /root/.dsh/plugin-manager.py npm "$@" ;;
-    import|export|delete|list) exec python3 /root/.dsh/plugin-manager.py "$@" ;;
+    import|export|delete|list|check-updates|rollback|safe-mode) exec python3 /root/.dsh/plugin-manager.py "$@" ;;
     *) printf '%s\n' '用法：dsha-plugin install <npm包名[@版本]>' \
             '      dsha-plugin import <插件压缩包路径>' \
             '      dsha-plugin list | delete <插件名>' \
+            '      dsha-plugin check-updates [插件名] | rollback <插件名>' \
+            '      dsha-plugin safe-mode on|off|status' \
             '安装或删除后，请重启 DSHA Web。普通依赖/命令行工具请使用 npm install。' ;;
 esac

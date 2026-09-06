@@ -156,6 +156,7 @@ public final class PtyTerminalFragment extends Fragment
         } catch (Throwable e) {
             String safe = SensitiveData.redact(String.valueOf(e));
             title.setText("终端启动失败：" + safe);
+            com.deepseekharness.app.core.DiagnosticLog.record(requireContext(), "PTY_START", safe);
             android.util.Log.w("DSHA", "PTY 启动失败：" + safe);
         }
     }

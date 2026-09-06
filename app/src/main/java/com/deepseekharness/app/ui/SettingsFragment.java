@@ -70,7 +70,7 @@ public class SettingsFragment extends Fragment {
         TextView ver = v.findViewById(R.id.settings_ver);
         ver.setText("DSHA v" + version + " · MIT License");
         TextView updateSub = v.findViewById(R.id.settings_update_sub);
-        updateSub.setText("当前 v" + version + " · 从 GitHub Releases 检查");
+        updateSub.setText("当前 v" + version + " · 稳定 / 预览更新通道");
 
         v.findViewById(R.id.settings_about).setOnClickListener(x -> AboutDialog.show(requireContext()));
         v.findViewById(R.id.settings_update).setOnClickListener(x -> checkUpdate());
@@ -103,123 +103,11 @@ public class SettingsFragment extends Fragment {
     }
 
     private void runSelftest() {
-        new Thread(() -> {
-            HarnessController c = new HarnessController(requireContext());
-            String out = c.smokeTest();
-            main.post(() -> {
-                if (!isAdded()) return;
-                showSelfTestDialog(out == null ? "自检失败" : out);
-            });
-        }, "dsha-selftest").start();
-    }
-
-    private void showSelfTestDialog(final String report) {
-        TextView body = new TextView(requireContext());
-        body.setText(report);
-        body.setTypeface(android.graphics.Typeface.MONOSPACE);
-        body.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        body.setTextColor(requireContext().getColor(R.color.text));
-        body.setTextIsSelectable(true);
-        body.setPadding(dp(16), dp(8), dp(16), dp(8));
-        ScrollView scroll = new ScrollView(requireContext());
-        scroll.addView(body);
-        scroll.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(420)));
-        new AlertDialog.Builder(requireContext())
-                .setTitle("自检结果")
-                .setView(scroll)
-                .setPositiveButton("复制", (d, w) -> {
-                    android.content.ClipboardManager cm = (android.content.ClipboardManager)
-                            requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
-                    if (cm != null) {
-                        cm.setPrimaryClip(android.content.ClipData.newPlainText("DSHA 自检", report));
-                        Toast.makeText(requireContext(), "已复制", Toast.LENGTH_SHORT).show();
-                    }
-                })
-                .setNegativeButton("关闭", null)
-                .show();
+        startActivity(new Intent(requireContext(), DiagnosticActivity.class));
     }
 
     private void checkUpdate() {
-        final String cur = currentVersion();
-        new Thread(() -> {
-            String tag = fetchLatestRelease();
-            main.post(() -> {
-                if (!isAdded()) return;
-                if (tag == null) {
-                    Toast.makeText(requireContext(), "检查失败，请稍后再试", Toast.LENGTH_SHORT).show();
-                } else if (!isNewer(tag, cur)) {
-                    Toast.makeText(requireContext(), "当前 v" + cur + " 已是最新", Toast.LENGTH_SHORT).show();
-                } else {
-                    new AlertDialog.Builder(requireContext())
-                            .setTitle("发现新版本 " + tag)
-                            .setMessage("当前版本 v" + cur + "\n是否前往下载？")
-                            .setPositiveButton("更新", (d, w) ->
-                                    AboutDialog.openBrowser(requireContext(),
-                                            "https://github.com/qiannianhuanxiang/DSHA/releases/latest"))
-                            .setNegativeButton("取消", null)
-                            .show();
-                }
-            });
-        }, "check-update").start();
-    }
-
-    private String currentVersion() {
-        try {
-            return requireContext().getPackageManager()
-                    .getPackageInfo(requireContext().getPackageName(), 0).versionName;
-        } catch (Exception e) {
-            return "?";
-        }
-    }
-
-    private String fetchLatestRelease() {
-        HttpURLConnection conn = null;
-        try {
-            conn = (HttpURLConnection) new URL(
-                    "https://api.github.com/repos/qiannianhuanxiang/DSHA/releases/latest").openConnection();
-            conn.setConnectTimeout(8000);
-            conn.setReadTimeout(8000);
-            conn.setRequestProperty("User-Agent", "DSHA");
-            if (conn.getResponseCode() != 200) return null;
-            BufferedReader r = new BufferedReader(new InputStreamReader(
-                    conn.getInputStream(), StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = r.readLine()) != null) sb.append(line);
-            String body = sb.toString();
-            int i = body.indexOf("\"tag_name\"");
-            if (i < 0) return null;
-            int c = body.indexOf('"', body.indexOf('"', i + 11) + 1);
-            int e = body.indexOf('"', c + 1);
-            return c >= 0 && e > c ? body.substring(c + 1, e) : null;
-        } catch (Exception e) {
-            return null;
-        } finally {
-            if (conn != null) conn.disconnect();
-        }
-    }
-
-    private boolean isNewer(String tag, String cur) {
-        if (tag == null || cur == null) return false;
-        String t = tag.startsWith("v") ? tag.substring(1) : tag;
-        String c = cur.startsWith("v") ? cur.substring(1) : cur;
-        String[] ta = t.split("\\.");
-        String[] ca = c.split("\\.");
-        for (int i = 0; i < Math.max(ta.length, ca.length); i++) {
-            int tn = i < ta.length ? safeInt(ta[i]) : 0;
-            int cn = i < ca.length ? safeInt(ca[i]) : 0;
-            if (tn != cn) return tn > cn;
-        }
-        return false;
-    }
-
-    private int safeInt(String s) {
-        try {
-            return Integer.parseInt(s.replaceAll("[^0-9]", ""));
-        } catch (Exception e) {
-            return 0;
-        }
+        startActivity(new Intent(requireContext(), UpdateActivity.class));
     }
 
     private LinearLayout buildRow(final int index) {

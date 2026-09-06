@@ -91,6 +91,7 @@ public final class GeckoPreviewActivity extends AppCompatActivity implements Web
         canGoBack = false;
         try {
             browser = new GeckoView(this);
+            com.deepseekharness.app.core.DiagnosticLog.record(this, "WEB_ENGINE", "Gecko 143");
             boolean desktop = getSharedPreferences(Constants.PREFS, MODE_PRIVATE)
                     .getBoolean(Constants.KEY_DESKTOP_MODE, false);
             GeckoSession current = new GeckoSession(new GeckoSessionSettings.Builder()
