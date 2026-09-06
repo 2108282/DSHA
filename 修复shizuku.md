@@ -362,10 +362,13 @@ public final class ShizukuShell {
 
 ---
 
+## 🧪 六、 真机验证结果
+
+* **测试版本范围**：DSHA v1.1.9.1 ~ v1.1.10
+* **测试机型环境**：Xiaomi 14 (小米澎湃 OS HyperOS / Android 16 SDK 36) + Stellar / Shizuku
+* **验证结论**：通过上述双保险组合方案成功突破澎湃 OS 底层跨进程拦截，`/exec` 顺利返回系统 shell 输出 `[EXIT=0]`，命令执行稳定无异常，Agent 决策与降级链路端到端闭环。
 
 ---
-
-
 
 ### 📢 【追加修复】后台无限生成 `com.dsh.client:shizuku` 
 在真机环境下，结合使用官方社区适配的 Android 16 Shizuku 修复版（解决 A16 `IProcessObserver` 崩溃），进行了测试和修补

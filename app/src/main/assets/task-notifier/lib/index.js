@@ -105,6 +105,62 @@ export function apply(ctx) {
   let lastActiveSessionId = null
   let lastAssistantText = ''
 
+  // 灵动岛/三通道状态机与 2s Trailing 节流控制
+  const THROTTLE_MS = 2000
+  let lastSentTime = 0
+  let lastSentState = ''
+  let pendingState = null
+  let trailingTimer = null
+
+  function flushRunningNotification(title, text) {
+    if (trailingTimer) {
+      clearTimeout(trailingTimer)
+      trailingTimer = null
+    }
+    pendingState = null
+    lastSentTime = Date.now()
+    lastSentState = text
+    void callBridge('/app/task/running', { title, text })
+  }
+
+  function scheduleRunningNotification(title, text) {
+    // 动作没变，绝对不推，保持完全静态
+    if (text === lastSentState) {
+      if (trailingTimer && pendingState && pendingState.text === text) {
+        clearTimeout(trailingTimer)
+        trailingTimer = null
+        pendingState = null
+      }
+      return
+    }
+
+    const now = Date.now()
+    const elapsed = now - lastSentTime
+
+    // 已经超过 2s，且当前没有排队的定时器：立即推送（Leading）
+    if (elapsed >= THROTTLE_MS && !trailingTimer) {
+      flushRunningNotification(title, text)
+      return
+    }
+
+    // 处于 2s 冷却期：暂存最新状态（Trailing 保底，绝对不漏）
+    pendingState = { title, text }
+    if (!trailingTimer) {
+      const waitTime = Math.max(50, THROTTLE_MS - elapsed)
+      trailingTimer = setTimeout(() => {
+        trailingTimer = null
+        if (pendingState) {
+          const next = pendingState
+          pendingState = null
+          // 仅当状态依然与上次发送的不同时才补推
+          if (next.text !== lastSentState) {
+            flushRunningNotification(next.title, next.text)
+          }
+        }
+      }, waitTime)
+    }
+  }
+
   // 1. 会话事件监听（实时同步通知栏）
   ctx.on('session/event', (session, event) => {
     try {
@@ -115,9 +171,16 @@ export function apply(ctx) {
 
       if (type === 'turn/start') {
         lastAssistantText = ''
+        if (trailingTimer) {
+          clearTimeout(trailingTimer)
+          trailingTimer = null
+        }
+        pendingState = null
+        lastSentState = '智能体正在分析并执行任务...'
+        lastSentTime = Date.now()
         void callBridge('/app/task/running', {
           title: '正在执行',
-          text: '智能体正在分析并执行任务...'
+          text: lastSentState
         })
         return
       }
@@ -141,8 +204,13 @@ export function apply(ctx) {
 
       if (type === 'tool/call') {
         const toolName = String(event?.data?.name || '')
-        // 提问工具：立即通知手机切换为「💬 助手提问 / 等待回答」状态，挂载「返回对话」抽屉按钮
+        // 提问工具：立即通知手机切换为「💬 助手提问 / 等待回答」状态，挂载「返回对话」抽屉按钮（穿透节流，立即生效）
         if (toolName.includes('ask_user') || toolName.includes('ask_question')) {
+          if (trailingTimer) {
+            clearTimeout(trailingTimer)
+            trailingTimer = null
+          }
+          pendingState = null
           let questionText = '智能体正在等待你的回答与选择'
           try {
             const args = typeof event?.data?.arguments === 'string' ? JSON.parse(event.data.arguments) : event?.data?.arguments
@@ -151,21 +219,26 @@ export function apply(ctx) {
               questionText = q0.question || q0.header
             }
           } catch {}
+          lastSentState = questionText
+          lastSentTime = Date.now()
           void callBridge('/app/task/running', {
             title: '💬 助手提问',
             text: questionText
           })
           return
         }
-        const text = formatToolDetail(event?.data?.name, event?.data?.arguments)
-        void callBridge('/app/task/running', {
-          title: '正在执行',
-          text: text || '智能体正在调用工具...'
-        })
+
+        const text = formatToolDetail(event?.data?.name, event?.data?.arguments) || '智能体正在调用工具...'
+        scheduleRunningNotification('正在执行', text)
         return
       }
 
       if (type === 'turn/end') {
+        if (trailingTimer) {
+          clearTimeout(trailingTimer)
+          trailingTimer = null
+        }
+        pendingState = null
         // 子任务 (Subagent / Workflow) 结束不向手机发任务完成通知
         if (session?.parentSessionId || session?.parent) {
           return
