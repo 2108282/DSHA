@@ -33,6 +33,14 @@ public class LaunchFragment extends Fragment {
     private boolean webReady;
     /** 本次启动开始时刻（显示耗时用）。 */
     private long startAtMs;
+    private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable refreshState = new Runnable() {
+        @Override public void run() {
+            refreshRunState();
+            refreshLanAddr();
+            ui.postDelayed(this, 1000);
+        }
+    };
 
     @Nullable
     @Override
@@ -40,9 +48,8 @@ public class LaunchFragment extends Fragment {
                              @Nullable Bundle savedInstanceState) {
         View v = inflater.inflate(R.layout.fragment_launch, container, false);
 
-        controller = new HarnessController(requireContext());
+        controller = HarnessController.get(requireContext());
         final Activity activity = requireActivity();
-        TextView runState = v.findViewById(R.id.launch_run_state);
         TextView status = v.findViewById(R.id.launch_status);
         Button start = v.findViewById(R.id.launch_start);
         Button restart = v.findViewById(R.id.launch_open);
@@ -58,23 +65,27 @@ public class LaunchFragment extends Fragment {
                 enterWeb();
                 return;
             }
-            doStart(activity, status, runState, start);
+            doStart(activity, status, start);
         });
 
         restart.setOnClickListener(x -> {
-            controller.stopWeb();
-            webReady = false;
-            start.setText("启动");
-            status.setText("已停止，正在重启…");
-            refreshRunState();
-            doStart(activity, status, runState, start);
+            // startWeb 本身串行执行「清旧进程 → 启动」，无需拆成两次请求。
+            doStart(activity, status, start);
         });
 
         stop.setOnClickListener(x -> {
-            controller.stopWeb();
+            controller.stopWeb(msg -> {
+                long generation = controller.getWebGeneration();
+                activity.runOnUiThread(() -> {
+                    if (getView() != v || generation != controller.getWebGeneration()) return;
+                    status.setText(msg);
+                    refreshRunState();
+                    refreshLanAddr();
+                });
+            });
             webReady = false;
             start.setText("启动");
-            status.setText("已发起停止");
+            status.setText("停止中…");
             refreshLanAddr();
             refreshRunState();
         });
@@ -83,7 +94,9 @@ public class LaunchFragment extends Fragment {
     }
 
     /** 启动 dsh：记录启动时刻，鉴权链接就绪后把「启动」变「进入」并输出 URL 到日志。 */
-    private void doStart(Activity activity, TextView status, TextView runState, Button start) {
+    private void doStart(Activity activity, TextView status, Button start) {
+        if (controller.isStarting() || controller.isStopping()) return;
+        final View root = getView();
         startAtMs = System.currentTimeMillis();
         String time = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
                 .format(new java.util.Date());
@@ -91,6 +104,23 @@ public class LaunchFragment extends Fragment {
         start.setText("启动");
         webReady = false;
         appendLog("—— 启动 " + time + " ——");
+        boolean accepted = controller.startWeb(msg -> {
+            long generation = controller.getWebGeneration();
+            activity.runOnUiThread(() -> {
+                if (getView() != root || generation != controller.getWebGeneration()) return;
+                status.setText(msg);
+                if (!controller.getWebAuthUrl().isEmpty() && !webReady) {
+                    long sec = (System.currentTimeMillis() - startAtMs) / 1000;
+                    appendLog("启动成功，耗时 " + sec + "s");
+                    appendLog("本机打开：" + controller.getWebAuthUrl()
+                            + "　（仅本机；其它设备请用「局域网地址」那条）");
+                }
+                refreshRunState();
+                refreshLanAddr();
+            });
+        });
+        refreshRunState();
+        if (!accepted) return;
         // 前台保活服务：dsh 后台常驻 + 看门狗自动重启（退到桌面/锁屏不被杀）
         try {
             Intent svc = new Intent(requireContext(), com.deepseekharness.app.HarnessService.class);
@@ -102,19 +132,6 @@ public class LaunchFragment extends Fragment {
         } catch (Throwable t) {
             android.util.Log.w("DSHA", "拉起保活服务失败: " + t.getMessage());
         }
-        controller.startWeb(msg -> activity.runOnUiThread(() -> {
-            status.setText(msg);
-            if (!controller.getWebAuthUrl().isEmpty() && !webReady) {
-                webReady = true;
-                long sec = (System.currentTimeMillis() - startAtMs) / 1000;
-                String url = controller.getWebAuthUrl();
-                runState.setText("已就绪，可进入");
-                start.setText("进入");
-                appendLog("启动成功，耗时 " + sec + "s");
-                appendLog("本机打开：" + url + "　（仅本机；其它设备请用「局域网地址」那条）");
-            }
-            refreshLanAddr();
-        }));
     }
 
     /** 打开 WebPreviewActivity 进入 dsh WebUI。 */
@@ -128,10 +145,14 @@ public class LaunchFragment extends Fragment {
             return;
         }
         final Activity activity = requireActivity();
+        final View root = getView();
+        final long generation = controller.getWebGeneration();
         new Thread(() -> {
             String cookie = controller.exchangeDshAuthCookie();
             String finalUrl = url;
             activity.runOnUiThread(() -> {
+                if (getView() != root || generation != controller.getWebGeneration()
+                        || !url.equals(controller.getWebAuthUrl())) return;
                 startActivity(WebPreviewActivity.intent(requireContext(), finalUrl, cookie));
                 refreshLanAddr();
             });
@@ -155,11 +176,24 @@ public class LaunchFragment extends Fragment {
     @Override
     public void onResume() {
         super.onResume();
-        refreshLanAddr();
-        refreshRunState();
+        ui.post(refreshState);
     }
 
-    /** 从 WebUI/其它页返回时按真实进程状态刷新「运行中/未运行」，避免误显。 */
+    @Override
+    public void onPause() {
+        ui.removeCallbacks(refreshState);
+        super.onPause();
+    }
+
+    @Override
+    public void onDestroyView() {
+        ui.removeCallbacks(refreshState);
+        lanAddrText = null;
+        launchLog = null;
+        super.onDestroyView();
+    }
+
+    /** 读取共享状态，不在主线程执行 proot/kill -0；重建页面也能跟随后台启停。 */
     private void refreshRunState() {
         try {
             View root = getView();
@@ -167,14 +201,20 @@ public class LaunchFragment extends Fragment {
             TextView runState = root.findViewById(R.id.launch_run_state);
             Button start = root.findViewById(R.id.launch_start);
             if (runState == null) return;
-            boolean running = controller.isWebRunning();
-            runState.setText(running ? "DSH 运行中" : "DSH 未运行");
-            // 鉴权链接还在（进程级 static），「启动」按钮恢复「进入」态
+            boolean starting = controller.isStarting();
+            boolean stopping = controller.isStopping();
+            boolean ready = !starting && !stopping && !controller.getWebAuthUrl().isEmpty();
+            runState.setText(stopping ? "DSH 停止中…" : starting ? "DSH 启动中…"
+                    : ready ? "DSH 已就绪，可进入" : controller.isUserStopped() ? "DSH 已停止" : "DSH 未就绪");
             if (start != null) {
-                boolean ready = !controller.getWebAuthUrl().isEmpty();
                 webReady = ready;
                 start.setText(ready ? "进入" : "启动");
+                start.setEnabled(!starting && !stopping);
             }
+            Button restart = root.findViewById(R.id.launch_open);
+            if (restart != null) restart.setEnabled(!starting && !stopping);
+            Button stop = root.findViewById(R.id.launch_stop);
+            if (stop != null) stop.setEnabled(!stopping);
         } catch (Throwable ignored) {
         }
     }

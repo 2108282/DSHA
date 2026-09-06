@@ -455,6 +455,7 @@ public class DshaAccessibilityService extends AccessibilityService {
                 "滑动 (" + x1 + "," + y1 + ")→(" + x2 + "," + y2 + ")");
     }
 
+    @androidx.annotation.RequiresApi(24)
     private static android.accessibilityservice.GestureDescription buildTap(int x, int y) {
         android.graphics.Path p = new android.graphics.Path();
         p.moveTo(x, y);
@@ -464,6 +465,7 @@ public class DshaAccessibilityService extends AccessibilityService {
     }
 
     /** 派发手势并等结果：dispatchGesture 是异步回调，agent 那边要的是同步答复 */
+    @androidx.annotation.RequiresApi(24)
     private String gesture(android.accessibilityservice.GestureDescription gd, String what) {
         final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
         final boolean[] ok = {false};

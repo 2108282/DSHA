@@ -141,12 +141,12 @@ public final class AdbBridge {
             dst.getParentFile().mkdirs();
             java.io.InputStream in;
             try {
-                in = ctx.getAssets().open("adb-wheels.tar.gz");
+                in = ctx.getAssets().open("adb-wheels.bin");
             } catch (java.io.IOException e1) {
                 try {
-                    in = ctx.getAssets().open("adb-wheels.tar");
+                    in = ctx.getAssets().open("adb-wheels.tar.gz");
                 } catch (java.io.IOException e2) {
-                    return "WHEELS_INJECT_FAIL: assets 里找不到 adb-wheels.tar.gz/.tar";
+                    return "WHEELS_INJECT_FAIL: assets 里找不到 adb-wheels.bin";
                 }
             }
             java.io.FileOutputStream fos = new java.io.FileOutputStream(dst);

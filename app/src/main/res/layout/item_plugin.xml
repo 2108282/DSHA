@@ -1,73 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:layout_marginStart="@dimen/page_pad"
-    android:layout_marginEnd="@dimen/page_pad"
-    android:layout_marginBottom="@dimen/gap_control"
-    android:background="@drawable/bg_card_clickable"
-    android:orientation="vertical"
-    android:padding="@dimen/card_pad">
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:layout_marginBottom="@dimen/gap_control" android:background="@drawable/bg_card_clickable"
+    android:orientation="vertical" android:padding="@dimen/card_pad">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
-
-        <TextView
-            android:id="@+id/pluginName"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="middle"
-            android:fontFamily="monospace"
-            android:singleLine="true"
-            android:textColor="@color/text"
-            android:textSize="@dimen/text_body"
-            android:textStyle="bold" />
-
-        <!-- 操作按钮：给最小宽度，让"安装/卸载/重装"三种文案的按钮宽度一致，
-             列表滚动时右边缘不会忽宽忽窄 -->
-        <TextView
-            android:id="@+id/pluginInstall"
-            android:layout_width="wrap_content"
-            android:layout_height="44dp"
-            android:layout_marginStart="@dimen/gap_tight"
-            android:background="@drawable/bg_btn"
-            android:gravity="center"
-            android:minWidth="72dp"
-            android:paddingStart="@dimen/gap_control"
-            android:paddingEnd="@dimen/gap_control"
-            android:text="安装"
-            android:textColor="@color/primary"
-            android:textSize="@dimen/text_label"
-            android:textStyle="bold" />
-
-        <Switch
-            android:id="@+id/pluginSwitch"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="@dimen/gap_tight"
-            android:visibility="gone" />
+    <TextView android:id="@+id/pluginName" style="@style/DshaText.Body"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:fontFamily="sans" android:breakStrategy="simple"
+        android:textStyle="bold" />
+    <TextView android:id="@+id/pluginDesc" style="@style/DshaText.Caption"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/gap_tight" android:maxLines="3" android:ellipsize="end" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/gap_control" android:orientation="horizontal"
+        android:gravity="center_vertical">
+        <TextView android:id="@+id/pluginStatus" style="@style/DshaText.Caption"
+            android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:layout_marginEnd="@dimen/gap_tight" />
+        <Switch android:id="@+id/pluginSwitch" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:minHeight="48dp"
+            android:showText="false" />
+        <TextView android:id="@+id/pluginActions" style="@style/PluginAction"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/gap_tight" android:text="更多" />
     </LinearLayout>
-
-    <TextView
-        android:id="@+id/pluginStatus"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/gap_hair"
-        android:textColor="@color/warn"
-        android:textSize="@dimen/text_caption" />
-
-    <TextView
-        android:id="@+id/pluginDesc"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/gap_hair"
-        android:ellipsize="end"
-        android:lineSpacingExtra="2dp"
-        android:maxLines="3"
-        android:textColor="@color/text_muted"
-        android:textSize="@dimen/text_caption" />
 </LinearLayout>

@@ -24,7 +24,7 @@ dsh-web-mobile）的实体随离线 rootfs 烘焙在 /root/dsha-*，但 dsh 只�
 禁用标记：profiles/web/node_modules/<name>.disabled（空文件）—— 存在即表示用户主动
 禁用，注册流程会尊重它而永远跳过（与 selftest.py 的判定一致），只有 --enable 会清掉。
 
-改动前留 .dsha-bak-* 备份；每次运行写 /root/.dsh/repair-builtin.log 供自检对账。
+清单通过临时文件原子替换，不为每次开关累积备份；每次运行写 repair-builtin.log。
 
 只读 / 保守原则：只对「名字已知且实体存在」的插件动手；不删除已有 bundle、
 不改写用户第三方插件、不覆盖已存在的 node_modules 实体（那可能是用户 pnpm 装的）。
@@ -37,6 +37,8 @@ import os
 import shutil
 import sys
 import time
+import re
+from contextlib import contextmanager
 
 # ================= 位置与清单 =================
 
@@ -81,11 +83,40 @@ def local(path):
     """容器内绝对路径 → 本地文件系统路径（测试用 DSHA_TEST_ROOT 前缀）。"""
     if not ROOT:
         return path
+    root = os.path.normcase(os.path.abspath(ROOT))
+    candidate = os.path.normcase(os.path.abspath(path))
+    if candidate == root or candidate.startswith(root + os.sep):
+        return path
     return os.path.join(ROOT, path.lstrip("/\\"))
+
+
+def valid_name(name):
+    return isinstance(name, str) and len(name) <= 214 and re.fullmatch(
+        r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*", name) is not None
+
+
+@contextmanager
+def operation_lock():
+    """所有 DSHA 插件清单写入共用锁；进程退出由系统释放。"""
+    os.makedirs(local(DSH_HOME), exist_ok=True)
+    with open(local(os.path.join(DSH_HOME, ".plugins.lock")), "a") as lock:
+        if os.name != "nt":
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name != "nt":
+                fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def entity_dir(name):
     """内置插件名 → 其实体目录（/root/dsha-*），找不到（官方核心/第三方）返回 None。"""
+    if not valid_name(name):
+        return None
+    imported = os.path.join(DSH_HOME, "plugin-src", name)
+    if os.path.isfile(local(os.path.join(imported, "package.json"))):
+        return imported
     if name.startswith("@"):
         return None  # 官方核心从 dsh 安装树解析，不在 /root/dsha-*
     cands = ["/root/" + name, "/root/dsha-" + name]
@@ -109,7 +140,7 @@ def is_disabled(name):
 def builtin_names():
     """内置插件名清单：优先读 dsha-builtin.txt，缺失时用兜底清单。"""
     try:
-        with open(local(BUILTIN_LIST), encoding="utf-8") as f:
+        with open(BUILTIN_LIST, encoding="utf-8") as f:
             names = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
         if names:
             return names
@@ -132,9 +163,6 @@ def read_manifest():
 
 def write_manifest(doc):
     os.makedirs(local(PROFILE), exist_ok=True)
-    bak = local(MANIFEST + ".dsha-bak-" + time.strftime("%Y%m%d-%H%M%S"))
-    if os.path.isfile(local(MANIFEST)) and not os.path.exists(bak):
-        shutil.copy2(local(MANIFEST), bak)
     text = json.dumps(doc, indent=2) + "\n"
     tmp = local(MANIFEST + ".dsha-tmp")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -208,7 +236,7 @@ def ensure_symlink(name, d):
     """保证 profiles/web/node_modules/<name> 是指向实体目录的链接。返回 True=改动了。"""
     link = os.path.join(local(NODE_MODULES), name)
     target = local(d)
-    os.makedirs(local(NODE_MODULES), exist_ok=True)
+    os.makedirs(os.path.dirname(link), exist_ok=True)
     if os.path.lexists(link):
         try:
             if os.path.islink(link) and os.path.realpath(link) == os.path.realpath(target):
@@ -236,7 +264,7 @@ def ensure_symlink(name, d):
         # 实体目录不能 symlink 的极端情况（SELinux/文件系统限制）：
         # 退回软链到相对路径后仍失败则放弃，由 dsh 的 pnpm 链接兜底
         try:
-            rel = os.path.relpath(target, os.path.join(local(NODE_MODULES), name))
+            rel = os.path.relpath(target, os.path.dirname(link))
             os.symlink(rel, link, target_is_directory=True)
             return True
         except OSError:
@@ -262,9 +290,10 @@ def enable_plugin(name):
     lines = ["== " + time.strftime("%Y-%m-%d %H:%M:%S") + " 启用 " + name]
     try:
         d = entity_dir(name)
-        if d is not None and os.path.isfile(marker_path(name)):
-            os.remove(marker_path(name))
-            lines.append("已清除禁用标记")
+        if d is None and name not in OFFICIAL_BUNDLES:
+            link = os.path.join(local(NODE_MODULES), name, "package.json")
+            if not os.path.isfile(link):
+                raise RuntimeError("找不到插件实体，请重新导入：" + name)
         doc = read_manifest()
         if doc is None:
             lines.append("profile 尚不存在，先注册再启用")
@@ -278,11 +307,19 @@ def enable_plugin(name):
             changed = True
         if d is not None and ensure_symlink(name, d):
             changed = True
+        if d is not None:
+            if not os.path.isfile(os.path.join(local(NODE_MODULES), name, "package.json")):
+                raise RuntimeError("无法建立插件链接：" + name)
+            doc.setdefault("dependencies", {})[name] = "link:" + d
+            changed = True
         if changed:
             write_manifest(doc)
             lines.append("已加回 bundles：%s" % name)
         else:
             lines.append("本就启用：%s" % name)
+        if d is not None and os.path.isfile(marker_path(name)):
+            os.remove(marker_path(name))
+            lines.append("已清除禁用标记")
     except RuntimeError as e:
         lines.append(str(e))
         _write_log(lines, ok=False)
@@ -432,9 +469,13 @@ def _write_log(lines, ok):
 def main():
     args = sys.argv[1:]
     if len(args) >= 2 and args[0] in ("--enable", "--disable"):
+        if not valid_name(args[1]):
+            print("BUILTIN_REGISTER_FAIL: 无效插件名")
+            return 1
         return enable_plugin(args[1]) if args[0] == "--enable" else disable_plugin(args[1])
     return register()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    with operation_lock():
+        sys.exit(main())

@@ -62,8 +62,13 @@ public class DeviceBridgeService extends Service {
                 .getBoolean("adb_enabled", false);
     }
 
-    public static void apply(Context ctx) {
-        if (!isAdbEnabled(ctx)) return;
+    public static boolean apply(Context ctx) {
+        if (!isAdbEnabled(ctx)) return false;
+        if (!com.deepseekharness.app.bridge.LocalNetworkAccess.granted(ctx)) {
+            adbState = "ADB 等待局域网授权：请到配置页保存并授权";
+            return false;
+        }
+        if (current != null) return true;
         try {
             Intent i = new Intent(ctx, DeviceBridgeService.class);
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -71,8 +76,16 @@ public class DeviceBridgeService extends Service {
             } else {
                 ctx.startService(i);
             }
-        } catch (Throwable ignored) {
+            return true;
+        } catch (IllegalStateException e) {
+            // Android 12+ 后台启动限制也属于此类；等用户回到前台再恢复。
+            adbState = "ADB 保活待恢复：请回到 DSHA";
+            Log.w("DSHA", "后台暂不能启动 ADB 保活: " + e.getClass().getSimpleName());
+        } catch (RuntimeException e) {
+            adbState = "ADB 保活启动失败：请在配置页重试";
+            Log.w("DSHA", "ADB 保活启动失败: " + e.getClass().getSimpleName());
         }
+        return false;
     }
 
     /** 保活服务判断「ADB 设备桥是否还活着」用（被杀后由看门狗拉回）。 */
@@ -95,7 +108,16 @@ public class DeviceBridgeService extends Service {
         current = this;
         running = true;
         createChannel();
-        startForeground(WATCH_NOTIF_ID, buildNotification("ADB 通道保活中"));
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 34)
+                startForeground(WATCH_NOTIF_ID, buildNotification("ADB 通道保活中"),
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+            else startForeground(WATCH_NOTIF_ID, buildNotification("ADB 通道保活中"));
+        } catch (RuntimeException error) {
+            adbState = "ADB 保活未获系统允许，请回到 DSHA 重试";
+            stopSelf();
+            return;
+        }
         // 3090 桥（agent 调设备能力的通道）与 Shizuku 备用通道一并拉起。
         // 桥有跨实例互斥（STARTED），dsh 启动路径若已起过这里就是幂等 no-op。
         try {

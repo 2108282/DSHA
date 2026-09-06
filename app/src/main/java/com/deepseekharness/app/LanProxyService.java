@@ -263,6 +263,10 @@ public final class LanProxyService {
 
     /** Start the LAN bridge only after a current BrowserAuth cookie is available. */
     public static synchronized void start(String rootfsDir, Context ctx, int backend, long generation) {
+        if (!com.deepseekharness.app.bridge.LocalNetworkAccess.granted(ctx)) {
+            stopLanListener();
+            return;
+        }
         if (isActiveRunLocked(activeRun)) return;
         if (!hasDshAuth(generation)) return;
         int resolvedBackend = backend > 0 && backend <= 65535 && backend != LAN_PORT

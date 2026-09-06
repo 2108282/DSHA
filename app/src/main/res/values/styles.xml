@@ -5,6 +5,31 @@
 -->
 <resources>
 
+    <style name="InstallStep" parent="Widget.DSHA.Button">
+        <item name="android:minHeight">56dp</item>
+        <item name="android:gravity">start|center_vertical</item>
+        <item name="android:paddingLeft">16dp</item>
+        <item name="android:paddingRight">16dp</item>
+        <item name="android:paddingTop">12dp</item>
+        <item name="android:paddingBottom">12dp</item>
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:background">@drawable/bg_btn</item>
+    </style>
+
+    <style name="PluginAction" parent="DshaText.Label">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:minWidth">48dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:paddingLeft">12dp</item>
+        <item name="android:paddingRight">12dp</item>
+        <item name="android:paddingTop">10dp</item>
+        <item name="android:paddingBottom">10dp</item>
+        <item name="android:background">@drawable/bg_btn</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+        <item name="android:textColor">@color/text</item>
+    </style>
+
     <!-- 页面主标题（每页顶部只有一个） -->
     <style name="DshaText.Display" parent="">
         <item name="android:textSize">@dimen/text_display</item>

@@ -116,6 +116,7 @@ final class DeviceSense {
         }
     }
 
+    @android.annotation.SuppressLint("MissingPermission") // location() 已核对权限，撤销时向上抛 SecurityException。
     private static Location bestKnown(LocationManager lm) throws SecurityException {
         Location best = null;
         for (String p : lm.getAllProviders()) {
@@ -133,6 +134,7 @@ final class DeviceSense {
     }
 
     /** 等一次定位回调。必须在主线程注册监听 —— 调用方是桥的工作线程。 */
+    @android.annotation.SuppressLint("MissingPermission") // 调用前检查授权，异步注册仍捕获撤销权限异常。
     private static Location awaitSingle(Context ctx, LocationManager lm, boolean fine)
             throws SecurityException {
         final AtomicReference<Location> box = new AtomicReference<>();

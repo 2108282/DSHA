@@ -62,7 +62,14 @@ public interface ContainerRuntime {
             argv.add(nativeLibProot.getAbsolutePath());
             // 只有文件系统不支持硬链接时才需要 link2symlink 模拟（会破坏 dsh write 工具）。
             // Android app 私有目录（/data/…，ext4/f2fs）本来就支持硬链接，扩展纯属多余。
-            if (!hardlinkSupported) argv.add("--link2symlink");
+            if (!hardlinkSupported) {
+                argv.add("--link2symlink");
+                // L2S 链保存宿主绝对路径，容器必须能按同一路径访问，否则 dpkg 的 chown/stat 报 ENOENT。
+                File l2s = new File(rootfsDir, ".l2s");
+                l2s.mkdirs();
+                argv.add("-b");
+                argv.add(l2s.getAbsolutePath() + ":" + l2s.getAbsolutePath());
+            }
             argv.add("-L");
             argv.add("--kill-on-exit");
             argv.add("-0");

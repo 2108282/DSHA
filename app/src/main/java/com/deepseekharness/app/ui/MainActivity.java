@@ -20,6 +20,27 @@ import com.google.android.material.bottomnavigation.BottomNavigationView;
 public class MainActivity extends AppCompatActivity {
 
     public static volatile MainActivity current;
+    private boolean requestingLocalNetwork;
+    private final androidx.activity.result.ActivityResultLauncher<String> localNetworkPermission =
+            registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+                    granted -> {
+                        requestingLocalNetwork = false;
+                        if (granted) com.deepseekharness.app.bridge.LocalNetworkAccess.applyConfiguredFeatures(this);
+                        else android.widget.Toast.makeText(this,
+                                "未允许局域网访问；本机对话仍可使用，LAN / 无线 ADB 需在系统权限设置中开启",
+                                android.widget.Toast.LENGTH_LONG).show();
+                    });
+
+    public void requestLocalNetwork() {
+        if (com.deepseekharness.app.bridge.LocalNetworkAccess.granted(this)) {
+            com.deepseekharness.app.bridge.LocalNetworkAccess.applyConfiguredFeatures(this);
+        } else if (!requestingLocalNetwork) {
+            requestingLocalNetwork = true;
+            getSharedPreferences(com.deepseekharness.app.util.Constants.PREFS, MODE_PRIVATE)
+                    .edit().putBoolean("local_network_permission_asked", true).apply();
+            localNetworkPermission.launch(com.deepseekharness.app.bridge.LocalNetworkAccess.PERMISSION);
+        }
+    }
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -27,7 +48,7 @@ public class MainActivity extends AppCompatActivity {
         current = this;
 
         ConfigStore config = new ConfigStore(this);
-        HarnessController controller = new HarnessController(this);
+        HarnessController controller = HarnessController.get(this);
         boolean skipExtract = getIntent().getBooleanExtra("skip_extract", false);
 
         // 启动门禁：未欢迎 → Welcome；环境未解压 → Extract
@@ -74,6 +95,23 @@ public class MainActivity extends AppCompatActivity {
 
         if (savedInstanceState == null) {
             nav.setSelectedItemId(R.id.nav_launch);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (!isFinishing() && findViewById(R.id.bottom_nav) != null
+                && (new ConfigStore(this).isLanMode()
+                || com.deepseekharness.app.DeviceBridgeService.isAdbEnabled(this))
+                && !com.deepseekharness.app.bridge.LocalNetworkAccess.granted(this)
+                && !getSharedPreferences(com.deepseekharness.app.util.Constants.PREFS, MODE_PRIVATE)
+                .getBoolean("local_network_permission_asked", false)) requestLocalNetwork();
+        // Android 12+ 可能拒绝后台唤起前台服务，回到可见界面后补一次恢复。
+        if (!isFinishing() && findViewById(R.id.bottom_nav) != null
+                && com.deepseekharness.app.DeviceBridgeService.isAdbEnabled(this)
+                && !com.deepseekharness.app.DeviceBridgeService.isRunning()) {
+            com.deepseekharness.app.DeviceBridgeService.apply(this);
         }
     }
 

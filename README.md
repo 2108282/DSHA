@@ -21,24 +21,32 @@
 
 ---
 
-## 📣 已更新至 v1.2.0-rc1（重构版 · 预发布）
+## 📣 v1.2.0-rc1.2（重构版 · 预览版）
 
-仓库已更新到 **v1.2.0-rc1**（versionCode 107，[点此下载 APK](https://github.com/qiannianhuanxiang/DSHA/releases/tag/v1.2.0-rc1)）。这是从零重写、保留原版框架与内容的**重构版**：纯 Java 17 单模块分层架构，内置 `@deepseek-ai/dsh` 升级到上游最新 **0.1.2-rc.1**。
+1.2 系列的重构与适配由贡献者 [@ym2025szz](https://github.com/ym2025szz) 推进，本次仍以 **Pre-release** 发布。感谢原作者 [@qiannianhuanxiang](https://github.com/qiannianhuanxiang) 及其他贡献者。
 
-**v1.2.0-rc1 主要变更：**
+[查看完整更新说明与下载](https://github.com/qiannianhuanxiang/DSHA/releases/tag/v1.2.0-rc1.2) · [插件选取：dsha.cc](https://dsha.cc/) · [上个预览版 rc1](https://github.com/qiannianhuanxiang/DSHA/releases/tag/v1.2.0-rc1)
 
-- dsh 升级到 0.1.2-rc.1（补齐 koffi-linux-arm64 等原生模块，修复 WebUI 起不来）
-- 覆盖安装不再丢插件/配置（rootfs 版本比对，内置包变化时强制干净重解压）
-- 插件管理：4 个内置插件 + 2 个官方核心带开关（**插件市场暂未开发**）
-- 局域网访问：3081 代理自动绑定，主页直接显示完整地址（点按复制）
-- 无障碍屏幕操作：读屏 / 点按 / 输入 / 按键 / 滑动 / 截屏（Android 11+）
-- ADB 无线配对、危险命令守卫、流式悬浮条、终端 PTY、备份恢复、Keystore 加密 API key
-- 57 条纯逻辑单元测试
+| 预览版 | 设备范围 | 下载 | 大小 |
+|---|---|---|---:|
+| 高安卓标准版 | Android 11+ / arm64，系统 WebView | [dsha-1.2.0-rc1.2.apk](https://github.com/qiannianhuanxiang/DSHA/releases/download/v1.2.0-rc1.2/dsha-1.2.0-rc1.2.apk) · [SHA-256](https://github.com/qiannianhuanxiang/DSHA/releases/download/v1.2.0-rc1.2/dsha-1.2.0-rc1.2.apk.sha256) | 212.39 MiB |
+| 低安卓兼容版 | 面向 Android 6—12 / arm64，内置 Gecko 备用内核 | [dsha-1.2.0-rc1.2low.apk](https://github.com/qiannianhuanxiang/DSHA/releases/download/v1.2.0-rc1.2/dsha-1.2.0-rc1.2low.apk) · [SHA-256](https://github.com/qiannianhuanxiang/DSHA/releases/download/v1.2.0-rc1.2/dsha-1.2.0-rc1.2low.apk.sha256) | 289.46 MiB |
 
-> ⚠️ **预发布版，主要用于收集使用者意见/反馈**：建议**重新安装**（先卸载旧版）而非覆盖安装，避免新旧环境残留引发报错；卸载前请先备份（`Download/DSHA/`，重装后可恢复）。
-> 📮 反馈：QQ 群 **975836806**（测试版、问题反馈、插件交流），或提 issue。
+**相比此前已发布的 rc1：**
 
-以下为项目原有介绍（部分能力以 v1.2.0-rc1 实际实现为准，插件市场等仍在开发中）：
+- **插件市场可用**：链接识别与安装、本地导入、多选导出、第三方插件删除；修复 HTTPS 证书、旧系统文件选择和卡片重叠问题，增加 dsha.cc 选插件入口。
+- **对话全屏**：去掉原生顶部栏，WebView / Gecko 共用全屏、返回手势和键盘避让；完善鉴权、附件选择、错误重试与启动/停止处理。
+- **终端与安装补齐**：恢复基础工具第 2 步，修复 apt 硬链接映射及部分设备终端加载失败；支持 `npm install 包名`，npm 上的 dsh 插件可用 `dsha-plugin install 包名@版本` 安装并登记。
+- **拆分与减重**：标准版比已发布 rc1 的 414.37 MiB 减少约 48.7%，兼容版减少约 30.1%；保留 Ubuntu、Node 24、pnpm 和 dsh 完整离线环境。
+- **同签名升级**：版本码 111，沿用 rc1 / rc1.1 发布签名和环境版本，可覆盖同签名旧版，无需先卸载。两版共享包名与数据，不能同时安装。
+
+运行时仍为 `@deepseek-ai/dsh 0.1.2-rc.1`。此前 alpha.2、rc1 和本地 rc1.1 的差异详见[发布说明](docs/releases/v1.2.0-rc1.2.md)。
+
+**验证范围：**两版构建、Lint 与签名检查通过；Android 13 验证插件下载/导入、npm 和本次全屏/键盘处理，前序 Android 16 已验证核心功能。编译/目标 API 37；Android 6—12、Android 17 及 16 KB 真机仍待补充，不代表已恢复全部历史能力。详见[兼容版说明](docs/android-low.md)和[本次验收记录](docs/release-rc1.2-2026-09-06.md)。
+
+📮 预览版反馈：[GitHub Issues](https://github.com/qiannianhuanxiang/DSHA/issues) / QQ 群 **975836806**，请附机型、Android 版本和复现步骤。
+
+以下保留 1.1.10 及更早版本的原有项目介绍；1.2 预览版的功能与兼容范围请以上方说明为准。
 
 ---
 

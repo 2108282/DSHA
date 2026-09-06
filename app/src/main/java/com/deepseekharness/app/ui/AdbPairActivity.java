@@ -36,7 +36,21 @@ public class AdbPairActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(buildUi());
-        discoverPorts();
+        if (com.deepseekharness.app.bridge.LocalNetworkAccess.granted(this)) discoverPorts();
+        else requestNetworkPermission();
+    }
+
+    private void requestNetworkPermission() {
+        setStatus("无线 ADB 需要局域网权限，以发现配对端口并连接设备");
+        requestPermissions(new String[]{com.deepseekharness.app.bridge.LocalNetworkAccess.PERMISSION}, 37);
+    }
+
+    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(code, permissions, results);
+        if (code == 37) {
+            if (com.deepseekharness.app.bridge.LocalNetworkAccess.granted(this)) discoverPorts();
+            else setStatus("未允许局域网访问，请在系统的 DSHA 权限设置中允许后重试配对");
+        }
     }
 
     private View buildUi() {
@@ -187,6 +201,10 @@ public class AdbPairActivity extends Activity {
     }
 
     private void startPair() {
+        if (!com.deepseekharness.app.bridge.LocalNetworkAccess.granted(this)) {
+            requestNetworkPermission();
+            return;
+        }
         if (pairing) return;
         String code = codeEt.getText().toString().trim();
         if (code.length() < 6) {

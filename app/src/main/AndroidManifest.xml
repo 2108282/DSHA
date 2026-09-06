@@ -3,32 +3,35 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 网络回调和 Wi-Fi 保活由本应用使用，不依赖浏览器库间接声明。 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <!-- 所有文件访问权限（Android 11+）：容器/proot 进程要能读写手机存储任意文件
          （含 DSHA 目录以外），WebUI 工作区才能建到 /sdcard 任意位置。 -->
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:targetApi="30" />
-    <!-- Android 6-9（API 23-28）：容器访问 /sdcard 走 WRITE_EXTERNAL_STORAGE 运行时权限；
-         Android 10+ 走作用域存储/MANAGE，这里用 maxSdkVersion 限定避免冗余。 -->
-    <uses-permission
-        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
-    <!-- terminal-view/terminal-emulator 0.118 声明 minSdk 24（Termux 2023 起），但组件主体
-         只需 API 21+；兼容 Android 6 时强制合并，终端在低版本设备上用兼容路径
-         （见 PtyTerminalFragment）。 -->
-    <uses-sdk tools:overrideLibrary="com.termux.view,com.termux.terminal" />
+    <queries>
+        <intent><action android:name="android.intent.action.OPEN_DOCUMENT" /><data android:mimeType="*/*" /></intent>
+        <intent><action android:name="android.intent.action.GET_CONTENT" /><data android:mimeType="*/*" /></intent>
+    </queries>
 
     <application
         android:name=".DshaApp"
@@ -36,6 +39,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.DeepseekHarness">
 
@@ -71,6 +75,7 @@
         <activity
             android:name=".ui.WebPreviewActivity"
             android:exported="false"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.DeepseekHarness" />
 
         <activity
@@ -87,13 +92,16 @@
         <service
             android:name=".DeviceBridgeService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- 前台保活：dsh Web UI 后台常驻 + 看门狗自动重启 -->
         <service
             android:name=".HarnessService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started local AI development server and terminal runtime with an ongoing notification and explicit stop action." />
+        </service>
 
         <service
             android:name=".ShellService"

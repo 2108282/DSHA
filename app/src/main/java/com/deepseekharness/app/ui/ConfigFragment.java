@@ -59,7 +59,6 @@ public class ConfigFragment extends Fragment {
         CheckBox checkUpdate = v.findViewById(R.id.config_check_update);
         CheckBox desktop = v.findViewById(R.id.config_desktop_mode);
         CheckBox backupKey = v.findViewById(R.id.config_backup_key);
-        CheckBox gecko = v.findViewById(R.id.config_gecko_core);
         CheckBox proroot = v.findViewById(R.id.config_proroot);
         CheckBox lan = v.findViewById(R.id.config_lan_mode);
         CheckBox overlay = v.findViewById(R.id.config_overlay_stream);
@@ -81,13 +80,21 @@ public class ConfigFragment extends Fragment {
         rootShell.setChecked(c.isRootShellAllowed());
         checkUpdate.setChecked(c.isCheckUpdate());
         desktop.setChecked(c.isDesktopMode());
-        backupKey.setChecked(c.isBackupKey());
+        CheckBox gecko = v.findViewById(R.id.config_gecko_core);
+        gecko.setVisibility(com.deepseekharness.app.BuildConfig.LOW_ANDROID ? View.VISIBLE : View.GONE);
         gecko.setChecked(c.isGeckoCore());
+        backupKey.setChecked(c.isBackupKey());
         proroot.setChecked(c.isProroot());
         lan.setChecked(c.isLanMode());
         overlay.setChecked(pref(ctx, "overlay_stream", false));
         sensors.setChecked(pref(ctx, "cap_sensors", false));
         location.setChecked(pref(ctx, "cap_location", false));
+        location.setOnCheckedChangeListener((button, checked) -> {
+            if (checked && ctx.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED)
+                requestPermissions(new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION,
+                        android.Manifest.permission.ACCESS_COARSE_LOCATION}, 104);
+        });
         autoBackup.setText(String.valueOf(c.getAutoBackupLaunches()));
         adb.setChecked(pref(ctx, "adb_enabled", false));
         TextView adbStatus = v.findViewById(R.id.config_adb_status);
@@ -112,8 +119,13 @@ public class ConfigFragment extends Fragment {
         v.findViewById(R.id.config_overlay_style).setOnClickListener(x -> showOverlayStyleDialog());
 
         // ADB 通道（可直接用）
-        v.findViewById(R.id.config_adb_pair).setOnClickListener(x ->
-                startActivity(new Intent(ctx, AdbPairActivity.class)));
+        v.findViewById(R.id.config_adb_pair).setOnClickListener(x -> {
+            if (android.os.Build.VERSION.SDK_INT < 30) {
+                new androidx.appcompat.app.AlertDialog.Builder(ctx).setTitle("当前系统没有配对码接口")
+                        .setMessage("无线调试配对码需要 Android 11+。Android 6—10 可使用 Shizuku 或由电脑开启 ADB TCP 通道；对话、插件和终端不受影响。")
+                        .setPositiveButton("知道了", null).show();
+            } else startActivity(new Intent(ctx, AdbPairActivity.class));
+        });
         v.findViewById(R.id.config_battery_opt).setOnClickListener(x -> openBatteryOpt(ctx));
         v.findViewById(R.id.config_a11y).setOnClickListener(x -> openA11ySettings(ctx));
         refreshA11yStatus(v.findViewById(R.id.config_a11y_status));
@@ -127,8 +139,8 @@ public class ConfigFragment extends Fragment {
             c.setRootShellAllowed(rootShell.isChecked());
             c.setCheckUpdate(checkUpdate.isChecked());
             c.setDesktopMode(desktop.isChecked());
+            if (com.deepseekharness.app.BuildConfig.LOW_ANDROID) c.setGeckoCore(gecko.isChecked());
             c.setBackupKey(backupKey.isChecked());
-            c.setGeckoCore(gecko.isChecked());
             c.setProroot(proroot.isChecked());
             c.setLanMode(lan.isChecked());
             c.setAutoBackupLaunches(parseInt(autoBackup.getText().toString()));
@@ -138,8 +150,12 @@ public class ConfigFragment extends Fragment {
             setPref(ctx, "adb_enabled", adb.isChecked());
             if (adb.isChecked()) {
                 DeviceBridgeService.apply(ctx);
+            } else {
+                ctx.stopService(new Intent(ctx, DeviceBridgeService.class));
             }
             applyLanMode(c, lan.isChecked());
+            if ((adb.isChecked() || lan.isChecked()) && getActivity() instanceof MainActivity)
+                ((MainActivity) getActivity()).requestLocalNetwork();
             Toast.makeText(ctx, "已保存（重启 Web 后生效）", Toast.LENGTH_SHORT).show();
         });
 

@@ -26,10 +26,11 @@ import com.deepseekharness.app.util.SensitiveData;
 public class InstallFragment extends Fragment {
 
     private HarnessController c;
+    private com.deepseekharness.app.runtime.BasicToolsInstaller basicTools;
+    private boolean busy;
     private TextView statusText, progressText, errorText, stepStatusText;
     private ProgressBar progressBar;
     private Button step1Btn, step2Btn, step3Btn, step4Btn, step5Btn, step6Btn;
-    private final StringBuilder stepLog = new StringBuilder();
 
     @Nullable
     @Override
@@ -41,6 +42,7 @@ public class InstallFragment extends Fragment {
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         c = new HarnessController(requireContext());
+        basicTools = new com.deepseekharness.app.runtime.BasicToolsInstaller(requireContext(), c.proot());
         statusText = view.findViewById(R.id.install_status);
         progressText = view.findViewById(R.id.install_progress);
         errorText = view.findViewById(R.id.install_error);
@@ -72,56 +74,73 @@ public class InstallFragment extends Fragment {
 
     // ================= 状态概览 =================
 
+    @Override public void onDestroyView() {
+        busy = false;
+        super.onDestroyView();
+    }
+
     private void refreshOverview() {
         ProotBootstrap p = c.proot();
         boolean env = p.isEnvironmentReady();
         statusText.setText("环境：" + (env ? "✅ 已就绪" : "⚠️ 未解压/不完整")
-                + "\n运行目录：data → files → linux → ubuntu\n"
-                + "配置：root → .dsh\n\n"
-                + "内置离线包方案：rootfs / Node / pnpm / dsh 都已随 APK 内置，"
-                + "本页做完整性检查与修复，无需联网安装。");
-        stepStatusText.setText("点击下方按钮可单独检查/修复对应组件。");
+                + "\n核心运行环境已内置。第 2 步缺少 curl / git 时会联网补齐，Python 与 pnpm 可离线修复。");
+        stepStatusText.setText("按 1—6 顺序检查，也可单独修复其中一步。");
     }
 
     // ================= 步骤执行 =================
 
     private void runAll() {
+        if (busy) return;
+        final View page = getView();
+        final android.app.Activity activity = getActivity();
+        if (page == null || activity == null) return;
         statusText.setText("一键检查中…");
         showProgress(true);
         new Thread(() -> {
             StringBuilder log = new StringBuilder();
+            int problems = 0;
             int[] steps = {1, 2, 3, 4, 5, 6};
             for (int i = 0; i < steps.length; i++) {
                 final int step = steps[i];
                 String[] r = checkStep(step);
+                if (!r[1].startsWith("✅")) problems++;
                 log.append(r[0]).append("\n");
                 final int pct = (i + 1) * 100 / steps.length;
-                if (getActivity() == null || !isAdded()) return;
-                getActivity().runOnUiThread(() -> {
+                if (!isAdded()) return;
+                activity.runOnUiThread(() -> {
+                    if (getView() != page) return;
                     progressBar.setProgress(pct);
                     progressText.setText("第 " + step + " 步：" + r[1]);
                 });
             }
             final String report = log.toString();
-            if (getActivity() == null || !isAdded()) return;
-            getActivity().runOnUiThread(() -> {
+            final int failures = problems;
+            activity.runOnUiThread(() -> {
+                if (getView() != page) return;
                 showProgress(false);
-                statusText.setText("一键检查完成（自动修复缺项）。");
-                stepStatusText.setText(report);
+                statusText.setText(failures == 0 ? "全部 6 步检查通过。" : "检查完成，仍有 " + failures + " 步需要处理。");
+                stepStatusText.setText(failures == 0 ? report : "未通过步骤的详细输出见下方，可复制后反馈。");
+                showResultError(failures > 0, report);
             });
         }, "install-check").start();
     }
 
     private void runStep(int step) {
+        if (busy) return;
+        final View page = getView();
+        final android.app.Activity activity = getActivity();
+        if (page == null || activity == null) return;
         statusText.setText("正在检查第 " + step + " 步…");
         showProgress(true);
+        if (step == 2) progressText.setText("正在检查并修复 curl / git / Python；首次下载可能需要几分钟…");
         new Thread(() -> {
             String[] r = checkStep(step);
-            if (getActivity() == null || !isAdded()) return;
-            getActivity().runOnUiThread(() -> {
+            activity.runOnUiThread(() -> {
+                if (getView() != page) return;
                 showProgress(false);
                 statusText.setText("第 " + step + " 步结果：" + r[1]);
-                stepStatusText.setText(r[0]);
+                stepStatusText.setText(r[1].startsWith("✅") ? r[0] : "本步未完成，详细输出见下方。");
+                showResultError(!r[1].startsWith("✅"), r[0]);
             });
         }, "install-step").start();
     }
@@ -145,13 +164,7 @@ public class InstallFragment extends Fragment {
                     return new String[]{"① rootfs：无离线包（APK 是精简包）。", "❌ 缺离线包"};
                 }
                 case 2: {
-                    // ② 基础工具：curl / git / python3
-                    String out = p.execAndRead(
-                            "for t in curl git python3; do command -v $t >/dev/null 2>&1 || echo MISS:$t; done; echo DONE");
-                    boolean ok = out == null || !out.contains("MISS:");
-                    return ok
-                            ? new String[]{"② 基础工具：curl / git / python3 都在。", "✅ 正常"}
-                            : new String[]{"② 缺：" + (out == null ? "?" : out.trim()), "⚠️ 缺项（不影响 dsh 本体）"};
+                    return basicTools.repair();
                 }
                 case 3: {
                     // ③ Node.js
@@ -161,11 +174,9 @@ public class InstallFragment extends Fragment {
                             : new String[]{"③ Node.js 不可用：" + v, "❌ 异常"};
                 }
                 case 4: {
-                    // ④ pnpm（corepack 提供）
-                    String v = p.execAndRead(
-                            "command -v pnpm >/dev/null 2>&1 && pnpm --version 2>&1 | head -1 || "
-                                    + "(corepack enable pnpm >/dev/null 2>&1; pnpm --version 2>&1 | head -1)")
-                            .trim();
+                    if (!p.ensureBundledPnpm())
+                        return new String[]{"④ 离线 pnpm 修复失败，请重试。", "❌ 异常"};
+                    String v = p.execAndRead("pnpm --version 2>&1 | head -1").trim();
                     return v.matches("\\d+.*")
                             ? new String[]{"④ pnpm：" + v, "✅ 正常"}
                             : new String[]{"④ pnpm 不可用：" + v, "⚠️ 插件管理需 pnpm"};
@@ -176,7 +187,7 @@ public class InstallFragment extends Fragment {
                             "node -e \"console.log(require('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').version)\" 2>&1 | head -1")
                             .trim();
                     return v.matches("[0-9]+\\..*")
-                            ? new String[]{"⑤ dsh：" + v + "（" + com.deepseekharness.app.util.Constants.DSH_VERSION + "）", "✅ 正常"}
+                            ? new String[]{"⑤ dsh：" + v, "✅ 正常"}
                             : new String[]{"⑤ dsh 不可用：" + v, "❌ 异常"};
                 }
                 case 6: {
@@ -230,7 +241,23 @@ public class InstallFragment extends Fragment {
     }
 
     private void showProgress(boolean show) {
+        busy = show;
         progressBar.setVisibility(show ? View.VISIBLE : View.GONE);
+        progressBar.setIndeterminate(show);
         progressText.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (show) {
+            errorText.setVisibility(View.GONE);
+            progressText.setText("正在检查，请稍候…");
+        }
+        View view = getView();
+        if (view != null) for (int id : new int[]{R.id.install_btn, R.id.install_step1,
+                R.id.install_step2, R.id.install_step3, R.id.install_step4, R.id.install_step5,
+                R.id.install_step6, R.id.install_uninstall}) view.findViewById(id).setEnabled(!show);
+    }
+
+    private void showResultError(boolean failed, String output) {
+        errorText.setText(failed ? output : "");
+        errorText.setVisibility(failed ? View.VISIBLE : View.GONE);
+        if (getView() != null) getView().findViewById(R.id.install_copy).setVisibility(failed ? View.VISIBLE : View.GONE);
     }
 }

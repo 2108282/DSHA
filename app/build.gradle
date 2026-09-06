@@ -2,23 +2,42 @@ plugins {
     id 'com.android.application'
 }
 
-// 骨架阶段不内置 300MB 离线 rootfs。默认走「精简包」路径，只要求能编出可安装的 APK；
-// 完整包（含 offline-rootfs.bin）由 CI 在 arm64 runner 上现场生成后放回 assets 即可，
-// 打包逻辑与原版 protectOfflineBundle 一致，留待接回。
-def slim = project.hasProperty('slim') || !file("src/main/assets/offline-rootfs.bin").exists()
+// 两版共用功能和离线环境；只有 low 携带兼容旧 Android 的 Gecko 内核。
 
 android {
     namespace 'com.deepseekharness.app'
-    compileSdk 34
+    compileSdk {
+        version = release(37)
+    }
+    ndkVersion '26.3.11579264'
 
     defaultConfig {
         applicationId "com.dsh.client"
-        minSdk 23
-        targetSdk 34
-        versionCode 107
-        versionName "1.2.0-rc1"
+        minSdk 30
+        targetSdk 37
+        versionCode 111
+        versionName "1.2.0-rc1.2"
         ndk {
             abiFilters 'arm64-v8a'
+        }
+    }
+
+    flavorDimensions 'androidSupport'
+    productFlavors {
+        standard {
+            dimension 'androidSupport'
+            minSdk 30
+            buildConfigField 'boolean', 'LOW_ANDROID', 'false'
+            resValue 'string', 'edition_description', '标准版 · Android 11+ · 系统 WebView'
+            resValue 'string', 'browser_description', '使用系统 WebView，请保持 Android System WebView / Chrome 更新。'
+        }
+        low {
+            dimension 'androidSupport'
+            minSdk 23
+            versionName '1.2.0-rc1.2low'
+            buildConfigField 'boolean', 'LOW_ANDROID', 'true'
+            resValue 'string', 'edition_description', '兼容版 · Android 6+ · WebView / Gecko'
+            resValue 'string', 'browser_description', '旧系统 WebView 自动使用内置 Gecko；可手动开启兼容内核。'
         }
     }
 
@@ -63,41 +82,57 @@ android {
     packagingOptions {
         jniLibs {
             useLegacyPackaging = true
+            // 使用 app 自带的同版本 16 KB JNI，覆盖 terminal-emulator AAR 中的旧库。
+            pickFirsts += ['**/libtermux.so']
             excludes += ['**/x86/**', '**/x86_64/**', '**/armeabi/**', '**/armeabi-v7a/**']
         }
     }
 
     androidResources {
         // 'bin' 是离线 rootfs：aapt 会把 .tar.gz 静默解成 .tar，所以打包前改名 .bin，
-        // 且必须 STORED（不 deflate）—— 否则打包多花几分钟、首启解压多 inflate 一整遍 159MB。
+        // 保持 STORED（不 deflate），避免对已经压缩的离线运行时再压缩一次。
         noCompress += ['gz', 'xz', 'bin', 'ja', 'tar', 'whl']
     }
 
     compileOptions {
+        coreLibraryDesugaringEnabled true
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
-        // java.util.function / java.time 等 Java 8 API 在 API 23 上不存在，
-        // 用 core library desugaring 回退（java.nio.file 不在 desugaring 范围，另行替换）。
-        coreLibraryDesugaringEnabled true
     }
 
     buildFeatures {
+        resValues = true
         aidl = true
         buildConfig = true
     }
+
+    sourceSets {
+        main.assets.setSrcDirs([layout.buildDirectory.dir("generated/standardAssets")])
+    }
 }
 
+def prepareStandardAssets = tasks.register("prepareStandardAssets", Exec) {
+    inputs.dir("src/main/assets")
+    inputs.file(rootProject.file("tools/prepare-standard-assets.py"))
+    outputs.dir(layout.buildDirectory.dir("generated/standardAssets"))
+    outputs.file(layout.buildDirectory.file("generated/standard-assets-report.json"))
+    commandLine(System.getenv("DSHA_PYTHON") ?: "python3", "-B",
+            rootProject.file("tools/prepare-standard-assets.py").absolutePath,
+            "--source", file("src/main/assets").absolutePath,
+            "--output", layout.buildDirectory.dir("generated/standardAssets").get().asFile.absolutePath)
+}
+tasks.named("preBuild").configure { dependsOn(prepareStandardAssets) }
+
 dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
+    lowImplementation 'org.mozilla.geckoview:geckoview-arm64-v8a:143.0.20251003115653'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
-    // 内置浏览器内核兜底：系统 WebView 过旧（Chrome<118）时前端 JS 崩，切 GeckoView。
-    implementation 'org.mozilla.geckoview:geckoview-arm64-v8a:126.0.20240526221752'
     implementation 'dev.rikka.shizuku:api:12.2.0'
     implementation 'dev.rikka.shizuku:provider:12.2.0'
     // 真 PTY 终端：Termux 拆出的 terminal-view/terminal-emulator（Apache 2.0），
     // 自带 JNI PTY 层（openpty+fork/exec）。坐标是 JitPack 多模块真实 groupId
     // （com.termux.termux-app），不是 Wiki 上会 401 的 com.termux:terminal-view。
     implementation 'com.termux.termux-app:terminal-view:0.118.0'
-    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
     testImplementation 'junit:junit:4.13.2'
 }

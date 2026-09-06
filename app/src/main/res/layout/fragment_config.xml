@@ -190,14 +190,18 @@
                 android:paddingStart="@dimen/gap_tight"
                 android:text="备份包含 API key（关掉更安全，恢复后需重填）" />
 
-            <CheckBox
-                android:id="@+id/config_gecko_core"
+            <TextView
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="@dimen/touch_min"
                 android:paddingStart="@dimen/gap_tight"
-                android:text="内置浏览器内核（系统 WebView 过旧时再开，更吃内存）" />
+                android:gravity="center_vertical"
+                android:text="@string/browser_description" />
+            <CheckBox android:id="@+id/config_gecko_core" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:minHeight="48dp" android:visibility="gone"
+                android:text="使用内置兼容内核（Gecko）" android:textColor="@color/text_secondary"
+                android:buttonTint="@color/primary" />
 
             <CheckBox
                 android:id="@+id/config_proroot"

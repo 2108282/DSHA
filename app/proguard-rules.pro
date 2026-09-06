@@ -1,1 +1,1 @@
-# 骨架阶段：不启用 minify。上线前再补 keep 规则（GeckoView/Shizuku 等按需加回）。
+# 标准版暂不启用 minify，Shizuku / PTY 的压缩规则后续单独验证。

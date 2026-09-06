@@ -39,8 +39,6 @@ public class HarnessService extends Service {
     // ================= WebUI 监听保活 =================
     private Thread keepAliveThread;
     private volatile boolean keepAliveRunning;
-    private final java.util.concurrent.atomic.AtomicBoolean restarting =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
     private final java.util.concurrent.atomic.AtomicLong lastRestartAt =
             new java.util.concurrent.atomic.AtomicLong(0);
     private static final long KEEPALIVE_INTERVAL_MS = 15000L;
@@ -56,7 +54,13 @@ public class HarnessService extends Service {
         super.onCreate();
         c = HarnessController.get(this);
         createChannel();
-        startForeground(NOTIF_ID, buildNotification("DSHA运行中", "Web UI 正在后台保持运行"));
+        try {
+            showForegroundNotification();
+        } catch (RuntimeException error) {
+            android.util.Log.w("DSHA", "前台服务未获系统允许: " + error.getClass().getSimpleName());
+            stopSelf();
+            return;
+        }
         // 3090 桥（agent 调设备能力）随前台服务拉起；跨实例互斥，重复启动安全
         try {
             shellHttp = new HttpShellService(this);
@@ -70,17 +74,19 @@ public class HarnessService extends Service {
         // Android 8+ 硬性契约：startForegroundService() 拉起的服务必须在 5 秒内 startForeground，
         // 否则被强杀。每次 onStartCommand 无条件先立通知（幂等）。
         try {
-            startForeground(NOTIF_ID, buildNotification("DSHA运行中", "Web UI 正在后台保持运行"));
+            showForegroundNotification();
         } catch (Throwable e) {
             android.util.Log.w("DSHA", "onStartCommand startForeground 失败: "
                     + SensitiveData.redact(String.valueOf(e)));
+            stopSelf();
+            return START_NOT_STICKY;
         }
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             stopWebAndSelf();
             return START_NOT_STICKY;
         }
-        if (intent == null && !c.isWebRunning()) {
-            // 系统因 START_STICKY 重建服务，且 Web 本来就没在跑 —— 不自动拉起（用户可能已停过）
+        if (!c.isStarting() && !c.canAutoRestart()) {
+            // 用户停止或哨兵仍在时不拉起；不在服务主线程执行 proot 探测。
             return START_STICKY;
         }
         startKeepAlive();
@@ -90,7 +96,7 @@ public class HarnessService extends Service {
     private void stopWebAndSelf() {
         stopKeepAlive();
         try {
-            c.stopWeb();
+            c.stopWeb(msg -> { });
         } catch (Throwable ignored) {
         }
         try {
@@ -107,7 +113,7 @@ public class HarnessService extends Service {
 
     // ================= 息屏保活 =================
 
-    private void acquireLocks() {
+    private synchronized void acquireLocks() {
         try {
             android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
             if (pm != null && (wakeLock == null || !wakeLock.isHeld())) {
@@ -129,7 +135,7 @@ public class HarnessService extends Service {
         }
     }
 
-    private void releaseLocks() {
+    private synchronized void releaseLocks() {
         try {
             if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         } catch (Throwable ignored) {
@@ -150,13 +156,22 @@ public class HarnessService extends Service {
         keepAliveRunning = true;
         keepAliveThread = new Thread(() -> {
             int fail = 0;
-            while (keepAliveRunning) {
+            while (keepAliveRunning && !Thread.currentThread().isInterrupted()) {
                 try {
                     Thread.sleep(KEEPALIVE_INTERVAL_MS);
                 } catch (InterruptedException e) {
                     break;
                 }
                 if (!keepAliveRunning) break;
+                if (!c.canAutoRestart()) {
+                    synchronized (HarnessService.this) {
+                        // 只在用户停止时释放；下次手动启动由 startKeepAlive 重新取锁。
+                        if (c.isUserStopped()) releaseLocks();
+                    }
+                    fail = 0;
+                    continue;
+                }
+                long generation = c.getWebGeneration();
                 // 顺手守着 ADB 设备桥（普通后台服务被回收时拉回来）
                 try {
                     if (DeviceBridgeService.isAdbEnabled(HarnessService.this)
@@ -169,20 +184,21 @@ public class HarnessService extends Service {
                     fail = 0;
                     continue;
                 }
+                // TCP 探测期间可能发生手动启停，不能沿用旧探测结果。
+                if (!keepAliveRunning || Thread.currentThread().isInterrupted()
+                        || generation != c.getWebGeneration() || !c.canAutoRestart()) {
+                    fail = 0;
+                    continue;
+                }
                 fail++;
                 if (fail < KEEPALIVE_MAX_FAIL) continue;
                 fail = 0;
-                long now = System.currentTimeMillis();
-                if (now - lastRestartAt.get() < RESTART_COOLDOWN_MS) continue;
-                lastRestartAt.set(now);
-                if (restarting.compareAndSet(false, true)) {
-                    try {
-                        android.util.Log.w("DSHA", "[保活] WebUI 连续失联，自动重启");
-                        c.startWeb(msg -> { });
-                    } catch (Throwable ignored) {
-                    } finally {
-                        restarting.set(false);
-                    }
+                long now = android.os.SystemClock.elapsedRealtime();
+                if (lastRestartAt.get() != 0 && now - lastRestartAt.get() < RESTART_COOLDOWN_MS) continue;
+                // Controller 持有启动门控直到就绪/失败/超时，无需异步返回即释放的第二把锁。
+                if (c.restartWebAutomatically(generation, msg -> { })) {
+                    lastRestartAt.set(now);
+                    android.util.Log.w("DSHA", "[保活] WebUI 连续失联，已提交自动重启");
                 }
             }
         }, "dsha-keepalive");
@@ -231,6 +247,14 @@ public class HarnessService extends Service {
     @Override
     public IBinder onBind(Intent intent) {
         return null;
+    }
+
+    private void showForegroundNotification() {
+        Notification notification = buildNotification("DSHA运行中", "Web UI 正在后台保持运行");
+        if (Build.VERSION.SDK_INT >= 34)
+            startForeground(NOTIF_ID, notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        else startForeground(NOTIF_ID, notification);
     }
 
     // ================= 通知 =================

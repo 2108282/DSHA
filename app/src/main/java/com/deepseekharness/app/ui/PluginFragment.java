@@ -1,316 +1,402 @@
 package com.deepseekharness.app.ui;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ProgressBar;
+import android.view.inputmethod.EditorInfo;
+import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.fragment.app.Fragment;
+import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.deepseekharness.app.R;
-import com.deepseekharness.app.core.HarnessController;
-import com.deepseekharness.app.util.BuiltinPlugins;
-import com.deepseekharness.app.util.SensitiveData;
+import com.deepseekharness.app.core.PluginRepository;
+import com.deepseekharness.app.util.PluginSource;
 
-import java.io.File;
-import java.io.FileInputStream;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
-/**
- * 插件页：两个页签 —— 「插件市场」与「插件管理」。
- *
- * <p><b>插件管理</b>：列出 dsh web profile 里可管理的 6 个插件（4 个内置 + 2 个官方核心），
- * 每个带开关，可自定义启用 / 禁用；改动写进 profile 的 dsh.profile.bundles（内置插件
- * 另写 node_modules/&lt;name&gt;.disabled 标记，注册流程会尊重它），重启 Web 后生效。
- * 内置插件不进市场 —— 它们随 APK/rootfs 自带，不是「从市场安装」的。
- *
- * <p><b>插件市场</b>：安装第三方插件的能力（GitHub 链接安装等）待回填，这里显示占位说明。
- * 打开本页会顺带触发一次内置插件注册（幂等），覆盖安装与全新安装都能看到真实状态。
- */
+/** 插件市场入口与已装插件管理；耗时任务由 Activity 范围的 Repository 承接。 */
 public class PluginFragment extends Fragment {
+    private PluginRepository repository;
+    private PluginRepository.State current;
+    private View root;
+    private EditText linkInput, search;
+    private TextView linkHint;
+    private CheckBox hideBuiltin;
+    private boolean market = true, enabledFirst;
+    private final List<PluginRepository.Item> visibleItems = new ArrayList<>();
+    private final Adapter adapter = new Adapter();
+    private ArrayList<String> pendingExports = new ArrayList<>();
+    private android.net.Uri pendingImport;
 
-    /** 管理页插件：{名字, 一句话描述, 是否内置（有 /root/dsha-* 实体）}。 */
-    private static final Object[][] MANAGED = {
-            {"@deepseek-ai/dsh-base", "官方核心：dsh 基础服务、系统提示词与运行时", false},
-            {"@deepseek-ai/dsh-web-app", "官方核心：Web UI 应用层（对话界面）", false},
-            {"dsh-device-shell-guide", "设备引导：新会话自动注入 ADB/Shizuku 设备操作提示词", true},
-            {"dsh-task-notifier", "任务通知：agent 每轮完成时经 3090 桥通知手机", true},
-            {"dsh-status-overlay", "状态悬浮条：把 agent 输出与工具调用流到顶部悬浮条", true},
-            {"dsh-web-mobile", "移动端适配：竖屏 / 触控优化 dsh WebUI", true},
-    };
+    private final ActivityResultLauncher<android.content.Intent> importPicker = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(), result -> {
+                if (repository == null) repository = new ViewModelProvider(requireActivity()).get(PluginRepository.class);
+                android.content.Intent data = result.getData();
+                android.net.Uri uri = data == null ? null : data.getData();
+                if (uri == null && data != null && data.getClipData() != null && data.getClipData().getItemCount() > 0)
+                    uri = data.getClipData().getItemAt(0).getUri();
+                if (result.getResultCode() != android.app.Activity.RESULT_OK || uri == null) {
+                    repository.selectionMessage("未选择文件或文件管理器未返回文件。可点「其他文件选择器」重试，选择 ZIP / TAR.GZ 插件包。");
+                    return;
+                }
+                if (!"content".equals(uri.getScheme()) && !"file".equals(uri.getScheme())) {
+                    repository.selectionMessage("文件管理器返回的地址无法读取，请改用系统文件选择器。");
+                    return;
+                }
+                if ("file".equals(uri.getScheme()) && android.os.Build.VERSION.SDK_INT < 30
+                        && requireContext().checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    pendingImport = uri;
+                    PluginFragment.this.readPermission.launch(android.Manifest.permission.READ_EXTERNAL_STORAGE);
+                    return;
+                }
+                repository.importArchive(uri);
+            });
+    private final ActivityResultLauncher<String> readPermission = registerForActivityResult(
+            new ActivityResultContracts.RequestPermission(), allowed -> {
+                android.net.Uri selected = pendingImport;
+                pendingImport = null;
+                if (allowed && selected != null) repository.importArchive(selected);
+                else repository.selectionMessage("未获得文件读取权限，请改用系统文件选择器导入。");
+            });
+    private final ActivityResultLauncher<String> exportPicker = registerForActivityResult(
+            new ActivityResultContracts.CreateDocument("application/gzip"), uri -> {
+                if (uri != null && !pendingExports.isEmpty())
+                    repository.exportArchives(new ArrayList<>(pendingExports), uri);
+                pendingExports.clear();
+            });
 
-    private TextView statusText;
-    private ProgressBar busy;
-    private RecyclerView pluginList;
-    private TextView btnMarket;
-    private TextView btnInstalled;
-    private final List<PluginItem> items = new ArrayList<>();
-    private Adapter adapter;
-    /** 当前是否停在「插件市场」页签：为真时列表显示为空，但 items 数据保留（切回管理页能直接恢复）。 */
-    private boolean marketMode = false;
-
-    private static class PluginItem {
-        final String name;
-        final String desc;
-        final boolean builtin;
-        boolean enabled;   // 是否在 dsh.profile.bundles
-        boolean pending;   // 开关操作进行中（防重入/并发）
-        String note = "";  // 实体缺失等附加说明
-
-        PluginItem(String name, String desc, boolean builtin) {
-            this.name = name;
-            this.desc = desc;
-            this.builtin = builtin;
-        }
-    }
-
-    @Nullable
-    @Override
+    @Nullable @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
-                             @Nullable Bundle savedInstanceState) {
+                             @Nullable Bundle state) {
         return inflater.inflate(R.layout.fragment_plugins, container, false);
     }
 
-    @Override
-    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
-        statusText = view.findViewById(R.id.statusText);
-        busy = view.findViewById(R.id.pluginBusy);
-        pluginList = view.findViewById(R.id.pluginList);
-        btnMarket = view.findViewById(R.id.btnMarket);
-        btnInstalled = view.findViewById(R.id.btnInstalled);
-        for (Object[] m : MANAGED) {
-            items.add(new PluginItem((String) m[0], (String) m[1], (Boolean) m[2]));
+    @Override public void onViewCreated(@NonNull View view, @Nullable Bundle saved) {
+        root = view;
+        repository = new ViewModelProvider(requireActivity()).get(PluginRepository.class);
+        if (saved != null) {
+            market = saved.getBoolean("market", true);
+            enabledFirst = saved.getBoolean("enabledFirst");
+            ArrayList<String> names = saved.getStringArrayList("pendingExports");
+            if (names != null) pendingExports = names;
+            String imported = saved.getString("pendingImport");
+            if (imported != null) pendingImport = android.net.Uri.parse(imported);
         }
-        adapter = new Adapter(items, this::onToggle, () -> marketMode);
-        pluginList.setLayoutManager(new LinearLayoutManager(requireContext()));
-        pluginList.setAdapter(adapter);
-
-        btnMarket.setOnClickListener(x -> showMarket());
-        btnInstalled.setOnClickListener(x -> refresh());
-        view.findViewById(R.id.btnRefresh).setOnClickListener(x -> refresh());
-        refresh();
-    }
-
-    /** 切到「插件市场」：安装第三方插件的能力待回填，先显示占位。
-     *  注意：不能清空 items —— 否则切回「插件管理」时列表就空了。 */
-    private void showMarket() {
-        marketMode = true;
-        btnMarket.setBackgroundResource(R.drawable.bg_tab_on);
-        btnInstalled.setBackgroundResource(R.drawable.bg_tab);
-        adapter.notifyDataSetChanged(); // marketMode=true → getItemCount()==0，列表空
-        statusText.setText("插件市场待接回：当前版本暂不支持从市场安装新插件。\n"
-                + "「插件管理」里是随 App 自带的插件（含开关）。");
-    }
-
-    /** 切到「插件管理」：触发注册（幂等）并刷新 6 个插件的真实状态。 */
-    private void refresh() {
-        marketMode = false;
-        btnMarket.setBackgroundResource(R.drawable.bg_tab);
-        btnInstalled.setBackgroundResource(R.drawable.bg_tab_on);
-        statusText.setText("正在同步插件状态…");
-        busy.setVisibility(View.VISIBLE);
-        new Thread(() -> {
-            String summary;
-            try {
-                HarnessController c = new HarnessController(requireContext());
-                if (!c.isEnvironmentReady()) {
-                    summary = "环境未就绪：请先完成解压 / 安装";
-                } else {
-                    String reg = c.proot().registerBuiltinPlugins();
-                    updateStates(c);
-                    summary = summarize(reg);
-                }
-            } catch (Throwable e) {
-                summary = "同步失败：" + SensitiveData.redact(String.valueOf(e));
+        linkInput = view.findViewById(R.id.appbar_github_input);
+        linkHint = view.findViewById(R.id.pluginLinkHint);
+        search = view.findViewById(R.id.pluginSearch);
+        hideBuiltin = view.findViewById(R.id.chkHideBuiltin);
+        RecyclerView list = view.findViewById(R.id.pluginList);
+        list.setLayoutManager(new LinearLayoutManager(requireContext()));
+        list.setNestedScrollingEnabled(false);
+        list.setItemAnimator(null);
+        list.setAdapter(adapter);
+        view.findViewById(R.id.btnMarket).setOnClickListener(v -> selectTab(true));
+        view.findViewById(R.id.btnPluginWebsite).setOnClickListener(v -> openPluginWebsite());
+        view.findViewById(R.id.btnInstalled).setOnClickListener(v -> selectTab(false));
+        view.findViewById(R.id.btnRefresh).setOnClickListener(v -> repository.refresh());
+        view.findViewById(R.id.btnPluginInstall).setOnClickListener(v -> installLink());
+        view.findViewById(R.id.btnPluginPaste).setOnClickListener(v -> pasteLink());
+        view.findViewById(R.id.btnImport).setOnClickListener(v -> chooseImport(false));
+        view.findViewById(R.id.btnImportFallback).setOnClickListener(v -> chooseImport(true));
+        view.findViewById(R.id.btnExport).setOnClickListener(v -> chooseExport());
+        view.findViewById(R.id.btnSort).setOnClickListener(v -> { enabledFirst = !enabledFirst; render(); });
+        hideBuiltin.setOnCheckedChangeListener((v, checked) -> render());
+        search.addTextChangedListener(watcher(this::render));
+        linkInput.addTextChangedListener(watcher(this::recognizeLink));
+        linkInput.setOnEditorActionListener((v, action, event) -> {
+            if (action == EditorInfo.IME_ACTION_GO || action == EditorInfo.IME_ACTION_DONE
+                    || (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER
+                    && event.getAction() == KeyEvent.ACTION_UP)) {
+                installLink();
+                return true;
             }
-            final String s = summary;
-            if (getActivity() == null || !isAdded()) return;
-            getActivity().runOnUiThread(() -> {
-                busy.setVisibility(View.GONE);
-                statusText.setText(s);
-                adapter.notifyDataSetChanged();
+            return false;
+        });
+        TextView status = view.findViewById(R.id.statusText);
+        status.setOnClickListener(v -> {
+            if (current != null && !current.message.isEmpty())
+                new AlertDialog.Builder(requireContext()).setTitle("插件操作结果")
+                        .setMessage(current.message).setPositiveButton("关闭", null).show();
+        });
+        repository.state().observe(getViewLifecycleOwner(), state -> { current = state; render(); });
+        if (!repository.isBusy() && (repository.state().getValue() == null
+                || repository.state().getValue().items.isEmpty())) repository.refresh();
+        recognizeLink();
+    }
+
+    @Override public void onSaveInstanceState(@NonNull Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putBoolean("market", market);
+        state.putBoolean("enabledFirst", enabledFirst);
+        state.putStringArrayList("pendingExports", pendingExports);
+        if (pendingImport != null) state.putString("pendingImport", pendingImport.toString());
+    }
+
+    @Override public void onDestroyView() {
+        ((RecyclerView) root.findViewById(R.id.pluginList)).setAdapter(null);
+        root = null;
+        linkInput = null;
+        search = null;
+        linkHint = null;
+        hideBuiltin = null;
+        super.onDestroyView();
+    }
+
+    private static TextWatcher watcher(Runnable callback) {
+        return new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { callback.run(); }
+            @Override public void afterTextChanged(Editable e) { }
+        };
+    }
+
+    private void recognizeLink() {
+        if (root == null) return;
+        String input = linkInput.getText().toString();
+        boolean valid = false;
+        try {
+            PluginSource source = PluginSource.parse(input);
+            linkHint.setText("已识别：" + source.description());
+            valid = true;
+        } catch (IllegalArgumentException error) {
+            linkHint.setText(input.trim().isEmpty() ? "支持仓库、分支/子目录、Release 下载和压缩包直链"
+                    : error.getMessage());
+        }
+        root.findViewById(R.id.btnPluginInstall).setEnabled(valid && !repository.isBusy());
+    }
+
+    private void selectTab(boolean showMarket) {
+        market = showMarket;
+        linkInput.clearFocus();
+        search.clearFocus();
+        android.view.inputmethod.InputMethodManager keyboard = (android.view.inputmethod.InputMethodManager)
+                requireContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (keyboard != null) keyboard.hideSoftInputFromWindow(root.getWindowToken(), 0);
+        render();
+        androidx.core.widget.NestedScrollView scroll = root.findViewById(R.id.pluginScroll);
+        scroll.post(() -> scroll.scrollTo(0, 0));
+    }
+
+    private void openPluginWebsite() {
+        try {
+            startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("https://dsha.cc/"))
+                    .addCategory(android.content.Intent.CATEGORY_BROWSABLE));
+        } catch (RuntimeException error) {
+            toast("无法打开浏览器，请在浏览器中访问 https://dsha.cc/");
+        }
+    }
+
+    private void installLink() {
+        if (repository.isBusy()) return;
+        try { repository.install(PluginSource.parse(linkInput.getText().toString())); }
+        catch (IllegalArgumentException error) { toast(error.getMessage()); }
+    }
+
+    private void chooseImport(boolean alternative) {
+        if (repository.isBusy()) { toast("请等待当前插件操作完成后再导入"); return; }
+        View focus = requireActivity().getCurrentFocus();
+        if (focus != null) {
+            android.view.inputmethod.InputMethodManager keyboard = (android.view.inputmethod.InputMethodManager)
+                    requireContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (keyboard != null) keyboard.hideSoftInputFromWindow(focus.getWindowToken(), 0);
+            focus.clearFocus();
+        }
+        repository.selectionMessage("请选择插件压缩包；文件选择器无法返回时，可使用「其他文件选择器」。");
+        try { importPicker.launch(PluginFilePicker.intent(requireContext(), alternative)); }
+        catch (android.content.ActivityNotFoundException error) {
+            if (!alternative) { chooseImport(true); return; }
+            repository.selectionMessage("未找到可用的文件选择器，请启用系统「文件」应用后重试。");
+            toast("没有可用的文件选择器");
+        } catch (RuntimeException error) {
+            repository.selectionMessage("无法打开文件选择器，请使用备用入口：" + error.getClass().getSimpleName());
+        }
+    }
+
+    private void pasteLink() {
+        ClipboardManager clipboard = (ClipboardManager) requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
+        ClipData clip = clipboard == null ? null : clipboard.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) { toast("剪贴板没有链接"); return; }
+        CharSequence text = clip.getItemAt(0).coerceToText(requireContext());
+        if (text != null) linkInput.setText(text);
+    }
+
+    private void render() {
+        if (root == null || current == null) return;
+        root.findViewById(R.id.marketHelp).setVisibility(market ? View.VISIBLE : View.GONE);
+        root.findViewById(R.id.pluginWebsiteSection).setVisibility(market ? View.VISIBLE : View.GONE);
+        root.findViewById(R.id.pluginLinkSection).setVisibility(market ? View.VISIBLE : View.GONE);
+        root.findViewById(R.id.installedControls).setVisibility(market ? View.GONE : View.VISIBLE);
+        root.findViewById(R.id.pluginList).setVisibility(market ? View.GONE : View.VISIBLE);
+        root.findViewById(R.id.btnMarket).setBackgroundResource(market ? R.drawable.bg_tab_on : R.drawable.bg_tab);
+        root.findViewById(R.id.btnInstalled).setBackgroundResource(market ? R.drawable.bg_tab : R.drawable.bg_tab_on);
+        ((TextView) root.findViewById(R.id.btnMarket)).setTextColor(requireContext().getColor(
+                market ? R.color.primary : R.color.text_secondary));
+        ((TextView) root.findViewById(R.id.btnInstalled)).setTextColor(requireContext().getColor(
+                market ? R.color.text_secondary : R.color.primary));
+        root.findViewById(R.id.pluginBusy).setVisibility(current.busy ? View.VISIBLE : View.GONE);
+        ((TextView) root.findViewById(R.id.statusText)).setText(current.message);
+        for (int id : new int[]{R.id.btnImport, R.id.btnImportFallback, R.id.btnExport, R.id.btnRefresh})
+            root.findViewById(id).setEnabled(!current.busy);
+        ((TextView) root.findViewById(R.id.btnSort)).setText(enabledFirst ? "已启用优先" : "名称排序");
+        visibleItems.clear();
+        String query = search.getText().toString().trim().toLowerCase(Locale.ROOT);
+        for (PluginRepository.Item item : current.items) {
+            if (hideBuiltin.isChecked() && (item.builtin || item.official)) continue;
+            if (!(item.name + " " + item.description).toLowerCase(Locale.ROOT).contains(query)) continue;
+            visibleItems.add(item);
+        }
+        Comparator<PluginRepository.Item> comparator = Comparator.comparing(it -> it.name.toLowerCase(Locale.ROOT));
+        if (enabledFirst) comparator = Comparator.<PluginRepository.Item, Boolean>comparing(it -> !it.enabled)
+                .thenComparing(comparator);
+        visibleItems.sort(comparator);
+        ((TextView) root.findViewById(R.id.pluginCount)).setText("共 " + visibleItems.size() + " 个插件");
+        TextView empty = root.findViewById(R.id.pluginEmpty);
+        empty.setVisibility(!market && visibleItems.isEmpty() ? View.VISIBLE : View.GONE);
+        empty.setText(current.busy ? "正在读取插件…" : "没有符合条件的插件");
+        adapter.notifyDataSetChanged();
+        recognizeLink();
+    }
+
+    private void chooseExport() {
+        if (current == null || repository.isBusy()) return;
+        List<String> names = new ArrayList<>();
+        for (PluginRepository.Item item : current.items) if (item.exportable) names.add(item.name);
+        if (names.isEmpty()) { toast("没有可导出的插件"); return; }
+        boolean[] checked = new boolean[names.size()];
+        AlertDialog dialog = new AlertDialog.Builder(requireContext())
+                .setTitle("选择要导出的插件")
+                .setMultiChoiceItems(names.toArray(new String[0]), checked, (d, which, value) -> {
+                    checked[which] = value;
+                    boolean any = false;
+                    for (boolean selected : checked) any |= selected;
+                    ((AlertDialog) d).getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(any);
+                })
+                .setNegativeButton("取消", null)
+                .setPositiveButton("选择保存位置", (d, which) -> {
+                    ArrayList<String> selected = new ArrayList<>();
+                    for (int i = 0; i < checked.length; i++) if (checked[i]) selected.add(names.get(i));
+                    beginExport(selected);
+                }).create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false));
+        dialog.show();
+    }
+
+    private void beginExport(ArrayList<String> names) {
+        if (names.isEmpty() || repository.isBusy()) return;
+        pendingExports = names;
+        String name = names.size() == 1 ? names.get(0).replaceAll("[^A-Za-z0-9._-]", "_") : "DSHA-plugins";
+        String stamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(new java.util.Date());
+        try { exportPicker.launch(name + "-" + stamp + ".tar.gz"); }
+        catch (Exception error) { pendingExports.clear(); toast("无法打开保存位置选择器"); }
+    }
+
+    private void toggle(PluginRepository.Item item, boolean enabled) {
+        if (repository.isBusy()) { adapter.notifyDataSetChanged(); return; }
+        if (item.official && !enabled) {
+            new AlertDialog.Builder(requireContext()).setTitle("禁用官方核心？")
+                    .setMessage(item.name + " 是 Web 运行所需的核心，禁用后页面可能无法启动。")
+                    .setPositiveButton("禁用", (d, which) -> repository.setEnabled(item, false))
+                    .setNegativeButton("取消", null)
+                    .setOnDismissListener(d -> adapter.notifyDataSetChanged()).show();
+        } else repository.setEnabled(item, enabled);
+    }
+
+    private void itemActions(PluginRepository.Item item) {
+        List<String> actions = new ArrayList<>();
+        actions.add("复制插件名称");
+        if (!item.source.isEmpty()) actions.add("复制来源链接");
+        if (item.exportable) actions.add("导出插件包");
+        if (item.deletable) actions.add("删除插件");
+        new AlertDialog.Builder(requireContext()).setTitle(item.name)
+                .setItems(actions.toArray(new String[0]), (d, which) -> {
+                    String action = actions.get(which);
+                    if (action.equals("导出插件包")) {
+                        ArrayList<String> names = new ArrayList<>();
+                        names.add(item.name);
+                        beginExport(names);
+                    } else if (action.equals("删除插件")) {
+                        if (repository.isBusy()) { toast("请等待当前插件操作完成"); return; }
+                        new AlertDialog.Builder(requireContext()).setTitle("删除插件？")
+                                .setMessage("将删除 " + item.name + " 的安装文件和启用记录。"
+                                        + "\n对话、其他插件及外部源码目录会保留。需要留存时可先导出。")
+                                .setNegativeButton("取消", null)
+                                .setPositiveButton("删除", (confirm, button) -> repository.delete(item)).show();
+                    } else {
+                        ClipboardManager clipboard = (ClipboardManager) requireContext()
+                                .getSystemService(Context.CLIPBOARD_SERVICE);
+                        if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("插件",
+                                action.equals("复制插件名称") ? item.name : item.source));
+                        toast("已复制");
+                    }
+                }).show();
+    }
+
+    private void toast(String message) {
+        if (isAdded()) Toast.makeText(requireContext(), message, Toast.LENGTH_LONG).show();
+    }
+
+    private class Adapter extends RecyclerView.Adapter<Adapter.Holder> {
+        class Holder extends RecyclerView.ViewHolder {
+            final TextView name, state, description;
+            final Switch toggle;
+            Holder(View view) {
+                super(view);
+                name = view.findViewById(R.id.pluginName);
+                state = view.findViewById(R.id.pluginStatus);
+                description = view.findViewById(R.id.pluginDesc);
+                toggle = view.findViewById(R.id.pluginSwitch);
+            }
+        }
+        @NonNull @Override public Holder onCreateViewHolder(@NonNull ViewGroup parent, int type) {
+            return new Holder(LayoutInflater.from(parent.getContext()).inflate(R.layout.item_plugin, parent, false));
+        }
+        @Override public void onBindViewHolder(@NonNull Holder holder, int position) {
+            PluginRepository.Item item = visibleItems.get(position);
+            holder.name.setText(item.name);
+            holder.state.setText((item.available ? (item.enabled ? "已启用" : "已禁用") : "实体缺失，请重新导入")
+                    + (item.version.isEmpty() ? "" : " · " + item.version));
+            holder.state.setTextColor(requireContext().getColor(
+                    !item.available ? R.color.warn : item.enabled ? R.color.primary : R.color.text_muted));
+            holder.description.setText(item.description.isEmpty()
+                    ? (item.official ? "官方核心" : item.builtin ? "DSHA 内置插件" : "第三方插件") : item.description);
+            holder.itemView.findViewById(R.id.pluginActions).setOnClickListener(v -> itemActions(item));
+            holder.itemView.findViewById(R.id.pluginActions).setContentDescription("更多操作：" + item.name);
+            holder.toggle.setVisibility(View.VISIBLE);
+            holder.toggle.setOnCheckedChangeListener(null);
+            holder.toggle.setChecked(item.enabled);
+            holder.toggle.setContentDescription((item.enabled ? "禁用 " : "启用 ") + item.name);
+            holder.toggle.jumpDrawablesToCurrentState();
+            holder.toggle.setEnabled(!repository.isBusy() && (item.available || item.enabled));
+            holder.toggle.setOnCheckedChangeListener((v, checked) -> {
+                if (checked != item.enabled) toggle(item, checked);
             });
-        }, "plugin-refresh").start();
-    }
-
-    /** 从 rootfs 直读 web profile，逐插件标出启用状态。 */
-    private void updateStates(HarnessController c) {
-        File rootfs = c.proot().getRootfsDir();
-        File manifest = new File(rootfs, "root/.dsh/profiles/web/package.json");
-        String m = manifest.isFile() ? readSmall(manifest) : "";
-        for (PluginItem it : items) {
-            it.enabled = BuiltinPlugins.inBundlesSection(m, it.name);
-            it.note = "";
-            if (it.builtin) {
-                // 实体在 /root/dsha-*；node_modules 链接指向容器内路径，Android 侧
-                // 用 isSymbolicLink 识别链接本身
-                boolean entity = new File(rootfs,
-                        BuiltinPlugins.entityDir(it.name).substring(1) + "/package.json").isFile();
-                if (!entity) {
-                    it.note = "实体缺失（精简包？）";
-                } else {
-                    File nm = new File(rootfs, BuiltinPlugins.profileNodeModulesRel(it.name));
-                    boolean linked = com.deepseekharness.app.util.Compat.isSymbolicLink(nm) || nm.exists();
-                    if (it.enabled && !linked) it.note = "链接待修复（点 ↻）";
-                }
-            }
+            holder.itemView.setOnLongClickListener(v -> { itemActions(item); return true; });
         }
-    }
-
-    /** 用户拨动开关：启用 / 禁用插件（官方核心禁用先确认）。 */
-    private void onToggle(PluginItem it, boolean enable) {
-        if (it.pending || it.enabled == enable) return;
-        // 官方核心禁用会拖垮 Web，确认一次再动手
-        if (!it.builtin && !enable) {
-            new androidx.appcompat.app.AlertDialog.Builder(requireContext())
-                    .setTitle("禁用官方核心？")
-                    .setMessage(it.name + " 是 dsh 的核心插件，禁用后 Web 可能无法正常启动。\n\n"
-                            + "确定要禁用吗？（可在本页重新开启）")
-                    .setPositiveButton("禁用", (d, w) -> applyToggle(it, false))
-                    .setNegativeButton("取消", (d, w) -> {
-                        it.enabled = true;
-                        if (getActivity() != null) getActivity().runOnUiThread(adapter::notifyDataSetChanged);
-                    })
-                    .show();
-            return;
-        }
-        applyToggle(it, enable);
-    }
-
-    private void applyToggle(PluginItem it, boolean enable) {
-        it.pending = true;
-        it.enabled = enable; // 立即乐观更新：重绑/重入时守卫（checked != enabled）直接拦住
-        if (getActivity() != null) getActivity().runOnUiThread(adapter::notifyDataSetChanged);
-        statusText.setText((enable ? "正在启用 " : "正在禁用 ") + it.name + "…");
-        busy.setVisibility(View.VISIBLE);
-        new Thread(() -> {
-            String out;
-            try {
-                out = new HarnessController(requireContext())
-                        .proot().setPluginEnabled(it.name, enable);
-            } catch (Throwable e) {
-                out = "ERROR: " + SensitiveData.redact(String.valueOf(e));
-            }
-            final String r = out == null ? "" : out;
-            if (getActivity() == null || !isAdded()) return;
-            getActivity().runOnUiThread(() -> {
-                busy.setVisibility(View.GONE);
-                boolean ok = r.contains("BUILTIN_REGISTER_OK");
-                it.pending = false;
-                updateStates(new HarnessController(requireContext())); // 回读真实状态
-                adapter.notifyDataSetChanged();
-                if (ok) {
-                    statusText.setText("已" + (enable ? "启用 " : "禁用 ") + it.name
-                            + "，重启 Web 后生效（启动页点「重启」）");
-                } else {
-                    statusText.setText("操作失败：" + (r.isEmpty() ? "无输出" : r.trim()));
-                    Toast.makeText(requireContext(), "插件状态未改变", Toast.LENGTH_SHORT).show();
-                }
-            });
-        }, "plugin-toggle").start();
-    }
-
-    private String summarize(String reg) {
-        int on = 0, off = 0, bad = 0;
-        for (PluginItem it : items) {
-            if (it.enabled) on++;
-            else off++;
-            if (it.note.startsWith("实体缺失")) bad++;
-        }
-        StringBuilder sb = new StringBuilder("管理 " + items.size() + " 个：启用 " + on
-                + "，禁用 " + off + (bad > 0 ? "，实体缺失 " + bad : "") + "。");
-        if (reg != null && reg.contains("BUILTIN_REGISTER_OK")) {
-            sb.append("（注册已同步）");
-        } else if (reg != null && reg.contains("BUILTIN_REGISTER_PARTIAL")) {
-            sb.append("（部分待处理，见列表与 repair-builtin.log）");
-        } else if (reg != null && reg.contains("FAIL")) {
-            sb.append("注册失败，见 /root/.dsh/repair-builtin.log");
-        }
-        return sb.toString();
-    }
-
-    private static String readSmall(File f) {
-        try (FileInputStream in = new FileInputStream(f)) {
-            byte[] buf = new byte[(int) Math.min(f.length(), 64 * 1024)];
-            int n = in.read(buf);
-            return n > 0 ? new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8) : "";
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    private static class Adapter extends RecyclerView.Adapter<Adapter.Holder> {
-        private final List<PluginItem> data;
-        private final java.util.function.BiConsumer<PluginItem, Boolean> onToggle;
-        private final java.util.function.BooleanSupplier market;
-
-        Adapter(List<PluginItem> data,
-                java.util.function.BiConsumer<PluginItem, Boolean> onToggle,
-                java.util.function.BooleanSupplier market) {
-            this.data = data;
-            this.onToggle = onToggle;
-            this.market = market;
-        }
-
-        static class Holder extends RecyclerView.ViewHolder {
-            final TextView name;
-            final TextView state;
-            final TextView desc;
-            final View install;
-            final Switch sw;
-
-            Holder(View v) {
-                super(v);
-                name = v.findViewById(R.id.pluginName);
-                state = v.findViewById(R.id.pluginStatus);
-                desc = v.findViewById(R.id.pluginDesc);
-                install = v.findViewById(R.id.pluginInstall);
-                sw = v.findViewById(R.id.pluginSwitch);
-            }
-        }
-
-        @NonNull
-        @Override
-        public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            View v = LayoutInflater.from(parent.getContext())
-                    .inflate(R.layout.item_plugin, parent, false);
-            return new Holder(v);
-        }
-
-        @Override
-        public void onBindViewHolder(@NonNull Holder h, int pos) {
-            PluginItem it = data.get(pos);
-            h.name.setText(it.name);
-            h.desc.setText(it.desc);
-            h.install.setVisibility(View.GONE); // 管理页用开关，不提供按钮
-            h.sw.setVisibility(View.VISIBLE);
-            // 先摘监听再 setChecked：否则 notifyDataSetChanged 重绑时的程序性 setChecked
-            // 会触发监听器造成「一次点击连环开关」的重入级联
-            h.sw.setOnCheckedChangeListener(null);
-            h.sw.setChecked(it.enabled);
-            // 打开页面时直接定格在最终状态，不播「关→开」动画（用户拨动时仍有动画反馈）
-            h.sw.jumpDrawablesToCurrentState();
-            h.state.setText(it.note.isEmpty()
-                    ? (it.enabled ? "已启用" : "已禁用")
-                    : it.note);
-            h.sw.setOnCheckedChangeListener((b, checked) -> {
-                if (checked != it.enabled && !it.pending) onToggle.accept(it, checked);
-            });
-        }
-
-        @Override
-        public int getItemCount() {
-            // 市场页签：显示空列表（占位说明在状态栏），但不动 items，切回管理页立即恢复
-            return market.getAsBoolean() ? 0 : data.size();
-        }
+        @Override public int getItemCount() { return visibleItems.size(); }
     }
 }

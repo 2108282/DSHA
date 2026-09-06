@@ -151,6 +151,10 @@ public class ProotBootstrap {
     // ================= 运行时文件 =================
 
     private File findNativeLib(String name) {
+        if (com.deepseekharness.app.BuildConfig.LOW_ANDROID) {
+            if (name.equals("libproot.so")) name = "libproot_legacy.so";
+            else if (name.equals("libprootloader.so")) name = "libprootloader_legacy.so";
+        }
         File direct = new File(nativeLibDir, name);
         if (direct.isFile()) return direct;
         File libRoot = new File(nativeLibDir).getParentFile();
@@ -205,6 +209,12 @@ public class ProotBootstrap {
             copyExec(findNativeLib("libandroidshmem.so"), new File(libDir, "libandroid-shmem.so"));
         }
         ensureDshRuntimePatches();
+        if (hasBash()) ensureNetworkTools();
+    }
+
+    private void ensureNetworkTools() {
+        try { RuntimeTools.prepare(ctx, rootfsDir); }
+        catch (IOException error) { Log.w("DSHA", "运行工具准备失败：" + SensitiveData.redact(String.valueOf(error))); }
     }
 
     // ================= dsh 运行补丁（dsh 1.2-alpha 在 Android proot 下的兼容） =================
@@ -356,6 +366,7 @@ public class ProotBootstrap {
 
     /** 内置插件注册脚本（rootfs 烘焙的四个内置插件 → web profile），资产名。 */
     public static final String BUILTIN_REGISTER_SCRIPT = "register-builtin-plugins.py";
+    private static final Object PLUGIN_SCRIPT_LOCK = new Object();
 
     /**
      * 幂等：把内置插件注册脚本注入 rootfs 并运行，把 dsh-device-shell-guide 等四个
@@ -389,7 +400,10 @@ public class ProotBootstrap {
 
     /** 注入注册脚本（幂等覆盖）并按需带参数运行。 */
     private String runBuiltinScript(String extraArgs) {
+        synchronized (PLUGIN_SCRIPT_LOCK) {
         if (!isEnvironmentReady()) return "ENV_NOT_READY";
+        if (!ensureBundledPython()) return "ERROR: Ubuntu Python 环境未就绪";
+        ensureBundledPnpm(); // 包管理器异常不能阻断列表、开关和删除；缺依赖的安装会单独报错。
         try {
             String script = readAssetString(BUILTIN_REGISTER_SCRIPT);
             if (script.isEmpty()) return "ASSET_MISSING:" + BUILTIN_REGISTER_SCRIPT;
@@ -405,6 +419,95 @@ public class ProotBootstrap {
             Log.w("DSHA", "内置插件脚本执行失败: " + SensitiveData.redact(String.valueOf(e)));
             return "ERROR: " + SensitiveData.redact(String.valueOf(e));
         }
+        }
+    }
+
+    // ================= 第三方插件管理（导入/导出/GitHub 下载） =================
+
+    /** 插件管理脚本（导入、导出、链接安装与状态读取），资产名。 */
+    public static final String PLUGIN_MANAGER_SCRIPT = "plugin-manager.py";
+
+    /**
+     * 注入插件管理脚本及共用注册模块，再通过 python3 执行。
+     * 末行 PLUGIN_RESULT JSON 区分成功、部分成功和失败。
+     *
+     * @param extraArgs 例如 {@code import /root/.dsh/import-upload.bin}、
+     *                  {@code export '["dsh-web-mobile"]' /root/.dsh/export.tar.gz}、
+     *                  {@code github owner repo 'branch/subdir'}
+     */
+    public String runPluginManager(String extraArgs) {
+        synchronized (PLUGIN_SCRIPT_LOCK) {
+        if (!isEnvironmentReady()) return "ENV_NOT_READY";
+        if (!ensureBundledPython()) return "ERROR: Ubuntu Python 环境未就绪";
+        ensureBundledPnpm();
+        try {
+            String script = readAssetString(PLUGIN_MANAGER_SCRIPT);
+            if (script.isEmpty()) return "ASSET_MISSING:" + PLUGIN_MANAGER_SCRIPT;
+            String b64 = Base64.encodeToString(script.getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8), Base64.NO_WRAP);
+            String common = readAssetString(BUILTIN_REGISTER_SCRIPT);
+            if (common.isEmpty()) return "ASSET_MISSING:" + BUILTIN_REGISTER_SCRIPT;
+            String common64 = Base64.encodeToString(common.getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8), Base64.NO_WRAP);
+            String cmd = "set -e; mkdir -p /root/.dsh; "
+                    + "printf '%s' '" + common64 + "' | base64 -d > /root/.dsh/" + BUILTIN_REGISTER_SCRIPT + "; "
+                    + "printf '%s' '" + b64 + "' | base64 -d > /root/.dsh/" + PLUGIN_MANAGER_SCRIPT + "; "
+                    + "chmod +x /root/.dsh/" + PLUGIN_MANAGER_SCRIPT + "; "
+                    + "python3 /root/.dsh/" + PLUGIN_MANAGER_SCRIPT
+                    + (extraArgs == null || extraArgs.isEmpty() ? "" : " " + extraArgs) + " 2>&1";
+            // 下载、多个插件依赖安装和导出可能较慢，脚本内部仍有单次网络/依赖超时。
+            return execAndRead(cmd, 600_000);
+        } catch (Throwable e) {
+            Log.w("DSHA", "插件管理脚本执行失败: " + SensitiveData.redact(String.valueOf(e)));
+            return "ERROR: " + SensitiveData.redact(String.valueOf(e));
+        }
+        }
+    }
+
+    /** 把本地文件推入容器（containerPath 为容器内绝对路径，如 /root/.dsh/import-upload.bin）。 */
+    public boolean pushFileIntoContainer(java.io.File src, String containerPath) {
+        if (src == null || !src.isFile() || containerPath == null) return false;
+        try {
+            java.io.File target = containerFile(containerPath);
+            if (target.getParentFile() != null) target.getParentFile().mkdirs();
+            try (java.io.FileInputStream in = new java.io.FileInputStream(src);
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(target)) {
+                byte[] buf = new byte[1 << 16];
+                int n;
+                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+            }
+            return true;
+        } catch (Throwable e) {
+            Log.w("DSHA", "推文件进容器失败: " + SensitiveData.redact(String.valueOf(e)));
+            return false;
+        }
+    }
+
+    /** 从容器取出文件到本地（containerPath 为容器内绝对路径）。 */
+    public boolean pullFileFromContainer(String containerPath, java.io.File dest) {
+        if (containerPath == null || dest == null) return false;
+        try {
+            java.io.File src = containerFile(containerPath);
+            if (!src.isFile()) return false;
+            if (dest.getParentFile() != null) dest.getParentFile().mkdirs();
+            try (java.io.FileInputStream in = new java.io.FileInputStream(src);
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
+                byte[] buf = new byte[1 << 16];
+                int n;
+                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+            }
+            return true;
+        } catch (Throwable e) {
+            Log.w("DSHA", "从容器取文件失败: " + SensitiveData.redact(String.valueOf(e)));
+            return false;
+        }
+    }
+
+    /** 容器内绝对路径 → 宿主文件系统路径（rootfs 根下）。 */
+    private java.io.File containerFile(String containerPath) {
+        String rel = containerPath.startsWith("/")
+                ? containerPath.substring(1) : containerPath;
+        return new java.io.File(rootfsDir, rel);
     }
 
     /** 读 assets 文本（Windows 检出可能是 CRLF，统一转 LF 再交给容器脚本）。 */
@@ -582,7 +685,7 @@ public class ProotBootstrap {
 
     public ContainerRuntime runtime() {
         try {
-            if ("proroot".equals(ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
+            if (android.os.Build.VERSION.SDK_INT >= 26 && "proroot".equals(ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
                     .getString("container_runtime", "proot"))) {
                 ContainerRuntime pr = new ContainerRuntime.Proroot(
                         ctx, ContainerRuntime.Proroot.defaultDir(ctx));
@@ -606,6 +709,7 @@ public class ProotBootstrap {
 
     /** proot 运行环境（两个 exec 入口共用）。proroot 是 LD_PRELOAD 方案，对 LD_LIBRARY_PATH 敏感。 */
     private void applyProotEnv(ProcessBuilder pb) {
+        ensureNetworkTools();
         ContainerRuntime rt = runtime();
         if ("proot".equals(rt.id())) {
             pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
@@ -627,6 +731,7 @@ public class ProotBootstrap {
                 "/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
         pb.environment().put("TMPDIR", "/tmp");
         pb.environment().put("DEBIAN_FRONTEND", "noninteractive");
+        RuntimeTools.applyEnvironment(pb.environment());
     }
 
     // ================= 执行 =================
@@ -714,6 +819,9 @@ public class ProotBootstrap {
      * 与 execRootfs 的差别：不带 -c、不重定向 stdin 到 /dev/null，且补 DSH_CONFIRM 交互确认。
      */
     public Process execRootfsInteractive() throws IOException {
+        ensureRuntimeFiles();
+        ensureBundledPython();
+        ensureBundledPnpm();
         ensureAndroidGroups(); // 登录 shell 的 $(groups) 依赖 /etc/group 里有 Android GID，先补齐
         java.util.List<String> argv = baseProotArgv();
         argv.add("/bin/bash");
@@ -743,6 +851,9 @@ public class ProotBootstrap {
 
     /** PTY 会话的环境变量（KEY=VALUE）。借临时 ProcessBuilder 复用 applyProotEnv，避免重抄漏项。 */
     public String[] ptyEnv() {
+        ensureRuntimeFiles();
+        ensureBundledPython();
+        ensureBundledPnpm();
         ProcessBuilder probe = new ProcessBuilder("/system/bin/true");
         applyProotEnv(probe);
         java.util.Map<String, String> m = probe.environment();
@@ -886,158 +997,117 @@ public class ProotBootstrap {
         rootfsDir.mkdirs();
         TarGzipExtractor.extractAuto(counted, rootfsDir, 0);
         installBundledPython(rootfsDir);
+        installBundledPnpm(rootfsDir);
+        RuntimeTools.prepare(ctx, rootfsDir);
         markOfflineExtracted();
     }
 
-    /** 把 assets 里的 Termux Python 运行时装进 rootfs（/bin/python3 + 标准库）。 */
+    private static final Object PYTHON_LOCK = new Object();
+
+    /** 标准版统一用 glibc Python；不再把另一套 Termux Python 重复写入 rootfs。 */
     private void installBundledPython(File stage) throws IOException {
-        File py = new File(stage, "bin/python3");
-        File stdlib = new File(stage, "data/data/com.termux/files/usr/lib/python3.14/os.py");
-        File support = new File(stage, "data/data/com.termux/files/usr/lib/libandroid-support.so");
-        if (py.isFile() && py.length() > 0 && stdlib.isFile() && support.isFile()) return;
-        File bundle = new File(tmpDir, "python-runtime.tgz");
-        tmpDir.mkdirs();
-        try (InputStream in = ctx.getAssets().open("runtime-python/python-runtime.tgz");
-             java.io.OutputStream out = new java.io.BufferedOutputStream(new FileOutputStream(bundle))) {
-            byte[] b = new byte[64 * 1024];
-            int n;
-            while ((n = in.read(b)) >= 0) { if (n > 0) out.write(b, 0, n); }
+        synchronized (PYTHON_LOCK) {
+            File py = new File(stage, "usr/bin/python3.12");
+            File enc = new File(stage, "usr/lib/python3.12/encodings/__init__.py");
+            if (!py.isFile() || py.length() == 0 || !enc.isFile()) {
+                try (InputStream input = openPythonAsset()) {
+                    TarGzipExtractor.extractAuto(input, stage, 0);
+                }
+            }
+            if (!py.isFile() || !enc.isFile()) throw new IOException("Ubuntu Python 运行环境不完整");
+            // 标准库的 C 扩展还依赖 SQLite/readline；仅有 Python 主程序并不代表它们可用。
+            File sqlite = new File(stage, "usr/lib/aarch64-linux-gnu/libsqlite3.so.0");
+            File readline = new File(stage, "usr/lib/aarch64-linux-gnu/libreadline.so.8");
+            if (!sqlite.isFile() || sqlite.length() == 0 || !readline.isFile() || readline.length() == 0) {
+                try (InputStream input = ctx.getAssets().open("python-support.bin")) {
+                    TarGzipExtractor.extractAuto(input, stage, 0);
+                }
+            }
+            if (!sqlite.isFile() || !readline.isFile()) throw new IOException("Python 动态库不完整");
+            py.setExecutable(true, false);
+            File command = new File(stage, "usr/bin/python3");
+            if (!command.getCanonicalFile().equals(py.getCanonicalFile())) {
+                if ((command.exists() || Compat.isSymbolicLink(command)) && !command.delete())
+                    throw new IOException("无法更新 Python 命令入口");
+                try {
+                    Compat.symlink("python3.12", command);
+                } catch (Exception error) {
+                    Compat.copy(py, command, true);
+                    command.setExecutable(true, false);
+                }
+            }
+            Compat.write(new File(stage, "root/.dsha-python-version"),
+                    "3.12-glibc-arm64\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
-        try (InputStream in = new FileInputStream(bundle)) {
-            TarGzipExtractor.extractAuto(in, stage, 0);
-        }
-        File src = new File(stage, "bin/python3.14");
-        if (!src.isFile()) throw new IOException("bundled Python runtime missing");
-        File target = new File(stage, "bin/python3");
-        if (target.getParentFile() != null) target.getParentFile().mkdirs();
-        try {
-            Compat.symlink("python3.14", target);
-        } catch (Exception ignored) {
-            Compat.copy(src, target, true);
-        }
-        Compat.write(new File(stage, "root/.dsha-python-version"),
-                "3.14-termux-arm64\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        //noinspection ResultOfMethodCallIgnored
-        bundle.delete();
     }
 
-    /** 幂等：确保 rootfs 有 python3（解压时装过，但老设备/中途失败要补）。 */
+    /** 老用户覆盖安装时按需补齐 Python，不重解压或删除其 rootfs。 */
     public boolean ensureBundledPython() {
-        if (!rootfsDir.isDirectory()) return false;
-        File py = new File(rootfsDir, "bin/python3");
-        File stdlib = new File(rootfsDir, "data/data/com.termux/files/usr/lib/python3.14/os.py");
-        File support = new File(rootfsDir, "data/data/com.termux/files/usr/lib/libandroid-support.so");
-        if (py.isFile() && py.length() > 0 && stdlib.isFile() && support.isFile()) return true;
-        try {
-            installBundledPython(rootfsDir);
-            provisionPythonSystemLibs();
-            return new File(rootfsDir, "bin/python3").isFile()
-                    && new File(rootfsDir, "data/data/com.termux/files/usr/lib/python3.14/os.py").isFile()
-                    && new File(rootfsDir, "data/data/com.termux/files/usr/lib/libandroid-support.so").isFile();
-        } catch (Throwable e) {
-            android.util.Log.w("DSHA", "离线 Python3 安装失败: "
-                    + SensitiveData.redact(String.valueOf(e)));
-            return false;
-        }
+        return ensureGlibcPython();
     }
 
-    /**
-     * 确保 rootfs 有 glibc 的 python3（Ubuntu 官方 deb 解包，assets/glibc-python.tar.gz）。
-     * ADB 配对用的 cryptography/spake2_cffi 是 manylinux(glibc) 轮子，
-     * bionic 的 Termux Python 加载不了，必须有 glibc python。幂等。
-     */
     public boolean ensureGlibcPython() {
         if (!rootfsDir.isDirectory()) return false;
-        File py = new File(rootfsDir, "usr/bin/python3.12");
-        File enc = new File(rootfsDir, "usr/lib/python3.12/encodings/__init__.py");
-        if (py.isFile() && py.length() > 0 && enc.isFile()) return true;
         try {
-            // 旧版 tar 把标准库拍平在 usr/lib/ 下（缺 python3.12/ 层级，python 启动即
-            // "No module named 'encodings'"）；检测到该错误布局时清掉散落，保留 aarch64-linux-gnu
-            File libRoot = new File(rootfsDir, "usr/lib");
-            if (new File(libRoot, "encodings").isDirectory()) {
-                File[] flat = libRoot.listFiles();
-                if (flat != null) {
-                    for (File f : flat) {
-                        if (f.getName().equals("aarch64-linux-gnu")) continue;
-                        deleteRecursively(f);
-                    }
-                }
-            }
-            File bundle = new File(tmpDir, "glibc-python.tar");
-            tmpDir.mkdirs();
-            try (InputStream in = openPythonAsset();
-                 java.io.OutputStream out = new java.io.BufferedOutputStream(new FileOutputStream(bundle))) {
-                byte[] b = new byte[64 * 1024];
-                int n;
-                while ((n = in.read(b)) >= 0) { if (n > 0) out.write(b, 0, n); }
-            }
-            try (InputStream in = new FileInputStream(bundle)) {
-                TarGzipExtractor.extractAuto(in, rootfsDir, 0);
-            }
-            bundle.delete();
-            // 修正 python3 软链 + 执行位（tar 可能展平软链）
-            File py3 = new File(rootfsDir, "usr/bin/python3");
-            py3.delete();
-            try {
-                Compat.symlink("python3.12", py3);
-            } catch (Exception ignored) {
-            }
-            py.setExecutable(true, false);
-            // 补 libexpat 软链
-            File expat = new File(rootfsDir, "usr/lib/aarch64-linux-gnu/libexpat.so.1");
-            File expatReal = new File(rootfsDir, "usr/lib/aarch64-linux-gnu/libexpat.so.1.9.1");
-            if (!expat.isFile() && expatReal.isFile()) {
-                try {
-                    Compat.symlink("libexpat.so.1.9.1", expat);
-                } catch (Exception ignored) {
-                }
-            }
-            return py.isFile() && py.length() > 0 && enc.isFile();
-        } catch (Throwable e) {
-            android.util.Log.w("DSHA", "glibc python 安装失败: "
-                    + SensitiveData.redact(String.valueOf(e)));
+            installBundledPython(rootfsDir);
+            return true;
+        } catch (Exception error) {
+            Log.w("DSHA", "Ubuntu Python 安装失败: " + SensitiveData.redact(String.valueOf(error)));
             return false;
         }
     }
 
-    /** 读 glibc python 资产：aapt 会把 assets 里的 .tar.gz 静默解成 .tar，
-     *  APK 里实际是 glibc-python.tar（源码保留 .gz 体积小）——两个名字都认。 */
-    private InputStream openPythonAsset() throws java.io.IOException {
-        try {
-            return ctx.getAssets().open("glibc-python.tar.gz");
-        } catch (java.io.IOException e) {
-            return ctx.getAssets().open("glibc-python.tar");
+    private static final Object PNPM_LOCK = new Object();
+
+    /** 放在独立目录，不覆盖用户通过 npm 安装或升级的全局包管理器。 */
+    private void installBundledPnpm(File stage) throws IOException {
+        synchronized (PNPM_LOCK) {
+            File entry = new File(stage, "usr/local/lib/dsha-pnpm/bin/pnpm.cjs");
+            File marker = new File(stage, "root/.dsha-pnpm-version");
+            if (!entry.isFile() || !marker.isFile()
+                    || !"10.34.5".equals(new String(Compat.readAllBytes(marker),
+                    java.nio.charset.StandardCharsets.UTF_8).trim())) {
+                try (InputStream input = ctx.getAssets().open("pnpm-runtime.bin")) {
+                    TarGzipExtractor.extractAuto(input, stage, 0);
+                }
+                if (!entry.isFile()) throw new IOException("离线 pnpm 入口缺失");
+                Compat.write(marker, "10.34.5\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            File wrapper = new File(stage, "root/dsh-bin/pnpm");
+            if (!wrapper.isFile() || wrapper.length() == 0) {
+                File directory = wrapper.getParentFile();
+                if (!directory.isDirectory() && !directory.mkdirs())
+                    throw new IOException("无法创建 pnpm 命令目录");
+                if ((wrapper.exists() || Compat.isSymbolicLink(wrapper)) && !wrapper.delete())
+                    throw new IOException("无法更新 pnpm 命令入口");
+                Compat.write(wrapper, ("#!/bin/sh\n"
+                        + "exec /usr/local/bin/node /usr/local/lib/dsha-pnpm/bin/pnpm.cjs \"$@\"\n")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                wrapper.setExecutable(true, false);
+            }
         }
     }
 
-    /**
-     * 给 Termux Python 补 Android 宿主系统库的版本化软链。
-     * Python 的 C 扩展按 glibc 命名（libz.so.1 / libssl.so.3 / libcrypto.so.3），
-     * 而 Android 宿主只有 libz.so / libssl.so / libcrypto.so —— 建软链指向宿主同名库，
-     * 让 linker 能按扩展要的名字找到（部分扩展对版本化依赖仍可能失败，但尽力补齐）。
-     */
-    private void provisionPythonSystemLibs() {
+    public boolean ensureBundledPnpm() {
         try {
-            File libDir2 = new File(rootfsDir, "data/data/com.termux/files/usr/lib");
-            if (!libDir2.isDirectory()) return;
-            String[][] links = {
-                    {"libz.so.1", "/system/lib64/libz.so"},
-                    {"libssl.so.3", "/system/lib64/libssl.so"},
-                    {"libcrypto.so.3", "/system/lib64/libcrypto.so"},
-            };
-            for (String[] l : links) {
-                File target = new File(libDir2, l[0]);
-                if (!target.exists()) {
-                    try {
-                        Compat.symlink(l[1], target);
-                    } catch (Exception ignored) {
-                    }
-                }
+            installBundledPnpm(rootfsDir);
+            return true;
+        } catch (Exception error) {
+            Log.w("DSHA", "离线 pnpm 安装失败: " + SensitiveData.redact(String.valueOf(error)));
+            return false;
+        }
+    }
+
+    private InputStream openPythonAsset() throws IOException {
+        try {
+            return ctx.getAssets().open("glibc-python.bin");
+        } catch (IOException ignored) {
+            // 兼容旧资产构建入口，新的标准版只打包 bin。
+            try {
+                return ctx.getAssets().open("glibc-python.tar.gz");
+            } catch (IOException missing) {
+                return ctx.getAssets().open("glibc-python.tar");
             }
-        } catch (Throwable e) {
-            android.util.Log.w("DSHA", "Python 系统库软链补齐失败（不影响 Python 本体）: "
-                    + SensitiveData.redact(String.valueOf(e)));
         }
     }
 }

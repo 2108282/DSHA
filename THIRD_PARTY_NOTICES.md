@@ -2,6 +2,14 @@
 
 DSHA 的 APK 内包含以下第三方二进制组件。
 
+## Termux 终端 JNI（标准版）
+
+- 来源：`termux/termux-app` 的 `v0.118.0`，`terminal-emulator/src/main/jni/termux.c`。
+- 许可：Apache-2.0（上游对 terminal-emulator 的许可例外，说明与许可全文保存在 `tools/termux-jni/`）。
+- 在包内的位置：`lib/arm64-v8a/libtermux.so`。
+- 标准版使用 NDK r26d 从同版本原始源码重新编译，保持原有 JNI 接口，设置 16 KB ELF 页对齐。
+- 源码及复现命令：`tools/termux-jni/termux.c`、`tools/termux-jni/build.ps1`。
+
 ## proot（Termux 分支）
 
 - 来源：https://github.com/termux/proot
@@ -95,6 +103,20 @@ DOM 元素，同时激活会互相打架（抽屉/浮层出两份、事件绑定
 
 ## 其他
 
+- 随包 CA 证书来自 certifi 2026.7.22 / Mozilla 根证书集合（MPL-2.0），许可证随 assets/licenses/certifi-LICENSE.txt 提供。
+  构建脚本 tools/build-standard-runtime.py 固定官方下载地址与 SHA-256；没有关闭 TLS 验证。
+- low 兼容版内核：GeckoView 143.0.20251003115653（MPL-2.0），来自 Mozilla Maven；
+  [对应源码](https://hg.mozilla.org/releases/mozilla-release/rev/08388fb6b18c61dbb3d0baa9bee4e7440b85f671)。
+  后续 Firefox Android 提高了最低系统要求，因此保留兼容 Android 6/7 的这个版本，仅用于本机 dsh 预览。
+- low 兼容版容器：Termux proot v5.1.107.92（GPL-2.0），
+  [上游源码](https://github.com/termux/proot/tree/v5.1.107.92)；API 23 编译配置、兼容函数和 fd 断言补丁完整保存在
+  `tools/build-low-proot.py`，脚本校验上游归档 SHA-256 后可重现构建。COPYING 随兼容包资产分发。
+- 标准版补充资产 `python-support.bin`：Ubuntu 24.04 arm64 的 `libsqlite3-0` 3.45.1-1ubuntu2.7、
+  `libreadline8t64` 8.2-4build1，未修改二进制。版权文件随包保存在容器 `usr/share/doc`。
+  对应源码：[sqlite3](https://launchpad.net/ubuntu/+source/sqlite3/3.45.1-1ubuntu2.7)、
+  [readline](https://launchpad.net/ubuntu/+source/readline/8.2-4build1)。
+- `pnpm-runtime.bin`：pnpm 10.34.5（MIT），来自 npm 官方发布包，保留许可证，省略其他平台的可执行文件。
+  [源码](https://github.com/pnpm/pnpm/tree/v10.34.5)；可用 `tools/build-standard-runtime.py` 按固定校验值复现资产。
 - Ubuntu arm64 rootfs（`assets/offline-rootfs.bin`）：各软件包遵循各自许可
 - GeckoView（`libxul.so` 等）：MPL-2.0
 - `@deepseek-ai/dsh`：见其 npm 包内的许可声明

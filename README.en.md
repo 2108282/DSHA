@@ -22,6 +22,23 @@
 
 ---
 
+## v1.2.0-rc1.2 preview — Android standard / compatibility builds
+
+Maintained and published by contributor [@ym2025szz](https://github.com/ym2025szz), continuing the 1.2 refactor of [@qiannianhuanxiang](https://github.com/qiannianhuanxiang)'s project. This is a **pre-release**.
+
+- **Standard:** Android 11+ / arm64, system WebView, 212.39 MiB.
+- **Compatibility:** intended for Android 6–12 / arm64, with Gecko 143 for older WebViews, 289.46 MiB. Both builds share the package name and data, so they cannot coexist.
+- Compared with rc1: plugin link installation, import/export/delete, certificate and file-picker fixes, a dsha.cc browsing link, fullscreen chat, npm support and installation repairs. The standard APK is about 48.7% smaller than the published rc1 while retaining the offline environment.
+- Version code 111, same release certificate as rc1/rc1.1; compatible in-place upgrades do not require uninstalling first. The bundled dsh remains 0.1.2-rc.1.
+
+[Download both APKs and SHA-256 files / full release notes](https://github.com/qiannianhuanxiang/DSHA/releases/tag/v1.2.0-rc1.2) · [Browse plugins](https://dsha.cc/)
+
+Builds, lint and signing checks pass; Android 13 covers both browser engines and plugin/npm flows, with earlier core checks on Android 16. Target SDK is API 37; Android 6–12, Android 17 and 16 KB devices still need additional hardware testing. Please report the device, Android version and reproduction steps in [Issues](https://github.com/qiannianhuanxiang/DSHA/issues) or QQ group **975836806**.
+
+The existing documentation below describes the earlier releases, including 1.1.10. The preview's scope is described above and in its release notes.
+
+---
+
 ## What this is
 
 DeepSeek Harness (`@deepseek-ai/dsh`) is DeepSeek's official agent harness — think Claude Code.
