@@ -343,6 +343,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         webContainer.setLayoutParams(webLp);
         webContainer.setClipChildren(true);
         webContainer.setClipToPadding(true);
+        webContainer.setBackgroundColor(Color.TRANSPARENT);
 
         progressBar = new ProgressBar(this);
         FrameLayout.LayoutParams pbLp = new FrameLayout.LayoutParams(dpToPx(36), dpToPx(36));
@@ -726,7 +727,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         try {
             String js = "(function() {" +
                     "  var css = `\n" +
-                    "    html, body, #root, [data-ds-dark-theme], main, .dsh-layout-root, div[class*='_root_'], div[class*='_wrap_'], div[class*='_container_'] {\n" +
+                    "    html, body, #root, [data-ds-dark-theme], main, .dsh-layout-root, div[class*='_root_'], div[class*='_wrap_'], div[class*='_container_'], div[class*='_boot_'], div[class*='_onboardingStage_'], div[class*='_stage_'] {\n" +
                     "      background: transparent !important;\n" +
                     "      background-color: transparent !important;\n" +
                     "    }\n" +
@@ -735,6 +736,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                     "      --dsw-alias-bg-layer-1: transparent !important;\n" +
                     "      --dsw-alias-bg-layer-2: rgba(255, 255, 255, 0.05) !important;\n" +
                     "      --dsw-specific-sidebar-fill: transparent !important;\n" +
+                    "      --dsh-boot-bg: transparent !important;\n" +
                     "    }\n" +
                     "  `;\n" +
                     "  var style = document.getElementById('dsh-transparent-style');\n" +

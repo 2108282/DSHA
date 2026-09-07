@@ -398,12 +398,45 @@ public class ProotBootstrap {
         return runBuiltinScript(flag + com.deepseekharness.app.util.ShellQuote.arg(name));
     }
 
+    private void extractAssetFile(String assetPath, File dest) {
+        try (InputStream in = ctx.getAssets().open(assetPath);
+             java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                out.write(buf, 0, n);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /** 确保 task-notifier 与 status-overlay 实体脚本与 APK assets 保持最新同步 */
+    public void ensureBuiltinPluginEntities() {
+        File rootfs = getRootfsDir();
+        if (rootfs == null || !rootfs.isDirectory()) return;
+        try {
+            // 1. dsh-task-notifier
+            File tnDir = new File(rootfs, "root/dsha-task-notifier/lib");
+            if (!tnDir.exists()) tnDir.mkdirs();
+            extractAssetFile("task-notifier/package.json", new File(rootfs, "root/dsha-task-notifier/package.json"));
+            extractAssetFile("task-notifier/cordis.patch.yml", new File(rootfs, "root/dsha-task-notifier/cordis.patch.yml"));
+            extractAssetFile("task-notifier/lib/index.js", new File(rootfs, "root/dsha-task-notifier/lib/index.js"));
+
+            // 2. dsh-status-overlay
+            File soDir = new File(rootfs, "root/dsha-status-overlay/lib");
+            if (!soDir.exists()) soDir.mkdirs();
+            extractAssetFile("status-overlay/package.json", new File(rootfs, "root/dsha-status-overlay/package.json"));
+            extractAssetFile("status-overlay/cordis.patch.yml", new File(rootfs, "root/dsha-status-overlay/cordis.patch.yml"));
+            extractAssetFile("status-overlay/lib/index.js", new File(rootfs, "root/dsha-status-overlay/lib/index.js"));
+        } catch (Throwable ignored) {}
+    }
+
     /** 注入注册脚本（幂等覆盖）并按需带参数运行。 */
     private String runBuiltinScript(String extraArgs) {
         synchronized (PLUGIN_SCRIPT_LOCK) {
         if (!isEnvironmentReady()) return "ENV_NOT_READY";
         if (!ensureBundledPython()) return "ERROR: Ubuntu Python 环境未就绪";
         ensureBundledPnpm(); // 包管理器异常不能阻断列表、开关和删除；缺依赖的安装会单独报错。
+        ensureBuiltinPluginEntities(); // 同步 assets 内核插件实体到 rootfs
         try {
             String script = readAssetString(BUILTIN_REGISTER_SCRIPT);
             if (script.isEmpty()) return "ASSET_MISSING:" + BUILTIN_REGISTER_SCRIPT;

@@ -126,6 +126,15 @@ public final class HttpShellService {
         return instance;
     }
 
+    /** 确保 3090 桥独立常驻启动（不依赖 ADB 开关，跨实例互斥保护）。 */
+    public static void ensureStarted(Context ctx) {
+        if (!STARTED.get() && ctx != null) {
+            try {
+                new HttpShellService(ctx.getApplicationContext()).start();
+            } catch (Throwable ignored) {}
+        }
+    }
+
     /** 桥还没启动过时的兜底 Context。
      *
      *  <p>{@link #tokenFileIfPossible()} 原先只从 {@code instance().ctx} 取 Context，

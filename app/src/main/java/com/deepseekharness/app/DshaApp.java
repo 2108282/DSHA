@@ -14,6 +14,9 @@ public class DshaApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        // 保证 3090 桥独立常驻（免 ADB / 免 Shizuku 原生通用通道），不依赖 ADB 开关
+        HttpShellService.ensureStarted(this);
+
         com.deepseekharness.app.core.DiagnosticLog.installCrashHandler(this);
         registerActivityLifecycleCallbacks(new com.deepseekharness.app.ui.ModernAndroidUi());
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
