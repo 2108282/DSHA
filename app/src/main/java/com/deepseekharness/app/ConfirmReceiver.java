@@ -15,6 +15,9 @@ import android.widget.Toast;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.RemoteInput;
 
+import com.deepseekharness.app.core.HarnessController;
+import com.deepseekharness.app.ui.MainActivity;
+import com.deepseekharness.app.ui.QuickChatSheetActivity;
 import com.deepseekharness.app.util.Constants;
 
 import java.io.File;
@@ -221,7 +224,9 @@ public class ConfirmReceiver extends BroadcastReceiver {
         HttpShellService.attachFocusCapsule(ctx, nb, "⚠️ 任务已终止", "已按指令停止操作。点击查看或继续对话。", "任务状态", "返回对话", "已终止", actionPi, true);
         nb.setOnlyAlertOnce(false);
 
-        NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());
+        } catch (Throwable ignored) {}
     }
 }

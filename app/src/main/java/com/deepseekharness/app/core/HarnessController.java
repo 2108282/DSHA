@@ -70,6 +70,10 @@ public class HarnessController {
         return proot;
     }
 
+    public int getPort() {
+        return config != null ? config.getPortInt() : 3080;
+    }
+
     /** Web 是否在运行（按 pid 文件 + kill -0 判断，不依赖端口反查）。 */
     public boolean isWebRunning() {
         try {

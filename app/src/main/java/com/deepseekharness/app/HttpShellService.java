@@ -528,34 +528,82 @@ public final class HttpShellService {
 
     // ================= App 层交互端点（agent 通过 3090 桥调用） =================
 
-    /** /app/notify?title=&text= ：发通知栏提醒 */
+    /** /app/notify?title=&text= ：发通知栏提醒（三轨灵动胶囊接力与前台 Toast） */
     private String appNotify(String path) {
         try {
-            // App 前台时不发通知（用户正看着页面，不打扰）——与 TaskNotifier 抑制一致
-            if (TaskNotifier.appInForeground) return "FOREGROUND_SKIP";
             String q = queryOf(path);
-            String title = getParam(q, "title", "DSHA 通知");
+            String title = getParam(q, "title", "任务完成");
             String text = getParam(q, "text", "");
-            if (text.isEmpty()) return "NO_TEXT";
+            if (text.isEmpty()) text = "智能体已结束任务，点击查看结果";
             title = safeDisplay(title);
             text = safeDisplay(text);
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm == null) return "NO_SERVICE";
-            if (Build.VERSION.SDK_INT >= 26) {
-                NotificationChannel ch = new NotificationChannel(
-                        "dsh_agent_channel", "Agent 通知",
-                        NotificationManager.IMPORTANCE_HIGH);
-                ch.setDescription("智能体通过 App 发送的通知");
-                nm.createNotificationChannel(ch);
+
+            if (nm != null) {
+                if (Build.VERSION.SDK_INT >= 26) {
+                    NotificationChannel ch = new NotificationChannel(
+                            Constants.CHANNEL_TASK_RESULT, "任务结果与交互",
+                            NotificationManager.IMPORTANCE_HIGH);
+                    ch.setDescription("智能体任务完成、异常结束或终止时的结果通知");
+                    nm.createNotificationChannel(ch);
+                }
+
+                // 拔除运行中胶囊(2003)，无缝接力到结果胶囊(2002)
+                nm.cancel(Constants.NOTIF_TASK_RUNNING);
+                nm.cancel(Constants.NOTIF_TASK_STOPPED);
+
+                Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                PendingIntent contentPi = PendingIntent.getActivity(ctx, 201, openAppIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                Intent actionIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                PendingIntent actionPi = PendingIntent.getActivity(ctx, 202, actionIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                String statusLabel = "任务完成";
+                String btnText = "返回对话";
+                if (title.contains("失败") || title.contains("中断") || title.contains("异常") || title.contains("终止") || title.contains("挂起")) {
+                    statusLabel = "任务状态";
+                    btnText = "返回对话";
+                }
+
+                String capsuleText = compactCapsuleText(title);
+
+                NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
+                        R.drawable.ic_alarm_white, "💬 " + btnText, actionPi)
+                        .build();
+
+                NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, Constants.CHANNEL_TASK_RESULT)
+                        .setSmallIcon(R.drawable.ic_whale_logo)
+                        .setContentTitle(title)
+                        .setContentText(text)
+                        .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+                        .setContentIntent(contentPi)
+                        .addAction(replyAction)
+                        .setOngoing(true)
+                        .setAutoCancel(true);
+
+                attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText, actionPi, true);
+                b.setOnlyAlertOnce(false);
+
+                try {
+                    nm.notify(Constants.NOTIF_TASK, b.build());
+                } catch (Throwable ignored) {}
             }
-            NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, "dsh_agent_channel")
-                    .setSmallIcon(R.drawable.ic_launch)
-                    .setContentTitle(title)
-                    .setContentText(text)
-                    .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
-                    .setPriority(NotificationCompat.PRIORITY_HIGH)
-                    .setAutoCancel(true);
-            nm.notify(2002, b.build());
+
+            // 前台提示用户
+            if (TaskNotifier.appInForeground) {
+                final String finalTitle = title;
+                final String finalText = text;
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    try {
+                        Toast.makeText(ctx, "✓ " + finalTitle + "：" + (finalText.length() > 30 ? finalText.substring(0, 30) + "…" : finalText), Toast.LENGTH_SHORT).show();
+                    } catch (Throwable ignored) {}
+                });
+            }
+
             return "OK";
         } catch (Throwable e) {
             return "ERROR: " + safeError(e);
