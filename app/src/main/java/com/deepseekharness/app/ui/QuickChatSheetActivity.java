@@ -768,6 +768,9 @@ public class QuickChatSheetActivity extends Activity {
                     "      --dsw-specific-sidebar-fill: transparent !important;\n" +
                     "      --dsh-boot-bg: transparent !important;\n" +
                     "    }\n" +
+                    "    [data-mobile-nav=\"frame\"] {\n" +
+                    "      padding-top: 0px !important;\n" +
+                    "    }\n" +
                     "  `;\n" +
                     "  var style = document.getElementById('dsh-transparent-style');\n" +
                     "  if (!style) {\n" +

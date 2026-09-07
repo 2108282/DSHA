@@ -85,7 +85,6 @@
         <item name="android:windowIsFloating">false</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowContentOverlay">@null</item>
-        <item name="android:windowShowWallpaper">true</item>
         <item name="android:backgroundDimEnabled">true</item>
     </style>
 </resources>
