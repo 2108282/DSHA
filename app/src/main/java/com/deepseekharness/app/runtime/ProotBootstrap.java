@@ -447,7 +447,8 @@ public class ProotBootstrap {
                     + "chmod +x /root/.dsh/" + BUILTIN_REGISTER_SCRIPT + "; "
                     + "python3 /root/.dsh/" + BUILTIN_REGISTER_SCRIPT
                     + (extraArgs.isEmpty() ? "" : " " + extraArgs) + " 2>&1";
-            return execAndRead(cmd, 90_000);
+            // 内置插件注册脚本运行 Python，使用 execAndReadWithProot 保证链接器环境 100% 稳定
+            return execAndReadWithProot(cmd, 90_000);
         } catch (Throwable e) {
             Log.w("DSHA", "内置插件脚本执行失败: " + SensitiveData.redact(String.valueOf(e)));
             return "ERROR: " + SensitiveData.redact(String.valueOf(e));

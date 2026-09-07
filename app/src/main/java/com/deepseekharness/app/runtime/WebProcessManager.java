@@ -25,14 +25,12 @@ public class WebProcessManager {
     public void stop() {
         String script = "touch " + WebProcSel.STOP_SENTINEL + "\n"
                 + "_p=$(cat " + WebProcSel.PID_WEB + " 2>/dev/null)\n"
-                + "case \"$_p\" in ''|*[!0-9]*) exit 0 ;; esac\n"
-                + "[ -r /proc/$_p/cmdline ] && { "
-                +   "_c=$(tr '\\0' ' ' < /proc/$_p/cmdline 2>/dev/null); "
-                +   "case \"$_c\" in *proot*|*proroot*) exit 0 ;; esac; "
-                + "}; "
-                + "kill \"$_p\" 2>/dev/null\n";
+                + "case \"$_p\" in ''|*[!0-9]*) ;; *) kill \"$_p\" 2>/dev/null ;; esac\n"
+                + "pkill -f 'dsh web' 2>/dev/null\n"
+                + "pkill -f 'bin.js' 2>/dev/null\n";
         try {
-            proot.execAndRead(script, 10_000); // 同步等待 kill 完成，确保端口释放
+            // 停止操作强制通过稳定 proot 运行时执行，100% 确保残留清理且不受子进程环境影响
+            proot.execAndReadWithProot(script, 10_000);
         } catch (Exception ignored) {
         }
     }

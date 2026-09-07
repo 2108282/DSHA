@@ -71,8 +71,9 @@ public final class WebProcSel {
      */
     public static boolean looksLikeWeb(String cmdline) {
         if (cmdline == null || cmdline.isEmpty()) return false;
-        if (cmdline.contains("libproot.so") || cmdline.contains("libproroot")
-                || cmdline.contains("proot")) {
+        // 仅排除启动器可执行文件本体，不能排除受 libproroot-bridge 注入的 node 目标进程
+        if (cmdline.endsWith("/libproot.so") || cmdline.endsWith("/libproroot.so")
+                || cmdline.equals("proot") || cmdline.equals("proroot")) {
             return false;
         }
         return (cmdline.contains("bin.js") && cmdline.contains("web"))

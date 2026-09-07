@@ -168,6 +168,7 @@ public interface ContainerRuntime {
         }
 
         @Override public void applyEnv(ProcessBuilder pb, File baseDir, File libDir, File tmpDir) {
+            tmpDir.mkdirs();
             pb.environment().put("PROROOT_TMP_DIR", tmpDir.getAbsolutePath());
             pb.environment().put("PROROOT_LIB_PATH",
                     new File(dir, "libproroot-runtime.so").getAbsolutePath());
@@ -175,6 +176,7 @@ public interface ContainerRuntime {
                     new File(dir, "libproroot-linker.so").getAbsolutePath());
             pb.environment().put("PROROOT_STUB_LOADER",
                     new File(dir, "libproroot-stub-loader.so").getAbsolutePath());
+            pb.environment().put("LD_LIBRARY_PATH", dir.getAbsolutePath() + ":" + libDir.getAbsolutePath());
         }
 
         @Override public void prepare() throws Exception {
@@ -185,6 +187,7 @@ public interface ContainerRuntime {
             }
             //noinspection ResultOfMethodCallIgnored
             shmDir().mkdirs();
+            new File(ctx.getFilesDir(), "linux/tmp").mkdirs();
         }
     }
 
