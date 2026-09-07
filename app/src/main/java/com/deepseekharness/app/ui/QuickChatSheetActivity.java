@@ -147,6 +147,16 @@ public class QuickChatSheetActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (sCachedWebView != null) {
+            // 唤醒防白屏兜底：若上次未成功加载出界面，再次唤出时自动重载有效凭证
+            if (!sWebLoaded) {
+                String authUrl = controller != null ? controller.getWebAuthUrl() : "";
+                if (authUrl != null && !authUrl.isEmpty()) {
+                    if (progressBar != null) progressBar.setVisibility(View.VISIBLE);
+                    sCachedWebView.loadUrl(authUrl);
+                }
+            }
+        }
         animateIn();
     }
 
@@ -681,6 +691,18 @@ public class QuickChatSheetActivity extends Activity {
                         errorHint.setText("DSHA 服务未就绪，请先在控制台启动");
                     }
                 }
+
+                @Override
+                public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse errorResponse) {
+                    super.onReceivedHttpError(view, request, errorResponse);
+                    // 401 自动回血自愈机制（对齐官方 WebPreviewActivity，杜绝白屏锁死）
+                    if (errorResponse != null && (errorResponse.getStatusCode() == 401 || errorResponse.getStatusCode() == 403)) {
+                        String retryUrl = controller != null ? controller.getWebAuthUrl() : "";
+                        if (retryUrl != null && !retryUrl.isEmpty()) {
+                            view.post(() -> view.loadUrl(retryUrl));
+                        }
+                    }
+                }
             });
 
             sCachedWebView.setWebChromeClient(new WebChromeClient());
@@ -690,26 +712,30 @@ public class QuickChatSheetActivity extends Activity {
             cookies.setAcceptThirdPartyCookies(sCachedWebView, true);
 
             String authUrl = controller != null ? controller.getWebAuthUrl() : "";
-            String base = "http://127.0.0.1:" + (controller != null ? controller.getPort() : "3080") + "/";
-
+            // 直接加载容器启动成功后固定不变的 LaunchToken 原生地址，彻底消除子线程换 Cookie 引起的超时白屏
             if (authUrl != null && !authUrl.isEmpty()) {
+                sCachedWebView.loadUrl(authUrl);
+            } else {
+                if (progressBar != null) progressBar.setVisibility(View.VISIBLE);
+                // 若启动初期 Token 尚未打印就绪，后台轮询等待有效凭证，绝不拿裸地址触发 401
                 new Thread(() -> {
-                    String cookie = controller.exchangeDshAuthCookie();
-                    runOnUiThread(() -> {
-                        if (isFinishing() || isDestroyed() || sCachedWebView == null) return;
-                        if (cookie != null && !cookie.isEmpty()) {
-                            cookies.setCookie(base, cookie + "; Path=/; HttpOnly; SameSite=Strict", ok -> {
-                                if (sCachedWebView != null) {
-                                    sCachedWebView.loadUrl(Boolean.TRUE.equals(ok) ? base : authUrl);
+                    for (int step = 0; step < 30; step++) {
+                        try {
+                            Thread.sleep(300);
+                        } catch (InterruptedException ignored) {
+                            break;
+                        }
+                        String readyUrl = controller != null ? controller.getWebAuthUrl() : "";
+                        if (readyUrl != null && !readyUrl.isEmpty()) {
+                            runOnUiThread(() -> {
+                                if (sCachedWebView != null && !isFinishing() && !isDestroyed()) {
+                                    sCachedWebView.loadUrl(readyUrl);
                                 }
                             });
-                        } else {
-                            sCachedWebView.loadUrl(authUrl);
+                            break;
                         }
-                    });
-                }, "sheet-cookie-init").start();
-            } else {
-                sCachedWebView.loadUrl(base);
+                    }
+                }, "sheet-wait-auth").start();
             }
         } else {
             if (sCachedWebView.getParent() instanceof ViewGroup) {
