@@ -2050,12 +2050,12 @@ public final class HttpShellService {
 
             Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            PendingIntent contentPi = PendingIntent.getActivity(ctx, 110, openAppIntent,
+            PendingIntent contentPi = PendingIntent.getActivity(ctx, 120, openAppIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
             Intent stopIntent = new Intent(ctx, ConfirmReceiver.class)
                     .setAction(ConfirmReceiver.ACTION_STOP_TASK);
-            PendingIntent stopPi = PendingIntent.getBroadcast(ctx, 111, stopIntent,
+            PendingIntent stopPi = PendingIntent.getBroadcast(ctx, 121, stopIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
             String compactDetail = compactActionDetail(text != null && !text.isEmpty() ? text : title);

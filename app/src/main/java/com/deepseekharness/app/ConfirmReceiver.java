@@ -177,10 +177,10 @@ public class ConfirmReceiver extends BroadcastReceiver {
             } catch (Throwable ignored) {}
         });
 
-        // 4. 打开 App 首页以展示并继续执行会话
+        // 4. 唤起快捷对话抽屉继续会话
         try {
-            Intent openIntent = new Intent(ctx, MainActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            Intent openIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     .putExtra("dsh_reply_text", text);
             ctx.startActivity(openIntent);
         } catch (Throwable ignored) {}
@@ -198,13 +198,13 @@ public class ConfirmReceiver extends BroadcastReceiver {
 
         Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        PendingIntent contentPi = PendingIntent.getActivity(ctx, 201, openAppIntent,
+        PendingIntent contentPi = PendingIntent.getActivity(ctx, 205, openAppIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         // 点击「💬 返回对话」直接从屏幕底部唤起抽屉弹层
         Intent actionIntent = new Intent(ctx, QuickChatSheetActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        PendingIntent actionPi = PendingIntent.getActivity(ctx, 202, actionIntent,
+        PendingIntent actionPi = PendingIntent.getActivity(ctx, 206, actionIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(

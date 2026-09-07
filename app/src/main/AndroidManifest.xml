@@ -61,8 +61,16 @@
 
         <!-- 快捷对话底部抽屉弹层（点击常驻通知或任务完成通知直达，独立任务栈物理隔离） -->
         <activity
+            android:name=".ui.QuickChatSheetActivity"
+            android:exported="true"
+            android:taskAffinity="com.dsh.client.quick_sheet"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.DeepseekHarness.SheetTransparent" />
+        <activity
             android:name=".QuickChatSheetActivity"
-            android:exported="false"
+            android:exported="true"
             android:taskAffinity="com.dsh.client.quick_sheet"
             android:excludeFromRecents="true"
             android:launchMode="singleInstance"

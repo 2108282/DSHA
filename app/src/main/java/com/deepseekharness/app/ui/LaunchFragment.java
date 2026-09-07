@@ -20,6 +20,7 @@ import com.deepseekharness.app.HttpShellService;
 import com.deepseekharness.app.LanProxyService;
 import com.deepseekharness.app.R;
 import com.deepseekharness.app.core.HarnessController;
+import com.deepseekharness.app.ui.QuickChatSheetActivity;
 import com.deepseekharness.app.util.Constants;
 
 /**
@@ -313,6 +314,18 @@ public class LaunchFragment extends Fragment {
             items.add("📶 局域网访问未开启（可在配置页中打开）");
             acts.add(() -> {});
         }
+
+        // 4. 快捷对话抽屉
+        items.add("💬 打开快捷对话底部抽屉");
+        acts.add(() -> {
+            try {
+                Intent intent = new Intent(requireContext(), QuickChatSheetActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                startActivity(intent);
+            } catch (Throwable t) {
+                Toast.makeText(requireContext(), "无法打开抽屉：" + t.getMessage(), Toast.LENGTH_SHORT).show();
+            }
+        });
 
         new androidx.appcompat.app.AlertDialog.Builder(requireContext())
                 .setTitle("访问地址与鉴权凭据")
