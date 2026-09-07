@@ -149,6 +149,14 @@ public class QuickChatSheetActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (sCachedWebView != null) {
+            // 确保 WebView 100% 挂载在当前窗口的容器中，防止因生命周期波动导致 View 容器留空
+            if (sCachedWebView.getParent() != webContainer) {
+                if (sCachedWebView.getParent() instanceof ViewGroup) {
+                    ((ViewGroup) sCachedWebView.getParent()).removeView(sCachedWebView);
+                }
+                webContainer.addView(sCachedWebView, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
             // 唤醒防白屏兜底：若上次未成功加载出界面，再次唤出时自动重载有效凭证
             if (!sWebLoaded) {
                 String authUrl = controller != null ? controller.getWebAuthUrl() : "";
