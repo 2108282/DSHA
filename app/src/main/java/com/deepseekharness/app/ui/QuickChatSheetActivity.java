@@ -50,7 +50,6 @@ import android.widget.ProgressBar;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 
-import androidx.appcompat.app.AppCompatActivity;
 
 /**
  * 快捷对话底部抽屉弹层（纯代码动态构建，零外部 XML 依赖）：
@@ -69,7 +68,7 @@ import androidx.appcompat.app.AppCompatActivity;
  * 9. 低位退出在动画完全结束后（onAnimationEnd）重置高度，彻底消除退出时的拉长闪屏。
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
-public class QuickChatSheetActivity extends AppCompatActivity {
+public class QuickChatSheetActivity extends Activity {
 
     public static final int ICON_CLOSE = 1;
     public static final int ICON_SETTINGS = 2;
@@ -110,7 +109,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
 
         // 窗口基础配置：全屏铺满、底部对齐（彻底锁死底部）、半透明遮罩、点击外部退出
-        supportRequestWindowFeature(Window.FEATURE_NO_TITLE);
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
         setFinishOnTouchOutside(true);
 
         Window window = getWindow();
@@ -119,11 +118,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             window.setDimAmount(0.42f);
             window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
-            window.setGravity(Gravity.BOTTOM);
+            // 彻底移除 window.setGravity(Gravity.BOTTOM)，防止输入法呼出时系统强行将 Window 整体向上顶飞
             // 采用 ADJUST_NOTHING：避免 Window 整体与卡片顶边被系统向上顶飞
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
             if (window.getDecorView() != null) {
                 window.getDecorView().setPadding(0, 0, 0, 0);
+                window.getDecorView().setBackgroundColor(Color.TRANSPARENT);
             }
         }
 
@@ -133,6 +133,10 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         calculateDimensions();
         setContentView(buildUi());
+        View content = findViewById(android.R.id.content);
+        if (content != null) {
+            content.setBackgroundColor(Color.TRANSPARENT);
+        }
         setupGesture();
         setupKeyboardObserver();
         attachChatWeb();

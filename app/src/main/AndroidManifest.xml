@@ -63,17 +63,17 @@
         <activity
             android:name=".ui.QuickChatSheetActivity"
             android:exported="true"
-            android:taskAffinity="com.deepseekharness.app.quickchat"
+            android:taskAffinity="com.dsh.client.quick_sheet"
             android:excludeFromRecents="true"
-            android:launchMode="singleTask"
+            android:launchMode="singleInstance"
             android:windowSoftInputMode="adjustNothing"
             android:theme="@style/Theme.DeepseekHarness.SheetTransparent" />
         <activity
             android:name=".QuickChatSheetActivity"
             android:exported="true"
-            android:taskAffinity="com.deepseekharness.app.quickchat"
+            android:taskAffinity="com.dsh.client.quick_sheet"
             android:excludeFromRecents="true"
-            android:launchMode="singleTask"
+            android:launchMode="singleInstance"
             android:windowSoftInputMode="adjustNothing"
             android:theme="@style/Theme.DeepseekHarness.SheetTransparent" />
         <activity android:name=".ui.PluginInstallActivity" android:exported="true">
