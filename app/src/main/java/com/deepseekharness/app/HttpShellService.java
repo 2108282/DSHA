@@ -21,6 +21,8 @@ import android.os.Looper;
 
 import androidx.core.app.NotificationCompat;
 
+import android.widget.Toast;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -93,15 +95,13 @@ public final class HttpShellService {
             new java.util.concurrent.atomic.AtomicLong();
     /** 当前挂起的弹窗：setCancelable(false) 后它自己关不掉，确认完必须主动 dismiss */
     private volatile androidx.appcompat.app.AlertDialog pendingDialog;
-    /** /app/ask 的一次性问答状态（同一时刻只允许一个提问在等待）。
-     *  askBusy 用 AtomicBoolean 而不是 volatile boolean —— 与 confirmBusy 同理：
-     *  「检查后置位」不原子的话两个请求会同时通过检查，各自弹一个对话框、
-     *  共写同一个 askAnswer，用户答 A 的值会被 B 那次请求读走。
-     *
-     *  <p>这里刻意<b>没有</b>与 pendingLatch 对应的 askLatch：确认那边需要字段，是因为
-     *  通知与悬浮条的按钮回调要从外部认领同一个 latch；提问只有对话框一条渠道，
-     *  回调直接闭包捕获 latch 就够了。曾经有过一个只写不读的 askLatch 字段，
-     *  它会让人误以为存在外部唤醒路径。 */
+    /** /app/ask 的一次性问答状态（支持前台弹窗与通知栏快捷按钮双通道同步回答）。 */
+    private final java.util.concurrent.atomic.AtomicLong askEpoch =
+            new java.util.concurrent.atomic.AtomicLong();
+    private volatile androidx.appcompat.app.AlertDialog pendingAskDialog;
+    private volatile CountDownLatch pendingAskLatch;
+    private final java.util.concurrent.atomic.AtomicBoolean askResolved =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
     private volatile String askAnswer = "";
     private final java.util.concurrent.atomic.AtomicBoolean askBusy =
             new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -1217,15 +1217,11 @@ public final class HttpShellService {
         }
     }
 
-    /** /app/ask?q=问题&options=选项A|选项B|选项C ：弹窗问用户，阻塞等回答（最多 3 个选项，120 秒超时） */
+    /** /app/ask?q=问题&options=选项A|选项B|选项C ：弹窗 + 通知栏双通道问用户，阻塞等回答（最多 3 个选项，120 秒超时） */
     private String appAsk(String path) {
         String q = getParam(queryOf(path), "q", "");
         String optRaw = getParam(queryOf(path), "options", "");
         if (q.isEmpty()) return "NO_QUESTION";
-        final MainActivity act = MainActivity.current;
-        if (act == null) {
-            return "[APP_BACKGROUND] App 不在前台，弹不出提问 —— 可先 /app/notify 提醒用户打开 DSHA";
-        }
         String[] parts = optRaw.isEmpty() ? new String[] { "好" } : optRaw.split("\\|");
         final String[] opts = parts.length <= 3 ? parts : new String[] { parts[0], parts[1], parts[2] };
         final String displayQuestion = safeDisplay(q);
@@ -1234,56 +1230,276 @@ public final class HttpShellService {
         // 检查与置位必须原子（见 askBusy 声明处）。CAS 成功之后立刻进 try，
         // 保证任何返回路径都会在 finally 里放开它。
         if (!askBusy.compareAndSet(false, true)) {
-            return "[BUSY] 已有一个提问在等用户回答";
+            return "[BUSY] 上一次提问还在等待用户回答";
         }
         try {
             final CountDownLatch latch = new CountDownLatch(1);
+            final long myEpoch = askEpoch.incrementAndGet();
             askAnswer = "";
-            act.runOnUiThread(() -> {
-                try {
-                    // 正在 finishing / 已销毁的 Activity 上 show() 会抛 BadTokenException，
-                    // 而这里是主线程，异常不在 handle() 的 catch 范围内 → 会崩 App
-                    if (act.isFinishing() || act.isDestroyed()) return;
-                    androidx.appcompat.app.AlertDialog.Builder b =
-                            new androidx.appcompat.app.AlertDialog.Builder(act)
-                                    .setTitle("助手提问").setMessage(displayQuestion);
-                    b.setPositiveButton(displayOptions[0], (d, w) -> {
-                        askAnswer = opts[0];
-                        latch.countDown();
-                    });
-                    if (opts.length > 1) {
-                        b.setNegativeButton(displayOptions[1], (d, w) -> {
-                            askAnswer = opts[1];
-                            latch.countDown();
-                        });
+            askResolved.set(false);
+            pendingAskLatch = latch;
+
+            // 1. 发送高优先级常驻通知（带选项快捷操作按钮，前台、后台与锁屏均可一键回答）
+            showAskNotification(q, opts, myEpoch);
+
+            // 2. 若前台 Activity 活跃，同时展示弹窗
+            final MainActivity act = MainActivity.current;
+            if (act != null) {
+                final AuthPromptInfo info = parseAuthPrompt(q, "💬 助手提问", opts);
+                act.runOnUiThread(() -> {
+                    try {
+                        if (act.isFinishing() || act.isDestroyed()) return;
+                        androidx.appcompat.app.AlertDialog.Builder b =
+                                new androidx.appcompat.app.AlertDialog.Builder(act)
+                                        .setTitle(info.title).setMessage(info.detail);
+                        b.setPositiveButton(info.primaryBtn, (d, w) -> resolveAsk(opts[0], myEpoch));
+                        if (opts.length > 1) {
+                            b.setNegativeButton(info.secondaryBtn, (d, w) -> resolveAsk(opts[1], myEpoch));
+                        }
+                        if (opts.length > 2) {
+                            b.setNeutralButton(displayOptions[2], (d, w) -> resolveAsk(opts[2], myEpoch));
+                        }
+                        b.setCancelable(false);
+                        pendingAskDialog = b.show();
+                    } catch (Throwable e) {
+                        android.util.Log.w("DSHA", "提问弹窗弹出失败，仍可从通知回答：" + safeError(e));
                     }
-                    if (opts.length > 2) {
-                        b.setNeutralButton(displayOptions[2], (d, w) -> {
-                            askAnswer = opts[2];
-                            latch.countDown();
-                        });
-                    }
-                    // 只认「用户主动取消」（返回键 / 点框外）。**不要挂 OnDismissListener** ——
-                    // dismiss 在 Activity 重建时也会触发（旋屏、切深色模式、被系统回收），
-                    // 那会让 agent 收到「用户关掉了提问框」这种假答案。确认弹窗那边正是
-                    // 因为拿 dismiss 当拒绝，长期出现「确认框有时莫名被拒」。
-                    // 代价是 Activity 重建时这次提问要等满超时 —— 宁可让 agent 多等，
-                    // 也不要给它一个错的回答。
-                    b.setOnCancelListener(d -> latch.countDown());
-                    b.show();
-                } catch (Throwable e) {
-                    latch.countDown();
-                }
-            });
-            boolean answered = latch.await(120, TimeUnit.SECONDS);
-            if (!answered) return "[TIMEOUT] 用户 120 秒内没有回答";
-            return askAnswer.isEmpty() ? "[DISMISSED] 用户关掉了提问框" : askAnswer;
-        } catch (InterruptedException e) {
-            return "[INTERRUPTED]";
+                });
+            }
+
+            try {
+                boolean answered = latch.await(120, TimeUnit.SECONDS);
+                if (!answered) return "[TIMEOUT] 用户 120 秒内没有回答";
+                return askAnswer.isEmpty() ? "[DISMISSED] 用户关掉了提问框" : askAnswer;
+            } catch (InterruptedException e) {
+                return "[INTERRUPTED]";
+            }
         } finally {
-            // 顺序与 confirm 一致：先清状态，最后才放开 busy
+            pendingAskLatch = null;
+            dismissAskDialog();
+            cancelAskNotification();
             askBusy.set(false);
         }
+    }
+
+    static class AuthPromptInfo {
+        final String title;
+        final String detail;
+        final String statusLabel;
+        final String capsuleText;
+        final String primaryBtn;
+        final String secondaryBtn;
+
+        AuthPromptInfo(String title, String detail, String statusLabel, String capsuleText, String primaryBtn, String secondaryBtn) {
+            this.title = title;
+            this.detail = detail;
+            this.statusLabel = statusLabel;
+            this.capsuleText = capsuleText;
+            this.primaryBtn = primaryBtn;
+            this.secondaryBtn = secondaryBtn;
+        }
+    }
+
+    private static AuthPromptInfo parseAuthPrompt(String raw, String defaultTitle, String[] opts) {
+        String s = raw == null ? "" : raw.trim();
+        String btn0 = (opts != null && opts.length > 0 && !opts[0].isEmpty()) ? opts[0] : "允许";
+        String btn1 = (opts != null && opts.length > 1 && !opts[1].isEmpty()) ? opts[1] : "拒绝";
+
+        if (s.contains("免打扰") || s.contains("租约") || s.contains("系统高级") || (s.contains("危险命令") && s.contains("权限"))) {
+            return new AuthPromptInfo("危险权限授权申请", "申请 10分钟免打扰租约", "权限申请", "危险授权", btn0, btn1);
+        }
+
+        if (s.contains("reboot") || s.contains("shutdown") || s.contains("mkfs") || s.contains("wipe") || s.contains("dd if=") || s.contains("toybox")) {
+            String cmd = s.replace("模型试图在设备上执行：", "").replace("模型试图在设备上执行:", "").replace("是否允许？", "").trim();
+            if (cmd.startsWith("`") && cmd.endsWith("`") && cmd.length() > 2) cmd = cmd.substring(1, cmd.length() - 1);
+            return new AuthPromptInfo("高危系统指令确认", cmd, "指令确认", "命令确认", btn0, btn1);
+        }
+
+        if (s.contains("模型试图在设备上执行") || s.contains("rm ") || s.contains("kill") || s.contains("pm ") || s.contains("cmd ") || s.contains("am ")) {
+            String cmd = s;
+            if (cmd.contains("模型试图在设备上执行：")) {
+                cmd = cmd.substring(cmd.indexOf("模型试图在设备上执行：") + "模型试图在设备上执行：".length());
+            } else if (cmd.contains("模型试图在设备上执行:")) {
+                cmd = cmd.substring(cmd.indexOf("模型试图在设备上执行:") + "模型试图在设备上执行:".length());
+            }
+            if (cmd.contains("是否允许？")) {
+                cmd = cmd.substring(0, cmd.indexOf("是否允许？"));
+            }
+            cmd = cmd.trim();
+            if (cmd.startsWith("`") && cmd.endsWith("`") && cmd.length() > 2) {
+                cmd = cmd.substring(1, cmd.length() - 1);
+            }
+            return new AuthPromptInfo("特权命令执行确认", cmd, "命令确认", "命令确认", btn0, btn1);
+        }
+
+        if (s.contains("涉及支付或隐私") || (s.contains("在【") && s.contains("】里："))) {
+            String target = s;
+            if (target.contains("#")) {
+                target = target.substring(0, target.indexOf("#")).trim();
+            }
+            if (target.startsWith("在【当前界面】里：")) {
+                target = target.substring("在【当前界面】里：".length()).trim();
+            } else if (target.startsWith("在【") && target.contains("】里：")) {
+                target = target.replace("在【", "").replace("】里：", ": ");
+            }
+            target = target.replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件").trim();
+            return new AuthPromptInfo("应用敏感操作确认", target, "敏感操作", "敏感确认", btn0, btn1);
+        }
+
+        if (s.contains("危险操作") || s.contains("高危操作") || s.contains("高危设备操作") || s.contains("高危权限")) {
+            String target = s;
+            target = target.replace("【危险操作授权】", "")
+                           .replace("【安全确认】", "")
+                           .replace("是否允许本次授权？", "")
+                           .replace("是否允许？", "")
+                           .replace("DeepSeek-Harness 请求", "请求")
+                           .replace("在【当前界面】里：", "")
+                           .trim();
+            if (target.contains("#")) {
+                target = target.substring(0, target.indexOf("#")).trim();
+            }
+            if (target.endsWith("，") || target.endsWith(",")) {
+                target = target.substring(0, target.length() - 1).trim();
+            }
+            target = target.replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件").trim();
+            if (target.isEmpty()) target = "申请 10分钟免打扰租约";
+            return new AuthPromptInfo("危险权限授权申请", target, "权限请求", "危险授权", btn0, btn1);
+        }
+
+        if (s.contains("屏幕") || s.contains("文字与控件") || s.contains("读屏") || s.contains("点按")) {
+            String target = s;
+            if (target.contains("#")) {
+                target = target.substring(0, target.indexOf("#")).trim();
+            }
+            target = target.replace("【屏幕操作】", "")
+                           .replace("在【当前界面】里：", "")
+                           .replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件")
+                           .trim();
+            return new AuthPromptInfo("屏幕操作授权申请", target, "权限请求", "屏幕授权", btn0, btn1);
+        }
+
+        if (s.contains("文件") || s.contains("覆盖") || s.contains("修改") || s.contains("本地") || s.contains("检测")) {
+            String target = s;
+            target = target.replace("检测到本地存在修改", "")
+                           .replace("检测到本地修改", "")
+                           .replace("检测到修改", "")
+                           .replace("是否确认", "")
+                           .replace("请确认", "")
+                           .replace("？", "?")
+                           .trim();
+            if (target.startsWith("，") || target.startsWith(",")) target = target.substring(1).trim();
+            if (!target.endsWith("?") && !target.endsWith("？")) target = target + "？";
+            if (target.length() > 25) target = target.substring(0, 24) + "…";
+            return new AuthPromptInfo("确认本地文件修改", target, "文件确认", "等待决策", btn0, btn1);
+        }
+
+        String cleanText = s.replace("请问", "").replace("是否", "").trim();
+        if (cleanText.length() > 25) cleanText = cleanText.substring(0, 24) + "…";
+        return new AuthPromptInfo("💬 助手提问与确认", cleanText, "助手提问", "等待回答", btn0, btn1);
+    }
+
+    private void showAskNotification(String q, String[] opts, long epoch) {
+        createConfirmChannel();
+        AuthPromptInfo info = parseAuthPrompt(q, "💬 助手提问", opts);
+        Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent contentPi = PendingIntent.getActivity(ctx, 39, openAppIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
+                .setSmallIcon(R.drawable.ic_whale_logo)
+                .setContentTitle(info.title)
+                .setContentText(info.detail)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(info.detail))
+                .setContentIntent(contentPi)
+                .setAutoCancel(true)
+                .setOngoing(true);
+
+        PendingIntent pi0 = null;
+        PendingIntent pi1 = null;
+        if (opts.length > 0) {
+            Intent intent0 = new Intent(ctx, ConfirmReceiver.class)
+                    .setAction(ConfirmReceiver.ACTION_ASK_ANSWER)
+                    .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch)
+                    .putExtra(ConfirmReceiver.EXTRA_ANSWER, opts[0]);
+            pi0 = PendingIntent.getBroadcast(ctx, 40, intent0,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            nb.addAction(0, info.primaryBtn, pi0);
+        }
+        if (opts.length > 1) {
+            Intent intent1 = new Intent(ctx, ConfirmReceiver.class)
+                    .setAction(ConfirmReceiver.ACTION_ASK_ANSWER)
+                    .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch)
+                    .putExtra(ConfirmReceiver.EXTRA_ANSWER, opts[1]);
+            pi1 = PendingIntent.getBroadcast(ctx, 41, intent1,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            nb.addAction(0, info.secondaryBtn, pi1);
+        }
+        for (int i = 2; i < opts.length; i++) {
+            String opt = opts[i];
+            Intent intent = new Intent(ctx, ConfirmReceiver.class)
+                    .setAction(ConfirmReceiver.ACTION_ASK_ANSWER)
+                    .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch)
+                    .putExtra(ConfirmReceiver.EXTRA_ANSWER, opt);
+            PendingIntent pi = PendingIntent.getBroadcast(ctx, 40 + i, intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            nb.addAction(0, opt, pi);
+        }
+
+        attachFocusCapsule(ctx, nb, info.title, info.detail, info.statusLabel, info.primaryBtn, info.capsuleText, pi0, info.secondaryBtn, pi1, true);
+
+        androidx.core.app.RemoteInput remoteInput = new androidx.core.app.RemoteInput.Builder(ConfirmReceiver.EXTRA_REPLY_TEXT)
+                .setLabel("输入回复内容...")
+                .build();
+        Intent replyIntent = new Intent(ctx, ConfirmReceiver.class)
+                .setAction(ConfirmReceiver.ACTION_ASK_REPLY)
+                .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
+        PendingIntent replyPi = PendingIntent.getBroadcast(ctx, 49, replyIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0));
+        NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
+                R.drawable.ic_launch, "💬 快捷输入", replyPi)
+                .addRemoteInput(remoteInput)
+                .build();
+        nb.addAction(replyAction);
+
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.notify(Constants.NOTIF_ASK_QUESTION, nb.build());
+        } catch (Throwable ignored) {}
+    }
+
+    private void cancelAskNotification() {
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.cancel(Constants.NOTIF_ASK_QUESTION);
+        } catch (Throwable ignored) {}
+    }
+
+    private void dismissAskDialog() {
+        final androidx.appcompat.app.AlertDialog d = pendingAskDialog;
+        if (d == null) return;
+        pendingAskDialog = null;
+        try {
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    if (d.isShowing()) d.dismiss();
+                } catch (Throwable ignored) {}
+            });
+        } catch (Throwable ignored) {}
+    }
+
+    public void resolveAsk(String answer, long epoch) {
+        if (epoch != askEpoch.get()) {
+            android.util.Log.i("DSHA", "忽略过期的提问点击（epoch " + epoch + "）");
+            return;
+        }
+        CountDownLatch l = pendingAskLatch;
+        if (l == null || l.getCount() == 0) return;
+        if (!askResolved.compareAndSet(false, true)) return;
+        askAnswer = answer;
+        l.countDown();
+        dismissAskDialog();
+        cancelAskNotification();
     }
 
     /** /app/export?path=/root/x.md&name=x.md ：把文件导出到 Download/DSHA（走 MediaStore，用户可直接在文件管理器看到） */
