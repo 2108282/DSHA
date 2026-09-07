@@ -16,6 +16,8 @@ import com.deepseekharness.app.R;
 public final class ModernAndroidUi implements Application.ActivityLifecycleCallbacks {
     @Override public void onActivityPostCreated(Activity activity, Bundle saved) {
         if (activity instanceof WebFullscreenUi.Host) return;
+        // 豁免快捷抽屉：抽屉自绘透明毛玻璃底板并有专属 keyboardSpacer 避让，绝不能被全局强制涂白和输入法 padding 挤压
+        if (activity.getClass().getSimpleName().contains("QuickChatSheetActivity")) return;
         View content = activity.findViewById(android.R.id.content);
         if (content == null) return;
         WindowCompat.setDecorFitsSystemWindows(activity.getWindow(), false);
