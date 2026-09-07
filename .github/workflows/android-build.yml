@@ -39,14 +39,32 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Fetch offline rootfs asset from official release
+        run: |
+          set -euo pipefail
+          if [ ! -f "app/src/main/assets/offline-rootfs.bin" ]; then
+            echo "==> Downloading official rc1.3 APK to extract offline-rootfs.bin..."
+            curl -L -f -o /tmp/dsha-official.apk "https://github.com/DSH-APP/DSHA/releases/download/v1.2.0-rc1.3/dsha-1.2.0-rc1.3.apk"
+            unzip -p /tmp/dsha-official.apk "assets/offline-rootfs.bin" > app/src/main/assets/offline-rootfs.bin
+            rm -f /tmp/dsha-official.apk
+          fi
+          ls -lh app/src/main/assets/offline-rootfs.bin
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
       - name: Build Standard Debug APK
         run: ./gradlew :app:assembleStandardDebug --stacktrace
 
+      - name: Verify APK size and contents
+        run: |
+          set -euo pipefail
+          APK_FILE=$(ls app/build/outputs/apk/standard/debug/*.apk | head -1)
+          ls -lh "$APK_FILE"
+          unzip -l "$APK_FILE" | grep "offline-rootfs" || true
+
       - name: Upload Standard Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: dsha-standard-debug
+          name: dsha-standard-debug-full
           path: app/build/outputs/apk/standard/debug/*.apk
