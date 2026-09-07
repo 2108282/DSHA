@@ -50,6 +50,8 @@ import android.widget.ProgressBar;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 
+import androidx.appcompat.app.AppCompatActivity;
+
 /**
  * 快捷对话底部抽屉弹层（纯代码动态构建，零外部 XML 依赖）：
  * 1. 左右 100% 铺满物理屏幕（Theme.DeepseekHarness.SheetTransparent + Decor 零边距）；
@@ -67,7 +69,7 @@ import android.widget.TextView;
  * 9. 低位退出在动画完全结束后（onAnimationEnd）重置高度，彻底消除退出时的拉长闪屏。
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
-public class QuickChatSheetActivity extends Activity {
+public class QuickChatSheetActivity extends AppCompatActivity {
 
     public static final int ICON_CLOSE = 1;
     public static final int ICON_SETTINGS = 2;
@@ -108,7 +110,7 @@ public class QuickChatSheetActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         // 窗口基础配置：全屏铺满、底部对齐（彻底锁死底部）、半透明遮罩、点击外部退出
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        supportRequestWindowFeature(Window.FEATURE_NO_TITLE);
         setFinishOnTouchOutside(true);
 
         Window window = getWindow();
