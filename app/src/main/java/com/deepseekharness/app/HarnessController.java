@@ -3235,7 +3235,9 @@ public class HarnessController {
                     {"webui-origin-port-patch.sh", "dsha-origin-port-patch.sh"},
                     // write 工具新建文件变悬空链接（l2s 与 dsh 的 link 发布冲突）
                     {"fs-write-patch.sh", "dsha-fs-write-patch.sh"},
-            }, 210_000);
+                    // 修复 dsh 0.1.2+ Launch Token 与 DSHA Bridge Token 冲突
+                    {"dsh-token-patch.sh", "dsha-token-patch.sh"},
+            }, 240_000);
             noteFsWritePatchResult(r1.get("fs-write-patch.sh"));
         } catch (Throwable ignored) {
         }
