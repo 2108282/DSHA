@@ -12,6 +12,7 @@ import { readFileSync, existsSync, unlinkSync } from 'node:fs'
 import { readFile, unlink } from 'node:fs/promises'
 
 // 保持无模块级硬依赖，防止阻塞插件树初始化
+export const name = 'dsh-task-notifier'
 export const inject = []
 
 // Instant notification on turn/end without 30s throttling
@@ -246,8 +247,6 @@ export function apply(ctx) {
 
         const reasonObj = event.data?.reason
         const kind = reasonObj?.kind ?? 'completed'
-        const sessionId = session?.id ?? 'session'
-        const now = Date.now()
 
         if (kind === 'error') {
           const detail = parseFailureDetail(reasonObj?.error)
@@ -259,9 +258,7 @@ export function apply(ctx) {
         }
 
         if (kind === 'aborted') {
-          if (now - lastCancelByNotification < 5000) {
-            return
-          }
+          // 彻底废除静音拦截：无论是手机通知栏点击停止，还是外部中止，一律弹出终止通知明确告知
           void callBridge('/app/notify', {
             title: '⚠️ 任务已终止',
             text: '已按指令停止操作，点击查看或继续对话'
@@ -293,22 +290,52 @@ export function apply(ctx) {
           return
         }
 
-        // 提取 AI 真实输出摘要，若无则优雅兜底
-        let endText = '智能体已结束任务，点击查看结果'
-        if (lastAssistantText && lastAssistantText.trim()) {
+        if (kind === 'completed') {
+          // 严防模型偷懒：若未输出任何实质文本或内容全为空白，绝不能判定为成功完成
+          if (!lastAssistantText || !lastAssistantText.trim()) {
+            void callBridge('/app/notify', {
+              title: '⚠️ 智能体未完成任务',
+              text: '模型已停下但未输出有效动作，点击返回对话'
+            })
+            return
+          }
+
           const clean = lastAssistantText.replace(/\s+/g, ' ').trim()
-          endText = clean.length > 60 ? clean.slice(0, 60) + '…' : clean
+          const endText = clean.length > 60 ? clean.slice(0, 60) + '…' : clean
+          void callBridge('/app/notify', {
+            title: '任务已完成',
+            text: endText
+          })
+          return
         }
 
+        // 统一终极兜底：所有未明确归类或意外脱轨的中断情况，一律弹中断通知
+        const detail = parseFailureDetail(reasonObj?.error) || String(kind || '任务中途脱轨或意外中断')
         void callBridge('/app/notify', {
-          title: '任务已完成',
-          text: endText
+          title: '⚠️ 任务异常中断',
+          text: `${detail}，点击返回对话查看`
         })
       }
     } catch {}
   })
 
-  // 2. 作用域注入 agents 服务，安全、非阻塞地管理 Agent 生命周期（停止与继续对话）
+  // 2. 监听全局 agent/error 异常广播（捕获脱离会话流的底层致命崩溃）
+  ctx.on('agent/error', ({ agent, error }) => {
+    try {
+      if (trailingTimer) {
+        clearTimeout(trailingTimer)
+        trailingTimer = null
+      }
+      pendingState = null
+      const detail = parseFailureDetail(error)
+      void callBridge('/app/notify', {
+        title: '⚠️ 任务异常中断',
+        text: detail || '智能体运行时发生底层故障中断'
+      })
+    } catch {}
+  })
+
+  // 3. 作用域注入 agents 服务，安全、非阻塞地管理 Agent 生命周期（停止与继续对话）
   ctx.inject(['agents'], (agentScope) => {
     let timer = setInterval(async () => {
       try {
