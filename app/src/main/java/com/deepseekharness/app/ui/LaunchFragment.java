@@ -16,6 +16,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
+import com.deepseekharness.app.HttpShellService;
 import com.deepseekharness.app.LanProxyService;
 import com.deepseekharness.app.R;
 import com.deepseekharness.app.core.HarnessController;
@@ -228,33 +229,96 @@ public class LaunchFragment extends Fragment {
         }
     }
 
-    /** LAN 开关开 + 代理已绑定 → 直接把完整局域网地址亮出来（点一下可复制）。 */
+    /** 刷新访问地址与凭据展示区：就绪或开局域网时可见，点击弹出完整地址与 Token 菜单。 */
     private void refreshLanAddr() {
         if (lanAddrText == null || !isAdded()) return;
         boolean lan = requireContext().getSharedPreferences(Constants.PREFS, Context.MODE_PRIVATE)
                 .getBoolean(Constants.KEY_LAN_MODE, false);
-        if (!lan) {
+        boolean ready = controller != null && !controller.getWebAuthUrl().isEmpty();
+
+        if (!lan && !ready) {
             lanAddrText.setVisibility(View.GONE);
             return;
         }
-        boolean bound = LanProxyService.isBound();
-        if (bound) {
-            // 完整地址直接亮出来：另一台设备照着输入即可，不用再点开对话框复制
-            String ip = HarnessController.getLanAddress();
-            if (ip != null && !ip.isEmpty()) {
-                final String addr = "http://" + ip + ":" + LanProxyService.LAN_PORT + "/?token="
-                        + LanProxyService.getLanToken(requireContext());
-                lanAddrText.setText("局域网地址（同 WiFi 的其它设备访问）：\n" + addr);
-                lanAddrText.setOnClickListener(v -> copyAddr("局域网地址", addr));
+
+        if (lan) {
+            boolean bound = LanProxyService.isBound();
+            if (bound) {
+                String ip = HarnessController.getLanAddress();
+                if (ip != null && !ip.isEmpty()) {
+                    final String addr = "http://" + ip + ":" + LanProxyService.LAN_PORT + "/?token="
+                            + LanProxyService.getLanToken(requireContext());
+                    lanAddrText.setText("局域网地址：\n" + addr + "\n▸ 点此查看 Bridge Token 与本机访问凭据");
+                } else {
+                    lanAddrText.setText("局域网已开启（等待 WiFi）\n▸ 点此查看 Bridge Token 与本机凭据");
+                }
             } else {
-                lanAddrText.setText("局域网已开启，但还没拿到 WiFi 地址（连上 WiFi 再看）");
-                lanAddrText.setOnClickListener(null);
+                lanAddrText.setText("局域网代理等待认证\n▸ 点此查看 Bridge Token 与本机凭据");
             }
         } else {
-            lanAddrText.setText("局域网代理正在等待本轮认证");
-            lanAddrText.setOnClickListener(null);
+            lanAddrText.setText("▸ 点击查看 Bridge Token 与本机/浏览器访问地址");
         }
+
+        lanAddrText.setOnClickListener(v -> showAccessCredentialsDialog());
         lanAddrText.setVisibility(View.VISIBLE);
+    }
+
+    /**
+     * 弹出访问地址与凭据选择器（专供自建后端、外部插件及调试访问）。
+     */
+    private void showAccessCredentialsDialog() {
+        if (!isAdded()) return;
+        final String bridgeToken = HttpShellService.currentToken();
+        final String authUrl = controller != null ? controller.getWebAuthUrl() : "";
+
+        boolean lan = requireContext().getSharedPreferences(Constants.PREFS, Context.MODE_PRIVATE)
+                .getBoolean(Constants.KEY_LAN_MODE, false);
+        String ip = HarnessController.getLanAddress();
+        final String lanAddr = (lan && ip != null && !ip.isEmpty())
+                ? "http://" + ip + ":" + LanProxyService.LAN_PORT + "/?token="
+                        + LanProxyService.getLanToken(requireContext())
+                : null;
+
+        java.util.List<String> items = new java.util.ArrayList<>();
+        java.util.List<Runnable> acts = new java.util.ArrayList<>();
+
+        // 1. 复制 Bridge Token (3090 设备桥 / 自建后端鉴权)
+        items.add("📋 复制设备桥令牌 (Bridge Token)\n" + (bridgeToken.isEmpty() ? "（尚未生成）" : bridgeToken));
+        acts.add(() -> copyAddr("Bridge Token", bridgeToken));
+
+        // 2. 本机 Web 访问链接
+        if (!authUrl.isEmpty()) {
+            items.add("🌐 复制本机 Web 访问地址（带 Launch Token）\n" + authUrl);
+            acts.add(() -> copyAddr("本机 Web 地址", authUrl));
+
+            items.add("🚀 用系统外部浏览器打开 Web 界面");
+            acts.add(() -> {
+                try {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(authUrl));
+                    startActivity(intent);
+                } catch (Throwable t) {
+                    Toast.makeText(requireContext(), "无法打开浏览器：" + t.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+
+        // 3. 局域网访问地址
+        if (lanAddr != null) {
+            items.add("📶 复制局域网访问地址（同 WiFi 其它设备）\n" + lanAddr);
+            acts.add(() -> copyAddr("局域网地址", lanAddr));
+        } else if (lan) {
+            items.add("📶 局域网模式已开启，等待获取 WiFi IP…");
+            acts.add(() -> {});
+        } else {
+            items.add("📶 局域网访问未开启（可在配置页中打开）");
+            acts.add(() -> {});
+        }
+
+        new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                .setTitle("访问地址与鉴权凭据")
+                .setItems(items.toArray(new CharSequence[0]), (d, w) -> acts.get(w).run())
+                .setNegativeButton("关闭", null)
+                .show();
     }
 
     private void copyAddr(String label, String addr) {
@@ -263,7 +327,7 @@ public class LaunchFragment extends Fragment {
                     requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null) {
                 cm.setPrimaryClip(android.content.ClipData.newPlainText(label, addr));
-                Toast.makeText(requireContext(), "已复制：" + addr, Toast.LENGTH_LONG).show();
+                Toast.makeText(requireContext(), label + " 已复制", Toast.LENGTH_SHORT).show();
             }
         } catch (Throwable t) {
             Toast.makeText(requireContext(), "复制失败：" + t.getMessage(), Toast.LENGTH_SHORT).show();

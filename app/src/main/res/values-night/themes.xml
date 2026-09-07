@@ -37,4 +37,16 @@
              「浅蓝底白字看不清」。上一版只改了 day 那份，深色模式毫无变化。 -->
         <item name="materialButtonStyle">@style/Widget.DSHA.Button</item>
     </style>
+
+    <!-- 快捷抽屉弹层专用全屏透明主题（深色模式） -->
+    <style name="Theme.DeepseekHarness.SheetTransparent" parent="Theme.DeepseekHarness">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorBackground">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
 </resources>

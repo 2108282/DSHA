@@ -6,6 +6,7 @@ import com.deepseekharness.app.util.Query;
 import com.deepseekharness.app.core.HarnessController;
 import com.deepseekharness.app.runtime.TarGzipExtractor;
 import com.deepseekharness.app.ui.MainActivity;
+import com.deepseekharness.app.ui.QuickChatSheetActivity;
 import com.deepseekharness.app.util.SensitiveData;
 
 import android.app.Notification;
@@ -441,6 +442,10 @@ public final class HttpShellService {
             String result;
             if (!authed) {
                 result = "[UNAUTHORIZED]";
+            } else if (path.startsWith("/app/task/running")) {
+                result = appTaskRunning(path);
+            } else if (path.startsWith("/app/task/cancel")) {
+                result = appTaskCancel();
             } else if (path.startsWith("/app/notify")) {
                 // agent 通过 App 发通知栏提醒（App 层交互）
                 result = appNotify(path);
@@ -1398,11 +1403,402 @@ public final class HttpShellService {
         }
     }
 
+    private static volatile android.graphics.Bitmap sCachedWhaleBmp = null;
+    private static volatile android.graphics.drawable.Icon sCachedWhaleIcon = null;
+    private static volatile android.graphics.drawable.Icon sCachedCheckIcon = null;
+    private static volatile android.graphics.drawable.Icon sCachedCloseIcon = null;
+    private static volatile long sLastRunningNotifTime = 0L;
+
+    private static android.graphics.drawable.Icon createRoundedBackgroundIcon(Context context, int drawableResId, int iconColor, int backgroundColor, float paddingFactor) {
+        if (Build.VERSION.SDK_INT < 23 || context == null) return null;
+        try {
+            int size = 128;
+            android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+            android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            paint.setColor(backgroundColor);
+            paint.setStyle(android.graphics.Paint.Style.FILL);
+            canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
+
+            android.graphics.drawable.Drawable drawable = androidx.core.content.ContextCompat.getDrawable(context, drawableResId);
+            if (drawable != null) {
+                drawable = drawable.mutate();
+                int pad = (int) (size * paddingFactor);
+                drawable.setBounds(pad, pad, size - pad, size - pad);
+                drawable.setColorFilter(new android.graphics.PorterDuffColorFilter(iconColor, android.graphics.PorterDuff.Mode.SRC_IN));
+                drawable.draw(canvas);
+            }
+            return android.graphics.drawable.Icon.createWithBitmap(bitmap);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static synchronized void ensureCachedIcons(Context ctx) {
+        if (ctx == null) return;
+        if (sCachedWhaleBmp == null) {
+            try {
+                sCachedWhaleBmp = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), R.drawable.ic_whale_logo);
+                if (sCachedWhaleBmp != null && Build.VERSION.SDK_INT >= 23) {
+                    sCachedWhaleIcon = android.graphics.drawable.Icon.createWithBitmap(sCachedWhaleBmp);
+                }
+            } catch (Throwable ignored) {}
+        }
+        if (sCachedCheckIcon == null && Build.VERSION.SDK_INT >= 23) {
+            sCachedCheckIcon = createRoundedBackgroundIcon(ctx, R.drawable.ic_check_white, 0xFFFFFFFF, 0xFF34C759, 0.15f);
+            sCachedCloseIcon = createRoundedBackgroundIcon(ctx, R.drawable.ic_close_white, 0xFFFFFFFF, 0xFFFF3B30, 0.15f);
+        }
+    }
+
+    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, boolean enableFloat) {
+        attachFocusCapsule(ctx, b, title, detail, statusLabel, actionTitle, capsuleText, primaryActionPi, null, null, enableFloat, enableFloat);
+    }
+
+    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat) {
+        attachFocusCapsule(ctx, b, title, detail, statusLabel, actionTitle, capsuleText, primaryActionPi, secondaryActionTitle, secondaryActionPi, enableFloat, enableFloat);
+    }
+
+    public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat, boolean islandFirstFloat) {
+        b.setSubText("大肥鱼");
+        b.setOnlyAlertOnce(true);
+        b.setShowWhen(false);
+        b.setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
+        b.setCategory(NotificationCompat.CATEGORY_STATUS);
+        if (!enableFloat) {
+            b.setPriority(NotificationCompat.PRIORITY_DEFAULT);
+        } else {
+            b.setPriority(NotificationCompat.PRIORITY_HIGH);
+        }
+
+        ensureCachedIcons(ctx);
+        boolean hasDualActions = (secondaryActionPi != null && secondaryActionTitle != null && !secondaryActionTitle.isEmpty());
+
+        if (!hasDualActions && sCachedWhaleBmp != null) {
+            try { b.setLargeIcon(sCachedWhaleBmp); } catch (Throwable ignored) {}
+        }
+
+        // 1. Google AOSP 16 (API 36) 原生实时活动标准 (Live Updates / Promoted Ongoing)
+        android.os.Bundle extras = b.getExtras();
+        if (extras != null) {
+            extras.putBoolean("android.requestPromotedOngoing", true);
+            extras.putString("android.shortCriticalText", capsuleText != null ? capsuleText : "正在执行");
+        }
+        try {
+            java.lang.reflect.Method m = b.getClass().getMethod("setRequestPromotedOngoing", boolean.class);
+            m.invoke(b, true);
+        } catch (Throwable ignored) {}
+
+        // 2. 小米澎湃 OS (HyperOS / HyperIsland 灵动岛) 焦点通知标准协议
+        try {
+            org.json.JSONObject paramV2 = new org.json.JSONObject();
+            paramV2.put("protocol", 1);
+            paramV2.put("business", "schedule_reminder");
+            paramV2.put("enableFloat", enableFloat);
+            paramV2.put("islandFirstFloat", islandFirstFloat);
+            paramV2.put("ticker", "大肥鱼 " + (capsuleText != null ? capsuleText : "正在执行"));
+            paramV2.put("aodTitle", title != null ? title : "DSHA");
+            paramV2.put("aodPic", "miui.focus.pic_big_island");
+
+            org.json.JSONObject island = new org.json.JSONObject();
+            island.put("highlightColor", "#58A6FF");
+
+            org.json.JSONObject bigIslandArea = new org.json.JSONObject();
+            org.json.JSONObject leftImgText = new org.json.JSONObject();
+            leftImgText.put("type", 1);
+            if (!hasDualActions && sCachedWhaleBmp != null) {
+                org.json.JSONObject leftPicInfo = new org.json.JSONObject();
+                leftPicInfo.put("type", 1);
+                leftPicInfo.put("pic", "miui.focus.pic_big_island");
+                leftImgText.put("picInfo", leftPicInfo);
+            }
+
+            org.json.JSONObject leftTextInfo = new org.json.JSONObject();
+            leftTextInfo.put("title", "大肥鱼");
+            leftTextInfo.put("showHighlightColor", true);
+            leftImgText.put("textInfo", leftTextInfo);
+            bigIslandArea.put("imageTextInfoLeft", leftImgText);
+
+            org.json.JSONObject rightTextInfo = new org.json.JSONObject();
+            rightTextInfo.put("title", capsuleText != null ? capsuleText : "正在执行");
+            rightTextInfo.put("showHighlightColor", false);
+            bigIslandArea.put("textInfo", rightTextInfo);
+            bigIslandArea.put("islandTimeout", 900);
+
+            island.put("bigIslandArea", bigIslandArea);
+            if (!hasDualActions && sCachedWhaleBmp != null) {
+                org.json.JSONObject smallIsland = new org.json.JSONObject();
+                org.json.JSONObject smallPicInfo = new org.json.JSONObject();
+                smallPicInfo.put("type", 1);
+                smallPicInfo.put("pic", "miui.focus.pic_small_island");
+                smallIsland.put("picInfo", smallPicInfo);
+                island.put("smallIslandArea", smallIsland);
+            }
+
+            paramV2.put("param_island", island);
+
+            org.json.JSONObject baseInfo = new org.json.JSONObject();
+            baseInfo.put("type", 2);
+            baseInfo.put("title", title != null ? title : "DSHA");
+
+            if (hasDualActions) {
+                baseInfo.put("content", detail != null ? detail : "");
+                paramV2.put("baseInfo", baseInfo);
+
+                org.json.JSONArray actionsArr = new org.json.JSONArray();
+                if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
+                    org.json.JSONObject a1 = new org.json.JSONObject();
+                    a1.put("type", 1);
+                    a1.put("action", "miui.focus.action_1");
+                    a1.put("actionTitle", actionTitle);
+                    a1.put("actionIcon", "miui.focus.pic_check");
+                    a1.put("actionIconDark", "miui.focus.pic_check");
+                    a1.put("actionBgColor", "#34C759");
+                    a1.put("actionBgColorDark", "#34C759");
+                    a1.put("actionIntentType", 2);
+                    actionsArr.put(a1);
+                }
+                org.json.JSONObject a2 = new org.json.JSONObject();
+                a2.put("type", 1);
+                a2.put("action", "miui.focus.action_2");
+                a2.put("actionTitle", secondaryActionTitle);
+                a2.put("actionIcon", "miui.focus.pic_close");
+                a2.put("actionIconDark", "miui.focus.pic_close");
+                a2.put("actionBgColor", "#FF3B30");
+                a2.put("actionBgColorDark", "#FF3B30");
+                a2.put("actionIntentType", 2);
+                actionsArr.put(a2);
+
+                paramV2.put("actions", actionsArr);
+            } else {
+                paramV2.put("baseInfo", baseInfo);
+
+                org.json.JSONObject hintInfo = new org.json.JSONObject();
+                hintInfo.put("title", detail != null ? detail : "");
+                hintInfo.put("content", statusLabel != null ? statusLabel : "实时状态");
+                hintInfo.put("type", 2);
+                hintInfo.put("colorContent", "#58A6FF");
+                hintInfo.put("colorContentDark", "#58A6FF");
+
+                if (primaryActionPi != null && actionTitle != null && !actionTitle.isEmpty()) {
+                    org.json.JSONObject actionInfo = new org.json.JSONObject();
+                    actionInfo.put("action", "miui.focus.action_1");
+                    actionInfo.put("actionIcon", "miui.focus.pic_action");
+                    actionInfo.put("actionIconDark", "miui.focus.pic_action");
+                    actionInfo.put("actionIntentType", 2);
+                    hintInfo.put("actionInfo", actionInfo);
+                }
+                paramV2.put("hintInfo", hintInfo);
+
+                if (sCachedWhaleBmp != null) {
+                    org.json.JSONObject picInfo = new org.json.JSONObject();
+                    picInfo.put("type", 1);
+                    picInfo.put("pic", "miui.focus.icon_feature");
+                    picInfo.put("picDark", "miui.focus.icon_feature");
+                    paramV2.put("picInfo", picInfo);
+                }
+            }
+
+            org.json.JSONObject root = new org.json.JSONObject();
+            root.put("param_v2", paramV2);
+
+            if (extras != null) {
+                extras.putString("miui.focus.param", root.toString());
+                extras.putBoolean("enableFloat", enableFloat);
+                extras.putBoolean("islandFirstFloat", islandFirstFloat);
+
+                if (Build.VERSION.SDK_INT >= 23) {
+                    android.os.Bundle pics = new android.os.Bundle();
+                    android.graphics.drawable.Icon whaleIcon = (sCachedWhaleIcon != null) ? sCachedWhaleIcon : android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_whale_logo);
+                    android.graphics.drawable.Icon alarmIcon = android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_alarm_white);
+                    android.graphics.drawable.Icon checkIcon = (sCachedCheckIcon != null) ? sCachedCheckIcon : android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_check_white);
+                    android.graphics.drawable.Icon closeIcon = (sCachedCloseIcon != null) ? sCachedCloseIcon : android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.ic_close_white);
+
+                    pics.putParcelable("miui.focus.pic_big_island", whaleIcon);
+                    pics.putParcelable("miui.focus.pic_small_island", whaleIcon);
+                    pics.putParcelable("miui.focus.icon_feature", whaleIcon);
+                    pics.putParcelable("miui.focus.pic_action", alarmIcon);
+                    pics.putParcelable("miui.focus.pic_check", checkIcon);
+                    pics.putParcelable("miui.focus.pic_close", closeIcon);
+                    extras.putBundle("miui.focus.pics", pics);
+
+                    if (primaryActionPi != null) {
+                        android.os.Bundle actionBundle = new android.os.Bundle();
+                        android.app.Notification.Action a1 = new android.app.Notification.Action.Builder(
+                                hasDualActions ? checkIcon : alarmIcon, actionTitle, primaryActionPi).build();
+                        actionBundle.putParcelable("miui.focus.action_1", a1);
+
+                        if (hasDualActions) {
+                            android.app.Notification.Action a2 = new android.app.Notification.Action.Builder(
+                                    closeIcon, secondaryActionTitle, secondaryActionPi).build();
+                            actionBundle.putParcelable("miui.focus.action_2", a2);
+                        }
+                        extras.putBundle("miui.focus.actions", actionBundle);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private String appTaskRunning(String path) {
+        try {
+            String q = queryOf(path);
+            String title = getParam(q, "title", "正在执行");
+            String text = getParam(q, "text", "智能体正在执行自动化任务...");
+            showRunningNotification(title, text);
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + safeError(e);
+        }
+    }
+
+    private String appTaskCancel() {
+        try {
+            cancelRunningNotification();
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + safeError(e);
+        }
+    }
+
+    private static String compactActionDetail(String raw) {
+        if (raw == null) return "智能体正在处理中...";
+        String s = raw.trim();
+        if (s.startsWith("正在使用工具")) {
+            int colon = s.indexOf(':');
+            if (colon > 0 && colon < s.length() - 1) return s.substring(colon + 1).trim();
+            return s;
+        }
+        return s;
+    }
+
+    private static String compactCapsuleText(String raw) {
+        if (raw == null) return "执行中";
+        String s = raw.trim();
+        if (s.contains("子任务") || s.contains("subagent") || s.contains("workflow") || s.contains("ralph")) return "调度任务中";
+        if (s.contains("read_image") || s.contains("看图") || s.contains("图") || s.contains("截屏") || s.contains("vision") || s.contains("画面")) return "分析画面中";
+        if (s.contains("写") || s.contains("修改") || s.contains("创建") || s.contains("write") || s.contains("edit") || s.contains("patch") || s.contains("apply")) return "修改文件中";
+        if (s.contains("读") || s.contains("cat") || s.contains("查看") || s.contains("read")) return "读取文件中";
+        if (s.contains("搜") || s.contains("find") || s.contains("grep") || s.contains("glob")) return "搜索文件中";
+        if (s.contains("网") || s.contains("联网") || s.contains("http") || s.contains("fetch") || s.contains("查资料") || s.contains("web_search") || s.contains("browse")) return "联网搜索中";
+        if (s.contains("屏幕") || s.contains("tap") || s.contains("swipe") || s.contains("dump") || s.contains("launch")) return "操作屏幕中";
+        if (s.contains("思考") || s.contains("think") || s.contains("reason")) return "深度思考中";
+        if (s.contains("命令") || s.contains("bash") || s.contains("shell") || s.contains("exec") || s.contains("git") || s.contains("curl") || s.contains("python") || s.contains("npm") || s.contains("pnpm") || s.contains("node") || s.contains("adb") || s.contains("rm ") || s.contains("ls ")) return "执行命令中";
+        if (s.length() <= 5) return s;
+        return s.substring(0, 4) + "…";
+    }
+
+    private void showAskWaitingNotification(String customQuestion) {
+        try {
+            createConfirmChannel();
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            PendingIntent contentPi = PendingIntent.getActivity(ctx, 110, openAppIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            NotificationCompat.Action returnAction = new NotificationCompat.Action.Builder(
+                    R.drawable.ic_alarm_white, "💬 返回对话", contentPi)
+                    .build();
+
+            String displayDesc = (customQuestion != null && !customQuestion.trim().isEmpty() && !customQuestion.equals("智能体正在等待你的回答与选择"))
+                    ? safeDisplay(customQuestion)
+                    : "智能体正在等待你的回答与选择，点击返回对话";
+
+            NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
+                    .setSmallIcon(R.drawable.ic_whale_logo)
+                    .setContentTitle("💬 助手提问")
+                    .setContentText(displayDesc)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(displayDesc))
+                    .setContentIntent(contentPi)
+                    .addAction(returnAction)
+                    .setAutoCancel(true)
+                    .setOngoing(true)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH);
+
+            attachFocusCapsule(ctx, nb, "💬 助手提问", displayDesc, "等待回答", "返回对话", "等待回答", contentPi, true);
+            nb.setOnlyAlertOnce(false);
+
+            if (nm != null) {
+                nm.cancel(Constants.NOTIF_TASK_RUNNING);
+                nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void showRunningNotification(String title, String text) {
+        try {
+            if ("💬 助手提问".equals(title) || "等待回答".equals(title) ||
+                (text != null && (text.contains("ask_user") || text.contains("ask_question"))) ||
+                (title != null && (title.contains("ask_user") || title.contains("ask_question")))) {
+                cancelRunningNotification();
+                showAskWaitingNotification(text);
+                return;
+            }
+
+            long nowTime = System.currentTimeMillis();
+            if (nowTime - sLastRunningNotifTime < 800L) return;
+            sLastRunningNotifTime = nowTime;
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (Build.VERSION.SDK_INT >= 26 && nm != null) {
+                NotificationChannel ch = new NotificationChannel(
+                        Constants.CHANNEL_AGENT_RUNNING, "Agent 运行状态",
+                        NotificationManager.IMPORTANCE_DEFAULT);
+                ch.setDescription("智能体运行中实时操作步骤通知");
+                nm.createNotificationChannel(ch);
+            }
+
+            Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            PendingIntent contentPi = PendingIntent.getActivity(ctx, 110, openAppIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            Intent stopIntent = new Intent(ctx, ConfirmReceiver.class)
+                    .setAction(ConfirmReceiver.ACTION_STOP_TASK);
+            PendingIntent stopPi = PendingIntent.getBroadcast(ctx, 111, stopIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            String compactDetail = compactActionDetail(text != null && !text.isEmpty() ? text : title);
+            String capsuleText = compactCapsuleText(text != null && !text.isEmpty() ? text : title);
+
+            if (nm != null) {
+                nm.cancel(Constants.NOTIF_TASK);
+                nm.cancel(Constants.NOTIF_TASK_STOPPED);
+                nm.cancel(Constants.NOTIF_ASK_QUESTION);
+            }
+
+            String displayTitle = "正在执行";
+            String displayDetail = compactDetail;
+
+            NotificationCompat.Action stopAction = new NotificationCompat.Action.Builder(
+                    R.drawable.ic_alarm_white, "🛑 停止任务", stopPi)
+                    .build();
+
+            NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, Constants.CHANNEL_AGENT_RUNNING)
+                    .setSmallIcon(R.drawable.ic_whale_logo)
+                    .setContentTitle(displayTitle)
+                    .setContentText(safeDisplay(displayDetail))
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(displayDetail))
+                    .setContentIntent(contentPi)
+                    .addAction(stopAction)
+                    .setOngoing(true);
+
+            attachFocusCapsule(ctx, nb, displayTitle, displayDetail, "实时状态", "停止任务", capsuleText, stopPi, false);
+
+            if (nm != null) nm.notify(Constants.NOTIF_TASK_RUNNING, nb.build());
+        } catch (Throwable ignored) {}
+    }
+
+    private void cancelRunningNotification() {
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.cancel(Constants.NOTIF_TASK_RUNNING);
+        } catch (Throwable ignored) {}
+    }
+
     private void showConfirmNotification(String cmd, long epoch) {
         createConfirmChannel();
         String displayCmd = safeDisplay(cmd);
         String shortCmd = displayCmd.length() > 100 ? displayCmd.substring(0, 100) + "…" : displayCmd;
-        // epoch 随 Intent 带回：残留通知上的旧按钮会因 epoch 过期被丢弃
         Intent allowI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_ALLOW)
                 .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
         Intent denyI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_DENY)
@@ -1411,19 +1807,27 @@ public final class HttpShellService {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         PendingIntent denyPi = PendingIntent.getBroadcast(ctx, 32, denyI,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification n = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
-                .setSmallIcon(R.drawable.ic_launch)
+
+        NotificationCompat.Action allowAction = new NotificationCompat.Action.Builder(
+                R.drawable.ic_check_white, "允许", allowPi).build();
+        NotificationCompat.Action denyAction = new NotificationCompat.Action.Builder(
+                R.drawable.ic_close_white, "拒绝", denyPi).build();
+
+        NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
+                .setSmallIcon(R.drawable.ic_whale_logo)
                 .setContentTitle("⚠️ DSHA 安全确认")
                 .setContentText("模型试图执行：" + shortCmd)
                 .setStyle(new NotificationCompat.BigTextStyle()
                         .bigText("模型试图在设备上执行：\n" + displayCmd + "\n\n是否允许？"))
-                .addAction(0, "允许", allowPi)
-                .addAction(0, "拒绝", denyPi)
+                .addAction(allowAction)
+                .addAction(denyAction)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setOngoing(true)
-                .build();
+                .setOngoing(true);
+
+        attachFocusCapsule(ctx, nb, "⚠️ DSHA 安全确认", "模型试图执行：" + shortCmd, "安全确认", "允许", "危险确认", allowPi, "拒绝", denyPi, true);
+
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) nm.notify(CONFIRM_NOTIF_ID, n);
+        if (nm != null) nm.notify(CONFIRM_NOTIF_ID, nb.build());
     }
 
     private void cancelConfirmNotification() {

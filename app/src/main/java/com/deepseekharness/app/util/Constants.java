@@ -23,8 +23,36 @@ public final class Constants {
     public static final int ADB_DEFAULT_CONNECT_PORT = 5555;
 
     // ================= 通知 ID（全局唯一，禁止重复） =================
+    /** HarnessService 前台服务通知 */
+    public static final int NOTIF_HARNESS_SERVICE = 1001;
+    /** TaskNotifier 任务完成通知 */
+    public static final int NOTIF_TASK = 2002;
+    /** 智能体运行中实时状态通知（带停止按钮） */
+    public static final int NOTIF_TASK_RUNNING = 2003;
+    /** 智能体任务已终止通知（带重新输入框） */
+    public static final int NOTIF_TASK_STOPPED = 2004;
     /** 危险命令确认通知（3090 桥） */
     public static final int NOTIF_SHELL_CONFIRM = 3003;
+    /** HttpShellService 助手提问通知 */
+    public static final int NOTIF_ASK_QUESTION = 3007;
+    /** ConfigFragment ADB 配对卡 */
+    public static final int NOTIF_ADB_PAIR_CARD = 3101;
+    /** AdbPairReceiver 配对结果 */
+    public static final int NOTIF_ADB_PAIR_RESULT = 3004;
+    /** DeviceBridgeService 配对提醒 */
+    public static final int NOTIF_ADB_WATCH = 3005;
+    /** DeviceBridgeService 常驻设备桥卡 */
+    public static final int NOTIF_ADB_CARD = 3006;
+
+    // ================= 通知渠道 =================
+    /** 智能体运行状态通知渠道（带停止任务按钮） */
+    public static final String CHANNEL_AGENT_RUNNING = "dsh_agent_channel";
+    /** 智能体任务结果与交互渠道（完成/报错/终止，带 RemoteInput 继续对话） */
+    public static final String CHANNEL_TASK_RESULT = "dsh_task_result_v2";
+    public static final String CHANNEL_TASK = "dsh_task_channel";
+    public static final String CHANNEL_ADB_PAIR = "dsh_adbpair_channel";
+    public static final String CHANNEL_ADB_WATCH = "dsh_adb_watch_channel";
+    public static final String CHANNEL_SHELL_CONFIRM = "dsh_confirm_channel";
 
     // ================= dsh 版本（采用最新 @deepseek-ai/dsh） =================
     /**
