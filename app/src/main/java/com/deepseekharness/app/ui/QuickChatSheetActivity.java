@@ -93,6 +93,7 @@ public class QuickChatSheetActivity extends Activity {
     private int maxHeight = 0;
     private int minHeight = 0;
     private int currentHeight = 0;
+    private boolean authRetried = false;
     private boolean isDismissing = false;
     private boolean isDarkMode = false;
 
@@ -677,6 +678,7 @@ public class QuickChatSheetActivity extends Activity {
                 public void onPageFinished(WebView view, String url) {
                     super.onPageFinished(view, url);
                     sWebLoaded = true;
+                    authRetried = false;
                     if (progressBar != null) progressBar.setVisibility(View.GONE);
                     // 彻底覆写 DSH 前端 CSS 变量与 DOM 背景，消除纯黑实心色，透出半透明毛玻璃卡片
                     injectTransparentBackground(view);
@@ -695,11 +697,15 @@ public class QuickChatSheetActivity extends Activity {
                 @Override
                 public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse errorResponse) {
                     super.onReceivedHttpError(view, request, errorResponse);
-                    // 401 自动回血自愈机制（对齐官方 WebPreviewActivity，杜绝白屏锁死）
-                    if (errorResponse != null && (errorResponse.getStatusCode() == 401 || errorResponse.getStatusCode() == 403)) {
-                        String retryUrl = controller != null ? controller.getWebAuthUrl() : "";
-                        if (retryUrl != null && !retryUrl.isEmpty()) {
-                            view.post(() -> view.loadUrl(retryUrl));
+                    // 严格限制：仅限主页面 401/403 且仅允许单次重试，绝不处理子资源，彻底根治主线程死循环卡死！
+                    if (request != null && request.isForMainFrame() && !authRetried) {
+                        int code = errorResponse != null ? errorResponse.getStatusCode() : 0;
+                        if (code == 401 || code == 403) {
+                            authRetried = true;
+                            String retryUrl = controller != null ? controller.getWebAuthUrl() : "";
+                            if (retryUrl != null && !retryUrl.isEmpty()) {
+                                view.post(() -> view.loadUrl(retryUrl));
+                            }
                         }
                     }
                 }
