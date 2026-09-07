@@ -537,6 +537,8 @@ public final class HttpShellService {
             if (text.isEmpty()) text = "智能体已结束任务，点击查看结果";
             title = safeDisplay(title);
             text = safeDisplay(text);
+            String compactDetail = text.replaceAll("[\\r\\n]+", " ").trim();
+            if (compactDetail.length() > 60) compactDetail = compactDetail.substring(0, 59) + "…";
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
 
             if (nm != null) {
@@ -578,14 +580,14 @@ public final class HttpShellService {
                 NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, Constants.CHANNEL_TASK_RESULT)
                         .setSmallIcon(R.drawable.ic_whale_logo)
                         .setContentTitle(title)
-                        .setContentText(text)
+                        .setContentText(compactDetail)
                         .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
                         .setContentIntent(contentPi)
                         .addAction(replyAction)
                         .setOngoing(true)
                         .setAutoCancel(true);
 
-                attachFocusCapsule(ctx, b, title, text, statusLabel, btnText, capsuleText, actionPi, true);
+                attachFocusCapsule(ctx, b, title, compactDetail, statusLabel, btnText, capsuleText, actionPi, true);
                 b.setOnlyAlertOnce(false);
 
                 try {
@@ -1925,19 +1927,54 @@ public final class HttpShellService {
     }
 
     private static String compactActionDetail(String raw) {
-        if (raw == null) return "智能体正在处理中...";
+        if (raw == null || raw.trim().isEmpty()) return "正在分析执行任务";
         String s = raw.trim();
-        if (s.startsWith("正在使用工具")) {
-            int colon = s.indexOf(':');
-            if (colon > 0 && colon < s.length() - 1) return s.substring(colon + 1).trim();
-            return s;
+        if (s.contains("智能体正在分析") || s.contains("智能体正在执行") || s.contains("正在分析并执行")) {
+            return "正在分析执行任务";
+        }
+        String[] prefixes = new String[]{
+            "⚙ 正在执行命令: ", "正在执行命令: ", "⚙ 正在执行命令 ", "正在执行命令 ",
+            "⚙ 正在使用工具 ", "正在使用工具 ", "⚙ 正在使用 ", "正在使用 ",
+            "⚙ 正在修改文件: ", "正在修改文件: ",
+            "⚙ 正在读取文件: ", "正在读取文件: ",
+            "⚙ 正在搜索文件: ", "正在搜索文件: ", "⚙ 正在搜索: ", "正在搜索: ",
+            "⚙ 正在联网查资料: ", "正在联网查资料: ",
+            "⚙ 正在分析画面: ", "正在分析画面: ", "⚙ 正在看图: ", "正在看图: ",
+            "⚙ 正在规划任务清单: ", "正在规划任务清单: ", "⚙ 正在整理任务清单: ", "正在整理任务清单: ",
+            "⚙ 正在调度子任务: ", "正在调度子任务: ", "⚙ 正在派子任务: ", "正在派子任务: ",
+            "⚙ 正在执行屏幕操作: ", "正在执行屏幕操作: ",
+            "⚙ 正在调用手机功能: ", "正在调用手机功能: ", "⚙ 正在调用手机系统功能: ", "正在调用手机系统功能: ",
+            "⚙ 正在加载技能: ", "正在加载技能: "
+        };
+        for (String p : prefixes) {
+            if (s.startsWith(p)) {
+                String remain = s.substring(p.length()).trim();
+                if (p.contains("修改")) return "修改: " + remain;
+                if (p.contains("读取")) return "读取: " + remain;
+                if (p.contains("搜索")) return "搜索: " + remain;
+                if (p.contains("联网")) return "联网: " + remain;
+                if (p.contains("画面") || p.contains("看图")) return "看图: " + remain;
+                if (p.contains("清单") || p.contains("规划")) return "清单: " + remain;
+                if (p.contains("子任务")) return "子任务: " + remain;
+                if (p.contains("屏幕")) return "屏幕: " + remain;
+                if (p.contains("手机")) return "系统: " + remain;
+                if (p.contains("技能")) return "技能: " + remain;
+                return remain;
+            }
         }
         return s;
     }
 
-    private static String compactCapsuleText(String raw) {
-        if (raw == null) return "执行中";
-        String s = raw.trim();
+    private static String compactCapsuleText(String detail) {
+        if (detail == null || detail.trim().isEmpty()) return "正在执行";
+        String s = detail.trim();
+        if (s.contains("安全确认") || s.contains("危险操作") || s.contains("特权执行") || s.contains("请求特权") || s.contains("敏感操作")) return "安全确认";
+        if (s.contains("等待回答") || s.contains("等待选择") || s.contains("助手提问") || s.contains("ask_user") || s.contains("ask_question")) return "等待回答";
+        if (s.contains("完成") || s.contains("成功") || s.contains("done")) return "任务已完成";
+        if (s.contains("中断") || s.contains("停止") || s.contains("cancel") || s.contains("abort")) return "任务已中断";
+        if (s.contains("失败") || s.contains("错误") || s.contains("503") || s.contains("400") || s.contains("error")) return "请求异常";
+        if (s.contains("智能体") || s.contains("分析执行") || s.contains("执行任务")) return "分析执行中";
+        if (s.contains("清单") || s.contains("规划") || s.contains("todo") || s.contains("goal")) return "规划清单中";
         if (s.contains("子任务") || s.contains("subagent") || s.contains("workflow") || s.contains("ralph")) return "调度任务中";
         if (s.contains("read_image") || s.contains("看图") || s.contains("图") || s.contains("截屏") || s.contains("vision") || s.contains("画面")) return "分析画面中";
         if (s.contains("写") || s.contains("修改") || s.contains("创建") || s.contains("write") || s.contains("edit") || s.contains("patch") || s.contains("apply")) return "修改文件中";
@@ -2061,8 +2098,13 @@ public final class HttpShellService {
 
     private void showConfirmNotification(String cmd, long epoch) {
         createConfirmChannel();
-        String displayCmd = safeDisplay(cmd);
-        String shortCmd = displayCmd.length() > 100 ? displayCmd.substring(0, 100) + "…" : displayCmd;
+        AuthPromptInfo info = parseAuthPrompt(cmd, "⚠️ 危险命令确认", new String[]{"允许", "拒绝"});
+
+        Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent contentPi = PendingIntent.getActivity(ctx, 30, openAppIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
         Intent allowI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_ALLOW)
                 .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
         Intent denyI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_DENY)
@@ -2072,26 +2114,23 @@ public final class HttpShellService {
         PendingIntent denyPi = PendingIntent.getBroadcast(ctx, 32, denyI,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        NotificationCompat.Action allowAction = new NotificationCompat.Action.Builder(
-                R.drawable.ic_check_white, "允许", allowPi).build();
-        NotificationCompat.Action denyAction = new NotificationCompat.Action.Builder(
-                R.drawable.ic_close_white, "拒绝", denyPi).build();
-
-        NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
+        NotificationCompat.Builder cb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                 .setSmallIcon(R.drawable.ic_whale_logo)
-                .setContentTitle("⚠️ DSHA 安全确认")
-                .setContentText("模型试图执行：" + shortCmd)
-                .setStyle(new NotificationCompat.BigTextStyle()
-                        .bigText("模型试图在设备上执行：\n" + displayCmd + "\n\n是否允许？"))
-                .addAction(allowAction)
-                .addAction(denyAction)
+                .setContentTitle(info.title)
+                .setContentText(info.detail)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(info.detail))
+                .setContentIntent(contentPi)
+                .addAction(0, info.primaryBtn, allowPi)
+                .addAction(0, info.secondaryBtn, denyPi)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setOngoing(true);
 
-        attachFocusCapsule(ctx, nb, "⚠️ DSHA 安全确认", "模型试图执行：" + shortCmd, "安全确认", "允许", "危险确认", allowPi, "拒绝", denyPi, true);
+        attachFocusCapsule(ctx, cb, info.title, info.detail, info.statusLabel, info.primaryBtn, info.capsuleText, allowPi, info.secondaryBtn, denyPi, true);
 
-        NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) nm.notify(CONFIRM_NOTIF_ID, nb.build());
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.notify(CONFIRM_NOTIF_ID, cb.build());
+        } catch (Throwable ignored) {}
     }
 
     private void cancelConfirmNotification() {

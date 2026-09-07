@@ -106,14 +106,26 @@ public class MainActivity extends AppCompatActivity {
         });
 
         if (savedInstanceState == null) {
-            nav.setSelectedItemId(getIntent().getBooleanExtra("open_plugins", false) ? R.id.nav_plugins : R.id.nav_launch);
+            if (getIntent().getBooleanExtra("open_terminal", false)) {
+                nav.setSelectedItemId(R.id.nav_terminal);
+            } else if (getIntent().getBooleanExtra("open_plugins", false)) {
+                nav.setSelectedItemId(R.id.nav_plugins);
+            } else {
+                nav.setSelectedItemId(R.id.nav_launch);
+            }
         }
     }
 
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
-        if (nav != null && intent.getBooleanExtra("open_plugins", false)) nav.setSelectedItemId(R.id.nav_plugins);
+        if (nav != null) {
+            if (intent.getBooleanExtra("open_terminal", false)) {
+                nav.setSelectedItemId(R.id.nav_terminal);
+            } else if (intent.getBooleanExtra("open_plugins", false)) {
+                nav.setSelectedItemId(R.id.nav_plugins);
+            }
+        }
     }
 
     @Override

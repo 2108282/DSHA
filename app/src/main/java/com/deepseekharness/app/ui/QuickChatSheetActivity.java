@@ -251,7 +251,7 @@ public class QuickChatSheetActivity extends Activity {
         btnSettings.setOnClickListener(v -> {
             Intent intent = new Intent(this, MainActivity.class);
             intent.putExtra("open_terminal", true);
-            intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             startActivity(intent);
             dismissSheet();
         });
@@ -304,11 +304,23 @@ public class QuickChatSheetActivity extends Activity {
         fullscreenLp.setMarginStart(dpToPx(4));
         btnFullscreen.setLayoutParams(fullscreenLp);
         btnFullscreen.setOnClickListener(v -> {
-            Intent intent = new Intent(this, MainActivity.class);
-            intent.putExtra("open_web", true);
-            intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            startActivity(intent);
-            dismissSheet();
+            String url = controller != null ? controller.getWebAuthUrl() : "";
+            if (url != null && !url.isEmpty()) {
+                new Thread(() -> {
+                    String cookie = controller.exchangeDshAuthCookie();
+                    runOnUiThread(() -> {
+                        Intent intent = WebPreviewActivity.intent(this, url, cookie);
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                        startActivity(intent);
+                        dismissSheet();
+                    });
+                }, "sheet-expand-web").start();
+            } else {
+                Intent intent = new Intent(this, MainActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                startActivity(intent);
+                dismissSheet();
+            }
         });
         rightGroup.addView(btnFullscreen);
         headerBar.addView(rightGroup);
@@ -666,10 +678,32 @@ public class QuickChatSheetActivity extends Activity {
 
             sCachedWebView.setWebChromeClient(new WebChromeClient());
 
+            android.webkit.CookieManager cookies = android.webkit.CookieManager.getInstance();
+            cookies.setAcceptCookie(true);
+            cookies.setAcceptThirdPartyCookies(sCachedWebView, true);
+
+            String authUrl = controller != null ? controller.getWebAuthUrl() : "";
             String base = "http://127.0.0.1:" + (controller != null ? controller.getPort() : "3080") + "/";
-            String token = HttpShellService.currentToken();
-            String url = token.isEmpty() ? base : base + "?dsha_t=" + Uri.encode(token);
-            sCachedWebView.loadUrl(url);
+
+            if (authUrl != null && !authUrl.isEmpty()) {
+                new Thread(() -> {
+                    String cookie = controller.exchangeDshAuthCookie();
+                    runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed() || sCachedWebView == null) return;
+                        if (cookie != null && !cookie.isEmpty()) {
+                            cookies.setCookie(base, cookie + "; Path=/; HttpOnly; SameSite=Strict", ok -> {
+                                if (sCachedWebView != null) {
+                                    sCachedWebView.loadUrl(Boolean.TRUE.equals(ok) ? base : authUrl);
+                                }
+                            });
+                        } else {
+                            sCachedWebView.loadUrl(authUrl);
+                        }
+                    });
+                }, "sheet-cookie-init").start();
+            } else {
+                sCachedWebView.loadUrl(base);
+            }
         } else {
             if (sCachedWebView.getParent() instanceof ViewGroup) {
                 ((ViewGroup) sCachedWebView.getParent()).removeView(sCachedWebView);
