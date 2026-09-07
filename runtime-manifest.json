@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-06T04:16:27Z",
+  "generated": "2026-09-07T09:10:12Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -81,6 +81,17 @@
       ]
     },
     {
+      "path": "app/src/main/assets/dsh-token-patch.sh",
+      "asset": "dsh-token-patch.sh",
+      "size": 3368,
+      "sha256": "7dc2d6b6cd00a9e498a8261e948c8dfd72dcf13d1ebae73470f3876c35b45565",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/dsh-token-patch.sh",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/dsh-token-patch.sh",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/dsh-token-patch.sh"
+      ]
+    },
+    {
       "path": "app/src/main/assets/fix-stale-bundles.sh",
       "asset": "fix-stale-bundles.sh",
       "size": 2824,
@@ -105,8 +116,8 @@
     {
       "path": "app/src/main/assets/fs-write-patch.sh",
       "asset": "fs-write-patch.sh",
-      "size": 10493,
-      "sha256": "583a1dbc36c15bc4a5f0316cfa6417d67567588766b4cd536c02596e8d45f6e7",
+      "size": 10395,
+      "sha256": "abb725a543322363f53497e32a503ae98de0a43cfefc118a838a977f06c1929c",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/fs-write-patch.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/fs-write-patch.sh",
@@ -248,8 +259,8 @@
     {
       "path": "app/src/main/assets/webserver-auth-patch.sh",
       "asset": "webserver-auth-patch.sh",
-      "size": 5696,
-      "sha256": "0aed65c27904b59e01aeb5207f8ef4c3f1f2573026299529d9cd01c519ffeb24",
+      "size": 5742,
+      "sha256": "4a48b085b840a2f30b5f22ccfaaad00640a3bee0c730b1d8be08f7ada07e0334",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/webserver-auth-patch.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/webserver-auth-patch.sh",
