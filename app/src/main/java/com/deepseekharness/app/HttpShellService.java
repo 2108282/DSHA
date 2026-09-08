@@ -1979,9 +1979,11 @@ public final class HttpShellService {
         String s = detail.trim();
         if (s.contains("安全确认") || s.contains("危险操作") || s.contains("特权执行") || s.contains("请求特权") || s.contains("敏感操作")) return "安全确认";
         if (s.contains("等待回答") || s.contains("等待选择") || s.contains("助手提问") || s.contains("ask_user") || s.contains("ask_question")) return "等待回答";
+        if (s.contains("未完成")) return "⚠️未完成";
+        if (s.contains("终止") || s.contains("中断") || s.contains("停止") || s.contains("cancel") || s.contains("abort")) return "⚠️任务终止";
+        if (s.contains("失败") || s.contains("错误") || s.contains("503") || s.contains("400") || s.contains("error")) return "❌执行失败";
+        if (s.contains("最大长度") || s.contains("max-tokens")) return "📏长度超限";
         if (s.contains("完成") || s.contains("成功") || s.contains("done")) return "任务已完成";
-        if (s.contains("中断") || s.contains("停止") || s.contains("cancel") || s.contains("abort")) return "任务已中断";
-        if (s.contains("失败") || s.contains("错误") || s.contains("503") || s.contains("400") || s.contains("error")) return "请求异常";
         if (s.contains("智能体") || s.contains("分析执行") || s.contains("执行任务")) return "分析执行中";
         if (s.contains("清单") || s.contains("规划") || s.contains("todo") || s.contains("goal")) return "规划清单中";
         if (s.contains("子任务") || s.contains("subagent") || s.contains("workflow") || s.contains("ralph")) return "调度任务中";
@@ -1993,8 +1995,9 @@ public final class HttpShellService {
         if (s.contains("屏幕") || s.contains("tap") || s.contains("swipe") || s.contains("dump") || s.contains("launch")) return "操作屏幕中";
         if (s.contains("思考") || s.contains("think") || s.contains("reason")) return "深度思考中";
         if (s.contains("命令") || s.contains("bash") || s.contains("shell") || s.contains("exec") || s.contains("git") || s.contains("curl") || s.contains("python") || s.contains("npm") || s.contains("pnpm") || s.contains("node") || s.contains("adb") || s.contains("rm ") || s.contains("ls ")) return "执行命令中";
-        if (s.length() <= 5) return s;
-        return s.substring(0, 4) + "…";
+        String clean = s.replaceAll("^[\p{P}\p{S}\s]+", "").trim();
+        if (clean.length() <= 5) return clean;
+        return clean.substring(0, 4) + "…";
     }
 
     private void showAskWaitingNotification(String customQuestion) {
