@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '1.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（如 1.2.0-rc1.3-test1 或 v1.2.0-rc1.3-test1）'
+        required: false
+        default: '1.2.0-rc1.3-test1'
+      prerelease:
+        description: '标记为预发布'
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    name: Build APK & publish Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Fetch offline rootfs asset from official release
+        run: |
+          set -euo pipefail
+          if [ ! -f "app/src/main/assets/offline-rootfs.bin" ]; then
+            echo "==> Downloading official rc1.3 APK to extract offline-rootfs.bin..."
+            curl -L -f -o /tmp/dsha-official.apk "https://github.com/DSH-APP/DSHA/releases/download/v1.2.0-rc1.3/dsha-1.2.0-rc1.3.apk"
+            unzip -p /tmp/dsha-official.apk "assets/offline-rootfs.bin" > app/src/main/assets/offline-rootfs.bin
+            rm -f /tmp/dsha-official.apk
+          fi
+          ls -lh app/src/main/assets/offline-rootfs.bin
+
+      - name: Prepare release signing key
+        env:
+          KS_B64: ${{ secrets.DSHA_KEYSTORE_B64 }}
+          KS_PWD: ${{ secrets.DSHA_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.DSHA_KEY_ALIAS }}
+          KEY_PWD: ${{ secrets.DSHA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KS_B64:-}" ]; then
+            printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/dsha.keystore"
+            echo "DSHA_KEYSTORE=$RUNNER_TEMP/dsha.keystore" >> "$GITHUB_ENV"
+            echo "DSHA_KEYSTORE_PASSWORD=${KS_PWD:-android}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_ALIAS=${KS_ALIAS:-androiddebugkey}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_PASSWORD=${KEY_PWD:-android}" >> "$GITHUB_ENV"
+            echo "已加载发布签名密钥"
+          else
+            echo "未配置 DSHA_KEYSTORE_B64，将使用默认 debug 签名"
+          fi
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Standard APK
+        run: ./gradlew :app:assembleStandardDebug --stacktrace
+
+      - name: Verify APK size and contents
+        run: |
+          set -euo pipefail
+          APK_FILE=$(ls app/build/outputs/apk/standard/debug/*.apk | head -1)
+          ls -lh "$APK_FILE"
+          unzip -l "$APK_FILE" | grep "offline-rootfs" || true
+
+      - name: Resolve tag and version
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG_VAL="${GITHUB_REF#refs/tags/}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            TAG_VAL="${{ inputs.tag }}"
+          else
+            TAG_VAL="1.2.0-rc1.3-test1"
+          fi
+          echo "value=$TAG_VAL" >> "$GITHUB_OUTPUT"
+
+          VN=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle | head -1 || echo "1.2.0-rc1.3-test1")
+          VC=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle | head -1 || echo "113")
+          echo "versionName=$VN" >> "$GITHUB_OUTPUT"
+          echo "versionCode=$VC" >> "$GITHUB_OUTPUT"
+
+      - name: Package APK for Release
+        id: apk
+        run: |
+          set -euo pipefail
+          ORIG_APK=$(ls app/build/outputs/apk/standard/debug/*.apk | head -1)
+          REL_NAME="dsha-standard-${{ steps.tag.outputs.value }}.apk"
+          cp "$ORIG_APK" "$REL_NAME"
+          sha256sum "$REL_NAME" | tee "$REL_NAME.sha256"
+          echo "file=$REL_NAME" >> "$GITHUB_OUTPUT"
+          echo "sha=$(sha256sum "$REL_NAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          target_commitish: ${{ github.sha }}
+          name: DSHA ${{ steps.tag.outputs.value }}
+          prerelease: ${{ inputs.prerelease || true }}
+          generate_release_notes: true
+          body: |
+            **仅支持 arm64 / Android 11+**，APK 已内置完整 Linux rootfs 离线环境。
+
+            ```
+            versionName  ${{ steps.tag.outputs.versionName }}
+            versionCode  ${{ steps.tag.outputs.versionCode }}
+            sha256       ${{ steps.apk.outputs.sha }}
+            ```
+
+            ### 核心更新与修复说明
+            - **内置完整离线环境**：包含官方 1.2.0 离线 rootfs 资产，开箱即用；
+            - **QuickChat 快捷对话抽屉**：彻底修复背景半透明、输入法自适应防顶飞、LaunchToken 原生直连秒开、防死循环；
+            - **Shizuku 与无线 ADB 双通道**：恢复标准 `ShizukuProvider` 握手通道，升级 SDK 13.1.5，支持 root/KernelSU 特权；
+            - **全场景任务中断统一监听**：移除停止静音，拦截模型偷懒，异常全场景捕获；
+            - **极速容器运行时 proroot**：修复环境与进程判据，大幅降低 CPU 开销与发热。
+
+            面向开发者的完整修改清单与代码对照见仓库 `test修补/1.2.0test.md`。
+          files: |
+            ${{ steps.apk.outputs.file }}
+            ${{ steps.apk.outputs.file }}.sha256
+          fail_on_unmatched_files: true
