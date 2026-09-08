@@ -120,12 +120,69 @@ def ensure_runtime_modules():
         parent = os.path.dirname(target)
         if os.path.commonpath([home, os.path.realpath(parent)]) != home:
             raise RuntimeError('运行时模块目录指向用户环境之外，已停止修复')
-        # 用户已有实体/依赖保持原样；仅填充缺失的运行时链接。
-        if os.path.lexists(target):
+        # 坏死链接（如历史相对路径计算错误导致的断链）或指向错误的旧链自动拔除重建
+        if os.path.islink(target):
+            try:
+                if not os.path.exists(target) or os.path.realpath(target) != os.path.realpath(source):
+                    os.unlink(target)
+                else:
+                    continue
+            except OSError:
+                pass
+        elif os.path.lexists(target):
             continue
         os.makedirs(parent, exist_ok=True)
         os.symlink(source, target, target_is_directory=True)
         count += 1
+    return count
+
+
+def ensure_global_plugin_links():
+    """确保 plugin-src 下的所有第三方插件：
+    1. 在全局 /usr/local/lib/node_modules 下有软链，供 Cordis loader 发现；
+    2. 在插件自身的 node_modules/@deepseek-ai 提供就近系统库软链，彻底杜绝 peer 模块丢失。
+    """
+    global_modules = local('/usr/local/lib/node_modules')
+    bundled_deepseek = local('/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai')
+    src_dir = os.path.join(local(DSH_HOME), 'plugin-src')
+    if not os.path.isdir(src_dir):
+        return 0
+    count = 0
+    for name in os.listdir(src_dir):
+        plugin_path = os.path.join(src_dir, name)
+        if not os.path.isdir(plugin_path) or not os.path.isfile(os.path.join(plugin_path, 'package.json')):
+            continue
+        # 1. 全局模块链接
+        if os.path.isdir(global_modules):
+            link = os.path.join(global_modules, name)
+            if os.path.islink(link):
+                try:
+                    if not os.path.exists(link) or os.path.realpath(link) != os.path.realpath(plugin_path):
+                        os.unlink(link)
+                except OSError:
+                    pass
+            if not os.path.lexists(link):
+                try:
+                    os.symlink(plugin_path, link, target_is_directory=True)
+                    count += 1
+                except OSError:
+                    pass
+        # 2. 插件就近 @deepseek-ai 依赖链接（双保险，彻底防 peer 丢失）
+        if os.path.isdir(bundled_deepseek):
+            p_nm = os.path.join(plugin_path, 'node_modules')
+            os.makedirs(p_nm, exist_ok=True)
+            p_link = os.path.join(p_nm, '@deepseek-ai')
+            if os.path.islink(p_link):
+                try:
+                    if not os.path.exists(p_link) or os.path.realpath(p_link) != os.path.realpath(bundled_deepseek):
+                        os.unlink(p_link)
+                except OSError:
+                    pass
+            if not os.path.lexists(p_link):
+                try:
+                    os.symlink(bundled_deepseek, p_link, target_is_directory=True)
+                except OSError:
+                    pass
     return count
 
 
@@ -412,6 +469,8 @@ def register():
     try:
         linked = ensure_runtime_modules()
         if linked: lines.append('已补充 %d 个共享运行时模块链接' % linked)
+        g_linked = ensure_global_plugin_links()
+        if g_linked: lines.append('已同步 %d 个全局第三方插件模块链接' % g_linked)
     except (OSError, RuntimeError) as error:
         print('BUILTIN_REGISTER_FAIL: ' + str(error))
         return 1
