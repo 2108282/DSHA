@@ -546,12 +546,32 @@ public class LaunchFragment extends Fragment {
         if (!tok.isEmpty()) {
             return base + "?token=" + android.net.Uri.encode(tok);
         }
-        // 极老版本无 launchToken 时的兼容兜底
         String t = HttpShellService.currentToken();
         return t.isEmpty() ? base : base + "?dsha_t=" + android.net.Uri.encode(t);
     }
 
-    /** 列出可用的浏览器访问地址。全面展示官方原生的 Launch Token 完整地址。 */
+    /** 启动页那行可点的地址 chip。
+     *
+     *  <p>用户反馈「启动页给的 URL 用不了，AI 找出来 :3080/?dsha_t=... 才是对的」。
+     *  原因是这里<b>只显示局域网地址</b>（3081），而那条链当时是坏的 ——
+     *  {@code stripTokenFromRequestLine} 把请求行的 HTTP 版本吃掉，后端直接 400。
+     *  用手机自带浏览器打开所需要的本机地址（带 dsh 自己的 {@code dsha_t}）
+     *  从来没有在界面上出现过，用户只能让 agent 去日志里挖。
+     *
+     *  <p>现在一行 chip 收两个入口，点开再选本机 / 同 WiFi。另外它以前只在
+     *  onViewCreated 算一次 —— 局域网后来才开、或者 WiFi 换了网段都不会刷新，
+     *  现在跟着心跳走。 */
+    private void updateLanAddr() {
+        if (!webReady) {
+            lanAddrText.setVisibility(View.GONE);
+            return;
+        }
+        lanAddrText.setText("在浏览器中打开 ▸ 点这里取地址（本机 / 同 WiFi）");
+        lanAddrText.setVisibility(View.VISIBLE);
+        lanAddrText.setOnClickListener(v -> showBrowserAddrDialog());
+    }
+
+    /** 列出可用的浏览器访问地址。地址里的 token 就是凭据，所以复制后要提醒一句。 */
     private void showBrowserAddrDialog() {
         final String local = uiUrl();
         boolean lan = requireContext()
@@ -566,13 +586,10 @@ public class LaunchFragment extends Fragment {
         final java.util.List<String> items = new java.util.ArrayList<>();
         final java.util.List<Runnable> acts = new java.util.ArrayList<>();
 
-        // ① 本机访问（内置与外部浏览器完全同源，直接展示官方 Launch Token 完整地址）
         items.add("用本机浏览器打开\n" + local);
         acts.add(() -> AboutDialog.openBrowser(requireContext(), local));
-        items.add("复制本机完整地址");
-        acts.add(() -> copyAddr("本机完整地址", local));
-
-        // ② 局域网访问
+        items.add("复制本机地址");
+        acts.add(() -> copyAddr("本机地址", local));
         if (lanAddr != null) {
             items.add("复制局域网地址（同 WiFi 的其它设备用）\n" + lanAddr);
             acts.add(() -> copyAddr("局域网地址", lanAddr));
