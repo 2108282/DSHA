@@ -572,6 +572,20 @@ public class LaunchFragment extends Fragment {
     /** 列出可用的浏览器访问地址。地址里的 token 就是凭据，所以复制后要提醒一句。 */
     private void showBrowserAddrDialog() {
         final String local = uiUrl();
+
+        // 1. 读取容器内官方本次启动生成的 Launch Token
+        String lt = "";
+        try {
+            java.io.File launchFile = new java.io.File(controller.getProot().getRootfsDir(), "root/.dsh/.launch_token");
+            if (launchFile.isFile() && launchFile.length() > 0) {
+                lt = new String(java.nio.file.Files.readAllBytes(launchFile.toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
+            }
+        } catch (Throwable ignored) {}
+
+        final String launchAddr = !lt.isEmpty() 
+                ? "http://127.0.0.1:" + controller.getPort() + "/?token=" + android.net.Uri.encode(lt)
+                : null;
+
         boolean lan = requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false);
@@ -584,10 +598,21 @@ public class LaunchFragment extends Fragment {
         final java.util.List<String> items = new java.util.ArrayList<>();
         final java.util.List<Runnable> acts = new java.util.ArrayList<>();
 
-        items.add("用本机浏览器打开\n" + local);
+        // ① 官方 Launch Token 完整地址（清晰打印在弹窗首项）
+        if (launchAddr != null) {
+            items.add("用本机浏览器打开（官方 Launch Token）\n" + launchAddr);
+            acts.add(() -> AboutDialog.openBrowser(requireContext(), launchAddr));
+            items.add("复制官方 Launch Token 地址");
+            acts.add(() -> copyAddr("Launch Token 地址", launchAddr));
+        }
+
+        // ② 原有 Bridge Token 选项
+        items.add("用本机浏览器打开（Bridge Token）\n" + local);
         acts.add(() -> AboutDialog.openBrowser(requireContext(), local));
-        items.add("复制本机地址");
-        acts.add(() -> copyAddr("本机地址", local));
+        items.add("复制本机 Bridge 地址");
+        acts.add(() -> copyAddr("本机 Bridge 地址", local));
+
+        // ③ 局域网地址
         if (lanAddr != null) {
             items.add("复制局域网地址（同 WiFi 的其它设备用）\n" + lanAddr);
             acts.add(() -> copyAddr("局域网地址", lanAddr));

@@ -2228,6 +2228,10 @@ public class HarnessController {
             ensureFsWritePatch(); // write 工具悬空链接（重装 dsh 后补丁会丢，⑥ 里补回）
         } catch (Throwable ignored) {
         }
+        try {
+            runAssetScript("dsh-token-patch.sh", "dsha-token-patch.sh", 60_000);
+        } catch (Throwable ignored) {
+        }
         // ===== 原生内置移动端 UI 适配（免第三方插件） =====
         // 把 @dsh-external/dsh-mobile-nav 的 client 产物直接注入 web-app 前端，
         // 手机端单栏/抽屉/汉堡/全屏设置开箱即用。幂等，失败不阻塞安装。
@@ -4543,7 +4547,7 @@ public class HarnessController {
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
      *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
      *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
-    private static final String BUILTIN_ASSET_VERSION = "39";
+    private static final String BUILTIN_ASSET_VERSION = "40";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
      *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，

@@ -1,15 +1,6 @@
 #!/bin/bash
-# dsh-token-patch.sh — 修复 deepseek-harness 0.1.2+ 新增的随机 Launch Token
-# 与 DSHA 客户端固定 Bridge Token (?dsha_t=...) 的鉴权冲突。
-#
-# 根因：
-#   1. 上游 dsh 0.1.2+ 在 dsh-client-connection 中引入了进程级 launchToken，
-#      authorizeIndex 要求 GET / 必须带 ?token=<launchToken> 才能换取签名 Cookie。
-#   2. DSHA 客户端 App 仍按旧版协议访问 ?dsha_t=<bridge_token>，导致官方层直接返回 401。
-#   3. 修复方案：在 authorizeIndex 增加对 dsha_t 的识别，校验与 /root/.dsh/.bridge_token
-#      一致时，同样签发官方 Cookie 并下发。
-#
-# 幂等：已打过补丁输出 TOKEN_PATCH_ALREADY；修复完成输出 TOKEN_PATCH_OK。
+# dsh-token-patch.sh — 适配 deepseek-harness 0.1.2 ~ 0.1.5-alpha 的官方 Launch Token
+# 动态捕获、地址文件同步与移动端浏览器长连断开修复。
 set -u
 
 C=$(find /usr/local/lib/node_modules/@deepseek-ai -path "*dsh-client-connection/lib/index.js" 2>/dev/null | head -1)
@@ -22,72 +13,99 @@ if [ -z "$C" ] || [ ! -f "$C" ]; then
   exit 0
 fi
 
-if grep -q 'DSHA_BRIDGE_AUTH' "$C"; then
-  echo TOKEN_PATCH_ALREADY
-  exit 0
-fi
-
 python3 - "$C" <<'PY'
 import sys
 
 path = sys.argv[1]
 src = open(path, encoding='utf-8').read()
 
-import_target = 'import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";'
-import_replacement = 'import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";\nimport { readFileSync } from "node:fs";'
+if 'import { writeFileSync }' not in src:
+    src = src.replace('import { createHash,', 'import { writeFileSync } from "node:fs";\nimport { createHash,', 1)
 
-if 'import { readFileSync } from "node:fs";' not in src:
-    if import_target in src:
-        src = src.replace(import_target, import_replacement, 1)
-    else:
-        print("IMPORT_TARGET_MISS")
-        sys.exit(2)
+old_plt = '''function processLaunchToken(owner) {
+\tconst existing = PROCESS_LAUNCH_TOKENS.get(owner);
+\tif (existing !== void 0) return existing;
+\tconst created = encodeBase64Url(randomBytes(SECRET_BYTES));
+\tPROCESS_LAUNCH_TOKENS.set(owner, created);
+\treturn created;
+}'''
 
-target = '\t\tconst tokens = url.searchParams.getAll(TOKEN_QUERY);'
-replacement = '''\t\t// [DSHA_BRIDGE_AUTH] 兼容 DSHA 客户端传来的 ?dsha_t= 鉴权
-\t\tconst dshaT = url.searchParams.get("dsha_t");
-\t\tif (dshaT) {
-\t\t\ttry {
-\t\t\t\tconst expectedToken = readFileSync("/root/.dsh/.bridge_token", "utf8").trim();
-\t\t\t\tif (expectedToken && dshaT === expectedToken) {
-\t\t\t\t\tconst authority = requestAuthority(req.headers);
-\t\t\t\t\tif (req.method === "GET" && url.pathname === "/" && authority !== void 0) {
-\t\t\t\t\t\tconst issuedAt = Date.now();
-\t\t\t\t\t\tconst expiresAt = issuedAt + this.maxAgeMilliseconds;
-\t\t\t\t\t\tconst value = encodeCookie({
-\t\t\t\t\t\t\tversion: COOKIE_PAYLOAD_VERSION,
-\t\t\t\t\t\t\tauthority,
-\t\t\t\t\t\t\tissuedAt,
-\t\t\t\t\t\t\texpiresAt
-\t\t\t\t\t\t}, this.secret);
-\t\t\t\t\t\tres.writeHead(303, {
-\t\t\t\t\t\t\t"cache-control": "no-store",
-\t\t\t\t\t\t\t"location": "/",
-\t\t\t\t\t\t\t"referrer-policy": "no-referrer",
-\t\t\t\t\t\t\t"set-cookie": [
-\t\t\t\t\t\t\t\tsessionCookie(cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1e3)),
-\t\t\t\t\t\t\t\t"dsha_t=" + expectedToken + "; Path=/; SameSite=Strict; Max-Age=31536000"
-\t\t\t\t\t\t\t]
-\t\t\t\t\t\t});
-\t\t\t\t\t\tres.end();
-\t\t\t\t\t\treturn false;
-\t\t\t\t\t}
-\t\t\t\t}
-\t\t\t} catch (e) {}
+new_plt = '''function processLaunchToken(owner) {
+\tconst existing = PROCESS_LAUNCH_TOKENS.get(owner);
+\tif (existing !== void 0) return existing;
+\tconst created = encodeBase64Url(randomBytes(SECRET_BYTES));
+\ttry {
+\t\twriteFileSync("/root/.dsh/.launch_token", created, "utf8");
+\t} catch(e) {}
+\tPROCESS_LAUNCH_TOKENS.set(owner, created);
+\treturn created;
+}'''
+if old_plt in src:
+    src = src.replace(old_plt, new_plt, 1)
+
+src = src.replace('new URL(origin).host === hostUrl.host', 'new URL(origin).hostname === hostUrl.hostname')
+src = src.replace('if (header$1(request.headers, "sec-fetch-site") === "cross-site") return false;',
+                  'if (!isLoopbackHostname(hostUrl.hostname) && header$1(request.headers, "sec-fetch-site") === "cross-site") return false;')
+src = src.replace('HttpOnly; SameSite=Strict', 'HttpOnly; SameSite=Lax')
+
+rej_idx = src.find("requestRejection(request) {")
+if rej_idx != -1 and 'request.headers?.upgrade' not in src:
+    rej_end = src.find("\n\t}", rej_idx) + 3
+    new_rej = """requestRejection(request) {
+\t\tif (!isTrustedApiRequest(request, this.trustedHosts)) return 403;
+\t\tif (this.browserAuth.isAuthenticated(request)) return void 0;
+\t\tif (request.headers?.upgrade?.toLowerCase() === "websocket") {
+\t\t\tconst host = header$1(request.headers, "host");
+\t\t\tconst hostUrl = host ? parseAuthority(host) : void 0;
+\t\t\tif (hostUrl && isLoopbackHostname(hostUrl.hostname)) return void 0;
 \t\t}
-\t\tconst tokens = url.searchParams.getAll(TOKEN_QUERY);'''
+\t\treturn 401;
+\t}"""
+    src = src[:rej_idx] + new_rej + src[rej_end:]
 
-if target not in src:
-    print("AUTHORIZE_INDEX_TARGET_MISS")
-    sys.exit(3)
-
-src = src.replace(target, replacement, 1)
 open(path, 'w', encoding='utf-8').write(src)
-print("PATCHED")
 PY
 
-if [ $? -eq 0 ]; then
-  echo TOKEN_PATCH_OK
-else
-  echo TOKEN_PATCH_FAIL
+W=$(find /usr/local/lib/node_modules/@deepseek-ai -path "*dsh-web-app/lib/index.js" 2>/dev/null | head -1)
+if [ -n "$W" ] && [ -f "$W" ]; then
+  python3 - "$W" <<'PY2'
+import sys
+path = sys.argv[1]
+src = open(path, encoding='utf-8').read()
+if 'import { writeFileSync }' not in src:
+    src = src.replace('import { createRequire }', 'import { writeFileSync, mkdirSync } from "node:fs";\nimport { createRequire }', 1)
+old_log = 'if (config.printUrl) console.log(`dsh web: ${authenticatedUrl}${lanUrl === void 0 ? "" : ` (LAN: ${lanUrl})`}`);'
+new_log = '''try {
+\t\t\tmkdirSync("/root/.dsh", { recursive: true });
+\t\t\twriteFileSync("/root/.dsh/web_url.txt", authenticatedUrl + "\\n", "utf8");
+\t\t} catch(e) {}
+\t\tif (config.printUrl) console.log(`dsh web: ${authenticatedUrl}${lanUrl === void 0 ? "" : ` (LAN: ${lanUrl})`}`);'''
+if old_log in src:
+    src = src.replace(old_log, new_log, 1)
+    open(path, 'w', encoding='utf-8').write(src)
+PY2
 fi
+
+cat << 'EOF2' > /usr/local/bin/dsh-url
+#!/bin/bash
+URL_FILE="/root/.dsh/web_url.txt"
+TOKEN_FILE="/root/.dsh/.launch_token"
+if [ -f "$URL_FILE" ] && [ -s "$URL_FILE" ]; then
+    URL=$(cat "$URL_FILE" | tr -d '\r\n')
+    echo "=================================================="
+    echo "当前本次启动 DSH Web 官方最新完整访问地址:"
+    echo "$URL"
+    echo "=================================================="
+elif [ -f "$TOKEN_FILE" ] && [ -s "$TOKEN_FILE" ]; then
+    TOK=$(cat "$TOKEN_FILE" | tr -d '\r\n')
+    echo "=================================================="
+    echo "当前本次启动 DSH Web 官方最新完整访问地址:"
+    echo "http://127.0.0.1:3080/?token=$TOK"
+    echo "=================================================="
+else
+    echo "DSH 尚未启动或未生成 Launch Token，请在 App 启动页重启服务后再试。"
+fi
+EOF2
+chmod +x /usr/local/bin/dsh-url 2>/dev/null || true
+
+echo TOKEN_PATCH_OK
