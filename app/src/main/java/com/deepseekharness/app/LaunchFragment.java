@@ -576,14 +576,14 @@ public class LaunchFragment extends Fragment {
         // 1. 读取容器内官方本次启动生成的 Launch Token
         String lt = "";
         try {
-            java.io.File launchFile = new java.io.File(controller.getProot().getRootfsDir(), "root/.dsh/.launch_token");
-            if (launchFile.isFile() && launchFile.length() > 0) {
+            java.io.File launchFile = (c != null && c.getProot() != null) ? new java.io.File(c.getProot().getRootfsDir(), "root/.dsh/.launch_token") : null;
+            if (launchFile != null && launchFile.isFile() && launchFile.length() > 0) {
                 lt = new String(java.nio.file.Files.readAllBytes(launchFile.toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
             }
         } catch (Throwable ignored) {}
 
         final String launchAddr = !lt.isEmpty() 
-                ? "http://127.0.0.1:" + controller.getPort() + "/?token=" + android.net.Uri.encode(lt)
+                ? "http://127.0.0.1:" + (c != null ? c.getPort() : 3080) + "/?token=" + android.net.Uri.encode(lt)
                 : null;
 
         boolean lan = requireContext()
