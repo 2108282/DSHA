@@ -64,7 +64,7 @@ import android.widget.TextView;
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
 public class QuickChatSheetActivity extends Activity {
-    private android.webkit.ValueCallback<Uri[]> mFilePathCallback;
+    private static android.webkit.ValueCallback<Uri[]> sFilePathCallback;
     private static final int FILE_CHOOSER_REQUEST_CODE = 2001;
 
 
@@ -618,7 +618,7 @@ public class QuickChatSheetActivity extends Activity {
             ws.setTextZoom(100);
             ws.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
             ws.setAllowFileAccess(false);
-            ws.setAllowContentAccess(false);
+            ws.setAllowContentAccess(true);
             ws.setCacheMode(WebSettings.LOAD_DEFAULT);
 
             // 禁用系统自动算法反色
@@ -663,32 +663,7 @@ public class QuickChatSheetActivity extends Activity {
                 }
             });
 
-            sCachedWebView.setWebChromeClient(new WebChromeClient() {
-                @Override
-                public boolean onShowFileChooser(WebView webView, android.webkit.ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
-                    if (mFilePathCallback != null) {
-                        mFilePathCallback.onReceiveValue(null);
-                        mFilePathCallback = null;
-                    }
-                    mFilePathCallback = filePathCallback;
-                    try {
-                        Intent intent = fileChooserParams.createIntent();
-                        startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE);
-                    } catch (Exception e) {
-                        Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
-                        fallback.addCategory(Intent.CATEGORY_OPENABLE);
-                        String[] accept = fileChooserParams.getAcceptTypes();
-                        fallback.setType(accept != null && accept.length > 0 && !accept[0].isEmpty() ? accept[0] : "*/*");
-                        try {
-                            startActivityForResult(Intent.createChooser(fallback, "选择文件"), FILE_CHOOSER_REQUEST_CODE);
-                        } catch (Exception ex) {
-                            mFilePathCallback = null;
-                            return false;
-                        }
-                    }
-                    return true;
-                }
-            });
+
 
             String base = "http://127.0.0.1:" + (controller != null ? controller.getPort() : "3080") + "/";
             String tok = controller != null ? controller.getLaunchToken() : "";
@@ -705,6 +680,35 @@ public class QuickChatSheetActivity extends Activity {
             }
             injectTransparentBackground(sCachedWebView);
         }
+
+                // 每次抽屉呼出时，都必须将 WebChromeClient 重新绑定到当前活跃的前台 Activity 实例，解决二次呼出后上传失效
+        final Activity currentActivity = this;
+        sCachedWebView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView webView, android.webkit.ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                if (sFilePathCallback != null) {
+                    sFilePathCallback.onReceiveValue(null);
+                    sFilePathCallback = null;
+                }
+                sFilePathCallback = filePathCallback;
+                try {
+                    Intent intent = fileChooserParams.createIntent();
+                    currentActivity.startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE);
+                } catch (Exception e) {
+                    Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+                    fallback.addCategory(Intent.CATEGORY_OPENABLE);
+                    String[] accept = fileChooserParams.getAcceptTypes();
+                    fallback.setType(accept != null && accept.length > 0 && !accept[0].isEmpty() ? accept[0] : "*/*");
+                    try {
+                        currentActivity.startActivityForResult(Intent.createChooser(fallback, "选择文件"), FILE_CHOOSER_REQUEST_CODE);
+                    } catch (Exception ex) {
+                        sFilePathCallback = null;
+                        return false;
+                    }
+                }
+                return true;
+            }
+        });
 
         webContainer.addView(sCachedWebView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -818,22 +822,16 @@ public class QuickChatSheetActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
-            if (mFilePathCallback != null) {
+            if (sFilePathCallback != null) {
                 Uri[] results = null;
-                if (resultCode == Activity.RESULT_OK && data != null) {
-                    String dataString = data.getDataString();
-                    android.content.ClipData clipData = data.getClipData();
-                    if (clipData != null) {
-                        results = new Uri[clipData.getItemCount()];
-                        for (int i = 0; i < clipData.getItemCount(); i++) {
-                            results[i] = clipData.getItemAt(i).getUri();
-                        }
-                    } else if (dataString != null) {
-                        results = new Uri[]{Uri.parse(dataString)};
-                    }
+                try {
+                    results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+                } catch (Exception ignored) {}
+                if (results == null && resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
+                    results = new Uri[]{ data.getData() };
                 }
-                mFilePathCallback.onReceiveValue(results);
-                mFilePathCallback = null;
+                sFilePathCallback.onReceiveValue(results);
+                sFilePathCallback = null;
             }
         }
     }
