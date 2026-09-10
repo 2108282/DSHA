@@ -1,6 +1,6 @@
 #!/bin/bash
-# dsh-token-patch.sh — 适配 deepseek-harness 0.1.2 ~ 0.1.5-alpha 的官方 Launch Token
-# 动态捕获、地址文件同步与移动端浏览器长连断开修复。
+# dsh-token-patch.sh — 适配 deepseek-harness 0.1.2 ~ 0.1.5-alpha 官方 Launch Token
+# 动态捕获落盘 + 解决移动端浏览器长连断开。
 set -u
 
 C=$(find /usr/local/lib/node_modules/@deepseek-ai -path "*dsh-client-connection/lib/index.js" 2>/dev/null | head -1)
@@ -19,9 +19,11 @@ import sys
 path = sys.argv[1]
 src = open(path, encoding='utf-8').read()
 
+# 1. 引入 writeFileSync
 if 'import { writeFileSync }' not in src:
     src = src.replace('import { createHash,', 'import { writeFileSync } from "node:fs";\nimport { createHash,', 1)
 
+# 2. 动态捕获每次启动生成的随机 Launch Token 并临时落盘
 old_plt = '''function processLaunchToken(owner) {
 \tconst existing = PROCESS_LAUNCH_TOKENS.get(owner);
 \tif (existing !== void 0) return existing;
@@ -43,11 +45,17 @@ new_plt = '''function processLaunchToken(owner) {
 if old_plt in src:
     src = src.replace(old_plt, new_plt, 1)
 
+# 3. 恢复 Chrome 端口省略兼容
 src = src.replace('new URL(origin).host === hostUrl.host', 'new URL(origin).hostname === hostUrl.hostname')
+
+# 4. 避免本机回环时被 sec-fetch-site: cross-site 误杀 403
 src = src.replace('if (header$1(request.headers, "sec-fetch-site") === "cross-site") return false;',
                   'if (!isLoopbackHostname(hostUrl.hostname) && header$1(request.headers, "sec-fetch-site") === "cross-site") return false;')
+
+# 5. 放宽 SameSite=Strict 为 Lax（解决移动端建立 WebSocket 时被拦截）
 src = src.replace('HttpOnly; SameSite=Strict', 'HttpOnly; SameSite=Lax')
 
+# 6. 对本机同源 WebSocket Upgrade 增加放行保障
 rej_idx = src.find("requestRejection(request) {")
 if rej_idx != -1 and 'request.headers?.upgrade' not in src:
     rej_end = src.find("\n\t}", rej_idx) + 3
@@ -66,37 +74,11 @@ if rej_idx != -1 and 'request.headers?.upgrade' not in src:
 open(path, 'w', encoding='utf-8').write(src)
 PY
 
-W=$(find /usr/local/lib/node_modules/@deepseek-ai -path "*dsh-web-app/lib/index.js" 2>/dev/null | head -1)
-if [ -n "$W" ] && [ -f "$W" ]; then
-  python3 - "$W" <<'PY2'
-import sys
-path = sys.argv[1]
-src = open(path, encoding='utf-8').read()
-if 'import { writeFileSync }' not in src:
-    src = src.replace('import { createRequire }', 'import { writeFileSync, mkdirSync } from "node:fs";\nimport { createRequire }', 1)
-old_log = 'if (config.printUrl) console.log(`dsh web: ${authenticatedUrl}${lanUrl === void 0 ? "" : ` (LAN: ${lanUrl})`}`);'
-new_log = '''try {
-\t\t\tmkdirSync("/root/.dsh", { recursive: true });
-\t\t\twriteFileSync("/root/.dsh/web_url.txt", authenticatedUrl + "\\n", "utf8");
-\t\t} catch(e) {}
-\t\tif (config.printUrl) console.log(`dsh web: ${authenticatedUrl}${lanUrl === void 0 ? "" : ` (LAN: ${lanUrl})`}`);'''
-if old_log in src:
-    src = src.replace(old_log, new_log, 1)
-    open(path, 'w', encoding='utf-8').write(src)
-PY2
-fi
-
+# 创建快捷查看命令: dsh-url
 cat << 'EOF2' > /usr/local/bin/dsh-url
 #!/bin/bash
-URL_FILE="/root/.dsh/web_url.txt"
 TOKEN_FILE="/root/.dsh/.launch_token"
-if [ -f "$URL_FILE" ] && [ -s "$URL_FILE" ]; then
-    URL=$(cat "$URL_FILE" | tr -d '\r\n')
-    echo "=================================================="
-    echo "当前本次启动 DSH Web 官方最新完整访问地址:"
-    echo "$URL"
-    echo "=================================================="
-elif [ -f "$TOKEN_FILE" ] && [ -s "$TOKEN_FILE" ]; then
+if [ -f "$TOKEN_FILE" ] && [ -s "$TOKEN_FILE" ]; then
     TOK=$(cat "$TOKEN_FILE" | tr -d '\r\n')
     echo "=================================================="
     echo "当前本次启动 DSH Web 官方最新完整访问地址:"
