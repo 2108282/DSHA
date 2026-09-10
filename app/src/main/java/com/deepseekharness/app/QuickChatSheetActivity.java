@@ -64,6 +64,9 @@ import android.widget.TextView;
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
 public class QuickChatSheetActivity extends Activity {
+    private android.webkit.ValueCallback<Uri[]> mFilePathCallback;
+    private static final int FILE_CHOOSER_REQUEST_CODE = 2001;
+
 
     public static final int ICON_CLOSE = 1;
     public static final int ICON_SETTINGS = 2;
@@ -660,7 +663,32 @@ public class QuickChatSheetActivity extends Activity {
                 }
             });
 
-            sCachedWebView.setWebChromeClient(new WebChromeClient());
+            sCachedWebView.setWebChromeClient(new WebChromeClient() {
+                @Override
+                public boolean onShowFileChooser(WebView webView, android.webkit.ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                    if (mFilePathCallback != null) {
+                        mFilePathCallback.onReceiveValue(null);
+                        mFilePathCallback = null;
+                    }
+                    mFilePathCallback = filePathCallback;
+                    try {
+                        Intent intent = fileChooserParams.createIntent();
+                        startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE);
+                    } catch (Exception e) {
+                        Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+                        fallback.addCategory(Intent.CATEGORY_OPENABLE);
+                        String[] accept = fileChooserParams.getAcceptTypes();
+                        fallback.setType(accept != null && accept.length > 0 && !accept[0].isEmpty() ? accept[0] : "*/*");
+                        try {
+                            startActivityForResult(Intent.createChooser(fallback, "选择文件"), FILE_CHOOSER_REQUEST_CODE);
+                        } catch (Exception ex) {
+                            mFilePathCallback = null;
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+            });
 
             String base = "http://127.0.0.1:" + (controller != null ? controller.getPort() : "3080") + "/";
             String tok = controller != null ? controller.getLaunchToken() : "";
@@ -782,6 +810,31 @@ public class QuickChatSheetActivity extends Activity {
             sCachedWebView.goBack();
         } else {
             dismissSheet();
+        }
+    }
+
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
+            if (mFilePathCallback != null) {
+                Uri[] results = null;
+                if (resultCode == Activity.RESULT_OK && data != null) {
+                    String dataString = data.getDataString();
+                    android.content.ClipData clipData = data.getClipData();
+                    if (clipData != null) {
+                        results = new Uri[clipData.getItemCount()];
+                        for (int i = 0; i < clipData.getItemCount(); i++) {
+                            results[i] = clipData.getItemAt(i).getUri();
+                        }
+                    } else if (dataString != null) {
+                        results = new Uri[]{Uri.parse(dataString)};
+                    }
+                }
+                mFilePathCallback.onReceiveValue(results);
+                mFilePathCallback = null;
+            }
         }
     }
 
