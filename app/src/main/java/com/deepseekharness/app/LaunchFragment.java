@@ -573,18 +573,32 @@ public class LaunchFragment extends Fragment {
     private void showBrowserAddrDialog() {
         final String local = uiUrl();
 
-        // 1. 读取容器内官方本次启动生成的 Launch Token
-        String lt = "";
+        // 1. 获取官方本次启动生成的 Launch Token 完整地址（双重捕获：文件优先，日志原生正则提取保底）
+        String launchAddr = null;
         try {
-            java.io.File launchFile = (c != null && c.getProot() != null) ? new java.io.File(c.getProot().getRootfsDir(), "root/.dsh/.launch_token") : null;
-            if (launchFile != null && launchFile.isFile() && launchFile.length() > 0) {
-                lt = new String(java.nio.file.Files.readAllBytes(launchFile.toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
+            if (c != null && c.getProot() != null) {
+                java.io.File rootfs = c.getProot().getRootfsDir();
+                // 优先来源 A：由安全补丁持久化捕获的 launch_token
+                java.io.File tokenFile = new java.io.File(rootfs, "root/.dsh/.launch_token");
+                if (tokenFile.isFile() && tokenFile.length() > 0) {
+                    String lt = new String(java.nio.file.Files.readAllBytes(tokenFile.toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
+                    if (!lt.isEmpty()) {
+                        launchAddr = "http://127.0.0.1:" + (c != null ? c.getPort() : 3080) + "/?token=" + android.net.Uri.encode(lt);
+                    }
+                }
+                // 保底来源 B（零补丁依赖）：直接从官方原始启动日志 dsh-web.log 中提取真实 URL
+                if (launchAddr == null) {
+                    java.io.File logFile = new java.io.File(rootfs, "root/dsh-web.log");
+                    if (logFile.isFile() && logFile.length() > 0) {
+                        String logContent = new String(java.nio.file.Files.readAllBytes(logFile.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+                        java.util.regex.Matcher m = java.util.regex.Pattern.compile("dsh web:\\s*(https?://127\\.0\\.0\\.1:\\d+/\\?[^\\s\\r\\n)]+)").matcher(logContent);
+                        if (m.find()) {
+                            launchAddr = m.group(1).trim();
+                        }
+                    }
+                }
             }
         } catch (Throwable ignored) {}
-
-        final String launchAddr = !lt.isEmpty() 
-                ? "http://127.0.0.1:" + (c != null ? c.getPort() : 3080) + "/?token=" + android.net.Uri.encode(lt)
-                : null;
 
         boolean lan = requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
@@ -601,9 +615,10 @@ public class LaunchFragment extends Fragment {
         // ① 官方 Launch Token 完整地址（清晰打印在弹窗首项）
         if (launchAddr != null) {
             items.add("用本机浏览器打开（官方 Launch Token）\n" + launchAddr);
-            acts.add(() -> AboutDialog.openBrowser(requireContext(), launchAddr));
+            final String fLaunch = launchAddr;
+            acts.add(() -> AboutDialog.openBrowser(requireContext(), fLaunch));
             items.add("复制官方 Launch Token 地址");
-            acts.add(() -> copyAddr("Launch Token 地址", launchAddr));
+            acts.add(() -> copyAddr("Launch Token 地址", fLaunch));
         }
 
         // ② 原有 Bridge Token 选项
