@@ -540,10 +540,20 @@ public class LaunchFragment extends Fragment {
     }
 
     private String uiUrl() {
-        String base = "http://127.0.0.1:" + c.getPort() + "/";
-        // dsh 的 Web 服务加了 token 鉴权（本机任何 App 都能访问 127.0.0.1，
-        // 上游只绑回环、没有鉴权层）。首帧带上 token，服务端回设 Cookie，
-        // 之后的静态资源、XHR 与 WebSocket 都自动带，页面里不必到处拼。
+        String base = "http://127.0.0.1:" + (c != null ? c.getPort() : 3080) + "/";
+        // 优先读取官方 launch_token（打通原生 0.1.5 鉴权）；未就绪则走 bridgeToken (dsha_t)
+        try {
+            if (c != null && c.getProot() != null) {
+                java.io.File launchFile = new java.io.File(c.getProot().getRootfsDir(), "root/.dsh/.launch_token");
+                if (launchFile.isFile() && launchFile.length() > 0) {
+                    String lt = new String(java.nio.file.Files.readAllBytes(launchFile.toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
+                    if (!lt.isEmpty()) {
+                        return base + "?token=" + android.net.Uri.encode(lt);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
         String t = HttpShellService.currentToken();
         return t.isEmpty() ? base : base + "?dsha_t=" + android.net.Uri.encode(t);
     }
