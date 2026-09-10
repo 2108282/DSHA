@@ -858,7 +858,28 @@ public class HarnessController {
     }
     public void setRootShellAllowed(boolean v) { prefs.edit().putBoolean("allow_root_shell", v).apply(); }
 
-    public String getWorkdir() {
+        /** 获取当前运行中 dsh 官方原生的 Launch Token。
+     *  优先读 .launch_token 临时文件，保底从官方 stdout 启动日志中实时正则提取。 */
+    public String getLaunchToken() {
+        try {
+            if (proot != null && proot.getRootfsDir() != null) {
+                java.io.File tf = new java.io.File(proot.getRootfsDir(), "root/.dsh/.launch_token");
+                if (tf.isFile() && tf.length() > 0) {
+                    String s = new String(java.nio.file.Files.readAllBytes(tf.toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
+                    if (!s.isEmpty()) return s;
+                }
+                java.io.File lf = new java.io.File(proot.getRootfsDir(), "root/dsh-web.log");
+                if (lf.isFile() && lf.length() > 0) {
+                    String log = new String(java.nio.file.Files.readAllBytes(lf.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+                    java.util.regex.Matcher m = java.util.regex.Pattern.compile("[?&]token=([^&\\s\\r\\n)]+)").matcher(log);
+                    if (m.find()) return m.group(1).trim();
+                }
+            }
+        } catch (Throwable ignored) {}
+        return "";
+    }
+
+public String getWorkdir() {
         String value = prefs.getString("workdir", "deepseek-harness");
         if (!isSafeWorkdir(value)) {
             // 兼容旧版本已经写入的损坏值：回退并持久化，不能继续拼进 shell。

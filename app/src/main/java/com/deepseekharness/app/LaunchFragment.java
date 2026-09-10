@@ -541,75 +541,19 @@ public class LaunchFragment extends Fragment {
 
     private String uiUrl() {
         String base = "http://127.0.0.1:" + (c != null ? c.getPort() : 3080) + "/";
-        // 优先读取官方 launch_token（打通原生 0.1.5 鉴权）；未就绪则走 bridgeToken (dsha_t)
-        try {
-            if (c != null && c.getProot() != null) {
-                java.io.File launchFile = new java.io.File(c.getProot().getRootfsDir(), "root/.dsh/.launch_token");
-                if (launchFile.isFile() && launchFile.length() > 0) {
-                    String lt = new String(java.nio.file.Files.readAllBytes(launchFile.toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
-                    if (!lt.isEmpty()) {
-                        return base + "?token=" + android.net.Uri.encode(lt);
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
-
+        // 内置 Web 彻底全面采用官方原生的 Launch Token 访问（零鉴权冲突，官方原汁原味）
+        String tok = c != null ? c.getLaunchToken() : "";
+        if (!tok.isEmpty()) {
+            return base + "?token=" + android.net.Uri.encode(tok);
+        }
+        // 极老版本无 launchToken 时的兼容兜底
         String t = HttpShellService.currentToken();
         return t.isEmpty() ? base : base + "?dsha_t=" + android.net.Uri.encode(t);
     }
 
-    /** 启动页那行可点的地址 chip。
-     *
-     *  <p>用户反馈「启动页给的 URL 用不了，AI 找出来 :3080/?dsha_t=... 才是对的」。
-     *  原因是这里<b>只显示局域网地址</b>（3081），而那条链当时是坏的 ——
-     *  {@code stripTokenFromRequestLine} 把请求行的 HTTP 版本吃掉，后端直接 400。
-     *  用手机自带浏览器打开所需要的本机地址（带 dsh 自己的 {@code dsha_t}）
-     *  从来没有在界面上出现过，用户只能让 agent 去日志里挖。
-     *
-     *  <p>现在一行 chip 收两个入口，点开再选本机 / 同 WiFi。另外它以前只在
-     *  onViewCreated 算一次 —— 局域网后来才开、或者 WiFi 换了网段都不会刷新，
-     *  现在跟着心跳走。 */
-    private void updateLanAddr() {
-        if (!webReady) {
-            lanAddrText.setVisibility(View.GONE);
-            return;
-        }
-        lanAddrText.setText("在浏览器中打开 ▸ 点这里取地址（本机 / 同 WiFi）");
-        lanAddrText.setVisibility(View.VISIBLE);
-        lanAddrText.setOnClickListener(v -> showBrowserAddrDialog());
-    }
-
-    /** 列出可用的浏览器访问地址。地址里的 token 就是凭据，所以复制后要提醒一句。 */
+    /** 列出可用的浏览器访问地址。全面展示官方原生的 Launch Token 完整地址。 */
     private void showBrowserAddrDialog() {
         final String local = uiUrl();
-
-        // 1. 获取官方本次启动生成的 Launch Token 完整地址（双重捕获：文件优先，日志原生正则提取保底）
-        String launchAddr = null;
-        try {
-            if (c != null && c.getProot() != null) {
-                java.io.File rootfs = c.getProot().getRootfsDir();
-                // 优先来源 A：由安全补丁持久化捕获的 launch_token
-                java.io.File tokenFile = new java.io.File(rootfs, "root/.dsh/.launch_token");
-                if (tokenFile.isFile() && tokenFile.length() > 0) {
-                    String lt = new String(java.nio.file.Files.readAllBytes(tokenFile.toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
-                    if (!lt.isEmpty()) {
-                        launchAddr = "http://127.0.0.1:" + (c != null ? c.getPort() : 3080) + "/?token=" + android.net.Uri.encode(lt);
-                    }
-                }
-                // 保底来源 B（零补丁依赖）：直接从官方原始启动日志 dsh-web.log 中提取真实 URL
-                if (launchAddr == null) {
-                    java.io.File logFile = new java.io.File(rootfs, "root/dsh-web.log");
-                    if (logFile.isFile() && logFile.length() > 0) {
-                        String logContent = new String(java.nio.file.Files.readAllBytes(logFile.toPath()), java.nio.charset.StandardCharsets.UTF_8);
-                        java.util.regex.Matcher m = java.util.regex.Pattern.compile("dsh web:\\s*(https?://127\\.0\\.0\\.1:\\d+/\\?[^\\s\\r\\n)]+)").matcher(logContent);
-                        if (m.find()) {
-                            launchAddr = m.group(1).trim();
-                        }
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
-
         boolean lan = requireContext()
                 .getSharedPreferences("deepseekharness", android.content.Context.MODE_PRIVATE)
                 .getBoolean("lan_mode", false);
@@ -622,22 +566,13 @@ public class LaunchFragment extends Fragment {
         final java.util.List<String> items = new java.util.ArrayList<>();
         final java.util.List<Runnable> acts = new java.util.ArrayList<>();
 
-        // ① 官方 Launch Token 完整地址（清晰打印在弹窗首项）
-        if (launchAddr != null) {
-            items.add("用本机浏览器打开（官方 Launch Token）\n" + launchAddr);
-            final String fLaunch = launchAddr;
-            acts.add(() -> AboutDialog.openBrowser(requireContext(), fLaunch));
-            items.add("复制官方 Launch Token 地址");
-            acts.add(() -> copyAddr("Launch Token 地址", fLaunch));
-        }
-
-        // ② 原有 Bridge Token 选项
-        items.add("用本机浏览器打开（Bridge Token）\n" + local);
+        // ① 本机访问（内置与外部浏览器完全同源，直接展示官方 Launch Token 完整地址）
+        items.add("用本机浏览器打开\n" + local);
         acts.add(() -> AboutDialog.openBrowser(requireContext(), local));
-        items.add("复制本机 Bridge 地址");
-        acts.add(() -> copyAddr("本机 Bridge 地址", local));
+        items.add("复制本机完整地址");
+        acts.add(() -> copyAddr("本机完整地址", local));
 
-        // ③ 局域网地址
+        // ② 局域网访问
         if (lanAddr != null) {
             items.add("复制局域网地址（同 WiFi 的其它设备用）\n" + lanAddr);
             acts.add(() -> copyAddr("局域网地址", lanAddr));

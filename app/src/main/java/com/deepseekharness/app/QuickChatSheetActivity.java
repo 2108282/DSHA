@@ -663,8 +663,10 @@ public class QuickChatSheetActivity extends Activity {
             sCachedWebView.setWebChromeClient(new WebChromeClient());
 
             String base = "http://127.0.0.1:" + (controller != null ? controller.getPort() : "3080") + "/";
-            String token = HttpShellService.currentToken();
-            String url = token.isEmpty() ? base : base + "?dsha_t=" + Uri.encode(token);
+            String tok = controller != null ? controller.getLaunchToken() : "";
+            String url = !tok.isEmpty() 
+                    ? base + "?token=" + Uri.encode(tok)
+                    : (HttpShellService.currentToken().isEmpty() ? base : base + "?dsha_t=" + Uri.encode(HttpShellService.currentToken()));
             sCachedWebView.loadUrl(url);
         } else {
             if (sCachedWebView.getParent() instanceof ViewGroup) {
