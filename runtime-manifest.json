@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-10T04:05:17Z",
+  "generated": "2026-09-10T04:18:50Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -83,8 +83,8 @@
     {
       "path": "app/src/main/assets/dsh-token-patch.sh",
       "asset": "dsh-token-patch.sh",
-      "size": 6110,
-      "sha256": "8694846136ee28f867aaa1f8a287c5e0b8fb7ef273fbc1b4a98680742a84d63e",
+      "size": 5353,
+      "sha256": "f760914eee2b5421f07f757fe7a3fa0e7130ae986759699d2b381ded19ffcdf9",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/dsh-token-patch.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/dsh-token-patch.sh",
