@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-10T03:46:14Z",
+  "generated": "2026-09-10T04:05:17Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -259,8 +259,8 @@
     {
       "path": "app/src/main/assets/webserver-auth-patch.sh",
       "asset": "webserver-auth-patch.sh",
-      "size": 5742,
-      "sha256": "4a48b085b840a2f30b5f22ccfaaad00640a3bee0c730b1d8be08f7ada07e0334",
+      "size": 3094,
+      "sha256": "351f0bee8218719b97eb1762a07f10dbb18b22c8400d72844d15a9ec0a71a8b4",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/webserver-auth-patch.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/webserver-auth-patch.sh",
