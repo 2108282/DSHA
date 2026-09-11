@@ -122,17 +122,23 @@ import sys
 path = sys.argv[1]
 src = open(path, encoding='utf-8').read()
 
-OLD = '''		try {
+if 'DSHA_L2S_FIX_ATTACHMENT' in src:
+    print('ALREADY')
+    sys.exit(0)
+
+patched = False
+
+# 1. 适配 0.1.2 版本的 temporary
+old_012 = '''		try {
 			await link(temporary, target);
 		} catch (error) {
 			/* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
 			if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
 			if (digest$1(new Uint8Array(await readFile(target))) !== sha256) throw new AttachmentError("Stored attachment failed integrity verification.", "ATTACHMENT_CORRUPT");
 		}
-		await unlink(temporary);
-		await chmod(target, 256);'''
+		await unlink(temporary);'''
 
-NEW = '''		try {
+new_012 = '''		try {
 			/* DSHA_L2S_FIX_ATTACHMENT —— 一律 rename 发布。Android/proot 下 link() 报错 EINVAL/EPERM */
 			await rename(temporary, target);
 		} catch (error) {
@@ -143,22 +149,53 @@ NEW = '''		try {
 			} else {
 				throw error;
 			}
-		}
-		await chmod(target, 256);'''
+		}'''
 
-if 'DSHA_L2S_FIX_ATTACHMENT' in src:
-    print('ALREADY')
-elif OLD in src:
-    src = src.replace(OLD, NEW, 1)
+if old_012 in src:
+    src = src.replace(old_012, new_012, 1)
+    patched = True
+else:
+    p = re.compile(r'try\s*\{\s*await link\(temporary,\s*target\);\s*\}\s*catch\s*\(error\)\s*\{.*?\}\s*await unlink\(temporary\);', re.S)
+    if p.search(src):
+        src = p.sub(new_012, src, count=1)
+        patched = True
+
+# 2. 适配 0.1.5+ 版本的 publishImmutableAlias (link source -> target)
+p_alias = '''		try {
+			await link(source, target);
+		} catch (error) {'''
+r_alias = '''		try {
+			/* DSHA_L2S_FIX_ATTACHMENT_ALIAS —— proot 下不支持真硬链接，改用 copyFile */
+			const { copyFile } = await import("node:fs/promises");
+			await copyFile(source, target);
+		} catch (error) {'''
+if p_alias in src:
+    src = src.replace(p_alias, r_alias, 1)
+    patched = True
+
+# 3. 适配 0.1.5+ 版本的 publishStagedObject (link staged.path -> target)
+p_staged = re.compile(r'try\s*\{\s*await link\(staged\.path,\s*target\);\s*\}\s*catch\s*\(error\)\s*\{.*?\}\s*await unlink\(staged\.path\);', re.S)
+r_staged = '''try {
+			/* DSHA_L2S_FIX_ATTACHMENT_STAGED —— 一律 rename 发布。Android/proot 下 link() 报错 */
+			await rename(staged.path, target);
+		} catch (error) {
+			if (error && error.code === "EXDEV") {
+				const { copyFile } = await import("node:fs/promises");
+				await copyFile(staged.path, target);
+				await unlink(staged.path).catch(() => {});
+			} else {
+				throw error;
+			}
+		}'''
+if p_staged.search(src):
+    src = p_staged.sub(r_staged, src, count=1)
+    patched = True
+
+if patched:
     print('PATCHED')
 else:
-    p = re.compile(r'try\s*\{\s*await link\(temporary,\s*target\);\s*\}\s*catch\s*\(error\)\s*\{.*?\}\s*await syncDirectory\(bucket\);\s*await syncDirectory\(join\(root,\s*"objects"\)\);\s*await unlink\(temporary\);', re.S)
-    if p.search(src):
-        src = p.sub(NEW, src, count=1)
-        print('PATCHED_REGEX')
-    else:
-        print('PATTERN_MISS')
-        sys.exit(3)
+    print('PATTERN_MISS')
+    sys.exit(3)
 
 open(path, 'w', encoding='utf-8').write(src)
 PY
@@ -186,7 +223,7 @@ if [ -z "${S:-}" ] || [ ! -f "${S:-}" ]; then
   echo SESSION_PATCH_SKIP
   exit 0
 fi
-if grep -q 'DSHA_L2S_FIX4' "$S"; then
+if grep -q 'DSHA_L2S_FIX4' "$S" || grep -q 'await rename(tmp, finalPath);' "$S"; then
   echo SESSION_PATCH_ALREADY
   exit 0
 fi
@@ -248,6 +285,9 @@ if 已打老补丁:
     result = 'UPGRADED'
 else:
     # 2b) 首次：注入 helper（放在最后一条 import 之后）并换掉调用点
+    if 'await rename(tmp, finalPath);' in src:
+        print('ALREADY_RENAME')
+        sys.exit(0)
     if CALL_ORIG not in src:
         print("PATTERN_MISS")
         sys.exit(3)

@@ -275,6 +275,7 @@ public class ProotBootstrap {
         }
         flattenL2sChains();
         patchLanSettingsPersistence();
+        ensureDshCorePatches();
     }
 
     /**
@@ -360,6 +361,46 @@ public class ProotBootstrap {
                 "import { mkdir, mkdtemp, open, rename,");
         Compat.write(f, c.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         Log.i("DSHA", "已 patch dsh session 持久化 link→rename: " + f.getAbsolutePath());
+    }
+
+    /**
+     * 执行 dsh 核心自愈补丁：
+     *  1. fs-write-patch.sh: 解决 proot 下 link() 失败，一律 rename/copyFile 原子发布（含 write 工具、会话持久化与图片附件）
+     *  2. dsh-token-patch.sh: 适配 dsh 0.1.2 ~ 0.1.5-rc.2 的 Launch Token 落盘与双轨鉴权、局域网代理放行
+     *  3. webserver-auth-patch.sh: Web 守卫放行官方 token= 与 dsh-auth- Cookie
+     * 脚本全幂等，升级 dsh 核心被覆盖后下一次启动自动打回，零人工干预。
+     */
+    private void ensureDshCorePatches() {
+        try {
+            runAssetBashScript("fs-write-patch.sh", 90_000);
+            runAssetBashScript("dsh-token-patch.sh", 60_000);
+            runAssetBashScript("webserver-auth-patch.sh", 60_000);
+        } catch (Throwable e) {
+            Log.w("DSHA", "dsh 核心自愈补丁执行异常: " + SensitiveData.redact(String.valueOf(e)));
+        }
+    }
+
+    /** 运行 assets 里的 bash 补丁脚本（幂等写入容器并执行）。 */
+    public String runAssetBashScript(String assetName, long timeoutMs) {
+        if (!isEnvironmentReady()) return "ENV_NOT_READY";
+        try {
+            String script = readAssetString(assetName);
+            if (script.isEmpty()) return "ASSET_MISSING:" + assetName;
+            String b64 = Base64.encodeToString(script.getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8), Base64.NO_WRAP);
+            String cmd = "set -e; mkdir -p /root/.dsh; "
+                    + "printf '%s' '" + b64 + "' | base64 -d > /root/.dsh/" + assetName + "; "
+                    + "chmod +x /root/.dsh/" + assetName + "; "
+                    + "bash /root/.dsh/" + assetName + " 2>&1";
+            String out = execAndRead(cmd, timeoutMs);
+            if (out != null && !out.isEmpty()) {
+                Log.i("DSHA", "资产补丁 [" + assetName + "] 执行完成: " + out.trim().replace("\n", " | "));
+            }
+            return out;
+        } catch (Throwable e) {
+            Log.w("DSHA", "资产补丁 [" + assetName + "] 执行失败: " + SensitiveData.redact(String.valueOf(e)));
+            return "ERROR: " + SensitiveData.redact(String.valueOf(e));
+        }
     }
 
     // ================= 内置插件注册 =================

@@ -8,6 +8,7 @@
 # link(临时文件, 目标) 做原子发布：
 #   1. dsh-fs-local                  → agent 的 write 工具
 #   2. dsh-session-persistence-jsonl → 会话日志
+#   3. dsh-attachment-local          → 图片附件持久化（ATTACHMENT_WRITE_FAILED）
 # 由此产生两类故障：
 #   · 发布后临时目录被清理 → 目标悬空 → 读取报 ENOENT
 #   · .l2s 链残留在 .dsh 里 → tar 遍历时报 ELOOP
@@ -98,6 +99,123 @@ PY
   fi
 fi
 
+# ============ ③ 图片附件发布（dsh-attachment-local） ============
+# 位置与结构都是刻意的，别"顺手整理"回去：
+#  · 放在②**之前** —— ②的每个分支结尾都是 `exit 0`（②原本是脚本末尾，那时无害）。
+#    本段一旦排在②后面，老用户的②走 SESSION_PATCH_ALREADY 就 exit，本段永远不执行，
+#    结果补丁只在全新安装上生效，恰好是最需要它的老用户拿不到。实测确认过。
+#  · 用 if/elif/else 而不是"命中就 exit" —— 与①同构，本段无论走哪个分支都不中断，
+#    后面的②照常执行。
+A=$(locate_pkg dsh-attachment-local)
+if [ -z "${A:-}" ] || [ ! -f "${A:-}" ]; then
+  log "未找到 dsh-attachment-local/lib/index.js，跳过"
+  echo ATTACHMENT_PATCH_SKIP
+elif grep -q 'DSHA_L2S_FIX_ATTACHMENT' "$A"; then
+  echo ATTACHMENT_PATCH_ALREADY
+else
+  cp -f "$A" "$A.dsha-bak" 2>/dev/null || true
+
+  python3 - "$A" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+src = open(path, encoding='utf-8').read()
+
+if 'DSHA_L2S_FIX_ATTACHMENT' in src:
+    print('ALREADY')
+    sys.exit(0)
+
+patched = False
+
+# 1. 适配 0.1.2 版本的 temporary
+old_012 = '''		try {
+			await link(temporary, target);
+		} catch (error) {
+			/* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
+			if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+			if (digest$1(new Uint8Array(await readFile(target))) !== sha256) throw new AttachmentError("Stored attachment failed integrity verification.", "ATTACHMENT_CORRUPT");
+		}
+		await unlink(temporary);'''
+
+new_012 = '''		try {
+			/* DSHA_L2S_FIX_ATTACHMENT —— 一律 rename 发布。Android/proot 下 link() 报错 EINVAL/EPERM */
+			await rename(temporary, target);
+		} catch (error) {
+			if (error && error.code === "EXDEV") {
+				const { copyFile } = await import("node:fs/promises");
+				await copyFile(temporary, target);
+				await unlink(temporary).catch(() => {});
+			} else {
+				throw error;
+			}
+		}'''
+
+if old_012 in src:
+    src = src.replace(old_012, new_012, 1)
+    patched = True
+else:
+    p = re.compile(r'try\s*\{\s*await link\(temporary,\s*target\);\s*\}\s*catch\s*\(error\)\s*\{.*?\}\s*await unlink\(temporary\);', re.S)
+    if p.search(src):
+        src = p.sub(new_012, src, count=1)
+        patched = True
+
+# 2. 适配 0.1.5+ 版本的 publishImmutableAlias (link source -> target)
+p_alias = '''		try {
+			await link(source, target);
+		} catch (error) {'''
+r_alias = '''		try {
+			/* DSHA_L2S_FIX_ATTACHMENT_ALIAS —— proot 下不支持真硬链接，改用 copyFile */
+			const { copyFile } = await import("node:fs/promises");
+			await copyFile(source, target);
+		} catch (error) {'''
+if p_alias in src:
+    src = src.replace(p_alias, r_alias, 1)
+    patched = True
+
+# 3. 适配 0.1.5+ 版本的 publishStagedObject (link staged.path -> target)
+p_staged = re.compile(r'try\s*\{\s*await link\(staged\.path,\s*target\);\s*\}\s*catch\s*\(error\)\s*\{.*?\}\s*await unlink\(staged\.path\);', re.S)
+r_staged = '''try {
+			/* DSHA_L2S_FIX_ATTACHMENT_STAGED —— 一律 rename 发布。Android/proot 下 link() 报错 */
+			await rename(staged.path, target);
+		} catch (error) {
+			if (error && error.code === "EXDEV") {
+				const { copyFile } = await import("node:fs/promises");
+				await copyFile(staged.path, target);
+				await unlink(staged.path).catch(() => {});
+			} else {
+				throw error;
+			}
+		}'''
+if p_staged.search(src):
+    src = p_staged.sub(r_staged, src, count=1)
+    patched = True
+
+if patched:
+    print('PATCHED')
+else:
+    print('PATTERN_MISS')
+    sys.exit(3)
+
+open(path, 'w', encoding='utf-8').write(src)
+PY
+  rc=$?
+
+  if [ "$rc" -ne 0 ]; then
+    log "附件发布补丁失败 rc=$rc（目标字符串可能随 dsh 版本变化）"
+    [ -f "$A.dsha-bak" ] && cp -f "$A.dsha-bak" "$A"
+    echo ATTACHMENT_PATCH_FAIL
+  elif ! check_syntax "$A"; then
+    log "附件发布补丁语法校验未通过，已回滚"
+    [ -f "$A.dsha-bak" ] && cp -f "$A.dsha-bak" "$A"
+    echo ATTACHMENT_PATCH_ROLLBACK
+  else
+    log "已打附件发布补丁（一律 rename）：$A"
+    echo ATTACHMENT_PATCH_OK
+  fi
+fi
+
+
 # ============ ② 会话日志发布（dsh-session-persistence-jsonl） ============
 S=$(locate_pkg dsh-session-persistence-jsonl)
 if [ -z "${S:-}" ] || [ ! -f "${S:-}" ]; then
@@ -105,7 +223,7 @@ if [ -z "${S:-}" ] || [ ! -f "${S:-}" ]; then
   echo SESSION_PATCH_SKIP
   exit 0
 fi
-if grep -q 'DSHA_L2S_FIX4' "$S"; then
+if grep -q 'DSHA_L2S_FIX4' "$S" || grep -q 'await rename(tmp, finalPath);' "$S"; then
   echo SESSION_PATCH_ALREADY
   exit 0
 fi
@@ -167,6 +285,9 @@ if 已打老补丁:
     result = 'UPGRADED'
 else:
     # 2b) 首次：注入 helper（放在最后一条 import 之后）并换掉调用点
+    if 'await rename(tmp, finalPath);' in src:
+        print('ALREADY_RENAME')
+        sys.exit(0)
     if CALL_ORIG not in src:
         print("PATTERN_MISS")
         sys.exit(3)
