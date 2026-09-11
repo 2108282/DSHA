@@ -107,9 +107,7 @@ public class QuickChatSheetActivity extends Activity {
     private ValueAnimator heightAnimator = null;
     private ViewTreeObserver.OnGlobalLayoutListener keyboardLayoutListener;
 
-    private static final int REQUEST_CODE_FILE_PICKER = 3001;
     private ValueCallback<Uri[]> fileCallback = null;
-    private final java.util.ArrayList<java.io.File> uploads = new java.util.ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -284,7 +282,8 @@ public class QuickChatSheetActivity extends Activity {
             intent.putExtra("open_terminal", true);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             startActivity(intent);
-            dismissSheet();
+            finish();
+            overridePendingTransition(0, 0);
         });
         leftGroup.addView(btnSettings);
         headerBar.addView(leftGroup);
@@ -343,14 +342,16 @@ public class QuickChatSheetActivity extends Activity {
                         Intent intent = WebPreviewActivity.intent(this, url, cookie);
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                         startActivity(intent);
-                        dismissSheet();
+                        finish();
+                        overridePendingTransition(0, 0);
                     });
                 }, "sheet-expand-web").start();
             } else {
                 Intent intent = new Intent(this, MainActivity.class);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
                 startActivity(intent);
-                dismissSheet();
+                finish();
+                overridePendingTransition(0, 0);
             }
         });
         rightGroup.addView(btnFullscreen);
@@ -897,89 +898,25 @@ public class QuickChatSheetActivity extends Activity {
             Intent primary = null;
             try {
                 primary = params.createIntent();
-                startActivityForResult(primary, REQUEST_CODE_FILE_PICKER);
-            } catch (Exception e) {
-                try {
-                    if (primary == null) {
-                        primary = new Intent(Intent.ACTION_GET_CONTENT).setType("*/*")
-                                .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE)
-                                .putExtra(Intent.EXTRA_MIME_TYPES, params.getAcceptTypes());
-                    }
-                    startActivityForResult(WebUploads.fallback(primary), REQUEST_CODE_FILE_PICKER);
-                } catch (Exception ignored) {
-                    cancelFileSelection();
-                    Toast.makeText(QuickChatSheetActivity.this, "无法打开系统文件选择器", Toast.LENGTH_SHORT).show();
-                }
-            }
+            } catch (Exception ignored) {}
+
+            FilePickerActivity.start(QuickChatSheetActivity.this, primary,
+                    params.getAcceptTypes(),
+                    params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE,
+                    uris -> {
+                        ValueCallback<Uri[]> cb = fileCallback;
+                        fileCallback = null;
+                        if (cb != null) {
+                            cb.onReceiveValue(uris);
+                        }
+                    });
             return true;
-        }
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQUEST_CODE_FILE_PICKER) {
-            ValueCallback<Uri[]> callback = fileCallback;
-            fileCallback = null;
-            if (callback == null) return;
-
-            Uri[] selected = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
-            if (selected == null && data != null) {
-                Uri uri = data.getData();
-                if (uri != null) {
-                    selected = new Uri[]{uri};
-                } else if (data.getClipData() != null) {
-                    int count = data.getClipData().getItemCount();
-                    if (count > 0) {
-                        selected = new Uri[count];
-                        for (int i = 0; i < count; i++) {
-                            selected[i] = data.getClipData().getItemAt(i).getUri();
-                        }
-                    }
-                }
-            }
-
-            if (selected == null || selected.length == 0) {
-                callback.onReceiveValue(null);
-                return;
-            }
-
-            final Uri[] chosen = selected;
-            final Context app = getApplicationContext();
-            new Thread(() -> {
-                java.util.ArrayList<java.io.File> copied = new java.util.ArrayList<>();
-                try {
-                    copied = WebUploads.copy(app, java.util.Arrays.asList(chosen));
-                    Uri[] local = new Uri[copied.size()];
-                    for (int i = 0; i < local.length; i++) {
-                        local[i] = androidx.core.content.FileProvider.getUriForFile(
-                                app, app.getPackageName() + ".updates", copied.get(i));
-                    }
-                    final java.util.ArrayList<java.io.File> ready = copied;
-                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-                        if (isFinishing() || isDestroyed()) {
-                            WebUploads.clean(ready);
-                            callback.onReceiveValue(null);
-                        } else {
-                            uploads.addAll(ready);
-                            callback.onReceiveValue(local);
-                        }
-                    });
-                } catch (Exception error) {
-                    WebUploads.clean(copied);
-                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-                        callback.onReceiveValue(null);
-                        Toast.makeText(app, "上传失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
-                    });
-                }
-            }, "sheet-file-import").start();
         }
     }
 
     @Override
     protected void onDestroy() {
         cancelFileSelection();
-        WebUploads.clean(uploads);
         if (keyboardLayoutListener != null && getWindow() != null && getWindow().getDecorView() != null) {
             getWindow().getDecorView().getViewTreeObserver().removeOnGlobalLayoutListener(keyboardLayoutListener);
         }

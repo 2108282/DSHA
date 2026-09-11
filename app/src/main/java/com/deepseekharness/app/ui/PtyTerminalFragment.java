@@ -144,21 +144,32 @@ public final class PtyTerminalFragment extends Fragment
             title.setText(displayTitle(s.session()));
             return;
         }
-        try {
-            // 初始 80x24 只是占位：attachSession 之后 TerminalView 会按控件实测的字宽
-            // 重新算行列并通知 PTY（否则 TUI 的边框会错位）。
-            PtySession ns = PtySession.start(c.proot(), 80, 24, this);
-            session = ns;
-            attachedSession = ns;
-            ns.attachListener(this);
-            view.attachSession(ns.session());
-            title.setText("Ubuntu · PTY");
-        } catch (Throwable e) {
-            String safe = SensitiveData.redact(String.valueOf(e));
-            title.setText("终端启动失败：" + safe);
-            com.deepseekharness.app.core.DiagnosticLog.record(requireContext(), "PTY_START", safe);
-            android.util.Log.w("DSHA", "PTY 启动失败：" + safe);
-        }
+        title.setText("正在启动终端…");
+        new Thread(() -> {
+            try {
+                // 初始 80x24 只是占位：attachSession 之后 TerminalView 会按控件实测的字宽
+                // 重新算行列并通知 PTY（否则 TUI 的边框会错位）。
+                PtySession ns = PtySession.start(c.proot(), 80, 24, this);
+                main.post(() -> {
+                    if (!isAdded() || view == null) return;
+                    session = ns;
+                    attachedSession = ns;
+                    ns.attachListener(this);
+                    view.attachSession(ns.session());
+                    title.setText("Ubuntu · PTY");
+                });
+            } catch (Throwable e) {
+                String safe = SensitiveData.redact(String.valueOf(e));
+                main.post(() -> {
+                    if (!isAdded() || title == null) return;
+                    title.setText("终端启动失败：" + safe);
+                    if (getContext() != null) {
+                        com.deepseekharness.app.core.DiagnosticLog.record(getContext(), "PTY_START", safe);
+                    }
+                    android.util.Log.w("DSHA", "PTY 启动失败：" + safe);
+                });
+            }
+        }, "pty-starter").start();
     }
 
     private String displayTitle(TerminalSession s) {
@@ -312,8 +323,11 @@ public final class PtyTerminalFragment extends Fragment
         }
         target.postOnAnimation(() -> {
             redrawPending.set(false);
-            if (!isAdded() || view != target || target.getWindowToken() == null) return;
-            target.onScreenUpdated();
+            try {
+                if (!isAdded() || view != target || target.getWindowToken() == null) return;
+                target.onScreenUpdated();
+            } catch (Throwable ignored) {
+            }
         });
     }
 
@@ -321,9 +335,12 @@ public final class PtyTerminalFragment extends Fragment
     public void onTitle(String t) {
         final TextView target = title;
         main.post(() -> {
-            if (!isAdded() || target == null || title != target) return;
-            if (t != null && !t.trim().isEmpty()) {
-                target.setText(SensitiveData.redact(t.trim()));
+            try {
+                if (!isAdded() || target == null || title != target) return;
+                if (t != null && !t.trim().isEmpty()) {
+                    target.setText(SensitiveData.redact(t.trim()));
+                }
+            } catch (Throwable ignored) {
             }
         });
     }
@@ -333,8 +350,11 @@ public final class PtyTerminalFragment extends Fragment
         final TextView target = title;
         final PtySession exited = attachedSession;
         main.post(() -> {
-            if (isAdded() && target != null && title == target) {
-                target.setText("会话已结束（退出码 " + status + "）");
+            try {
+                if (isAdded() && target != null && title == target) {
+                    target.setText("会话已结束（退出码 " + status + "）");
+                }
+            } catch (Throwable ignored) {
             }
         });
         if (session == exited) session = null;
