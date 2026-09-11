@@ -385,18 +385,29 @@ public class QuickChatSheetActivity extends ComponentActivity {
         // [③ 💬➕ 新建对话按钮]
         View btnNewChat = createHeaderIconButton(ICON_NEW_CHAT, textColor, "开启新对话");
         btnNewChat.setOnClickListener(v -> {
-            if (sCachedWebView != null) {
-                String js = "(function() {" +
-                        "  var btn = document.querySelector('[class*=\"newSession\"], [aria-label*=\"新会话\"], [aria-label*=\"新建\"], button[title*=\"新会话\"], button[title*=\"New session\"], button[title*=\"New Chat\"]');" +
-                        "  if (btn) {" +
-                        "    btn.click();" +
-                        "  } else {" +
-                        "    window.location.hash = '';" +
-                        "    window.location.reload();" +
-                        "  }" +
-                        "})();";
-                sCachedWebView.evaluateJavascript(js, null);
+            if (sCachedWebView == null) return;
+            String curUrl = sCachedWebView.getUrl();
+            // 如果脱离了本地 3080 服务，直接强制重载回官方原生主页
+            if (curUrl == null || (!curUrl.startsWith("http://127.0.0.1:3080") && !curUrl.startsWith("http://localhost:3080"))) {
+                String authUrl = controller != null ? controller.getWebAuthUrl() : "";
+                if (authUrl != null && !authUrl.isEmpty()) {
+                    sCachedWebView.loadUrl(authUrl);
+                } else {
+                    sCachedWebView.loadUrl("http://127.0.0.1:3080/");
+                }
+                return;
             }
+            // 在本地服务内：优先触发 DOM 按钮新建会话，兜底清除 hash 并导向根路由
+            String js = "(function() {" +
+                    "  var btn = document.querySelector('[class*=\"newSession\"], [aria-label*=\"新会话\"], [aria-label*=\"新建\"], button[title*=\"新会话\"], button[title*=\"New session\"], button[title*=\"New Chat\"]');" +
+                    "  if (btn) {" +
+                    "    btn.click();" +
+                    "  } else {" +
+                    "    window.location.hash = '';" +
+                    "    window.location.href = '/';" +
+                    "  }" +
+                    "})();";
+            sCachedWebView.evaluateJavascript(js, null);
         });
         rightGroup.addView(btnNewChat);
 
@@ -762,17 +773,24 @@ public class QuickChatSheetActivity extends ComponentActivity {
             sCachedWebView.setWebViewClient(new WebViewClient() {
                 @Override
                 public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                    if (url != null && url.startsWith("http://127.0.0.1:3080")) return false;
-                    return false;
+                    if (url != null && (url.startsWith("http://127.0.0.1:3080") || url.startsWith("http://localhost:3080"))) {
+                        return false;
+                    }
+                    openExternal(url);
+                    return true;
                 }
 
                 @Override
                 public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                    if (request != null && request.getUrl() != null) {
-                        String url = request.getUrl().toString();
-                        if (url.startsWith("http://127.0.0.1:3080")) return false;
+                    if (request == null || request.getUrl() == null) return false;
+                    // 只接管主框架的网页点击导航，不阻断 iframe 或子资源
+                    if (!request.isForMainFrame()) return false;
+                    String url = request.getUrl().toString();
+                    if (url.startsWith("http://127.0.0.1:3080") || url.startsWith("http://localhost:3080")) {
+                        return false;
                     }
-                    return false;
+                    openExternal(url);
+                    return true;
                 }
 
                 @Override
@@ -987,6 +1005,20 @@ public class QuickChatSheetActivity extends ComponentActivity {
             sCachedWebView.goBack();
         } else {
             dismissSheet();
+        }
+    }
+
+    private void openExternal(String url) {
+        if (url == null) return;
+        Uri uri = Uri.parse(url);
+        if (!"http".equals(uri.getScheme()) && !"https".equals(uri.getScheme())) return;
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, uri)
+                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (RuntimeException e) {
+            Toast.makeText(this, "未找到可用的系统浏览器", Toast.LENGTH_SHORT).show();
         }
     }
 
