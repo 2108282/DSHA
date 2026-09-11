@@ -1929,6 +1929,9 @@ public String getWorkdir() {
         runAssetScript("webui-polyfill.sh", "dsha-webui-polyfill.sh", 60_000);
         runAssetScript("dsh-token-patch.sh", "dsha-token-patch.sh", 60_000);
         runAssetScript("pnpm-env-fix.sh", "dsha-pnpm-env-fix.sh", 60_000);
+        }
+        try {
+            runAssetScript("plugin-links-patch.sh", "dsha-plugin-links-patch.sh", 60_000);
     }
 
     /** 确保外部浏览器 /api 403 修复已应用（Chrome 150+ Origin 省略端口，幂等）。
@@ -3268,6 +3271,8 @@ public String getWorkdir() {
                     {"fs-write-patch.sh", "dsha-fs-write-patch.sh"},
                     // 修复 dsh 0.1.2+ Launch Token 与 DSHA Bridge Token 冲突
                     {"dsh-token-patch.sh", "dsha-token-patch.sh"},
+                    // 修复历史死链接与第三方插件双向寻址闭环
+                    {"plugin-links-patch.sh", "dsha-plugin-links-patch.sh"},
             }, 240_000);
             noteFsWritePatchResult(r1.get("fs-write-patch.sh"));
         } catch (Throwable ignored) {
@@ -4574,7 +4579,7 @@ public String getWorkdir() {
      *  资产内容变更时 +1（marker 存在会导致重跑⑥时跳过重注入，
      *  必须靠版本标记删 marker 强制重注入，老用户才能拿到新资产）。
      *  与 STEP6_VERSION 一起写入 builtin-assets.version（installGuard 末尾）。 */
-    private static final String BUILTIN_ASSET_VERSION = "40";
+    private static final String BUILTIN_ASSET_VERSION = "41";
 
     /** 内置插件资产版本自愈（检查 + 删 marker；版本标记写入在 installGuard
      *  末尾 runStep 里——若中途失败版本未写，下次启动版本不一致会重跑⑥重注入，

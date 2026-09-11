@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-11T00:42:43Z",
+  "generated": "2026-09-11T01:16:46Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -213,6 +213,17 @@
       ]
     },
     {
+      "path": "app/src/main/assets/plugin-links-patch.sh",
+      "asset": "plugin-links-patch.sh",
+      "size": 2291,
+      "sha256": "cb7a58d008d7dd3e4f6a29fc0e078613eaac62ec278f19f560dc0310b4bc97f4",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/plugin-links-patch.sh",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/plugin-links-patch.sh",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/plugin-links-patch.sh"
+      ]
+    },
+    {
       "path": "app/src/main/assets/pnpm-env-fix.sh",
       "asset": "pnpm-env-fix.sh",
       "size": 9482,
@@ -221,6 +232,17 @@
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/pnpm-env-fix.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/pnpm-env-fix.sh",
         "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/pnpm-env-fix.sh"
+      ]
+    },
+    {
+      "path": "app/src/main/assets/register-builtin-plugins.py",
+      "asset": "register-builtin-plugins.py",
+      "size": 23759,
+      "sha256": "eba4012b04a0b2589de8202892bbd248707fa80b1d1b48d5d0bcd136bc67ad13",
+      "urls": [
+        "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/register-builtin-plugins.py",
+        "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/register-builtin-plugins.py",
+        "https://ghproxy.net/https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/register-builtin-plugins.py"
       ]
     },
     {
