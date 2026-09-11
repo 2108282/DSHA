@@ -41,27 +41,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Fetch and rebuild offline rootfs with dsh 0.1.5-rc.2
+      - name: Fetch prebuilt offline rootfs 0.1.5-rc.2 from release
         run: |
           set -euo pipefail
           if [ ! -f "app/src/main/assets/offline-rootfs.bin" ]; then
-            echo "==> 1. 从用户自己仓库已有的 Release (1.2.0-rc1.3-test1) 下载基础 rootfs..."
-            curl -L -f -o /tmp/dsha-base.apk "https://github.com/${{ github.repository }}/releases/download/1.2.0-rc1.3-test1/dsha-standard-1.2.0-rc1.3-test1.apk"
-            unzip -p /tmp/dsha-base.apk "assets/offline-rootfs.bin" > /tmp/base-rootfs.bin
-            rm -f /tmp/dsha-base.apk
-
-            echo "==> 2. 安装锁定的指定版本 @deepseek-ai/dsh@0.1.5-rc.2 依赖树..."
-            mkdir -p /tmp/dsh-stage
-            npm install -g --prefix /tmp/dsh-stage @deepseek-ai/dsh@0.1.5-rc.2 --os=linux --cpu=arm64 --libc=glibc --ignore-scripts --no-audit --no-fund
-
-            echo "==> 3. 使用 tools/rebuild-dsh.py 换装，生成出厂内置 0.1.5-rc.2 的 offline-rootfs.bin..."
-            python3 tools/rebuild-dsh.py /tmp/base-rootfs.bin app/src/main/assets/offline-rootfs.bin /tmp/dsh-stage/lib/node_modules/@deepseek-ai/dsh
-            rm -rf /tmp/base-rootfs.bin /tmp/dsh-stage
+            echo "==> 直接从自身仓库 Release (0.1.5rc.2-base) 秒级拉取已做好的 0.1.5-rc.2 底包..."
+            curl -L -f -o app/src/main/assets/offline-rootfs.bin \
+              "https://github.com/${{ github.repository }}/releases/download/0.1.5rc.2-base/offline-rootfs.bin"
           fi
           ls -lh app/src/main/assets/offline-rootfs.bin
 
@@ -83,9 +69,3 @@ jobs:
         with:
           name: dsha-standard-debug-full
           path: app/build/outputs/apk/standard/debug/*.apk
-
-      - name: Upload Rebuilt offline-rootfs.bin Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: dsha-offline-rootfs-0.1.5-rc.2
-          path: app/src/main/assets/offline-rootfs.bin
