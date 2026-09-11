@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-10T04:18:50Z",
+  "generated": "2026-09-11T00:42:43Z",
   "note": "只含脚本层增量；rootfs 与 .so 随 APK 发布，不在此清单内",
   "files": [
     {
@@ -215,8 +215,8 @@
     {
       "path": "app/src/main/assets/pnpm-env-fix.sh",
       "asset": "pnpm-env-fix.sh",
-      "size": 9219,
-      "sha256": "b3b99262cf1484840324335dc37ba4e5486f40b17e8799b7c84c1577d7ad1a48",
+      "size": 9482,
+      "sha256": "f4880b9e151aa5e8bfd9b75ad2feef92a8c798e1586d05b412bc722a7e1b8230",
       "urls": [
         "https://raw.githubusercontent.com/qiannianhuanxiang/DSHA/main/app/src/main/assets/pnpm-env-fix.sh",
         "https://cdn.jsdelivr.net/gh/qiannianhuanxiang/DSHA@main/app/src/main/assets/pnpm-env-fix.sh",

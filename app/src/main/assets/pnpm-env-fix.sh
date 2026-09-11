@@ -66,6 +66,10 @@ link_is_emulated() {
     1) return 0 ;;
     0) return 1 ;;
   esac
+  # proroot 运行环境判定：动态链接器劫持下跨模块 realpath 容易引发 store 穿透，统一走 copy 彻底杜绝断链
+  if [ -n "${PROROOT_ROOTFS:-}" ] || [ -n "${PROROOT_LIB_PATH:-}" ] || [ -n "${PROROOT_TMP_DIR:-}" ]; then
+    return 0
+  fi
   d=$(mktemp -d "${DSHA_PROBE_DIR:-/root/.dsh}/.dsha-linkprobe.XXXXXX" 2>/dev/null) || return 1
   printf ok > "$d/a" 2>/dev/null || { rm -rf "$d"; return 1; }
   if ln "$d/a" "$d/b" 2>/dev/null; then

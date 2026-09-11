@@ -1927,6 +1927,8 @@ public String getWorkdir() {
         // 全部会话、建会话让 agent 执行 bash。
         runAssetScript("webserver-auth-patch.sh", "dsha-webserver-auth.sh", 60_000);
         runAssetScript("webui-polyfill.sh", "dsha-webui-polyfill.sh", 60_000);
+        runAssetScript("dsh-token-patch.sh", "dsha-token-patch.sh", 60_000);
+        runAssetScript("pnpm-env-fix.sh", "dsha-pnpm-env-fix.sh", 60_000);
     }
 
     /** 确保外部浏览器 /api 403 修复已应用（Chrome 150+ Origin 省略端口，幂等）。
@@ -2251,6 +2253,10 @@ public String getWorkdir() {
         }
         try {
             runAssetScript("dsh-token-patch.sh", "dsha-token-patch.sh", 60_000);
+        } catch (Throwable ignored) {
+        }
+        try {
+            runAssetScript("pnpm-env-fix.sh", "dsha-pnpm-env-fix.sh", 60_000);
         } catch (Throwable ignored) {
         }
         // ===== 原生内置移动端 UI 适配（免第三方插件） =====
