@@ -223,7 +223,7 @@ if [ -z "${S:-}" ] || [ ! -f "${S:-}" ]; then
   echo SESSION_PATCH_SKIP
   exit 0
 fi
-if grep -q 'DSHA_L2S_FIX4' "$S" || grep -q 'await rename(tmp, finalPath);' "$S"; then
+if grep -q 'DSHA_L2S_FIX4' "$S" || (grep -q 'await rename(tmp, finalPath);' "$S" && grep -q 'rename' "$S"); then
   echo SESSION_PATCH_ALREADY
   exit 0
 fi

@@ -75,6 +75,7 @@ public class SettingsFragment extends Fragment {
         v.findViewById(R.id.settings_about).setOnClickListener(x -> AboutDialog.show(requireContext()));
         v.findViewById(R.id.settings_update).setOnClickListener(x -> checkUpdate());
         v.findViewById(R.id.settings_selftest).setOnClickListener(x -> runSelftest());
+        v.findViewById(R.id.settings_apply_patches).setOnClickListener(x -> confirmApplyPatches());
         v.findViewById(R.id.settings_reextract).setOnClickListener(x -> confirmReextract());
 
         return v;
@@ -173,4 +174,55 @@ public class SettingsFragment extends Fragment {
             this.factory = factory;
         }
     }
+    private void confirmApplyPatches() {
+        new AlertDialog.Builder(requireContext())
+                .setTitle("执行核心补丁修复")
+                .setMessage("将对容器依次执行 Token 双轨鉴权打通、Web 守卫放行、会话日志与图片附件原子写入修复。\n\n适用于升级 DSH 核心被覆盖或鉴权报错时一键恢复。")
+                .setPositiveButton("开始修复", (d, w) -> runApplyPatches())
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void runApplyPatches() {
+        HarnessController controller = HarnessController.getInstance(requireContext());
+        AlertDialog progress = new AlertDialog.Builder(requireContext())
+                .setTitle("正在修复")
+                .setMessage("正在执行核心补丁，请稍候…")
+                .setCancelable(false)
+                .show();
+
+        new Thread(() -> {
+            StringBuilder report = new StringBuilder();
+            try {
+                String r1 = controller.proot().runAssetBashScript("fs-write-patch.sh", 90_000);
+                report.append("· 写入与附件发布: ").append(r1.contains("OK") || r1.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r1.isEmpty() ? "完成" : r1.trim())).append("\n");
+
+                String r2 = controller.proot().runAssetBashScript("dsh-token-patch.sh", 60_000);
+                report.append("· Token 双轨鉴权: ").append(r2.contains("OK") || r2.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r2.isEmpty() ? "完成" : r2.trim())).append("\n");
+
+                String r3 = controller.proot().runAssetBashScript("webserver-auth-patch.sh", 60_000);
+                report.append("· Web 守卫放行: ").append(r3.contains("OK") || r3.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r3.isEmpty() ? "完成" : r3.trim())).append("\n");
+
+                String r4 = controller.proot().runAssetBashScript("lan-bind-patch.sh", 60_000);
+                report.append("· 局域网放行: ").append(r4.contains("PATCHED") || r4.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r4.isEmpty() ? "完成" : r4.trim()));
+            } catch (Throwable e) {
+                report.append("执行异常: ").append(e.getMessage());
+            }
+
+            main.post(() -> {
+                if (!isAdded()) return;
+                progress.dismiss();
+                new AlertDialog.Builder(requireContext())
+                        .setTitle("修复完成")
+                        .setMessage(report.toString() + "\n\n建议重启 Web 服务使修改全部生效。")
+                        .setPositiveButton("立即重启服务", (d, w) -> {
+                            controller.startWeb(status -> {});
+                            Toast.makeText(requireContext(), "正在重启 Web 服务…", Toast.LENGTH_SHORT).show();
+                        })
+                        .setNegativeButton("稍后手动重启", null)
+                        .show();
+            });
+        }, "dsha-manual-patch").start();
+    }
+
 }

@@ -156,7 +156,7 @@ public class HarnessController {
                 // 先写 PID 再查哨兵：停止方先写哨兵再读 PID，两边不会同时漏过。
                 + "[ ! -e " + WebProcSel.STOP_SENTINEL + " ] || exit 0; "
                 + "exec dsh web --no-open --host 127.0.0.1 --port "
-                + config.getPortInt();
+                + config.getPortInt() + " 2>&1";
     }
 
     /**

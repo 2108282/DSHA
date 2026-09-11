@@ -355,12 +355,30 @@ public class ProotBootstrap {
         if (!f.isFile()) return;
         String c = new String(Compat.readAllBytes(f),
                 java.nio.charset.StandardCharsets.UTF_8);
-        if (!c.contains("await link(tmp, finalPath)")) return; // 已 patch 或版本不同
-        c = c.replace("await link(tmp, finalPath);", "await rename(tmp, finalPath);");
-        c = c.replace("import { link, mkdir, mkdtemp, open,",
-                "import { mkdir, mkdtemp, open, rename,");
-        Compat.write(f, c.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        Log.i("DSHA", "已 patch dsh session 持久化 link→rename: " + f.getAbsolutePath());
+        boolean callsLink = c.contains("await link(tmp, finalPath);");
+        boolean callsRename = c.contains("await rename(tmp, finalPath);") || c.contains("await __dshaPublishLog(tmp, finalPath);");
+        if (!callsLink && !callsRename) return; // 版本不匹配或已无关
+        
+        String patched = c;
+        if (callsLink) {
+            patched = patched.replace("await link(tmp, finalPath);", "await rename(tmp, finalPath);");
+        }
+        
+        // 精准处理 import：确保 node:fs/promises 导入包含 rename
+        if (!patched.contains("rename") || patched.indexOf("rename") > patched.indexOf("from \"node:fs/promises\"")) {
+            patched = patched.replace("import { link, lstat, mkdir, mkdtemp, open,",
+                    "import { rename, lstat, mkdir, mkdtemp, open,");
+            patched = patched.replace("import { link, mkdir, mkdtemp, open,",
+                    "import { rename, mkdir, mkdtemp, open,");
+            if (!patched.contains("import { rename,") && patched.contains("from \"node:fs/promises\"")) {
+                patched = patched.replace("from \"node:fs/promises\"", ", rename } from \"node:fs/promises\"");
+                patched = patched.replace("{ , rename", "{ rename");
+            }
+        }
+        if (!patched.equals(c)) {
+            Compat.write(f, patched.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            Log.i("DSHA", "已 patch dsh session 持久化 link→rename (含 import 安全补全): " + f.getAbsolutePath());
+        }
     }
 
     /**
