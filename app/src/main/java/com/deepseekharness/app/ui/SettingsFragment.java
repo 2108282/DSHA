@@ -184,7 +184,7 @@ public class SettingsFragment extends Fragment {
     }
 
     private void runApplyPatches() {
-        HarnessController controller = HarnessController.getInstance(requireContext());
+        HarnessController controller = HarnessController.get(requireContext());
         AlertDialog progress = new AlertDialog.Builder(requireContext())
                 .setTitle("正在修复")
                 .setMessage("正在执行核心补丁，请稍候…")
