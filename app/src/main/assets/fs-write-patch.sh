@@ -228,7 +228,9 @@ if [ -z "${S:-}" ] || [ ! -f "${S:-}" ]; then
   echo SESSION_PATCH_SKIP
   exit 0
 fi
-if grep -q 'DSHA_L2S_FIX4' "$S" || (grep -q 'await rename(tmp, finalPath);' "$S" && grep -q 'rename' "$S"); then
+
+# 检查是否已打过补丁且 import 完好（必须同时有 rename 和 link）
+if grep -q 'await __dshaPublishLog(tmp, finalPath);' "$S" && grep -q 'DSHA_L2S_FIX4' "$S" && grep -q '\blink\b' "$S" && grep -q '\brename\b' "$S"; then
   echo SESSION_PATCH_ALREADY
   exit 0
 fi
@@ -268,45 +270,49 @@ async function __dshaPublishLog(tmp, finalPath) {
 CALL_ORIG = 'await link(tmp, finalPath);'
 CALL_NEW = 'await __dshaPublishLog(tmp, finalPath);'
 
-已打老补丁 = 'DSHA_L2S_FIX2' in src
-
-# 1) import：确保有 rename（老补丁已加过就跳过）
+# 1) import：确保同时有 rename 和 link（dsh 0.1.5 的 defaultFileSystem 必须引用 link）
 m2 = re.search(r'^import \{([^}]*)\} from "node:fs/promises";', src, re.M)
 if not m2:
     print("NO_FS_PROMISES_IMPORT")
     sys.exit(4)
-if 'rename' not in m2.group(1):
-    src = src[:m2.start(1)] + " rename," + m2.group(1) + src[m2.end(1):]
 
-if 已打老补丁:
-    # 2a) 升级：把 FIX2 的 helper 整段替换成 FIX4 版（调用点已是 __dshaPublishLog）
+items = [x.strip() for x in m2.group(1).split(',') if x.strip()]
+if 'rename' not in items:
+    items.insert(0, 'rename')
+if 'link' not in items:
+    items.insert(1, 'link')
+new_import = 'import { ' + ', '.join(items) + ' } from "node:fs/promises";'
+src = src[:m2.start()] + new_import + src[m2.end():]
+
+# 2) 注入 helper 与调用点
+if 'DSHA_L2S_FIX4' in src:
+    result = 'ALREADY_FIX4'
+elif 'DSHA_L2S_FIX2' in src:
     OLD_HELPER = re.compile(
         r'\n?/\* DSHA_L2S_FIX2 .*?\nasync function __dshaPublishLog\(tmp, finalPath\) \{.*?\n\}\n',
         re.S)
-    if not OLD_HELPER.search(src):
-        print("OLD_HELPER_MISS")
-        sys.exit(5)
-    src = OLD_HELPER.sub(HELPER, src, count=1)
-    result = 'UPGRADED'
-else:
-    # 2b) 首次：注入 helper（放在最后一条 import 之后）并换掉调用点
-    if 'await rename(tmp, finalPath);' in src:
-        print('ALREADY_RENAME')
-        sys.exit(0)
-    if CALL_ORIG not in src:
-        print("PATTERN_MISS")
-        sys.exit(3)
+    if OLD_HELPER.search(src):
+        src = OLD_HELPER.sub(HELPER, src, count=1)
+        result = 'UPGRADED'
+    else:
+        result = 'FIXED_IMPORT'
+elif CALL_ORIG in src:
     lines = src.split('\n')
     last_import = -1
     for i, line in enumerate(lines):
         if line.startswith('import '):
             last_import = i
-    if last_import < 0:
-        print("NO_IMPORT_BLOCK")
-        sys.exit(6)
-    lines.insert(last_import + 1, HELPER)
-    src = '\n'.join(lines).replace(CALL_ORIG, CALL_NEW, 1)
-    result = 'PATCHED'
+    if last_import >= 0:
+        lines.insert(last_import + 1, HELPER)
+        src = '\n'.join(lines).replace(CALL_ORIG, CALL_NEW, 1)
+        result = 'PATCHED'
+    else:
+        src = src.replace(CALL_ORIG, 'await rename(tmp, finalPath);', 1)
+        result = 'RENAME_REPLACED'
+elif 'await rename(tmp, finalPath);' in src:
+    result = 'FIXED_IMPORT_FOR_RENAME'
+else:
+    result = 'IMPORT_FIXED'
 
 open(path, 'w', encoding='utf-8').write(src)
 print(result)

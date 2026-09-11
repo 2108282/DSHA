@@ -364,20 +364,28 @@ public class ProotBootstrap {
             patched = patched.replace("await link(tmp, finalPath);", "await rename(tmp, finalPath);");
         }
         
-        // 精准处理 import：确保 node:fs/promises 导入包含 rename
-        if (!patched.contains("rename") || patched.indexOf("rename") > patched.indexOf("from \"node:fs/promises\"")) {
-            patched = patched.replace("import { link, lstat, mkdir, mkdtemp, open,",
-                    "import { rename, lstat, mkdir, mkdtemp, open,");
-            patched = patched.replace("import { link, mkdir, mkdtemp, open,",
-                    "import { rename, mkdir, mkdtemp, open,");
-            if (!patched.contains("import { rename,") && patched.contains("from \"node:fs/promises\"")) {
-                patched = patched.replace("from \"node:fs/promises\"", ", rename } from \"node:fs/promises\"");
-                patched = patched.replace("{ , rename", "{ rename");
+        // 关键修复：确保 node:fs/promises 导入同时包含 rename 和 link（dsh 0.1.5 的 defaultFileSystem 仍必须引用 link）
+        int fsPromisesIdx = patched.indexOf("from \"node:fs/promises\"");
+        if (fsPromisesIdx > 0) {
+            int importStart = patched.lastIndexOf("import {", fsPromisesIdx);
+            if (importStart >= 0) {
+                String importBlock = patched.substring(importStart, fsPromisesIdx);
+                // 确保有 link（修复被误换成 rename 导致 link is not defined 的致命 bug）
+                if (!importBlock.contains("link")) {
+                    patched = patched.substring(0, importStart + 8) + " link," + patched.substring(importStart + 8);
+                    fsPromisesIdx += 6;
+                }
+                // 确保有 rename
+                importStart = patched.lastIndexOf("import {", fsPromisesIdx);
+                importBlock = patched.substring(importStart, fsPromisesIdx);
+                if (!importBlock.contains("rename")) {
+                    patched = patched.substring(0, importStart + 8) + " rename," + patched.substring(importStart + 8);
+                }
             }
         }
         if (!patched.equals(c)) {
             Compat.write(f, patched.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            Log.i("DSHA", "已 patch dsh session 持久化 link→rename (含 import 安全补全): " + f.getAbsolutePath());
+            Log.i("DSHA", "已 patch dsh session 持久化 link→rename (确保 rename 与 link 均存在): " + f.getAbsolutePath());
         }
     }
 
