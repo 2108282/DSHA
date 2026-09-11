@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - '1.2.0-rc1.3test'
+      - '1.2.0rc1test'
       - main
   workflow_dispatch:
 
