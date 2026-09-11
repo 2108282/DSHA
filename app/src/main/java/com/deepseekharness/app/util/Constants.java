@@ -54,12 +54,12 @@ public final class Constants {
     public static final String CHANNEL_ADB_WATCH = "dsh_adb_watch_channel";
     public static final String CHANNEL_SHELL_CONFIRM = "dsh_confirm_channel";
 
-    // ================= dsh 版本（采用最新 @deepseek-ai/dsh） =================
+    // ================= dsh 版本（出厂内置版本） =================
     /**
-     * 最新 dsh 版本：npm registry 的 alpha 标签（@deepseek-ai/dsh@0.1.2-alpha.4）。
+     * 当前 APK 内置 dsh 核心版本。
      * 对应上游 deepseek-ai/deepseek-harness 仓库。
      */
-    public static final String DSH_VERSION = "0.1.2-alpha.4";
+    public static final String DSH_VERSION = "0.1.5-rc.2";
     public static final String DSH_RUNTIME_ID = "dsh-v" + DSH_VERSION;
     /** 全局安装路径下的 dsh 入口（容器内路径，见 WebProcSel 的 cmdline 判据）。 */
     public static final String DSH_BIN_JS =
