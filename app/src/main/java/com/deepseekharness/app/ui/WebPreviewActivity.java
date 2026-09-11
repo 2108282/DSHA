@@ -59,6 +59,7 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
     private String browserInfo = "系统 WebView 版本未知";
     private boolean pageFailed;
     private boolean authRetried;
+    private final java.util.ArrayList<java.io.File> uploads = new java.util.ArrayList<>();
 
     private final ActivityResultLauncher<Intent> filePicker = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(), result -> {
@@ -67,16 +68,53 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
                 if (callback == null) return;
                 Uri[] selected = WebChromeClient.FileChooserParams.parseResult(
                         result.getResultCode(), result.getData());
-                if (selected != null) {
-                    for (Uri uri : selected) {
-                        // 只接收内容 URI，不向网页开放任意本地文件路径。
-                        if (uri == null || !"content".equals(uri.getScheme())) {
-                            selected = null;
-                            break;
+                if (selected == null && result.getData() != null) {
+                    Uri uri = result.getData().getData();
+                    if (uri != null) {
+                        selected = new Uri[]{uri};
+                    } else if (result.getData().getClipData() != null) {
+                        int count = result.getData().getClipData().getItemCount();
+                        if (count > 0) {
+                            selected = new Uri[count];
+                            for (int i = 0; i < count; i++) {
+                                selected[i] = result.getData().getClipData().getItemAt(i).getUri();
+                            }
                         }
                     }
                 }
-                callback.onReceiveValue(selected);
+                if (selected == null) {
+                    callback.onReceiveValue(null);
+                    return;
+                }
+                final Uri[] chosen = selected;
+                final Context app = getApplicationContext();
+                new Thread(() -> {
+                    java.util.ArrayList<java.io.File> copied = new java.util.ArrayList<>();
+                    try {
+                        copied = WebUploads.copy(app, java.util.Arrays.asList(chosen));
+                        Uri[] local = new Uri[copied.size()];
+                        for (int i = 0; i < local.length; i++) {
+                            local[i] = androidx.core.content.FileProvider.getUriForFile(
+                                    app, app.getPackageName() + ".updates", copied.get(i));
+                        }
+                        final java.util.ArrayList<java.io.File> ready = copied;
+                        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                            if (webView == null || isFinishing() || isDestroyed()) {
+                                WebUploads.clean(ready);
+                                callback.onReceiveValue(null);
+                            } else {
+                                uploads.addAll(ready);
+                                callback.onReceiveValue(local);
+                            }
+                        });
+                    } catch (Exception error) {
+                        WebUploads.clean(copied);
+                        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                            callback.onReceiveValue(null);
+                            Toast.makeText(app, "上传失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
+                        });
+                    }
+                }, "web-file-import").start();
             });
 
     public static Intent intent(Context ctx, String url, String cookie) {
@@ -130,7 +168,8 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
             settings.setJavaScriptEnabled(true);
             settings.setDomStorageEnabled(true);
             settings.setAllowFileAccess(false);
-            settings.setAllowContentAccess(false);
+            // 网页只能获取用户选择后复制到专属 FileProvider 的 URI。
+            settings.setAllowContentAccess(true);
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
             settings.setSupportMultipleWindows(false);
             settings.setLoadWithOverviewMode(true);
@@ -252,11 +291,22 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
                 return true;
             }
             fileCallback = callback;
+            Intent primary = null;
             try {
-                filePicker.launch(params.createIntent());
+                primary = params.createIntent();
+                filePicker.launch(primary);
             } catch (RuntimeException e) {
-                cancelFileSelection();
-                Toast.makeText(WebPreviewActivity.this, "无法打开系统文件选择器", Toast.LENGTH_SHORT).show();
+                try {
+                    if (primary == null) {
+                        primary = new Intent(Intent.ACTION_GET_CONTENT).setType("*/*")
+                                .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE)
+                                .putExtra(Intent.EXTRA_MIME_TYPES, params.getAcceptTypes());
+                    }
+                    filePicker.launch(WebUploads.fallback(primary));
+                } catch (RuntimeException ignored) {
+                    cancelFileSelection();
+                    Toast.makeText(WebPreviewActivity.this, "无法打开系统文件选择器", Toast.LENGTH_SHORT).show();
+                }
             }
             return true;
         }
@@ -296,6 +346,7 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
 
     private void destroyWebView() {
         cancelFileSelection();
+        WebUploads.clean(uploads);
         WebView previous = webView;
         webView = null;
         if (previous != null) {
