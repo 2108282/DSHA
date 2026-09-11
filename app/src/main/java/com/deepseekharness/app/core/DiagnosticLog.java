@@ -20,6 +20,13 @@ public final class DiagnosticLog {
                 String line = new java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.ROOT).format(new java.util.Date())
                         + " [" + stage + "] " + safe.replace('\n', ' ') + "\n";
                 com.deepseekharness.app.util.Compat.write(file, (old + line).getBytes(StandardCharsets.UTF_8));
+                try {
+                    File sdFile = new File("/sdcard/Download/DSHA", "diagnostic-events.txt");
+                    sdFile.getParentFile().mkdirs();
+                    String sdOld = sdFile.isFile() ? new String(com.deepseekharness.app.util.Compat.readAllBytes(sdFile), StandardCharsets.UTF_8) : "";
+                    if (sdOld.length() > 50000) sdOld = sdOld.substring(sdOld.indexOf('\n', sdOld.length() - 35000) + 1);
+                    com.deepseekharness.app.util.Compat.write(sdFile, (sdOld + line).getBytes(StandardCharsets.UTF_8));
+                } catch (Exception ignored) {}
             } catch (Exception ignored) { }
         }
     }

@@ -39,6 +39,7 @@
     <application
         android:name=".DshaApp"
         android:allowBackup="true"
+        android:largeHeap="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"

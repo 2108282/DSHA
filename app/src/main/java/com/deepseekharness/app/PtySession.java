@@ -32,7 +32,7 @@ public final class PtySession implements TerminalSessionClient {
     private static final String TAG = "DSHA-pty";
 
     /** 回滚缓冲行数：够往上翻几屏日志，又不至于把内存吃掉（每行 80 列约 200 字节）。 */
-    private static final int TRANSCRIPT_ROWS = 2000;
+    private static final int TRANSCRIPT_ROWS = 1000;
 
     /** UI 侧只关心这几件事。回调都在 PTY 读线程上来，实现方自己 post 到主线程。 */
     public interface Listener {
