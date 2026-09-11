@@ -161,16 +161,21 @@ else:
         patched = True
 
 # 2. 适配 0.1.5+ 版本的 publishImmutableAlias (link source -> target)
-p_alias = '''		try {
-			await link(source, target);
-		} catch (error) {'''
-r_alias = '''		try {
-			/* DSHA_L2S_FIX_ATTACHMENT_ALIAS —— proot 下不支持真硬链接，改用 copyFile */
-			const { copyFile } = await import("node:fs/promises");
-			await copyFile(source, target);
-		} catch (error) {'''
-if p_alias in src:
-    src = src.replace(p_alias, r_alias, 1)
+p_alias = re.compile(r'try\s*\{\s*(?:await link\(source,\s*target\);|/\* DSHA_L2S_FIX_ATTACHMENT_ALIAS.*?\*/.*?await copyFile\(source,\s*target\);)\s*\}\s*catch\s*\(error\)\s*\{.*?if\s*\(await digestFile\(target\)\s*!==\s*sha256\).*?\}\s*await chmod\(target,\s*256\);', re.S)
+r_alias = '''try {
+			/* DSHA_L2S_FIX_ATTACHMENT_ALIAS —— proot 下不支持真硬链接，改用 copyFile，并防已存在只读文件报 EACCES */
+			const { copyFile, stat } = await import("node:fs/promises");
+			const existing = await stat(target).catch(() => null);
+			if (!existing) {
+				await copyFile(source, target);
+			}
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && (error.code === "EEXIST" || error.code === "EACCES" || error.code === "EPERM"))) throw error;
+			if (await digestFile(target) !== sha256) throw new AttachmentError("Stored attachment failed integrity verification.", "ATTACHMENT_CORRUPT");
+		}
+		await chmod(target, 256);'''
+if p_alias.search(src):
+    src = p_alias.sub(r_alias, src, count=1)
     patched = True
 
 # 3. 适配 0.1.5+ 版本的 publishStagedObject (link staged.path -> target)

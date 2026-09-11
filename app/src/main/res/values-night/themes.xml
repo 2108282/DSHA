@@ -50,16 +50,4 @@
         <item name="android:windowContentOverlay">@null</item>
         <item name="android:backgroundDimEnabled">true</item>
     </style>
-
-    <!-- 抽屉文件选择专属透明中转主题（零遮罩、零动画、全透明，确保对抽屉现有画面零视觉侵入） -->
-    <style name="Theme.DeepseekHarness.SheetPickerTransparent" parent="@android:style/Theme.Translucent.NoTitleBar">
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:colorBackground">@android:color/transparent</item>
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:windowAnimationStyle">@null</item>
-        <item name="android:windowDisablePreview">true</item>
-        <item name="android:windowContentOverlay">@null</item>
-        <item name="android:backgroundDimEnabled">false</item>
-    </style>
 </resources>

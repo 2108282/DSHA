@@ -66,21 +66,13 @@
             android:exported="true"
             android:taskAffinity="com.dsh.client.quick_sheet"
             android:excludeFromRecents="true"
-            android:launchMode="singleInstance"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustNothing"
             android:theme="@style/Theme.DeepseekHarness.SheetTransparent" />
         <activity-alias
             android:name=".QuickChatSheetActivity"
             android:targetActivity=".ui.QuickChatSheetActivity"
             android:exported="true" />
-        <activity
-            android:name=".ui.QuickSheetPickerActivity"
-            android:taskAffinity="com.dsh.client.sheet_picker"
-            android:theme="@style/Theme.DeepseekHarness.SheetPickerTransparent"
-            android:excludeFromRecents="true"
-            android:noHistory="true"
-            android:exported="false"
-            android:finishOnTaskLaunch="true" />
         <activity android:name=".ui.PluginInstallActivity" android:exported="true">
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />

@@ -52,6 +52,14 @@ import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.ComponentActivity;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
+
 
 /**
  * 快捷对话底部抽屉弹层（纯代码动态构建，零外部 XML 依赖）：
@@ -70,7 +78,7 @@ import android.widget.Toast;
  * 9. 低位退出在动画完全结束后（onAnimationEnd）重置高度，彻底消除退出时的拉长闪屏。
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
-public class QuickChatSheetActivity extends Activity {
+public class QuickChatSheetActivity extends ComponentActivity {
 
     public static final int ICON_CLOSE = 1;
     public static final int ICON_SETTINGS = 2;
@@ -108,6 +116,69 @@ public class QuickChatSheetActivity extends Activity {
     private ViewTreeObserver.OnGlobalLayoutListener keyboardLayoutListener;
 
     private ValueCallback<Uri[]> fileCallback = null;
+    private final ArrayList<File> uploads = new ArrayList<>();
+
+    private final ActivityResultLauncher<Intent> filePicker = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(), result -> {
+                ValueCallback<Uri[]> callback = fileCallback;
+                fileCallback = null;
+                if (callback == null) return;
+
+                Uri[] selected = WebChromeClient.FileChooserParams.parseResult(
+                        result.getResultCode(), result.getData());
+                if (selected == null && result.getData() != null) {
+                    Uri uri = result.getData().getData();
+                    if (uri != null) {
+                        selected = new Uri[]{uri};
+                    } else if (result.getData().getClipData() != null) {
+                        int count = result.getData().getClipData().getItemCount();
+                        if (count > 0) {
+                            selected = new Uri[count];
+                            for (int i = 0; i < count; i++) {
+                                selected[i] = result.getData().getClipData().getItemAt(i).getUri();
+                            }
+                        }
+                    }
+                }
+
+                if (selected == null || selected.length == 0) {
+                    callback.onReceiveValue(null);
+                    return;
+                }
+
+                final Uri[] chosen = selected;
+                final Context app = getApplicationContext();
+                new Thread(() -> {
+                    ArrayList<File> copied = new ArrayList<>();
+                    try {
+                        copied = WebUploads.copy(app, Arrays.asList(chosen));
+                        Uri[] local = new Uri[copied.size()];
+                        for (int i = 0; i < local.length; i++) {
+                            local[i] = androidx.core.content.FileProvider.getUriForFile(
+                                    app, app.getPackageName() + ".updates", copied.get(i));
+                            try {
+                                app.grantUriPermission(app.getPackageName(), local[i], Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            } catch (Throwable ignored) {}
+                        }
+                        final ArrayList<File> ready = copied;
+                        new Handler(Looper.getMainLooper()).post(() -> {
+                            if (isFinishing() || isDestroyed()) {
+                                WebUploads.clean(ready);
+                                callback.onReceiveValue(null);
+                            } else {
+                                uploads.addAll(ready);
+                                callback.onReceiveValue(local);
+                            }
+                        });
+                    } catch (Exception error) {
+                        WebUploads.clean(copied);
+                        new Handler(Looper.getMainLooper()).post(() -> {
+                            callback.onReceiveValue(null);
+                            Toast.makeText(app, "上传失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
+                        });
+                    }
+                }, "sheet-file-import").start();
+            });
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -753,13 +824,17 @@ public class QuickChatSheetActivity extends Activity {
                         String cookieVal = authCookie.contains(";") ? authCookie : (authCookie + "; Path=/; HttpOnly; SameSite=Lax");
                         cookies.setCookie("http://127.0.0.1:3080/", cookieVal);
                     }
-                    java.io.File tf = new java.io.File(getFilesDir(), "linux/ubuntu/root/.dsh/.bridge_token");
-                    if (tf.isFile()) {
-                        String bt = new String(com.deepseekharness.app.util.Compat.readAllBytes(tf)).trim();
-                        if (!bt.isEmpty()) {
-                            cookies.setCookie("http://127.0.0.1:3080/", "dsha_t=" + bt + "; Path=/; SameSite=Lax; Max-Age=31536000");
-                        }
+                    String bt = "";
+                    java.io.File tf1 = new java.io.File("/root/.dsh/.bridge_token");
+                    java.io.File tf2 = new java.io.File(getFilesDir(), "linux/ubuntu/root/.dsh/.bridge_token");
+                    java.io.File tf3 = new java.io.File("/data/data/" + getPackageName() + "/files/linux/ubuntu/root/.dsh/.bridge_token");
+                    if (tf1.isFile()) bt = new String(com.deepseekharness.app.util.Compat.readAllBytes(tf1)).trim();
+                    else if (tf2.isFile()) bt = new String(com.deepseekharness.app.util.Compat.readAllBytes(tf2)).trim();
+                    else if (tf3.isFile()) bt = new String(com.deepseekharness.app.util.Compat.readAllBytes(tf3)).trim();
+                    if (!bt.isEmpty()) {
+                        cookies.setCookie("http://127.0.0.1:3080/", "dsha_t=" + bt + "; Path=/; SameSite=Lax; Max-Age=31536000");
                     }
+                    cookies.flush();
                 } catch (Throwable ignored) {}
             }, "sheet-cookie-init").start();
 
@@ -935,18 +1010,20 @@ public class QuickChatSheetActivity extends Activity {
             Intent primary = null;
             try {
                 primary = params.createIntent();
-            } catch (Exception ignored) {}
-
-            QuickSheetPickerActivity.start(QuickChatSheetActivity.this, primary,
-                    params.getAcceptTypes(),
-                    params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE,
-                    uris -> {
-                        ValueCallback<Uri[]> cb = fileCallback;
-                        fileCallback = null;
-                        if (cb != null) {
-                            cb.onReceiveValue(uris);
-                        }
-                    });
+                filePicker.launch(primary);
+            } catch (Exception e) {
+                try {
+                    if (primary == null) {
+                        primary = new Intent(Intent.ACTION_GET_CONTENT).setType("*/*")
+                                .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE)
+                                .putExtra(Intent.EXTRA_MIME_TYPES, params.getAcceptTypes());
+                    }
+                    filePicker.launch(WebUploads.fallback(primary));
+                } catch (Exception ignored) {
+                    cancelFileSelection();
+                    Toast.makeText(QuickChatSheetActivity.this, "无法打开系统文件选择器", Toast.LENGTH_SHORT).show();
+                }
+            }
             return true;
         }
     }
@@ -954,6 +1031,7 @@ public class QuickChatSheetActivity extends Activity {
     @Override
     protected void onDestroy() {
         cancelFileSelection();
+        WebUploads.clean(uploads);
         if (keyboardLayoutListener != null && getWindow() != null && getWindow().getDecorView() != null) {
             getWindow().getDecorView().getViewTreeObserver().removeOnGlobalLayoutListener(keyboardLayoutListener);
         }
