@@ -98,6 +98,9 @@ public class FilePickerActivity extends ComponentActivity {
                             for (int i = 0; i < local.length; i++) {
                                 local[i] = androidx.core.content.FileProvider.getUriForFile(
                                         app, app.getPackageName() + ".updates", copied.get(i));
+                                try {
+                                    app.grantUriPermission(app.getPackageName(), local[i], Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                } catch (Throwable ignored) {}
                             }
                             new Handler(Looper.getMainLooper()).post(() -> {
                                 if (callback != null) callback.onResult(local);

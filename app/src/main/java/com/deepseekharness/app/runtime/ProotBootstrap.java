@@ -913,10 +913,8 @@ public class ProotBootstrap {
      */
     public Process execRootfsInteractive() throws IOException {
         ensureRuntimeFiles();
-        if (!isEnvironmentReady()) {
-            ensureBundledPython();
-            ensureBundledPnpm();
-        }
+        ensureBundledPython();
+        ensureBundledPnpm();
         ensureAndroidGroups(); // 登录 shell 的 $(groups) 依赖 /etc/group 里有 Android GID，先补齐
         java.util.List<String> argv = baseProotArgv();
         argv.add("/bin/bash");
@@ -947,10 +945,8 @@ public class ProotBootstrap {
     /** PTY 会话的环境变量（KEY=VALUE）。借临时 ProcessBuilder 复用 applyProotEnv，避免重抄漏项。 */
     public String[] ptyEnv() {
         ensureRuntimeFiles();
-        if (!isEnvironmentReady()) {
-            ensureBundledPython();
-            ensureBundledPnpm();
-        }
+        ensureBundledPython();
+        ensureBundledPnpm();
         ProcessBuilder probe = new ProcessBuilder("/system/bin/true");
         applyProotEnv(probe);
         java.util.Map<String, String> m = probe.environment();

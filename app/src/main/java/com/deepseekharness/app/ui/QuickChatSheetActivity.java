@@ -733,6 +733,24 @@ public class QuickChatSheetActivity extends Activity {
             cookies.setAcceptCookie(true);
             cookies.setAcceptThirdPartyCookies(sCachedWebView, true);
 
+            // 预埋鉴权凭证 Cookie，确保 Web Worker 发起二进制文件上传(/api/session/uploadFileBinary)时带完整认证
+            new Thread(() -> {
+                try {
+                    String authCookie = controller != null ? controller.exchangeDshAuthCookie() : null;
+                    if (authCookie != null && !authCookie.isEmpty()) {
+                        String cookieVal = authCookie.contains(";") ? authCookie : (authCookie + "; Path=/; HttpOnly; SameSite=Lax");
+                        cookies.setCookie("http://127.0.0.1:3080/", cookieVal);
+                    }
+                    java.io.File tf = new java.io.File(getFilesDir(), "linux/ubuntu/root/.dsh/.bridge_token");
+                    if (tf.isFile()) {
+                        String bt = new String(com.deepseekharness.app.util.Compat.readAllBytes(tf)).trim();
+                        if (!bt.isEmpty()) {
+                            cookies.setCookie("http://127.0.0.1:3080/", "dsha_t=" + bt + "; Path=/; SameSite=Lax; Max-Age=31536000");
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }, "sheet-cookie-init").start();
+
             String authUrl = controller != null ? controller.getWebAuthUrl() : "";
             // 直接加载容器启动成功后固定不变的 LaunchToken 原生地址，彻底消除子线程换 Cookie 引起的超时白屏
             if (authUrl != null && !authUrl.isEmpty()) {
@@ -766,6 +784,7 @@ public class QuickChatSheetActivity extends Activity {
             if (progressBar != null) {
                 progressBar.setVisibility(sWebLoaded ? View.GONE : View.VISIBLE);
             }
+            sCachedWebView.getSettings().setAllowContentAccess(true);
             sCachedWebView.setWebChromeClient(new SheetChromeClient());
             injectTransparentBackground(sCachedWebView);
         }
@@ -891,6 +910,12 @@ public class QuickChatSheetActivity extends Activity {
     }
 
     private class SheetChromeClient extends WebChromeClient {
+        @Override
+        public boolean onConsoleMessage(android.webkit.ConsoleMessage message) {
+            android.util.Log.d("DSHA_SHEET_CONSOLE", message.message() + " (" + message.sourceId() + ":" + message.lineNumber() + ")");
+            return true;
+        }
+
         @Override
         public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> callback, FileChooserParams params) {
             cancelFileSelection();
