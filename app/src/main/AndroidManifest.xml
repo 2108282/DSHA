@@ -73,10 +73,6 @@
             android:name=".QuickChatSheetActivity"
             android:targetActivity=".ui.QuickChatSheetActivity"
             android:exported="true" />
-        <activity
-            android:name=".ui.FilePickerActivity"
-            android:theme="@style/Theme.DeepseekHarness.SheetTransparent"
-            android:exported="false" />
         <activity android:name=".ui.PluginInstallActivity" android:exported="true">
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
