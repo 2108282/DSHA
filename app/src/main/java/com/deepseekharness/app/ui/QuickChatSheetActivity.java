@@ -954,42 +954,75 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
-    /** 彻底覆写前端背景 CSS 变量，确保背景 100% 透明透光 */
+    /** 彻底覆写前端背景 CSS 变量，确保黑夜模式下背景层 100% 消失或透明透光，彻底露出毛玻璃与壁纸 */
     private void injectTransparentBackground(WebView view) {
         if (view == null) return;
         try {
-            String js = "(function() {" +
-                    "  var css = `\n" +
-                    "    html, body, #root, [data-ds-dark-theme], main, .dsh-layout-root, div[class*='_root_'], div[class*='_wrap_'], div[class*='_container_'], div[class*='_boot_'], div[class*='_onboardingStage_'], div[class*='_stage_'] {\n" +
-                    "      background: transparent !important;\n" +
-                    "      background-color: transparent !important;\n" +
-                    "    }\n" +
-                    "    :root, .dark, [data-ds-dark-theme] {\n" +
-                    "      --dsw-alias-bg-base: transparent !important;\n" +
-                    "      --dsw-alias-bg-layer-1: transparent !important;\n" +
-                    "      --dsw-alias-bg-layer-2: rgba(255, 255, 255, 0.05) !important;\n" +
-                    "      --dsw-specific-sidebar-fill: transparent !important;\n" +
-                    "      --dsh-boot-bg: transparent !important;\n" +
-                    "    }\n" +
-                    "    [data-mobile-nav=\"frame\"] {\n" +
-                    "      padding-top: 0px !important;\n" +
-                    "    }\n" +
-                    "  `;\n" +
-                    "  var style = document.getElementById('dsh-transparent-style');\n" +
-                    "  if (!style) {\n" +
-                    "    style = document.createElement('style');\n" +
-                    "    style.id = 'dsh-transparent-style';\n" +
-                    "    document.head.appendChild(style);\n" +
-                    "  }\n" +
-                    "  style.innerHTML = css;\n" +
-                    "  if (document.documentElement) {\n" +
-                    "    document.documentElement.style.backgroundColor = 'transparent';\n" +
-                    (isDarkMode
+            String cssDark = "html, body, #root, [data-ds-dark-theme], main, .dsh-layout-root, "
+                    + "div[class*='_root'], div[class*='_wrap'], div[class*='_container'], div[class*='_boot'], "
+                    + "div[class*='_scrollBody'], div[class*='_composerSeat'], div[class*='_dock'], "
+                    + "div[class*='_viewArea'], div[class*='_panel'], div[class*='_header'], div[class*='_body'], "
+                    + "div[class*='_titleCluster'], div[class*='_crumbs'], header, section, article {\n"
+                    + "  background: transparent !important;\n"
+                    + "  background-color: transparent !important;\n"
+                    + "  background-image: none !important;\n"
+                    + "}\n"
+                    + ":root, .dark, body[data-ds-dark-theme], [data-ds-dark-theme] {\n"
+                    + "  --dsw-alias-bg-base: transparent !important;\n"
+                    + "  --dsw-alias-bg-layer-1: transparent !important;\n"
+                    + "  --dsw-alias-bg-layer-2: rgba(255, 255, 255, 0.05) !important;\n"
+                    + "  --dsw-alias-bg-layer-3: rgba(255, 255, 255, 0.08) !important;\n"
+                    + "  --dsw-specific-sidebar-fill: transparent !important;\n"
+                    + "  --dsh-boot-bg: transparent !important;\n"
+                    + "  --dsw-specific-tip: transparent !important;\n"
+                    + "  --dsw-specific-input-major: rgba(255, 255, 255, 0.08) !important;\n"
+                    + "  --dsw-alias-markdown-code-block: rgba(0, 0, 0, 0.25) !important;\n"
+                    + "  --dsw-alias-label-primary: #E8ECF4 !important;\n"
+                    + "  --dsw-alias-label-secondary: #A6B0C3 !important;\n"
+                    + "  --dsw-alias-border-l1: rgba(255, 255, 255, 0.08) !important;\n"
+                    + "  --dsw-alias-border-l2: rgba(255, 255, 255, 0.12) !important;\n"
+                    + "}\n"
+                    + "[data-mobile-nav=\"frame\"] {\n"
+                    + "  padding-top: 0px !important;\n"
+                    + "}\n";
+
+            String cssLight = "html, body, #root, main, .dsh-layout-root, "
+                    + "div[class*='_root'], div[class*='_wrap'], div[class*='_container'], "
+                    + "div[class*='_scrollBody'], div[class*='_composerSeat'], div[class*='_dock'], "
+                    + "div[class*='_viewArea'], div[class*='_panel'], header, section {\n"
+                    + "  background: transparent !important;\n"
+                    + "  background-color: transparent !important;\n"
+                    + "}\n"
+                    + ":root {\n"
+                    + "  --dsw-alias-bg-base: transparent !important;\n"
+                    + "  --dsw-alias-bg-layer-1: transparent !important;\n"
+                    + "  --dsw-specific-sidebar-fill: transparent !important;\n"
+                    + "  --dsh-boot-bg: transparent !important;\n"
+                    + "}\n";
+
+            String targetCss = isDarkMode ? cssDark : cssLight;
+
+            String js = "(function() {"
+                    + "  var style = document.getElementById('dsh-transparent-style');\n"
+                    + "  if (!style) {\n"
+                    + "    style = document.createElement('style');\n"
+                    + "    style.id = 'dsh-transparent-style';\n"
+                    + "    document.head.appendChild(style);\n"
+                    + "  }\n"
+                    + "  style.innerHTML = " + org.json.JSONObject.quote(targetCss) + ";\n"
+                    + "  if (document.documentElement) {\n"
+                    + "    document.documentElement.style.backgroundColor = 'transparent';\n"
+                    + (isDarkMode
                             ? "    document.documentElement.classList.add('dark'); document.documentElement.setAttribute('data-theme', 'dark');\n"
-                            : "    document.documentElement.classList.remove('dark'); document.documentElement.setAttribute('data-theme', 'light');\n") +
-                    "  }\n" +
-                    "  if (document.body) document.body.style.backgroundColor = 'transparent';\n" +
-                    "})();";
+                            : "    document.documentElement.classList.remove('dark'); document.documentElement.setAttribute('data-theme', 'light');\n")
+                    + "  }\n"
+                    + "  if (document.body) {\n"
+                    + "    document.body.style.backgroundColor = 'transparent';\n"
+                    + (isDarkMode
+                            ? "    document.body.setAttribute('data-ds-dark-theme', '');\n"
+                            : "    document.body.removeAttribute('data-ds-dark-theme');\n")
+                    + "  }\n"
+                    + "})();";
             view.evaluateJavascript(js, null);
         } catch (Throwable ignored) {}
     }
