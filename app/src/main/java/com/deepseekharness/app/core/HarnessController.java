@@ -257,15 +257,16 @@ public class HarnessController {
                 reportStatus(generation, onStatus, "环境解压完成，正在启动 dsh web…");
             }
             if (!lifecycle.isCurrent(generation)) return;
-            // 内置四插件注册：rootfs 烘焙的实体要登记进 web profile 才会被 dsh 加载。
-            // 覆盖安装（rootfs 保留）与全新安装（rootfs 重新解压）都靠这一步补齐；
-            // 失败不阻塞启动（插件页打开时会再触发一次，dsh 下次重启生效）。
+            // 内置四插件注册：仅在首次启动或未初始化时执行，已就绪则跳过，节省启动耗时
             try {
-                String r = proot.registerBuiltinPlugins();
-                if (r != null && (r.contains("BUILTIN_REGISTER_OK")
-                        || r.contains("BUILTIN_REGISTER_PARTIAL")
-                        || r.contains("FAIL"))) {
-                    Log.i("DSHA", "内置插件注册: " + r.trim());
+                File profPkg = new File(proot.getRootfsDir(), "root/.dsh/profiles/web/package.json");
+                if (!profPkg.isFile()) {
+                    String r = proot.registerBuiltinPlugins();
+                    if (r != null && (r.contains("BUILTIN_REGISTER_OK")
+                            || r.contains("BUILTIN_REGISTER_PARTIAL")
+                            || r.contains("FAIL"))) {
+                        Log.i("DSHA", "内置插件注册: " + r.trim());
+                    }
                 }
             } catch (Throwable ignored) {
             }

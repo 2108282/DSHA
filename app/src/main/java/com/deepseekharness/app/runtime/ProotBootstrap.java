@@ -323,6 +323,8 @@ public class ProotBootstrap {
     private void flattenL2sChains() {
         try {
             if (!isEnvironmentReady()) return;
+            File marker = new File(rootfsDir, "root/.dsh/.l2s_flatten_done");
+            if (marker.isFile()) return;
             String script = readAssetString(L2S_FLATTEN_SCRIPT);
             if (script.isEmpty()) return;
             String b64 = Base64.encodeToString(script.getBytes(
@@ -345,6 +347,7 @@ public class ProotBootstrap {
                     && !out.contains("flattened=0 dangling=0 removed=0")) {
                 Log.i("DSHA", "l2s 摊平完成: " + out.trim().replace("\n", " | "));
             }
+            try { marker.createNewFile(); } catch (Throwable ignored) {}
         } catch (Throwable e) {
             Log.w("DSHA", "l2s 摊平失败（不影响启动）: "
                     + SensitiveData.redact(String.valueOf(e)));
@@ -400,9 +403,12 @@ public class ProotBootstrap {
      */
     private void ensureDshCorePatches() {
         try {
+            File marker = new File(rootfsDir, "root/.dsh/.core_patches_done");
+            if (marker.isFile()) return;
             runAssetBashScript("fs-write-patch.sh", 90_000);
             runAssetBashScript("dsh-token-patch.sh", 60_000);
             runAssetBashScript("webserver-auth-patch.sh", 60_000);
+            try { marker.createNewFile(); } catch (Throwable ignored) {}
         } catch (Throwable e) {
             Log.w("DSHA", "dsh 核心自愈补丁执行异常: " + SensitiveData.redact(String.valueOf(e)));
         }
@@ -509,6 +515,25 @@ public class ProotBootstrap {
             // 兼顾独立平级目录的旧资产覆盖
             extractAssetDir("task-notifier", new File(rootfs, "root/dsha-task-notifier"));
             extractAssetDir("status-overlay", new File(rootfs, "root/dsha-status-overlay"));
+
+            // 为四个内置插件建立通往 DSH 共享依赖池的 node_modules 符号链接，彻底解决 Cannot find package 依赖缺失
+            String targetNm = "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules";
+            for (String p : new String[]{"dsha-device-shell-guide", "dsha-status-overlay", "dsha-task-notifier", "dsha-web-mobile"}) {
+                File link = new File(rootfs, "root/" + p + "/node_modules");
+                if (!link.exists()) {
+                    try { Compat.symlink(targetNm, link); } catch (Throwable ignored) {}
+                }
+            }
+            File globalNm = new File(rootfs, "usr/local/lib/node_modules");
+            if (globalNm.isDirectory()) {
+                for (String p : new String[]{"dsh-device-shell-guide", "dsh-status-overlay", "dsh-task-notifier", "dsh-web-mobile"}) {
+                    String orig = "/root/" + (p.startsWith("dsh-") ? "dsha-" + p.substring(4) : p);
+                    File gLink = new File(globalNm, p);
+                    if (!gLink.exists()) {
+                        try { Compat.symlink(orig, gLink); } catch (Throwable ignored) {}
+                    }
+                }
+            }
         } catch (Throwable ignored) {}
     }
 
