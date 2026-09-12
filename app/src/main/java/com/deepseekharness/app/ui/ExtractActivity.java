@@ -83,6 +83,7 @@ public class ExtractActivity extends AppCompatActivity {
                 });
                 final long[] lastUi = {0};
                 final Fmt.RateMeter meter = new Fmt.RateMeter();
+                try { controller.stopWeb(); } catch (Throwable ignored) {}
                 controller.proot().ensureRuntimeFiles();
                 controller.proot().extractOfflineBundle((done, total) -> {
                     final double rate = meter.feed(done);
