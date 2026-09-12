@@ -800,10 +800,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             ws.setAllowContentAccess(true);
             ws.setCacheMode(WebSettings.LOAD_DEFAULT);
 
-            // 禁用系统自动算法反色
+            // 模式状态跟随容器，同时禁用系统自动算法反色
+            boolean initDark = ThemeController.isDark(getApplicationContext());
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
-                    ws.setForceDark(WebSettings.FORCE_DARK_OFF);
+                    ws.setForceDark(initDark ? WebSettings.FORCE_DARK_ON : WebSettings.FORCE_DARK_OFF);
                 } catch (Throwable ignored) {}
             }
             if (Build.VERSION.SDK_INT >= 33) {
@@ -988,6 +989,19 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 boolean dark = ThemeController.isDark(context);
                 boolean immersive = new com.deepseekharness.app.core.ConfigStore(context).isSheetImmersive();
 
+                // 动态同步 WebView 内核深浅色模式，使 (prefers-color-scheme: dark) 真实跟随容器模式
+                WebSettings ws = sCachedWebView.getSettings();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        ws.setForceDark(dark ? WebSettings.FORCE_DARK_ON : WebSettings.FORCE_DARK_OFF);
+                    } catch (Throwable ignored) {}
+                }
+                if (Build.VERSION.SDK_INT >= 33) {
+                    try {
+                        ws.setAlgorithmicDarkeningAllowed(false);
+                    } catch (Throwable ignored) {}
+                }
+
                 String inputBg = dark ? "rgba(255, 255, 255, 0.06)" : "rgba(255, 255, 255, 0.75)";
                 String inputBorder = dark ? "rgba(255, 255, 255, 0.12)" : "rgba(0, 0, 0, 0.08)";
 
@@ -1068,18 +1082,43 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "[data-mobile-nav=\"frame\"] {\n"
                         + "  padding-top: 0px !important;\n"
                         + "}\n"
+                        + "/* ===== 全景下层遮挡自动隐身机制 ===== */\n"
+                        + "/* 当文件树抽屉、文档预览、侧边栏会话列表、模态弹窗或全屏看板等展开时，底层主会话流与贴底输入框自动隐身，彻底杜绝文字穿透与重叠 */\n"
+                        + "[data-mobile-nav=\"frame\"][data-aionui-preview-open] div[class*='pI_x6G_centerCol'],\n"
+                        + "[data-mobile-nav=\"frame\"][data-aionui-explorer-open] div[class*='pI_x6G_centerCol'],\n"
+                        + "[data-mobile-nav=\"frame\"]:not([data-sidebar-collapsed]) div[class*='pI_x6G_centerCol'],\n"
+                        + "body:has([aria-modal=\"true\"]) div[class*='pI_x6G_centerCol'],\n"
+                        + "html[data-dsh-taskboard-active] div[class*='pI_x6G_centerCol'],\n"
+                        + "html[data-dsh-ssh-active] div[class*='pI_x6G_centerCol'],\n"
+                        + "[data-mobile-nav=\"frame\"][data-aionui-preview-open] div[class*='_composerSeat'],\n"
+                        + "[data-mobile-nav=\"frame\"][data-aionui-explorer-open] div[class*='_composerSeat'],\n"
+                        + "[data-mobile-nav=\"frame\"]:not([data-sidebar-collapsed]) div[class*='_composerSeat'],\n"
+                        + "body:has([aria-modal=\"true\"]) div[class*='_composerSeat'],\n"
+                        + "html[data-dsh-taskboard-active] div[class*='_composerSeat'],\n"
+                        + "html[data-dsh-ssh-active] div[class*='_composerSeat'] {\n"
+                        + "  visibility: hidden !important;\n"
+                        + "  opacity: 0 !important;\n"
+                        + "  pointer-events: none !important;\n"
+                        + "}\n"
                         + "/* ===== 二层菜单与抽屉防穿透加固 ===== */\n"
-                        + "/* 1. 移动端左侧抽屉（会话侧边栏）：防穿透毛玻璃实体底座，消除双重重影 */\n"
+                        + "/* 1. 移动端左侧抽屉（会话侧边栏）：防穿透实体底座，严格剔除 backdrop-filter 防止破坏 fixed 弹窗包含块 */\n"
                         + "[data-mobile-nav=\"frame\"] > :first-child,\n"
                         + "div[class*='pI_x6G_sidebarCol'],\n"
                         + "div[class*='hHd-Xa_root'] {\n"
                         + "  background: var(--dsh-drawer-bg) !important;\n"
                         + "  background-color: var(--dsh-drawer-bg) !important;\n"
-                        + "  backdrop-filter: blur(20px) !important;\n"
-                        + "  -webkit-backdrop-filter: blur(20px) !important;\n"
                         + "  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3) !important;\n"
+                        + "  overflow-x: hidden !important;\n"
                         + "}\n"
-                        + "/* 2. 所有下拉菜单、选项列表、快捷操作卡片 */\n"
+                        + "/* 2. 移动端设置弹窗居中与全宽自适应加固 */\n"
+                        + "[aria-modal=\"true\"]:has(> :first-child > :last-child > button):not(:has([role=\"navigation\"])):not(:has([class*=\"ZuhsRW\"])) {\n"
+                        + "  box-sizing: border-box !important;\n"
+                        + "  left: 8px !important;\n"
+                        + "  right: 8px !important;\n"
+                        + "  width: calc(100vw - 16px) !important;\n"
+                        + "  max-width: calc(100vw - 16px) !important;\n"
+                        + "}\n"
+                        + "/* 3. 所有下拉菜单、选项列表、快捷操作卡片 */\n"
                         + "[role=\"menu\"],\n"
                         + "[role=\"listbox\"],\n"
                         + "div[class*='_menu'],\n"
@@ -1099,7 +1138,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "  border: 1px solid var(--dsh-menu-border) !important;\n"
                         + "  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35) !important;\n"
                         + "}\n"
-                        + "/* 3. 模态弹窗、设置面板与文件抽屉 */\n"
+                        + "/* 4. 模态弹窗、设置面板与文件抽屉 */\n"
                         + "[aria-modal=\"true\"],\n"
                         + "[role=\"dialog\"],\n"
                         + "div[class*='_dialog_w1urq'],\n"
@@ -1128,6 +1167,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                             + "  if (document.documentElement) document.documentElement.style.backgroundColor = '';\n"
                             + "  if (document.body) document.body.style.backgroundColor = '';\n")
                         + "  if (document.documentElement) {\n"
+                        + "    document.documentElement.style.colorScheme = " + (dark ? "'dark'" : "'light'") + ";\n"
                         + (dark
                                 ? "    document.documentElement.classList.add('dark'); document.documentElement.setAttribute('data-theme', 'dark');\n"
                                 : "    document.documentElement.classList.remove('dark'); document.documentElement.setAttribute('data-theme', 'light');\n")
