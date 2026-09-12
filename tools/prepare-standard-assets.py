@@ -69,7 +69,11 @@ def main():
         (output / "runtime-python" / name).unlink(missing_ok=True)
     # 用 bin 扩展名避免 aapt 展开 gzip；读取端按 magic 判断格式。
     for name in ("glibc-python", "adb-wheels"):
-        shutil.copyfile(source / (name + ".tar.gz"), output / (name + ".bin"))
+        src = source / (name + ".tar.gz")
+        if not src.is_file():
+            src = source / (name + ".bin")
+        if src.is_file():
+            shutil.copyfile(src, output / (name + ".bin"))
     if not rootfs.is_file():
         (output / "offline-rootfs.bin").unlink(missing_ok=True)
         (output.parent / "standard-assets-report.json").unlink(missing_ok=True)
