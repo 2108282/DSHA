@@ -91,6 +91,7 @@ public class QuickChatSheetActivity extends ComponentActivity {
     @SuppressLint("StaticFieldLeak")
     private static WebView sCachedWebView = null;
     private static boolean sWebLoaded = false;
+    private static long sLoadedGeneration = -1;
 
     private FrameLayout rootOverlay;
     private LinearLayout sheetCard;
@@ -386,18 +387,20 @@ public class QuickChatSheetActivity extends ComponentActivity {
         View btnNewChat = createHeaderIconButton(ICON_NEW_CHAT, textColor, "开启新对话");
         btnNewChat.setOnClickListener(v -> {
             if (sCachedWebView == null) return;
+
+            long currentGen = controller != null ? controller.getWebGeneration() : -1;
+            boolean serviceRestarted = sLoadedGeneration != currentGen && currentGen > 0;
             String curUrl = sCachedWebView.getUrl();
-            // 如果脱离了本地 3080 服务，直接强制重载回官方原生主页
-            if (curUrl == null || (!curUrl.startsWith("http://127.0.0.1:3080") && !curUrl.startsWith("http://localhost:3080"))) {
-                String authUrl = controller != null ? controller.getWebAuthUrl() : "";
-                if (authUrl != null && !authUrl.isEmpty()) {
-                    sCachedWebView.loadUrl(authUrl);
-                } else {
-                    sCachedWebView.loadUrl("http://127.0.0.1:3080/");
-                }
+            boolean detached = curUrl == null || (!curUrl.startsWith("http://127.0.0.1:3080") && !curUrl.startsWith("http://localhost:3080"));
+
+            // 【识别新 Token】：若底层服务已重启（Token 失效）、脱离了本地服务或此前未成功载入，
+            // 立即通过新 Token 重新加载主页并换新 Cookie，确保新对话与附件上传在最新有效凭证下进行
+            if (serviceRestarted || detached || !sWebLoaded) {
+                reloadWithLatestToken();
                 return;
             }
-            // 在本地服务内：优先触发 DOM 按钮新建会话，兜底清除 hash 并导向根路由
+
+            // 【常态丝滑】：在服务正常运行、Token 依然有效时，100% 走 DOM 毫秒级探测快速新建会话，零白屏不重载
             String js = "(function() {" +
                     "  var btn = document.querySelector('[class*=\"newSession\"], [aria-label*=\"新会话\"], [aria-label*=\"新建\"], button[title*=\"新会话\"], button[title*=\"New session\"], button[title*=\"New Chat\"]');" +
                     "  if (btn) {" +
@@ -861,6 +864,9 @@ public class QuickChatSheetActivity extends ComponentActivity {
             String authUrl = controller != null ? controller.getWebAuthUrl() : "";
             // 直接加载容器启动成功后固定不变的 LaunchToken 原生地址，彻底消除子线程换 Cookie 引起的超时白屏
             if (authUrl != null && !authUrl.isEmpty()) {
+                if (controller != null) {
+                    sLoadedGeneration = controller.getWebGeneration();
+                }
                 sCachedWebView.loadUrl(authUrl);
             } else {
                 if (progressBar != null) progressBar.setVisibility(View.VISIBLE);
@@ -874,6 +880,9 @@ public class QuickChatSheetActivity extends ComponentActivity {
                         }
                         String readyUrl = controller != null ? controller.getWebAuthUrl() : "";
                         if (readyUrl != null && !readyUrl.isEmpty()) {
+                            if (controller != null) {
+                                sLoadedGeneration = controller.getWebGeneration();
+                            }
                             runOnUiThread(() -> {
                                 if (sCachedWebView != null && !isFinishing() && !isDestroyed()) {
                                     sCachedWebView.loadUrl(readyUrl);
@@ -1059,6 +1068,78 @@ public class QuickChatSheetActivity extends ComponentActivity {
                 }
             }
             return true;
+        }
+    }
+
+    /**
+     * 智能刷新 Token 与鉴权 Cookie：
+     * 1. 重新从 Controller 换取最新的 dsh-auth-* Cookie 并写入 CookieManager（保证附件上传畅通）
+     * 2. 携带最新 launchtoken 重新 loadUrl（保证主框架鉴权成功）
+     */
+    private void reloadWithLatestToken() {
+        if (sCachedWebView == null || controller == null) return;
+        final long currentGen = controller.getWebGeneration();
+        if (progressBar != null) progressBar.setVisibility(View.VISIBLE);
+        authRetried = false;
+        sLoadedGeneration = currentGen;
+
+        new Thread(() -> {
+            String targetUrl = controller.getWebAuthUrl();
+            for (int step = 0; step < 25 && (targetUrl == null || targetUrl.isEmpty()); step++) {
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException ignored) {
+                    break;
+                }
+                targetUrl = controller.getWebAuthUrl();
+            }
+            if (targetUrl == null || targetUrl.isEmpty()) return;
+
+            final String finalUrl = targetUrl;
+            try {
+                String authCookie = controller.exchangeDshAuthCookie();
+                if (authCookie != null && !authCookie.isEmpty()) {
+                    android.webkit.CookieManager cookies = android.webkit.CookieManager.getInstance();
+                    String cookieVal = authCookie.contains(";") ? authCookie : (authCookie + "; Path=/; HttpOnly; SameSite=Lax");
+                    cookies.setCookie("http://127.0.0.1:3080/", cookieVal);
+                    cookies.flush();
+                }
+            } catch (Throwable ignored) {}
+
+            runOnUiThread(() -> {
+                if (sCachedWebView != null && !isFinishing() && !isDestroyed()) {
+                    sCachedWebView.loadUrl(finalUrl);
+                }
+            });
+        }, "token-cookie-sync").start();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (sCachedWebView != null) {
+            // 1. 唤醒 WebView 渲染管线与 JS 定时器
+            sCachedWebView.onResume();
+            sCachedWebView.resumeTimers();
+
+            // 2. 检查底层服务是否发生过重启（Token 是否已变更）
+            long currentGen = controller != null ? controller.getWebGeneration() : -1;
+            boolean serviceRestarted = sLoadedGeneration != currentGen && currentGen > 0;
+
+            if (!sWebLoaded || serviceRestarted) {
+                // 服务重启过或未曾加载成功：自动通过新 Token 重载并刷新 Cookie
+                reloadWithLatestToken();
+            }
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // 关键：抽屉退入后台/锁屏时，彻底冻结 JS 引擎与渲染管线，后台每秒心跳瞬间降为 0
+        if (sCachedWebView != null) {
+            sCachedWebView.onPause();
+            sCachedWebView.pauseTimers();
         }
     }
 
