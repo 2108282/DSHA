@@ -54,7 +54,7 @@ import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.activity.ComponentActivity;
+import androidx.appcompat.app.AppCompatActivity;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.core.view.ViewCompat;
@@ -83,7 +83,7 @@ import java.util.Arrays;
  * 9. 低位退出在动画完全结束后（onAnimationEnd）重置高度，彻底消除退出时的拉长闪屏。
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
-public class QuickChatSheetActivity extends ComponentActivity {
+public class QuickChatSheetActivity extends AppCompatActivity {
 
     public static final int ICON_CLOSE = 1;
     public static final int ICON_SETTINGS = 2;
@@ -1032,10 +1032,22 @@ public class QuickChatSheetActivity extends ComponentActivity {
                         + "  background-color: rgba(128, 128, 128, 0.06) !important;\n"
                         + "  border-color: rgba(128, 128, 128, 0.18) !important;\n"
                         + "}\n"
-                        + "/* 输入框底座：随透明开关自适应微透光渐变，彻底消除死黑死白底板，长文字滚动不穿帮 */\n"
+                        + "/* 消息视口：底部边界精确止于输入框上方，超出边界文字被 overflow 物理切断瞬间消失，绝不穿透到底部 */\n"
+                        + "div[class*='_scrollBody'] {\n"
+                        + "  margin-bottom: var(--dsh-composer-height, 148px) !important;\n"
+                        + "  overflow-y: auto !important;\n"
+                        + "  overflow-x: hidden !important;\n"
+                        + "}\n"
+                        + "/* 输入框底座：完全透明透光，绝对定位固定贴底，绝不使用实心色遮挡 */\n"
                         + "div[class*='_composerSeat'] {\n"
-                        + "  background: linear-gradient(180deg, transparent 0px, " + seatBg + " 24px) !important;\n"
+                        + "  position: absolute !important;\n"
+                        + "  bottom: 0 !important;\n"
+                        + "  left: 0 !important;\n"
+                        + "  right: 0 !important;\n"
+                        + "  z-index: 10 !important;\n"
+                        + "  background: transparent !important;\n"
                         + "  background-color: transparent !important;\n"
+                        + "  background-image: none !important;\n"
                         + "}\n"
                         + "/* 输入框卡片：半透明通透衬底，位置端正 */\n"
                         + "div[class*='uV2eYG_card'] {\n"
