@@ -165,4 +165,12 @@ public class ConfigStore {
     public void setUiTheme(String v) {
         prefs.edit().putString("ui_theme", com.deepseekharness.app.util.UiThemePreference.normalize(v)).apply();
     }
+
+    public boolean isSheetImmersive() {
+        return prefs.getBoolean("sheet_immersive", true);
+    }
+
+    public void setSheetImmersive(boolean v) {
+        prefs.edit().putBoolean("sheet_immersive", v).apply();
+    }
 }

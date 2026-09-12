@@ -76,6 +76,19 @@ public class SettingsFragment extends Fragment {
         v.findViewById(R.id.settings_update).setOnClickListener(x -> checkUpdate());
         v.findViewById(R.id.settings_selftest).setOnClickListener(x -> runSelftest());
         v.findViewById(R.id.settings_apply_patches).setOnClickListener(x -> confirmApplyPatches());
+
+        androidx.appcompat.widget.SwitchCompat immersiveSwitch = v.findViewById(R.id.settings_sheet_immersive_switch);
+        if (immersiveSwitch != null) {
+            ConfigStore cfg = new ConfigStore(requireContext());
+            immersiveSwitch.setChecked(cfg.isSheetImmersive());
+            v.findViewById(R.id.settings_sheet_immersive_row).setOnClickListener(x -> {
+                boolean next = !immersiveSwitch.isChecked();
+                immersiveSwitch.setChecked(next);
+                cfg.setSheetImmersive(next);
+                Toast.makeText(requireContext(), next ? "已开启抽屉沉浸全透明" : "已关闭抽屉沉浸全透明（使用经典背景）", Toast.LENGTH_SHORT).show();
+            });
+        }
+
         v.findViewById(R.id.settings_reextract).setOnClickListener(x -> confirmReextract());
 
         return v;
