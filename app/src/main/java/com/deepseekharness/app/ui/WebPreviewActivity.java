@@ -181,13 +181,16 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
             view.setWebViewClient(new PreviewClient());
             view.setWebChromeClient(new PreviewChromeClient());
             container.addView(view, new FrameLayout.LayoutParams(-1, -1));
+            // 确保总电闸处于推上状态，彻底消除从抽屉切入全屏时被全局 pauseTimers 冻结卡死
+            view.resumeTimers();
             CookieManager cookies = CookieManager.getInstance();
             cookies.setAcceptCookie(true);
             cookies.setAcceptThirdPartyCookies(view, false);
             if (authCookie != null && !authCookie.isEmpty()) {
                 // setCookie 是异步的：完成后才加载，避免首次进入偶发未认证。
-                cookies.setCookie(baseUrl, authCookie + "; Path=/; HttpOnly; SameSite=Strict", ok -> {
+                cookies.setCookie(baseUrl, authCookie + "; Path=/; HttpOnly; SameSite=Lax", ok -> {
                     if (webView != view || isFinishing() || isDestroyed()) return;
+                    view.resumeTimers();
                     view.loadUrl(Boolean.TRUE.equals(ok) ? baseUrl : authUrl);
                 });
             } else {
@@ -355,22 +358,43 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
         }
     }
 
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        authUrl = intent.getStringExtra(EXTRA_URL);
+        authCookie = intent.getStringExtra(EXTRA_COOKIE);
+        baseUrl = WebPreviewPolicy.loopbackBaseUrl(authUrl);
+        if (baseUrl != null) {
+            loadSession();
+        }
+    }
+
     @Override public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) WebFullscreenUi.hideSystemBars(this);
     }
 
     @Override protected void onPause() {
-        if (webView != null) webView.onPause();
+        if (webView != null) {
+            webView.onPause();
+            webView.pauseTimers();
+        }
         super.onPause();
     }
 
     @Override protected void onResume() {
         super.onResume();
-        if (webView != null) webView.onResume();
+        if (webView != null) {
+            webView.onResume();
+            webView.resumeTimers();
+        }
     }
 
     @Override protected void onDestroy() {
+        if (webView != null) {
+            webView.pauseTimers();
+        }
         destroyWebView();
         super.onDestroy();
     }
