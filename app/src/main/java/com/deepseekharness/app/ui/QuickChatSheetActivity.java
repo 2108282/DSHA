@@ -196,6 +196,13 @@ public class QuickChatSheetActivity extends ComponentActivity {
 
         Window window = getWindow();
         if (window != null) {
+            // 显式关闭系统沉浸式框架对 DecorView 的状态栏 Padding 注入，消除顶部多余空白行
+            WindowCompat.setDecorFitsSystemWindows(window, false);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                WindowManager.LayoutParams lp = window.getAttributes();
+                lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                window.setAttributes(lp);
+            }
             window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             window.setDimAmount(0.42f);
@@ -203,8 +210,13 @@ public class QuickChatSheetActivity extends ComponentActivity {
             // 采用 ADJUST_NOTHING：避免 Window 整体与卡片顶边被系统向上顶飞
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
             if (window.getDecorView() != null) {
+                window.getDecorView().setFitsSystemWindows(false);
                 window.getDecorView().setPadding(0, 0, 0, 0);
                 window.getDecorView().setBackgroundColor(Color.TRANSPARENT);
+                ViewCompat.setOnApplyWindowInsetsListener(window.getDecorView(), (v, insets) -> {
+                    v.setPadding(0, 0, 0, 0);
+                    return WindowInsetsCompat.CONSUMED;
+                });
             }
         }
 
@@ -215,8 +227,13 @@ public class QuickChatSheetActivity extends ComponentActivity {
         setContentView(buildUi());
         View content = findViewById(android.R.id.content);
         if (content != null) {
+            content.setFitsSystemWindows(false);
             content.setBackgroundColor(Color.TRANSPARENT);
             content.setPadding(0, 0, 0, 0);
+            ViewCompat.setOnApplyWindowInsetsListener(content, (v, insets) -> {
+                v.setPadding(0, 0, 0, 0);
+                return WindowInsetsCompat.CONSUMED;
+            });
         }
         setupGesture();
         setupKeyboardObserver();
@@ -290,12 +307,17 @@ public class QuickChatSheetActivity extends ComponentActivity {
         int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");
         int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
 
-        // 1. 根全屏透明遮罩容器（左右 100% 撑满）
+        // 1. 根全屏透明遮罩容器（左右 100% 撑满，彻底消费 WindowInsets 杜绝空行）
         rootOverlay = new FrameLayout(this);
         rootOverlay.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         rootOverlay.setBackgroundColor(Color.TRANSPARENT);
         rootOverlay.setPadding(0, 0, 0, 0);
+        rootOverlay.setFitsSystemWindows(false);
+        ViewCompat.setOnApplyWindowInsetsListener(rootOverlay, (v, insets) -> {
+            v.setPadding(0, 0, 0, 0);
+            return WindowInsetsCompat.CONSUMED;
+        });
 
         // 点击外部空白区域退出
         rootOverlay.setOnTouchListener((v, event) -> {
@@ -321,6 +343,7 @@ public class QuickChatSheetActivity extends ComponentActivity {
         sheetCard.setOrientation(LinearLayout.VERTICAL);
         sheetCard.setElevation(dpToPx(16));
         sheetCard.setClipChildren(true);
+        sheetCard.setFitsSystemWindows(false);
 
         // 24dp 顶部圆角毛玻璃半透背景 + 细微描边（一直覆盖到底部，键盘下方完全拥有同色垫板）
         GradientDrawable cardBg = new GradientDrawable();
@@ -965,22 +988,25 @@ public class QuickChatSheetActivity extends ComponentActivity {
                 boolean dark = ThemeController.isDark(context);
                 boolean immersive = new com.deepseekharness.app.core.ConfigStore(context).isSheetImmersive();
 
+                String seatBg = dark ? "rgba(16, 20, 27, 0.45)" : "rgba(245, 248, 252, 0.45)";
+                String inputBg = dark ? "rgba(255, 255, 255, 0.06)" : "rgba(255, 255, 255, 0.75)";
+                String inputBorder = dark ? "rgba(255, 255, 255, 0.12)" : "rgba(0, 0, 0, 0.08)";
+
                 String commonVars = "  --dsw-alias-bg-base: transparent !important;\n"
                         + "  --dsw-alias-bg-layer-1: transparent !important;\n"
                         + "  --dsw-alias-bg-layer-2: rgba(128, 128, 128, 0.05) !important;\n"
                         + "  --dsw-alias-bg-layer-3: rgba(128, 128, 128, 0.08) !important;\n"
                         + "  --dsw-specific-sidebar-fill: transparent !important;\n"
                         + "  --dsh-boot-bg: transparent !important;\n"
-                        + "  /* 任务完成横幅彻底透明 */\n"
+                        + "  /* 任务完成横幅彻底透明透光 */\n"
                         + "  --dsw-specific-tip: transparent !important;\n"
                         + "  --dsw-specific-menu: transparent !important;\n"
-                        + "  /* 输入框彻底透明 */\n"
-                        + "  --dsw-specific-input-major: transparent !important;\n"
                         + "  --dsw-specific-selector: transparent !important;\n"
                         + "  /* 代码块与行内代码半透微光，彻底消除不透明黑块 */\n"
                         + "  --dsw-alias-markdown-code-block: rgba(128, 128, 128, 0.08) !important;\n"
                         + "  --dsw-alias-markdown-code-block-banner: rgba(128, 128, 128, 0.05) !important;\n"
-                        + "  --dsw-alias-markdown-inline-code: rgba(128, 128, 128, 0.12) !important;\n";
+                        + "  --dsw-alias-markdown-inline-code: rgba(128, 128, 128, 0.12) !important;\n"
+                        + "  --dsw-specific-input-major: " + inputBg + " !important;\n";
 
                 String textColorVars = dark
                         ? "  --dsw-alias-label-primary: #E8ECF4 !important;\n  --dsw-alias-label-secondary: #A6B0C3 !important;\n"
@@ -990,16 +1016,32 @@ public class QuickChatSheetActivity extends ComponentActivity {
                         + "div[class*='_root'], div[class*='_wrap'], div[class*='_container'], "
                         + "div[class*='_boot'], div[class*='_onboardingStage'], div[class*='_stage'], "
                         + "div[class*='_scrollBody'], div[class*='_viewArea'], div[class*='_body'], "
-                        + "div[class*='_composerHero'], div[class*='_composerSeat'], div[class*='_dock'], "
-                        + "div[class*='_panel'], div[class*='lXshSW_root'], div[class*='uV2eYG_card'], "
-                        + "div[class*='uV2eYG_root'], pre, code, div[class*='_bannerWrap'], .md-code-block, "
+                        + "div[class*='_composerHero'], div[class*='_dock'], div[class*='_panel'], "
+                        + "pre, code, div[class*='_bannerWrap'], .md-code-block, "
                         + "header, section, article {\n"
                         + "  background: transparent !important;\n"
                         + "  background-color: transparent !important;\n"
                         + "  background-image: none !important;\n"
                         + "}\n"
-                        + ":root, html, body, body[data-ds-dark-theme], .dark {\n"
+                        + ":root, html, body, body[data-ds-dark-theme], .dark, [data-theme] {\n"
                         + commonVars + textColorVars
+                        + "}\n"
+                        + "/* 任务完成横幅：半透明微透光卡片，带精致圆角边框 */\n"
+                        + "div[class*='lXshSW_root'] {\n"
+                        + "  background: rgba(128, 128, 128, 0.06) !important;\n"
+                        + "  background-color: rgba(128, 128, 128, 0.06) !important;\n"
+                        + "  border-color: rgba(128, 128, 128, 0.18) !important;\n"
+                        + "}\n"
+                        + "/* 输入框底座：随透明开关自适应微透光渐变，彻底消除死黑死白底板，长文字滚动不穿帮 */\n"
+                        + "div[class*='_composerSeat'] {\n"
+                        + "  background: linear-gradient(180deg, transparent 0px, " + seatBg + " 24px) !important;\n"
+                        + "  background-color: transparent !important;\n"
+                        + "}\n"
+                        + "/* 输入框卡片：半透明通透衬底，位置端正 */\n"
+                        + "div[class*='uV2eYG_card'] {\n"
+                        + "  background: " + inputBg + " !important;\n"
+                        + "  background-color: " + inputBg + " !important;\n"
+                        + "  border: 1px solid " + inputBorder + " !important;\n"
                         + "}\n"
                         + "[data-mobile-nav=\"frame\"] {\n"
                         + "  padding-top: 0px !important;\n"
