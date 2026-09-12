@@ -14,6 +14,7 @@ public class DshaApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        com.deepseekharness.app.ui.ThemeController.apply(this);
         // 保证 3090 桥独立常驻（免 ADB / 免 Shizuku 原生通用通道），不依赖 ADB 开关
         HttpShellService.ensureStarted(this);
 

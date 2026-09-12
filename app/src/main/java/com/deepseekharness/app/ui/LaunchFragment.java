@@ -261,17 +261,15 @@ public class LaunchFragment extends Fragment {
             if (bound) {
                 String ip = HarnessController.getLanAddress();
                 if (ip != null && !ip.isEmpty()) {
-                    final String addr = "http://" + ip + ":" + LanProxyService.LAN_PORT + "/?token="
-                            + LanProxyService.getLanToken(requireContext());
-                    lanAddrText.setText("局域网地址：\n" + addr + "\n▸ 点此查看 Bridge Token 与本机访问凭据");
+                    lanAddrText.setText("🌐 局域网服务已就绪 · " + ip + ":" + LanProxyService.LAN_PORT + "\n▸ 点击查看/复制完整访问链接、Bridge Token 与凭据");
                 } else {
-                    lanAddrText.setText("局域网已开启（等待 WiFi）\n▸ 点此查看 Bridge Token 与本机凭据");
+                    lanAddrText.setText("🌐 局域网服务已开启（等待连接 WiFi）\n▸ 点击查看 Bridge Token 与本机访问凭据");
                 }
             } else {
-                lanAddrText.setText("局域网代理等待认证\n▸ 点此查看 Bridge Token 与本机凭据");
+                lanAddrText.setText("🌐 局域网代理正在等待本轮认证\n▸ 点击查看 Bridge Token 与本机访问凭据");
             }
         } else {
-            lanAddrText.setText("▸ 点击查看 Bridge Token 与本机/浏览器访问地址");
+            lanAddrText.setText("▸ 点击查看/复制 Bridge Token 与本机访问凭据");
         }
 
         lanAddrText.setOnClickListener(v -> showAccessCredentialsDialog());

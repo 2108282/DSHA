@@ -205,7 +205,8 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/gap_hair"
-                        android:text="Token 双轨鉴权 · Web 守卫 · 原子写入 · 局域网放行"
+                        android:lineSpacingExtra="2dp"
+                        android:text="Token 双轨鉴权 · Web 守卫放行 · 附件写入修复 · 插件软链自愈 · 局域网放行"
                         android:textColor="@color/text_muted"
                         android:textSize="@dimen/text_caption" />
                 </LinearLayout>

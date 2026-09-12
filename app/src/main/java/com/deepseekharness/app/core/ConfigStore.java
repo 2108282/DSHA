@@ -157,4 +157,12 @@ public class ConfigStore {
     public void setWorkdir(String v) {
         prefs.edit().putString(Constants.KEY_WORKDIR, v).apply();
     }
+
+    public String getUiTheme() {
+        return com.deepseekharness.app.util.UiThemePreference.normalize(prefs.getString("ui_theme", "system"));
+    }
+
+    public void setUiTheme(String v) {
+        prefs.edit().putString("ui_theme", com.deepseekharness.app.util.UiThemePreference.normalize(v)).apply();
+    }
 }

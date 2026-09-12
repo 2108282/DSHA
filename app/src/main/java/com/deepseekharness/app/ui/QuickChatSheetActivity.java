@@ -207,8 +207,7 @@ public class QuickChatSheetActivity extends ComponentActivity {
         }
 
         controller = HarnessController.get(this);
-        isDarkMode = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
-                == Configuration.UI_MODE_NIGHT_YES;
+        isDarkMode = ThemeController.isDark(this);
 
         calculateDimensions();
         setContentView(buildUi());
@@ -226,7 +225,23 @@ public class QuickChatSheetActivity extends ComponentActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        boolean dark = ThemeController.isDark(this);
+        if (dark != isDarkMode) {
+            isDarkMode = dark;
+            if (sheetCard != null) {
+                int cardBgColor = isDarkMode ? Color.parseColor("#EB161B24") : Color.parseColor("#EBF5F8FC");
+                int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
+                GradientDrawable cardBg = new GradientDrawable();
+                cardBg.setShape(GradientDrawable.RECTANGLE);
+                float r = dpToPx(24);
+                cardBg.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
+                cardBg.setColor(cardBgColor);
+                cardBg.setStroke(dpToPx(1), borderColor);
+                sheetCard.setBackground(cardBg);
+            }
+        }
         if (sCachedWebView != null) {
+            injectTransparentBackground(sCachedWebView);
             // 确保 WebView 100% 挂载在当前窗口的容器中，防止因生命周期波动导致 View 容器留空
             if (sCachedWebView.getParent() != webContainer) {
                 if (sCachedWebView.getParent() instanceof ViewGroup) {
@@ -834,6 +849,29 @@ public class QuickChatSheetActivity extends ComponentActivity {
             });
 
             sCachedWebView.setWebChromeClient(new SheetChromeClient());
+            sCachedWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
+                try {
+                    android.app.DownloadManager.Request request = new android.app.DownloadManager.Request(Uri.parse(url));
+                    request.setMimeType(mimetype);
+                    String cks = android.webkit.CookieManager.getInstance().getCookie(url);
+                    if (cks != null && !cks.isEmpty()) request.addRequestHeader("cookie", cks);
+                    request.addRequestHeader("User-Agent", userAgent);
+                    String fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimetype);
+                    request.setDescription("正在下载文件 " + fileName);
+                    request.setTitle(fileName);
+                    request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                    request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "DSHA/" + fileName);
+                    android.app.DownloadManager dm = (android.app.DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                    if (dm != null) {
+                        dm.enqueue(request);
+                        Toast.makeText(this, "开始下载：" + fileName + "（保存在 Download/DSHA/）", Toast.LENGTH_LONG).show();
+                    }
+                } catch (Throwable t) {
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                    } catch (Throwable ignored) {}
+                }
+            });
 
             android.webkit.CookieManager cookies = android.webkit.CookieManager.getInstance();
             cookies.setAcceptCookie(true);
@@ -937,7 +975,12 @@ public class QuickChatSheetActivity extends ComponentActivity {
                     "    document.head.appendChild(style);\n" +
                     "  }\n" +
                     "  style.innerHTML = css;\n" +
-                    "  if (document.documentElement) document.documentElement.style.backgroundColor = 'transparent';\n" +
+                    "  if (document.documentElement) {\n" +
+                    "    document.documentElement.style.backgroundColor = 'transparent';\n" +
+                    (isDarkMode
+                            ? "    document.documentElement.classList.add('dark'); document.documentElement.setAttribute('data-theme', 'dark');\n"
+                            : "    document.documentElement.classList.remove('dark'); document.documentElement.setAttribute('data-theme', 'light');\n") +
+                    "  }\n" +
                     "  if (document.body) document.body.style.backgroundColor = 'transparent';\n" +
                     "})();";
             view.evaluateJavascript(js, null);

@@ -59,6 +59,8 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
     private String browserInfo = "系统 WebView 版本未知";
     private boolean pageFailed;
     private boolean authRetried;
+    private WebDownloads downloads;
+    private WebBlobDownload blobDownload;
     private final java.util.ArrayList<java.io.File> uploads = new java.util.ArrayList<>();
 
     private final ActivityResultLauncher<Intent> filePicker = registerForActivityResult(
@@ -125,6 +127,7 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        downloads = new WebDownloads(this, savedInstanceState);
         setContentView(R.layout.activity_web_preview);
         WebFullscreenUi.install(this);
         container = findViewById(R.id.web_container);
@@ -180,6 +183,16 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
             }
             view.setWebViewClient(new PreviewClient());
             view.setWebChromeClient(new PreviewChromeClient());
+            view.setDownloadListener((url, agent, disposition, mime, length) -> {
+                if (!WebPreviewPolicy.sameService(baseUrl, view.getUrl())) return;
+                String name = android.webkit.URLUtil.guessFileName(url, disposition, mime);
+                if (url.startsWith("blob:") || url.startsWith("data:")) {
+                    if (blobDownload == null) blobDownload = new WebBlobDownload(view, downloads.model);
+                    blobDownload.start(baseUrl, url, name);
+                    return;
+                }
+                downloads.start(baseUrl, url, CookieManager.getInstance().getCookie(url), name, length, null);
+            });
             container.addView(view, new FrameLayout.LayoutParams(-1, -1));
             // 确保总电闸处于推上状态，彻底消除从抽屉切入全屏时被全局 pauseTimers 冻结卡死
             view.resumeTimers();
@@ -392,10 +405,20 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
     }
 
     @Override protected void onDestroy() {
+        if (downloads != null) downloads.dismiss();
+        if (blobDownload != null) {
+            blobDownload.close();
+            blobDownload = null;
+        }
         if (webView != null) {
             webView.pauseTimers();
         }
         destroyWebView();
         super.onDestroy();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle out) {
+        if (downloads != null) downloads.model.saveState(out);
+        super.onSaveInstanceState(out);
     }
 }

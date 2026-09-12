@@ -175,9 +175,22 @@ public class SettingsFragment extends Fragment {
         }
     }
     private void confirmApplyPatches() {
+        String msg = "【包含的全部修复功能】\n"
+                + "1. 写入与附件自愈：强制使用原子 rename 发布，根除 Android 容器禁止硬链接引起的写文件报错与图片/文件附件丢失 (ATTACHMENT_WRITE_FAILED)；\n"
+                + "2. Token 双轨鉴权：打通 dsh 官方 Launch Token 与 Cookie 校验，放行本地与跨设备访问凭据；\n"
+                + "3. Web 守卫放行：解决网页服务报 401 鉴权失效、死循环或白屏；\n"
+                + "4. 局域网放行：修复回环地址校验，使同一 WiFi 下其他设备正常加载设置与模型列表；\n"
+                + "5. 插件软链自愈：原生修复第三方插件 (如 dsh-agy) 与内置插件依赖，根除 ERR_MODULE_NOT_FOUND 报错。\n\n"
+                + "【什么时候使用此功能】\n"
+                + "· 刚导入外部备份包后，启动报模块找不到或插件报错时；\n"
+                + "· 网页打不开、卡在「正在验证 Web 访问权限」、报 401 鉴权失败时；\n"
+                + "· 发送图片或文件报错、历史附件无法加载时；\n"
+                + "· 局域网其他设备连上提示 settings are unavailable 时；\n"
+                + "· 升级核心被覆盖后的一键重置复原。";
+
         new AlertDialog.Builder(requireContext())
-                .setTitle("执行核心补丁修复")
-                .setMessage("将对容器依次执行 Token 双轨鉴权打通、Web 守卫放行、会话日志与图片附件原子写入修复。\n\n适用于升级 DSH 核心被覆盖或鉴权报错时一键恢复。")
+                .setTitle("核心运行与鉴权修复")
+                .setMessage(msg)
                 .setPositiveButton("开始修复", (d, w) -> runApplyPatches())
                 .setNegativeButton("取消", null)
                 .show();

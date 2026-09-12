@@ -37,12 +37,27 @@
             android:layout_marginStart="@dimen/gap_control"
             android:text="启动" />
 
-        <!-- 标题右侧的弹性占位：把「关于」挤到最右 -->
+        <!-- 标题右侧的弹性占位：把主题与「关于」挤到最右 -->
         <View
             android:id="@+id/appbar_spacer"
             android:layout_width="0dp"
             android:layout_height="1dp"
             android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/btn_theme"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:layout_marginEnd="8dp"
+            android:background="@drawable/bg_chip_clickable"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="黑夜"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
 
         <FrameLayout
             android:id="@+id/btn_about"

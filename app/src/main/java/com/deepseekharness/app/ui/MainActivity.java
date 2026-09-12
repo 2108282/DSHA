@@ -74,6 +74,12 @@ public class MainActivity extends AppCompatActivity {
         }
 
         TextView title = findViewById(R.id.app_title);
+        TextView themeBtn = findViewById(R.id.btn_theme);
+        if (themeBtn != null) {
+            boolean dark = ThemeController.isDark(this);
+            themeBtn.setText(dark ? "☀️ 白天" : "🌙 黑夜");
+            themeBtn.setOnClickListener(v -> ThemeController.toggle(this));
+        }
         findViewById(R.id.btn_about).setOnClickListener(v -> AboutDialog.show(this));
 
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
