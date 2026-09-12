@@ -577,16 +577,17 @@ public class ProotBootstrap {
                         for (File up : userPlugins) {
                             if (!up.isDirectory()) continue;
                             String pname = up.getName();
+                            String vPath = "/root/.dsh/plugin-src/" + pname;
                             // 1. 全局软链：/usr/local/lib/node_modules/<pname> -> /root/.dsh/plugin-src/<pname>
                             File gLink = new File(globalNm, pname);
                             if (!gLink.exists()) {
-                                try { Compat.symlink(up.getAbsolutePath(), gLink); } catch (Throwable ignored) {}
+                                try { Compat.symlink(vPath, gLink); } catch (Throwable ignored) {}
                             }
                             // 2. profile 局部软链：/root/.dsh/profiles/web/node_modules/<pname>
                             if (profNm.isDirectory()) {
                                 File pLink = new File(profNm, pname);
                                 if (!pLink.exists()) {
-                                    try { Compat.symlink(up.getAbsolutePath(), pLink); } catch (Throwable ignored) {}
+                                    try { Compat.symlink(vPath, pLink); } catch (Throwable ignored) {}
                                 }
                             }
                             // 3. 确保第三方插件的 node_modules 是真实目录，并精准建立 @deepseek-ai 子软链

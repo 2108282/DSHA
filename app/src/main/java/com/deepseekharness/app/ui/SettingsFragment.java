@@ -206,8 +206,8 @@ public class SettingsFragment extends Fragment {
                 String r4 = controller.proot().runAssetBashScript("lan-bind-patch.sh", 60_000);
                 report.append("· 局域网放行: ").append(r4.contains("PATCHED") || r4.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r4.isEmpty() ? "完成" : r4.trim())).append("\n");
 
-                controller.proot().ensureBuiltinPluginEntities();
-                report.append("· 插件全局与依赖软链: ✅ 已修复就绪");
+                String r5 = controller.proot().runAssetBashScript("dsha-plugin-heal.sh", 60_000);
+                report.append("· 插件全局与依赖软链自愈: ").append(r5.contains("OK") ? "✅ 已就绪" : "⚠️ 完成");
             } catch (Throwable e) {
                 report.append("执行异常: ").append(e.getMessage());
             }

@@ -866,6 +866,70 @@ def restore_workspaces(stage, root):
     return False
 
 
+def heal_plugin_links(root):
+    """恢复完成后在 Linux 原生层自动为所有内置与第三方插件补齐软链，彻底根除 ERR_MODULE_NOT_FOUND。"""
+    target_nm = "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai"
+    global_nm = "/usr/local/lib/node_modules"
+    prof_nm = os.path.join(root, ".dsh", "profiles", "web", "node_modules")
+    try:
+        os.makedirs(prof_nm, exist_ok=True)
+        os.makedirs(global_nm, exist_ok=True)
+    except Exception:
+        pass
+
+    # 1. 修复第三方插件 (如 dsh-agy)
+    src_dir = os.path.join(root, ".dsh", "plugin-src")
+    if os.path.isdir(src_dir):
+        try:
+            entries = os.listdir(src_dir)
+        except Exception:
+            entries = []
+        for name in entries:
+            p = os.path.join(src_dir, name)
+            if not os.path.isdir(p):
+                continue
+            _force_symlink(p, os.path.join(global_nm, name))
+            _force_symlink(p, os.path.join(prof_nm, name))
+            p_nm = os.path.join(p, "node_modules")
+            if os.path.islink(p_nm):
+                try: os.unlink(p_nm)
+                except Exception: pass
+            try: os.makedirs(p_nm, exist_ok=True)
+            except Exception: pass
+            _force_symlink(target_nm, os.path.join(p_nm, "@deepseek-ai"))
+
+    # 2. 修复内置插件
+    for name in ["dsh-device-shell-guide", "dsh-status-overlay", "dsh-task-notifier", "dsh-web-mobile"]:
+        p = os.path.join(root, "dsha-" + (name[4:] if name.startswith("dsh-") else name))
+        if not os.path.isdir(p):
+            continue
+        _force_symlink(p, os.path.join(global_nm, name))
+        _force_symlink(p, os.path.join(prof_nm, name))
+        p_nm = os.path.join(p, "node_modules")
+        if os.path.islink(p_nm):
+            try: os.unlink(p_nm)
+            except Exception: pass
+        try: os.makedirs(p_nm, exist_ok=True)
+        except Exception: pass
+        _force_symlink(target_nm, os.path.join(p_nm, "@deepseek-ai"))
+
+
+def _force_symlink(target, link_path):
+    try:
+        if os.path.islink(link_path):
+            if os.readlink(link_path) == target:
+                return
+            os.unlink(link_path)
+        elif os.path.lexists(link_path):
+            if os.path.isdir(link_path):
+                shutil.rmtree(link_path, ignore_errors=True)
+            else:
+                os.unlink(link_path)
+        os.symlink(target, link_path)
+    except Exception:
+        pass
+
+
 def ensure_workspace_dirs(root):
     """恢复后按 workspace.json 里的工作区路径补建目录，防止 dsh 剪会话。
 
@@ -986,6 +1050,7 @@ def main():
     # 界面里消失）。备份只带 .dsh、不带工作目录，这一步必须在 dsh 启动前做。
     if os.path.isdir(os.path.join(root, ".dsh")):
         ensure_workspace_dirs(root)
+        heal_plugin_links(root)
     if not retain_stage:
         try:
             shutil.rmtree(stage, ignore_errors=True)
