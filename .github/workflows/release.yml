@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的 tag（如 1.2.0-rc1.3-test1 或 v1.2.0-rc1.3-test1）'
+        description: '要发布的 tag（如 1.2.0-rc1.3-update2 或 v1.2.0-rc1.3-update2）'
         required: false
-        default: '1.2.0-rc1.3-test1'
+        default: '1.2.0-rc1.3-update2'
       prerelease:
         description: '标记为预发布'
         type: boolean
@@ -53,16 +53,31 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Fetch offline rootfs asset from official release
+      - name: Fetch prebuilt offline rootfs from own release
         run: |
           set -euo pipefail
+          mkdir -p app/src/main/assets
+          BASE_TAG="0.1.5rc1-base"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
+
           if [ ! -f "app/src/main/assets/offline-rootfs.bin" ]; then
-            echo "==> Downloading official rc1.3 APK to extract offline-rootfs.bin..."
-            curl -L -f -o /tmp/dsha-official.apk "https://github.com/DSH-APP/DSHA/releases/download/v1.2.0-rc1.3/dsha-1.2.0-rc1.3.apk"
-            unzip -p /tmp/dsha-official.apk "assets/offline-rootfs.bin" > app/src/main/assets/offline-rootfs.bin
-            rm -f /tmp/dsha-official.apk
+            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 offline-rootfs.bin..."
+            curl -L -f -o app/src/main/assets/offline-rootfs.bin "${BASE_URL}/offline-rootfs.bin"
           fi
+
+          if [ ! -f "app/src/main/assets/dsh-runtime.bin" ]; then
+            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 dsh-runtime.bin..."
+            curl -L -f -o app/src/main/assets/dsh-runtime.bin "${BASE_URL}/dsh-runtime.bin"
+          fi
+
+          if [ ! -f "app/src/main/assets/offline-rootfs.layout" ]; then
+            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 offline-rootfs.layout..."
+            curl -L -f -o app/src/main/assets/offline-rootfs.layout "${BASE_URL}/offline-rootfs.layout"
+          fi
+
           ls -lh app/src/main/assets/offline-rootfs.bin
+          ls -lh app/src/main/assets/dsh-runtime.bin
+          cat app/src/main/assets/offline-rootfs.layout
 
       - name: Prepare release signing key
         env:
@@ -105,12 +120,12 @@ jobs:
           elif [ -n "${{ inputs.tag }}" ]; then
             TAG_VAL="${{ inputs.tag }}"
           else
-            TAG_VAL="1.2.0-rc1.3-test1"
+            TAG_VAL="1.2.0-rc1.3-update2"
           fi
           echo "value=$TAG_VAL" >> "$GITHUB_OUTPUT"
 
-          VN=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle | head -1 || echo "1.2.0-rc1.3-test1")
-          VC=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle | head -1 || echo "113")
+          VN=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle | head -1 || echo "1.2.0-rc1.3-update2")
+          VC=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle | head -1 || echo "114")
           echo "versionName=$VN" >> "$GITHUB_OUTPUT"
           echo "versionCode=$VC" >> "$GITHUB_OUTPUT"
 
@@ -134,7 +149,7 @@ jobs:
           prerelease: ${{ inputs.prerelease || true }}
           generate_release_notes: true
           body: |
-            **仅支持 arm64 / Android 11+**，APK 已内置完整 Linux rootfs 离线环境。
+            **仅支持 arm64 / Android 11+**，APK 已内置完整 Linux rootfs 离线环境与自主底包。
 
             ```
             versionName  ${{ steps.tag.outputs.versionName }}
@@ -143,13 +158,20 @@ jobs:
             ```
 
             ### 核心更新与修复说明
-            - **内置完整离线环境**：包含官方 1.2.0 离线 rootfs 资产，开箱即用；
-            - **QuickChat 快捷对话抽屉**：彻底修复背景半透明、输入法自适应防顶飞、LaunchToken 原生直连秒开、防死循环；
-            - **Shizuku 与无线 ADB 双通道**：恢复标准 `ShizukuProvider` 握手通道，升级 SDK 13.1.5，支持 root/KernelSU 特权；
-            - **全场景任务中断统一监听**：移除停止静音，拦截模型偷懒，异常全场景捕获；
-            - **极速容器运行时 proroot**：修复环境与进程判据，大幅降低 CPU 开销与发热。
+            - **内置自主掌控 0.1.5-rc.2 离线底包**：开箱即用，全面摆脱外部依赖，内置核心运行与自愈补丁；
+            - **QuickChat 快捷对话抽屉全景沉浸**：
+              - 消除顶部状态栏空白条，全屏顶格沉浸；
+              - 继承 AppCompatActivity 完美联动日夜间模式，日间视口彻底透明透光、黑夜代码块与输入框半透明微光；
+              - 输入框底座全透明，采用视口二段物理截断（margin-bottom 联动），长对话滚动至输入框上方自然消失，彻底杜绝穿透与重叠；
+              - 设置页新增【快捷抽屉沉浸全透明】独立开关，输入框底座自适应微透光；
+            - **pnpm 包管理器全局部署与离线自愈**：安装与修复时同步部署到 `/usr/local/bin/pnpm` 系统全局路径，彻底根治插件管理器找不到 pnpm 报错；
+            - **局域网访问与 Token 永久固定**：局域网访问 Token 永久持久化，重启不重置；
+            - **Web 预览与下载能力增强**：支持网页文件及 Blob 链接原生下载与安全校验，恢复 `resumeTimers` 杜绝卡白屏；
+            - **插件架构与自愈强化**：规范第三方插件真实目录，自动建立 `@deepseek-ai` 软链自愈，植入 3 秒极速启动缓存；
+            - **备份恢复全量覆盖**：图片与文件附件库（attachments）正式纳入全量备份，修复对话索引与工作区丢失；
+            - **功耗与心跳彻底优化**：熄屏无任务自动释放 WakeLock 与 Wi-Fi 锁，深度休眠不发热不偷跑电，后台有长任务时自动稳固持锁。
 
-            面向开发者的完整修改清单与代码对照见仓库 `test修补/1.2.0test.md`。
+            面向开发者的完整修改清单与白皮书见仓库 `test修补/` 目录。
           files: |
             ${{ steps.apk.outputs.file }}
             ${{ steps.apk.outputs.file }}.sha256

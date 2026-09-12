@@ -1,6 +1,6 @@
-# DSHA 1.2.0-rc1.3-update 核心修复与底包换装技术总结文档
+# DSHA 1.2.0-rc1.3-update2 核心修复与底包换装技术总结文档
 
-本文档记录了基于 `1.2.0rc1test` 分支排查定位并彻底修复的全部核心功能缺陷、系统底层根因、以及将离线底包独立换装固化为 `@deepseek-ai/dsh@0.1.5-rc.2` 的完整技术细节。
+本文档记录了基于 `test` 分支排查定位并彻底修复的全部核心功能缺陷、系统底层根因、以及将离线底包独立换装固化为 `@deepseek-ai/dsh@0.1.5-rc.2` 的完整技术细节。
 
 ---
 
@@ -13,6 +13,7 @@
 6. 离线底包脱钩换装为锁定的 `dsh 0.1.5-rc.2`（出厂即固化，覆盖自动感知）
 7. 智能体多步任务与 UI 进度卡片实时同步强执行纪律（`AGENTS.md`）
 8. 修改与新增文件清单全览
+9. 1.2.0-rc1.3-update2 增量综合修复升级说明
 
 ---
 
@@ -141,4 +142,28 @@ ReferenceError: link is not defined
 | `app/src/main/java/com/deepseekharness/app/util/Constants.java` | 修改 | DSH_VERSION 锁定为 0.1.5-rc.2 |
 | `app/src/main/assets/offline-rootfs.version` | 新增 | 版本标记为 11，支持覆盖安装自动识别 |
 | `.github/workflows/android-build.yml` | 修改 | 直接从自身 Release 拉取 0.1.5-rc.2 现成底包，脱离外部依赖 |
+| `app/build.gradle` | 修改 | 版本升级为 1.2.0-rc1.3-update2，versionCode 114 |
+| `.github/workflows/release.yml` | 修改 | 对齐自身 Release 0.1.5rc1-base 底包资产下载与 release 发布说明 |
 | `AGENTS.md` | 修改 | 写入任务进度实时同步强执行纪律规范 |
+
+---
+
+## 9. 1.2.0-rc1.3-update2 增量综合修复升级说明
+
+1. **QuickChat 快捷对话抽屉全景沉浸全透明**：
+   - 消除顶部状态栏空白条，全屏顶格沉浸；
+   - 继承 `AppCompatActivity` 完美联动日夜间模式，日间视口彻底透明透光、黑夜代码块与输入框半透明微光；
+   - 输入框底座全透明，采用视口二段物理截断（`margin-bottom` 联动），长对话滚动至输入框上方自然消失，彻底杜绝穿透与重叠；
+   - 设置页新增【快捷抽屉沉浸全透明】独立开关，输入框底座自适应微透光。
+2. **pnpm 包管理器全局部署与离线自愈**：
+   - 安装与修复时同步将执行入口部署到 `/usr/local/bin/pnpm` 系统全局路径，彻底根治插件管理器找不到 pnpm 报错。
+3. **局域网访问与 Token 永久固定**：
+   - 局域网访问 Token 永久持久化，重启不重置，启动页增加重新生成按钮。
+4. **Web 预览与下载能力增强**：
+   - 支持网页文件及 Blob 链接原生下载与安全校验，恢复 `resumeTimers` 杜绝卡白屏。
+5. **插件架构与自愈强化**：
+   - 规范第三方插件真实目录，自动建立 `@deepseek-ai` 软链自愈，植入 3 秒极速启动缓存。
+6. **备份恢复全量覆盖**：
+   - 图片与文件附件库（attachments）正式纳入全量备份，修复对话索引与工作区丢失。
+7. **功耗与心跳彻底优化**：
+   - 熄屏无任务自动释放 WakeLock 与 Wi-Fi 锁，深度休眠不发热不偷跑电，后台有长任务时自动稳固持锁。
