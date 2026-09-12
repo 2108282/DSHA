@@ -1174,17 +1174,33 @@ public class ProotBootstrap {
                 if (!entry.isFile()) throw new IOException("离线 pnpm 入口缺失");
                 Compat.write(marker, "10.34.5\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
+            byte[] pnpmWrapperScript = ("#!/bin/sh\n"
+                    + "exec /usr/local/bin/node /usr/local/lib/dsha-pnpm/bin/pnpm.cjs \"$@\"\n")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+            // 1. 保留 /root/dsh-bin/pnpm 兼容入口
             File wrapper = new File(stage, "root/dsh-bin/pnpm");
-            if (!wrapper.isFile() || wrapper.length() == 0) {
+            if (!wrapper.isFile() || wrapper.length() == 0 || Compat.isSymbolicLink(wrapper)) {
                 File directory = wrapper.getParentFile();
                 if (!directory.isDirectory() && !directory.mkdirs())
                     throw new IOException("无法创建 pnpm 命令目录");
                 if ((wrapper.exists() || Compat.isSymbolicLink(wrapper)) && !wrapper.delete())
                     throw new IOException("无法更新 pnpm 命令入口");
-                Compat.write(wrapper, ("#!/bin/sh\n"
-                        + "exec /usr/local/bin/node /usr/local/lib/dsha-pnpm/bin/pnpm.cjs \"$@\"\n")
-                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                Compat.write(wrapper, pnpmWrapperScript);
                 wrapper.setExecutable(true, false);
+            }
+
+            // 2. 关键修复：同步将执行入口部署至全局标准路径 /usr/local/bin/pnpm！
+            // 彻底解决终端、插件管理器 (plugin-manager.py / shutil.which) 在默认系统 PATH 找不到 pnpm 的问题
+            File usrBinPnpm = new File(stage, "usr/local/bin/pnpm");
+            if (!usrBinPnpm.isFile() || usrBinPnpm.length() == 0 || Compat.isSymbolicLink(usrBinPnpm)) {
+                File directory = usrBinPnpm.getParentFile();
+                if (!directory.isDirectory() && !directory.mkdirs())
+                    throw new IOException("无法创建 /usr/local/bin 目录");
+                if ((usrBinPnpm.exists() || Compat.isSymbolicLink(usrBinPnpm)) && !usrBinPnpm.delete())
+                    throw new IOException("无法更新 /usr/local/bin/pnpm 命令入口");
+                Compat.write(usrBinPnpm, pnpmWrapperScript);
+                usrBinPnpm.setExecutable(true, false);
             }
         }
     }
