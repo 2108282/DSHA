@@ -173,7 +173,7 @@ public class HarnessController {
                 + "echo $$ > " + WebProcSel.PID_WEB + " 2>/dev/null; "
                 // 先写 PID 再查哨兵：停止方先写哨兵再读 PID，两边不会同时漏过。
                 + "[ ! -e " + WebProcSel.STOP_SENTINEL + " ] || exit 0; "
-                + "exec dsh web --no-open --patch /root/.dsh/heartbeat-patch.yml --host 127.0.0.1 --port "
+                + "exec dsh web --patch /root/.dsh/heartbeat-patch.yml --no-open --host 127.0.0.1 --port "
                 + config.getPortInt() + " 2>&1";
     }
 
