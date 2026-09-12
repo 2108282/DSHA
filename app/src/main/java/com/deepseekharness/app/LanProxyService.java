@@ -274,6 +274,9 @@ public final class LanProxyService {
         getLanToken(ctx);
         if (!isValidLanToken(lanToken)) return;
         logPath = rootfsDir == null ? "" : rootfsDir + "/root/dsh-lan.log";
+        try {
+            com.deepseekharness.app.core.HarnessController.get(ctx).ensureHeartbeatPatch();
+        } catch (Throwable ignored) {}
         ExecutorService executor = Executors.newFixedThreadPool(8, r -> {
             Thread t = new Thread(r, "dsha-lan-proxy");
             t.setDaemon(true);

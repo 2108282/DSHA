@@ -35,6 +35,8 @@ public class HarnessService extends Service {
 
     private HarnessController c;
     private HttpShellService shellHttp;
+    public static volatile HarnessService currentInstance;
+    private android.content.BroadcastReceiver screenReceiver;
 
     // ================= WebUI 监听保活 =================
     private Thread keepAliveThread;
@@ -52,6 +54,7 @@ public class HarnessService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        currentInstance = this;
         c = HarnessController.get(this);
         createChannel();
         try {
@@ -111,11 +114,16 @@ public class HarnessService extends Service {
         stopSelf();
     }
 
-    // ================= 息屏保活 =================
+    // ================= 息屏保活与动态休眠 =================
 
     private synchronized void acquireLocks() {
         try {
             android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            boolean isInteractive = pm != null && pm.isInteractive();
+            if (!isInteractive && !isTaskRunning()) {
+                // 屏幕熄灭且当前无正在执行的任务：不持锁，允许系统进入深度睡眠（Doze / Suspend）
+                return;
+            }
             if (pm != null && (wakeLock == null || !wakeLock.isHeld())) {
                 wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "DSHA:web");
                 wakeLock.setReferenceCounted(false);
@@ -148,11 +156,77 @@ public class HarnessService extends Service {
         wifiLock = null;
     }
 
+    private void startScreenWatcher() {
+        if (screenReceiver != null) return;
+        try {
+            screenReceiver = new android.content.BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    if (intent == null || intent.getAction() == null) return;
+                    String action = intent.getAction();
+                    if (Intent.ACTION_SCREEN_OFF.equals(action)) {
+                        // 熄屏：若无后台任务在跑，立即释放 WakeLock 与 WifiLock，系统进入深度休眠
+                        if (!isTaskRunning()) {
+                            releaseLocks();
+                            android.util.Log.i("DSHA", "[保活] 屏幕熄灭且无运行任务，已释放锁进入休眠");
+                        }
+                    } else if (Intent.ACTION_SCREEN_ON.equals(action) || Intent.ACTION_USER_PRESENT.equals(action)) {
+                        // 亮屏/解锁：重新持锁保证前台极速响应
+                        acquireLocks();
+                        android.util.Log.i("DSHA", "[保活] 屏幕亮起，已重新持有 WakeLock/WifiLock");
+                    }
+                }
+            };
+            android.content.IntentFilter filter = new android.content.IntentFilter();
+            filter.addAction(Intent.ACTION_SCREEN_OFF);
+            filter.addAction(Intent.ACTION_SCREEN_ON);
+            filter.addAction(Intent.ACTION_USER_PRESENT);
+            registerReceiver(screenReceiver, filter);
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "注册屏幕状态监听失败: " + e.getMessage());
+        }
+    }
+
+    private void stopScreenWatcher() {
+        if (screenReceiver != null) {
+            try {
+                unregisterReceiver(screenReceiver);
+            } catch (Throwable ignored) {}
+            screenReceiver = null;
+        }
+    }
+
+    private boolean isTaskRunning() {
+        return HttpShellService.isTaskActive;
+    }
+
+    public void checkAndReleaseLocksIfIdle() {
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && !pm.isInteractive() && !isTaskRunning()) {
+                releaseLocks();
+                android.util.Log.i("DSHA", "[保活] 任务结束且处于熄屏状态，已释放锁进入休眠");
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    public static void onTaskStateChanged(Context ctx, boolean running) {
+        HarnessService s = currentInstance;
+        if (s != null) {
+            if (running) {
+                s.acquireLocks();
+            } else {
+                s.checkAndReleaseLocksIfIdle();
+            }
+        }
+    }
+
     // ================= 看门狗 =================
 
     private void startKeepAlive() {
         stopKeepAlive();
         acquireLocks();
+        startScreenWatcher();
         keepAliveRunning = true;
         keepAliveThread = new Thread(() -> {
             int fail = 0;
@@ -168,6 +242,12 @@ public class HarnessService extends Service {
                         // 只在用户停止时释放；下次手动启动由 startKeepAlive 重新取锁。
                         if (c.isUserStopped()) releaseLocks();
                     }
+                    fail = 0;
+                    continue;
+                }
+                android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+                if (pm != null && !pm.isInteractive() && !isTaskRunning()) {
+                    // 屏幕熄灭且无任务在跑：跳过主动探活，让进程与网络协议栈完全休眠
                     fail = 0;
                     continue;
                 }
@@ -207,6 +287,7 @@ public class HarnessService extends Service {
     }
 
     private void stopKeepAlive() {
+        stopScreenWatcher();
         releaseLocks();
         keepAliveRunning = false;
         if (keepAliveThread != null) {
@@ -233,6 +314,7 @@ public class HarnessService extends Service {
 
     @Override
     public void onDestroy() {
+        if (currentInstance == this) currentInstance = null;
         stopKeepAlive();
         if (shellHttp != null) {
             try {

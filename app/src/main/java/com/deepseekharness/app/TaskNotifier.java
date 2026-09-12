@@ -92,6 +92,8 @@ public class TaskNotifier {
     }
 
     private void notifyDone() {
+        HttpShellService.isTaskActive = false;
+        HarnessService.onTaskStateChanged(ctx, false);
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) {
             nm.cancel(Constants.NOTIF_TASK_RUNNING);

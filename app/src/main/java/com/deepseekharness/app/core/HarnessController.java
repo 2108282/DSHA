@@ -140,6 +140,24 @@ public class HarnessController {
         return webAuthUrl;
     }
 
+    /**
+     * 写入动态 WebSocket 心跳补丁：
+     * 纯本机模式彻底关闭心跳 (2147483647ms)，局域网模式 120s 防路由器断连。
+     */
+    public void ensureHeartbeatPatch() {
+        try {
+            File patchFile = new File(proot.getRootfsDir(), "root/.dsh/heartbeat-patch.yml");
+            if (patchFile.getParentFile() != null) patchFile.getParentFile().mkdirs();
+            int interval = config.isLanMode() ? 120_000 : 2147483647;
+            String content = "- id: typert-gateway\n"
+                    + "  config:\n"
+                    + "    websocketHeartbeatIntervalMs: " + interval + "\n";
+            Compat.write(patchFile, content.getBytes(StandardCharsets.UTF_8));
+        } catch (Throwable e) {
+            Log.w("DSHA", "写入心跳补丁失败: " + e.getMessage());
+        }
+    }
+
     /** dsh 实际启动命令（写 pid 文件要在 exec 之前，exec 不换 pid）。 */
     public String runCoreCommand() {
         String apiKey = config.getApiKey();
@@ -155,7 +173,7 @@ public class HarnessController {
                 + "echo $$ > " + WebProcSel.PID_WEB + " 2>/dev/null; "
                 // 先写 PID 再查哨兵：停止方先写哨兵再读 PID，两边不会同时漏过。
                 + "[ ! -e " + WebProcSel.STOP_SENTINEL + " ] || exit 0; "
-                + "exec dsh web --no-open --host 127.0.0.1 --port "
+                + "exec dsh web --no-open --patch /root/.dsh/heartbeat-patch.yml --host 127.0.0.1 --port "
                 + config.getPortInt() + " 2>&1";
     }
 
@@ -244,6 +262,7 @@ public class HarnessController {
                 } catch (Exception ignored) {
                 }
             }
+            ensureHeartbeatPatch();
             Process p = proot.execRootfs(runCoreCommand());
             // 3090 桥就绪：agent 在容器里调设备能力（/exec /confirm /status）走这条通道。
             // 跨实例互斥，DeviceBridgeService 已起过则是幂等 no-op。

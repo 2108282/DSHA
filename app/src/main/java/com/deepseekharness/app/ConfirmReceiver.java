@@ -85,6 +85,8 @@ public class ConfirmReceiver extends BroadcastReceiver {
     }
 
     private void handleStopTask(Context ctx) {
+        HttpShellService.isTaskActive = false;
+        HarnessService.onTaskStateChanged(ctx, false);
         // 1. 取消运行中实时状态通知
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) {

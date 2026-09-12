@@ -70,6 +70,9 @@ public final class HttpShellService {
      *  否则那个没绑上端口的实例一被销毁就会把真桥的状态清掉。 */
     private volatile boolean owner;
 
+    /** 宿主当前是否有后台任务正在活跃运行（供息屏自动休眠判定用） */
+    public static volatile boolean isTaskActive = false;
+
     private final Context ctx;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private volatile CountDownLatch pendingLatch;
@@ -2039,6 +2042,8 @@ public final class HttpShellService {
 
     private void showRunningNotification(String title, String text) {
         try {
+            isTaskActive = true;
+            HarnessService.onTaskStateChanged(ctx, true);
             if ("💬 助手提问".equals(title) || "等待回答".equals(title) ||
                 (text != null && (text.contains("ask_user") || text.contains("ask_question"))) ||
                 (title != null && (title.contains("ask_user") || title.contains("ask_question")))) {
@@ -2102,6 +2107,8 @@ public final class HttpShellService {
 
     private void cancelRunningNotification() {
         try {
+            isTaskActive = false;
+            HarnessService.onTaskStateChanged(ctx, false);
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.cancel(Constants.NOTIF_TASK_RUNNING);
         } catch (Throwable ignored) {}
