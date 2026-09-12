@@ -57,6 +57,9 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -193,6 +196,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         Window window = getWindow();
         if (window != null) {
+            // 显式关闭系统沉浸式框架对 DecorView 的状态栏 Padding 注入，消除顶部多余空白行
+            WindowCompat.setDecorFitsSystemWindows(window, false);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                WindowManager.LayoutParams lp = window.getAttributes();
+                lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                window.setAttributes(lp);
+            }
             window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             window.setDimAmount(0.42f);
@@ -201,8 +211,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             // 采用 ADJUST_NOTHING：避免 Window 整体与卡片顶边被系统向上顶飞
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
             if (window.getDecorView() != null) {
+                window.getDecorView().setFitsSystemWindows(false);
                 window.getDecorView().setPadding(0, 0, 0, 0);
                 window.getDecorView().setBackgroundColor(Color.TRANSPARENT);
+                ViewCompat.setOnApplyWindowInsetsListener(window.getDecorView(), (v, insets) -> {
+                    v.setPadding(0, 0, 0, 0);
+                    return WindowInsetsCompat.CONSUMED;
+                });
             }
         }
 
@@ -213,7 +228,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         setContentView(buildUi());
         View content = findViewById(android.R.id.content);
         if (content != null) {
+            content.setFitsSystemWindows(false);
             content.setBackgroundColor(Color.TRANSPARENT);
+            content.setPadding(0, 0, 0, 0);
+            ViewCompat.setOnApplyWindowInsetsListener(content, (v, insets) -> {
+                v.setPadding(0, 0, 0, 0);
+                return WindowInsetsCompat.CONSUMED;
+            });
         }
         setupGesture();
         setupKeyboardObserver();
@@ -287,12 +308,17 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");
         int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
 
-        // 1. 根全屏透明遮罩容器（左右 100% 撑满）
+        // 1. 根全屏透明遮罩容器（左右 100% 撑满，彻底消费 WindowInsets 杜绝空行）
         rootOverlay = new FrameLayout(this);
         rootOverlay.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         rootOverlay.setBackgroundColor(Color.TRANSPARENT);
         rootOverlay.setPadding(0, 0, 0, 0);
+        rootOverlay.setFitsSystemWindows(false);
+        ViewCompat.setOnApplyWindowInsetsListener(rootOverlay, (v, insets) -> {
+            v.setPadding(0, 0, 0, 0);
+            return WindowInsetsCompat.CONSUMED;
+        });
 
         // 点击外部空白区域退出
         rootOverlay.setOnTouchListener((v, event) -> {
@@ -318,6 +344,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         sheetCard.setOrientation(LinearLayout.VERTICAL);
         sheetCard.setElevation(dpToPx(16));
         sheetCard.setClipChildren(true);
+        sheetCard.setFitsSystemWindows(false);
 
         // 24dp 顶部圆角毛玻璃半透背景 + 细微描边（一直覆盖到底部，键盘下方完全拥有同色垫板）
         GradientDrawable cardBg = new GradientDrawable();
@@ -955,60 +982,90 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     }
 
     /** 覆写前端背景与输入框底座保护，确保沉浸透光同时彻底根除输入框塌陷与文字穿透重叠 */
-    private void injectTransparentBackground(WebView view) {
-        if (view == null) return;
-        try {
-            boolean immersive = new com.deepseekharness.app.core.ConfigStore(this).isSheetImmersive();
-            String seatColor = isDarkMode ? "#10141B" : "#F5F8FC";
+    public static void refreshImmersiveTheme(Context context) {
+        if (sCachedWebView == null || context == null) return;
+        sCachedWebView.post(() -> {
+            try {
+                boolean dark = ThemeController.isDark(context);
+                boolean immersive = new com.deepseekharness.app.core.ConfigStore(context).isSheetImmersive();
+                String seatColor = dark ? "#10141B" : "#F5F8FC";
 
-            String cssImmersive = "html, body, #root, [data-ds-dark-theme], main, .dsh-layout-root, "
-                    + "div[class*='_root_'], div[class*='_wrap_'], div[class*='_container_'], "
-                    + "div[class*='_boot_'], div[class*='_onboardingStage_'], div[class*='_stage_'] {\n"
-                    + "  background: transparent !important;\n"
-                    + "  background-color: transparent !important;\n"
-                    + "}\n"
-                    + ":root, .dark, body[data-ds-dark-theme], [data-ds-dark-theme] {\n"
-                    + "  --dsw-alias-bg-base: transparent !important;\n"
-                    + "  --dsw-alias-bg-layer-1: transparent !important;\n"
-                    + "  --dsw-alias-bg-layer-2: rgba(255, 255, 255, 0.05) !important;\n"
-                    + "  --dsw-specific-sidebar-fill: transparent !important;\n"
-                    + "  --dsh-boot-bg: transparent !important;\n"
-                    + (isDarkMode ? "  --dsw-alias-label-primary: #E8ECF4 !important;\n" : "")
-                    + "}\n"
-                    + "/* 关键底座保护：保留输入框物理遮挡层，彻底杜绝长对话文字漏到底部穿透重叠 */\n"
-                    + "div[class*='_composerSeat'] {\n"
-                    + "  background: " + seatColor + " !important;\n"
-                    + "  background-color: " + seatColor + " !important;\n"
-                    + "}\n"
-                    + "[data-mobile-nav=\"frame\"] {\n"
-                    + "  padding-top: 0px !important;\n"
-                    + "}\n";
+                String darkCssVars = "  --dsw-alias-bg-base: transparent !important;\n"
+                        + "  --dsw-alias-bg-layer-1: transparent !important;\n"
+                        + "  --dsw-alias-bg-layer-2: rgba(255, 255, 255, 0.05) !important;\n"
+                        + "  --dsw-specific-sidebar-fill: transparent !important;\n"
+                        + "  --dsh-boot-bg: transparent !important;\n"
+                        + "  --dsw-alias-label-primary: #E8ECF4 !important;\n"
+                        + "  /* 代码块与行内代码在黑夜模式下半透微光，消除突兀实心黑块 */\n"
+                        + "  --dsw-alias-markdown-code-block: rgba(255, 255, 255, 0.05) !important;\n"
+                        + "  --dsw-alias-markdown-code-block-banner: rgba(255, 255, 255, 0.03) !important;\n"
+                        + "  --dsw-alias-markdown-inline-code: rgba(255, 255, 255, 0.08) !important;\n"
+                        + "  /* 输入框卡片透光微光衬底 */\n"
+                        + "  --dsw-specific-input-major: rgba(255, 255, 255, 0.06) !important;\n";
 
-            String js = "(function() {"
-                    + "  var style = document.getElementById('dsh-transparent-style');\n"
-                    + (immersive
-                        ? "  if (!style) {\n"
-                        + "    style = document.createElement('style');\n"
-                        + "    style.id = 'dsh-transparent-style';\n"
-                        + "    document.head.appendChild(style);\n"
+                String lightCssVars = "  --dsw-alias-bg-base: transparent !important;\n"
+                        + "  --dsw-alias-bg-layer-1: transparent !important;\n"
+                        + "  --dsw-alias-bg-layer-2: rgba(0, 0, 0, 0.03) !important;\n"
+                        + "  --dsw-specific-sidebar-fill: transparent !important;\n"
+                        + "  --dsh-boot-bg: transparent !important;\n"
+                        + "  --dsw-alias-markdown-code-block: rgba(0, 0, 0, 0.03) !important;\n"
+                        + "  --dsw-alias-markdown-code-block-banner: rgba(0, 0, 0, 0.02) !important;\n"
+                        + "  --dsw-alias-markdown-inline-code: rgba(0, 0, 0, 0.05) !important;\n"
+                        + "  --dsw-specific-input-major: rgba(255, 255, 255, 0.65) !important;\n";
+
+                String activeVars = dark ? darkCssVars : lightCssVars;
+
+                String cssImmersive = "html, body, #root, [data-ds-dark-theme], main, .dsh-layout-root, "
+                        + "div[class*='_root_'], div[class*='_wrap_'], div[class*='_container_'], "
+                        + "div[class*='_boot_'], div[class*='_onboardingStage_'], div[class*='_stage_'], "
+                        + "div[class*='_scrollBody'], div[class*='_viewArea'], div[class*='_body'] {\n"
+                        + "  background: transparent !important;\n"
+                        + "  background-color: transparent !important;\n"
+                        + "}\n"
+                        + ":root, .dark, body[data-ds-dark-theme], [data-ds-dark-theme] {\n"
+                        + activeVars
+                        + "}\n"
+                        + "/* 关键底座保护：保留输入框物理遮挡层，彻底杜绝长对话文字漏到底部穿透重叠 */\n"
+                        + "div[class*='_composerSeat'] {\n"
+                        + "  background: " + seatColor + " !important;\n"
+                        + "  background-color: " + seatColor + " !important;\n"
+                        + "}\n"
+                        + "[data-mobile-nav=\"frame\"] {\n"
+                        + "  padding-top: 0px !important;\n"
+                        + "}\n";
+
+                String js = "(function() {"
+                        + "  var style = document.getElementById('dsh-transparent-style');\n"
+                        + (immersive
+                            ? "  if (!style) {\n"
+                            + "    style = document.createElement('style');\n"
+                            + "    style.id = 'dsh-transparent-style';\n"
+                            + "    document.head.appendChild(style);\n"
+                            + "  }\n"
+                            + "  style.innerHTML = " + org.json.JSONObject.quote(cssImmersive) + ";\n"
+                            + "  if (document.documentElement) document.documentElement.style.backgroundColor = 'transparent';\n"
+                            + "  if (document.body) document.body.style.backgroundColor = 'transparent';\n"
+                            : "  if (style) style.remove();\n"
+                            + "  if (document.documentElement) document.documentElement.style.backgroundColor = '';\n"
+                            + "  if (document.body) document.body.style.backgroundColor = '';\n")
+                        + "  if (document.documentElement) {\n"
+                        + (dark
+                                ? "    document.documentElement.classList.add('dark'); document.documentElement.setAttribute('data-theme', 'dark');\n"
+                                : "    document.documentElement.classList.remove('dark'); document.documentElement.setAttribute('data-theme', 'light');\n")
                         + "  }\n"
-                        + "  style.innerHTML = " + org.json.JSONObject.quote(cssImmersive) + ";\n"
-                        + "  if (document.documentElement) document.documentElement.style.backgroundColor = 'transparent';\n"
-                        + "  if (document.body) document.body.style.backgroundColor = 'transparent';\n"
-                        : "  if (style) style.remove();\n")
-                    + "  if (document.documentElement) {\n"
-                    + (isDarkMode
-                            ? "    document.documentElement.classList.add('dark'); document.documentElement.setAttribute('data-theme', 'dark');\n"
-                            : "    document.documentElement.classList.remove('dark'); document.documentElement.setAttribute('data-theme', 'light');\n")
-                    + "  }\n"
-                    + "  if (document.body) {\n"
-                    + (isDarkMode
-                            ? "    document.body.setAttribute('data-ds-dark-theme', '');\n"
-                            : "    document.body.removeAttribute('data-ds-dark-theme');\n")
-                    + "  }\n"
-                    + "})();";
-            view.evaluateJavascript(js, null);
-        } catch (Throwable ignored) {}
+                        + "  if (document.body) {\n"
+                        + (dark
+                                ? "    document.body.setAttribute('data-ds-dark-theme', '');\n"
+                                : "    document.body.removeAttribute('data-ds-dark-theme');\n")
+                        + "  }\n"
+                        + "})();";
+                sCachedWebView.evaluateJavascript(js, null);
+            } catch (Throwable ignored) {}
+        });
+    }
+
+    private void injectTransparentBackground(WebView view) {
+        refreshImmersiveTheme(this);
     }
 
     /** 从底部顺滑滑入展开（屏幕外静默就绪，绝不闪屏变形） */
@@ -1190,6 +1247,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             updateCardTheme();
         }
         if (sCachedWebView != null) {
+            // 确保每次切回前台时根据最新配置刷新全透明沉浸样式
+            injectTransparentBackground(sCachedWebView);
+
             // 1. 唤醒 WebView 渲染管线与 JS 定时器
             sCachedWebView.onResume();
             sCachedWebView.resumeTimers();

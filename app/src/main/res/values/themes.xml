@@ -77,6 +77,8 @@
 
     <!-- 快捷抽屉弹层专用全屏透明主题（无黑边、无白状态栏、左右 100% 满屏无留白） -->
     <style name="Theme.DeepseekHarness.SheetTransparent" parent="Theme.DeepseekHarness">
+        <item name="android:fitsSystemWindows">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:colorBackground">@android:color/transparent</item>

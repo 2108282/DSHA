@@ -86,6 +86,7 @@ public class SettingsFragment extends Fragment {
                 boolean next = !immersiveSwitch.isChecked();
                 immersiveSwitch.setChecked(next);
                 cfg.setSheetImmersive(next);
+                QuickChatSheetActivity.refreshImmersiveTheme(requireContext().getApplicationContext());
                 Toast.makeText(requireContext(), next ? "已开启抽屉沉浸全透明" : "已关闭抽屉沉浸全透明（使用经典背景）", Toast.LENGTH_SHORT).show();
             });
         }
