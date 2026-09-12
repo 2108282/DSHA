@@ -113,10 +113,9 @@ public final class BackupScope {
     /** {@code .dsh} 下要打包的子路径；空数组表示<b>整个 {@code .dsh}</b>。 */
     public static String[] dshPaths(int scope) {
         switch (scope) {
-            // dsh 1.2：会话文件在 sessions/，但 UI 入口是 storages/workspace.json 注册表
-            // （workspace -> sessionIds）。只带 sessions/ 的话恢复后会话文件在、注册表没引用，
-            // WebUI 里看不到 —— 所以两个都带（session_projcache 是投影缓存非权威，可重建）。
-            case SESSIONS: return new String[] { ".dsh/sessions", ".dsh/storages" };
+            // dsh 1.2+：会话文件在 sessions/，UI 入口是 storages/workspace.json 注册表，
+            // 历史对话中的图片与文件附件在 attachments/，三者缺一不可。
+            case SESSIONS: return new String[] { ".dsh/sessions", ".dsh/storages", ".dsh/attachments" };
             case PLUGINS:  return new String[] { ".dsh/profiles" };
             case SETTINGS: return new String[] { ".dsh/settings.yaml" };
             default:       return new String[0];   // 空 = 整个 .dsh
@@ -126,7 +125,7 @@ public final class BackupScope {
     /** 恢复时要合并的 {@code .dsh} 子目录名；必须与 {@link #dshPaths(int)} 一一对应。 */
     public static String[] mergeSubdirs(int scope) {
         switch (scope) {
-            case SESSIONS: return new String[] { "sessions", "storages" };
+            case SESSIONS: return new String[] { "sessions", "storages", "attachments" };
             case PLUGINS:  return new String[] { "profiles" };
             case SETTINGS: return new String[] { "settings.yaml" };
             default:       return new String[0];

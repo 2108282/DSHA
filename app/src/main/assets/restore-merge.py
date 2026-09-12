@@ -947,10 +947,10 @@ def main():
         say("· 老备份（无清单文件），按内容自动识别恢复")
 
     if scope == "sessions":
-        say("· 这是「只对话」备份：只覆盖对话记录与会话索引，配置与插件保持现状")
-        ok_dsh = restore_dsh_subtree(stage, root, ["sessions", "storages"], alpha=alpha)
-        # 快照后跑：它才是真数据（.dsh/sessions 在设备上多半只是个软链）
-        ok_dsh = restore_pub_snapshot(stage, root, only=["sessions", "storages"]) or ok_dsh
+        say("· 这是「只对话」备份：只覆盖对话记录、会话索引与图片文件附件，配置与插件保持现状")
+        ok_dsh = restore_dsh_subtree(stage, root, ["sessions", "storages", "attachments"], alpha=alpha)
+        # 快照后跑：它才是真数据（.dsh/sessions 等在设备上多半只是个软链）
+        ok_dsh = restore_pub_snapshot(stage, root, only=["sessions", "storages", "attachments"]) or ok_dsh
     elif scope == "settings":
         say("· 这是「只设置」备份：只覆盖 settings.yaml，聊天记录与插件保持现状")
         ok_dsh = restore_dsh_subtree(stage, root, ["settings.yaml"], alpha=alpha)
