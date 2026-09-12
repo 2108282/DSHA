@@ -44,6 +44,19 @@ public class WorkspaceFragment extends Fragment {
         v.findViewById(R.id.workspace_location).setOnClickListener(x ->
                 Toast.makeText(requireContext(), "备份保存在 Download/DSHA/", Toast.LENGTH_LONG).show());
 
+        // 工作区路径配置
+        android.widget.EditText wsPathInput = v.findViewById(R.id.workspace_path);
+        if (wsPathInput != null) {
+            wsPathInput.setText(controller.config().getWorkdir());
+            v.findViewById(R.id.workspace_apply).setOnClickListener(x -> {
+                String newWd = wsPathInput.getText().toString().trim();
+                if (!newWd.isEmpty()) {
+                    controller.config().setWorkdir(newWd);
+                    Toast.makeText(requireContext(), "工作区目录已更新：" + newWd, Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+
         // 文件共享（DocumentsProvider，MT 管理器可发现）
         TextView shareStatus = v.findViewById(R.id.workspace_share_status);
         if (shareStatus != null) {
@@ -190,7 +203,7 @@ public class WorkspaceFragment extends Fragment {
                 .setPositiveButton("选择文件", (d, w) -> {
                     android.util.Log.i("DSHA-restore", "选择文件按钮点击，准备 launch");
                     try {
-                        restorePicker.launch(new String[]{"application/gzip", "*/*"});
+                        restorePicker.launch(new String[]{"*/*"});
                         android.util.Log.i("DSHA-restore", "launch 已调用");
                     } catch (Throwable t) {
                         android.util.Log.e("DSHA-restore", "launch 异常: " + t, t);
@@ -207,11 +220,18 @@ public class WorkspaceFragment extends Fragment {
         final android.content.Context app = requireContext().getApplicationContext();
         new Thread(() -> {
             try {
+                // 恢复前先尝试停止后台服务，释放文件句柄
+                try { controller.stopWeb(); } catch (Throwable ignored) {}
                 String report = BackupManager.restoreFromBackup(app, controller, backupUri);
                 main.post(() -> new AlertDialog.Builder(requireContext())
                         .setTitle("恢复完成（已校验）")
-                        .setMessage(report)
-                        .setPositiveButton("关闭", null)
+                        .setMessage(report + "\n\n建议立即重启服务以加载恢复的数据。")
+                        .setPositiveButton("立即重启", (d, w) -> {
+                            controller.stopWeb();
+                            controller.startWeb(null);
+                            Toast.makeText(requireContext(), "正在重启服务…", Toast.LENGTH_SHORT).show();
+                        })
+                        .setNegativeButton("稍后手动启动", null)
                         .show());
             } catch (Exception e) {
                 String msg = e.getMessage() == null ? e.toString() : e.getMessage();

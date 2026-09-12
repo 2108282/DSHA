@@ -778,6 +778,94 @@ def read_manifest(stage):
     return None
 
 
+def restore_workspaces(stage, root):
+    """全量恢复：将备份包内的 .dsha-workspaces 恢复到实际工作区目录。
+    智能兼容跨设备路径：若原路径存在且可写则恢复至原路径；
+    若换机后原路径不可写或属异机私有路径，则重定向至本机公开存储（/sdcard/Download/DSHA/<title>），
+    并自动同步写回 .dsh/storages/workspace.json，确保恢复后 WebUI 对话与代码完整对应且不被剪枝。
+    """
+    ws_stage = os.path.join(stage, ".dsha-workspaces")
+    if not os.path.isdir(ws_stage):
+        ws_stage = os.path.join(stage, "workspaces")
+        if not os.path.isdir(ws_stage):
+            return False
+
+    meta_file = os.path.join(ws_stage, "meta.json")
+    meta = {}
+    if os.path.isfile(meta_file):
+        try:
+            with open(meta_file, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            pass
+
+    ws_json_path = os.path.join(root, ".dsh", "storages", "workspace.json")
+    ws_data = None
+    if os.path.isfile(ws_json_path):
+        try:
+            with open(ws_json_path, "r", encoding="utf-8") as f:
+                ws_data = json.load(f)
+        except Exception:
+            pass
+
+    restored = []
+    try:
+        entries = os.listdir(ws_stage)
+    except OSError:
+        return False
+
+    for wid in entries:
+        wid_dir = os.path.join(ws_stage, wid)
+        if not os.path.isdir(wid_dir) or wid == "meta.json":
+            continue
+        info = meta.get(wid, {})
+        orig_path = info.get("orig_path")
+        title = info.get("title", "工作区")
+
+        target_path = orig_path
+        can_write = False
+        if target_path and target_path.startswith("/") and target_path not in ("/", "/root", "/sdcard", "/storage/emulated/0"):
+            try:
+                os.makedirs(target_path, exist_ok=True)
+                probe = os.path.join(target_path, ".dsha-write-test-%s" % os.getpid())
+                with open(probe, "w") as pf:
+                    pf.write("ok")
+                os.remove(probe)
+                can_write = True
+            except Exception:
+                can_write = False
+
+        if not can_write:
+            target_path = os.path.join("/sdcard/Download/DSHA", title)
+            try:
+                os.makedirs(target_path, exist_ok=True)
+            except Exception as e:
+                say("· 恢复工作区「%s」目录失败（%s）：%s" % (title, target_path, e))
+                continue
+
+        try:
+            shutil.copytree(wid_dir, target_path, dirs_exist_ok=True)
+            restored.append("%s → %s" % (title, target_path))
+            if ws_data:
+                tbl = ws_data.setdefault("tables", {}).setdefault("workspaces", {})
+                if wid in tbl:
+                    tbl[wid]["path"] = target_path
+        except Exception as e:
+            say("· 恢复工作区「%s」文件失败：%s" % (title, e))
+
+    if ws_data and restored:
+        try:
+            with open(ws_json_path, "w", encoding="utf-8") as f:
+                json.dump(ws_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            say("· 同步工作区注册表路径失败: %s" % e)
+
+    if restored:
+        say("· 已恢复工作区代码与文件：%s" % "；".join(restored))
+        return True
+    return False
+
+
 def ensure_workspace_dirs(root):
     """恢复后按 workspace.json 里的工作区路径补建目录，防止 dsh 剪会话。
 
@@ -859,10 +947,10 @@ def main():
         say("· 老备份（无清单文件），按内容自动识别恢复")
 
     if scope == "sessions":
-        say("· 这是「只对话」备份：只覆盖对话记录，配置与插件保持现状")
-        ok_dsh = restore_dsh_subtree(stage, root, ["sessions"], alpha=alpha)
+        say("· 这是「只对话」备份：只覆盖对话记录与会话索引，配置与插件保持现状")
+        ok_dsh = restore_dsh_subtree(stage, root, ["sessions", "storages"], alpha=alpha)
         # 快照后跑：它才是真数据（.dsh/sessions 在设备上多半只是个软链）
-        ok_dsh = restore_pub_snapshot(stage, root, only=["sessions"]) or ok_dsh
+        ok_dsh = restore_pub_snapshot(stage, root, only=["sessions", "storages"]) or ok_dsh
     elif scope == "settings":
         say("· 这是「只设置」备份：只覆盖 settings.yaml，聊天记录与插件保持现状")
         ok_dsh = restore_dsh_subtree(stage, root, ["settings.yaml"], alpha=alpha)
@@ -887,6 +975,8 @@ def main():
                 fix_profiles(root, landed)
             # 全量也要落快照：.dsh 里的 sessions 等可能只是软链
             restore_pub_snapshot(stage, root)
+            # 恢复工作区代码与文件
+            restore_workspaces(stage, root)
         else:
             # 候选校验/切换失败时，旧 .dsh 仍是用户唯一可启动的数据；任何后续
             # merge、插件修补或快照落位都可能改写它，所以这里必须全部跳过。

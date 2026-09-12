@@ -105,8 +105,17 @@
                     android:textSize="@dimen/text_body" />
             </LinearLayout>
 
-            <Button android:id="@+id/launch_safe" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:minHeight="48dp" android:text="插件导致启动失败？安全启动" android:textSize="14sp" />
+            <Button
+                android:id="@+id/launch_safe"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/gap_tight"
+                android:minHeight="48dp"
+                android:background="@drawable/bg_btn"
+                android:text="插件导致启动失败？安全启动"
+                android:textAllCaps="false"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp" />
 
             <TextView
                 android:id="@+id/lan_addr"

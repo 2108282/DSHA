@@ -1,11 +1,68 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/surface" android:fillViewport="true">
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="@dimen/page_pad">
-        <Button android:id="@+id/link_install_close" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="关闭" />
-        <TextView style="@style/DshaText.Display" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="安装网站插件" />
-        <TextView android:id="@+id/link_install_status" style="@style/DshaText.Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:textIsSelectable="true" />
-        <TextView android:id="@+id/link_install_details" style="@style/DshaText.Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:textIsSelectable="true" />
-        <Button android:id="@+id/link_install_confirm" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="24dp" android:text="解析链接" />
-        <Button android:id="@+id/link_install_manage" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="打开插件管理" />
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/surface"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="@dimen/page_pad">
+
+        <Button
+            android:id="@+id/link_install_close"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_btn"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:text="关闭"
+            android:textAllCaps="false"
+            android:textColor="@color/text_secondary" />
+
+        <TextView
+            style="@style/DshaText.Display"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="安装网站插件" />
+
+        <TextView
+            android:id="@+id/link_install_status"
+            style="@style/DshaText.Body"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:textIsSelectable="true" />
+
+        <TextView
+            android:id="@+id/link_install_details"
+            style="@style/DshaText.Body"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:textIsSelectable="true" />
+
+        <Button
+            android:id="@+id/link_install_confirm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:background="@drawable/bg_btn_primary"
+            android:text="解析链接"
+            android:textAllCaps="false"
+            android:textColor="@color/accent_on" />
+
+        <Button
+            android:id="@+id/link_install_manage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_btn"
+            android:text="打开插件管理"
+            android:textAllCaps="false"
+            android:textColor="@color/text" />
     </LinearLayout>
 </ScrollView>

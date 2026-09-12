@@ -80,6 +80,8 @@
          本项目已经在「同一份配置散落两处」上栽过几次
          （补丁标记版本不同步、插件安置两套实现并存）。 -->
     <style name="Widget.DSHA.Button" parent="Widget.Material3.Button.TextButton">
+        <!-- 默认使用次级浅底背景，彻底解决未显式声明 background 的 Button 变成黑色实心胶囊的 bug -->
+        <item name="android:background">@drawable/bg_btn</item>
         <item name="backgroundTint">@null</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:textColor">@color/text</item>

@@ -118,10 +118,42 @@ public final class BackupManager {
         StringBuilder sb = new StringBuilder();
         sb.append("cd /root || exit 1\n")
           .append("rm -f .dsha-backup.tar.gz\n")
-          .append("[ -d .dsh ] || { echo NO_DSH_DIR; exit 1; }\n")
-          .append("set --\n");
+          .append("[ -d .dsh ] || { echo NO_DSH_DIR; exit 1; }\n");
+
         if (paths.length == 0) {
-            sb.append("set -- .dsh\n");
+            // 全量备份：动态扫描 workspace.json，把用户工作区的项目文件收集进 .dsha-workspaces 一同归档
+            sb.append("python3 -c '\n")
+              .append("import json, os, shutil\n")
+              .append("ws_stage = \"/root/.dsha-workspaces\"\n")
+              .append("shutil.rmtree(ws_stage, ignore_errors=True)\n")
+              .append("ws_file = \"/root/.dsh/storages/workspace.json\"\n")
+              .append("meta = {}\n")
+              .append("if os.path.isfile(ws_file):\n")
+              .append("    try:\n")
+              .append("        with open(ws_file, \"r\", encoding=\"utf-8\") as f:\n")
+              .append("            data = json.load(f)\n")
+              .append("        for wid, rec in (data.get(\"tables\", {}).get(\"workspaces\", {}) or {}).items():\n")
+              .append("            p = (rec or {}).get(\"path\")\n")
+              .append("            t = (rec or {}).get(\"title\", \"工作区\")\n")
+              .append("            if not p or not os.path.isdir(p) or p in (\"/\", \"/root\", \"/sdcard\", \"/storage/emulated/0\", \"/sdcard/Download\"):\n")
+              .append("                continue\n")
+              .append("            dst = os.path.join(ws_stage, wid)\n")
+              .append("            os.makedirs(dst, exist_ok=True)\n")
+              .append("            meta[wid] = {\"title\": t, \"orig_path\": p}\n")
+              .append("            ign = lambda d, files: {f for f in files if f in (\"node_modules\", \".git\", \"__pycache__\", \".pnpm-store\", \"dist\", \".next\", \".cache\", \".dsh\")}\n")
+              .append("            shutil.copytree(p, dst, dirs_exist_ok=True, ignore=ign)\n")
+              .append("        if meta:\n")
+              .append("            with open(os.path.join(ws_stage, \"meta.json\"), \"w\", encoding=\"utf-8\") as mf:\n")
+              .append("                json.dump(meta, mf, ensure_ascii=False)\n")
+              .append("    except Exception:\n")
+              .append("        pass\n")
+              .append("' 2>/dev/null || true\n");
+        }
+
+        sb.append("set --\n");
+        if (paths.length == 0) {
+            sb.append("set -- .dsh\n")
+              .append("[ -d .dsha-workspaces ] && set -- \"$@\" .dsha-workspaces\n");
         } else {
             for (String p : paths) {
                 sb.append("[ -e ").append(ShellQuote.arg(p)).append(" ] && set -- \"$@\" ")
@@ -132,6 +164,7 @@ public final class BackupManager {
           .append("[ $# -gt 0 ] || { echo NOTHING_TO_PACK; exit 1; }\n")
           .append("echo \"打包: $*\"\n")
           .append("tar -czf .dsha-backup.tar.gz --ignore-failed-read \"$@\" || { echo TAR_FAIL; exit 1; }\n")
+          .append("rm -rf .dsha-workspaces\n")
           .append("test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n")
           .append("CNT=$(tar -tzf .dsha-backup.tar.gz 2>/dev/null | wc -l)\n")
           .append("echo \"VERIFY_ENTRIES=$CNT\"\n")
@@ -164,7 +197,19 @@ public final class BackupManager {
     // ==================== 导出 ====================
 
     private static String exportArchive(Context ctx, File src, String name) throws Exception {
+        // 拥有所有文件访问权限（Android 11+ MANAGE_EXTERNAL_STORAGE）或系统低于 Android 10 时，直接文件写入最可靠、绝无重命名冲突
+        if (Build.VERSION.SDK_INT < 29 || (Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager())) {
+            String direct = writeDirect(src, name);
+            if (direct != null) return direct;
+        }
+        // 走 MediaStore 前先清理同名旧记录，防止系统重命名为 (1)
         if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                Uri collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+                ctx.getContentResolver().delete(collection,
+                        MediaStore.MediaColumns.DISPLAY_NAME + " = ?", new String[]{name});
+            } catch (Throwable ignored) {
+            }
             return writeViaMediaStore(ctx, src, name);
         }
         return writeDirect(src, name);
