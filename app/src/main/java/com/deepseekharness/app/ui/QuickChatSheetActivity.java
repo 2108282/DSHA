@@ -54,7 +54,7 @@ import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.activity.ComponentActivity;
+import androidx.appcompat.app.AppCompatActivity;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 
@@ -80,7 +80,7 @@ import java.util.Arrays;
  * 9. 低位退出在动画完全结束后（onAnimationEnd）重置高度，彻底消除退出时的拉长闪屏。
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
-public class QuickChatSheetActivity extends ComponentActivity {
+public class QuickChatSheetActivity extends AppCompatActivity {
 
     public static final int ICON_CLOSE = 1;
     public static final int ICON_SETTINGS = 2;
@@ -228,17 +228,7 @@ public class QuickChatSheetActivity extends ComponentActivity {
         boolean dark = ThemeController.isDark(this);
         if (dark != isDarkMode) {
             isDarkMode = dark;
-            if (sheetCard != null) {
-                int cardBgColor = isDarkMode ? Color.parseColor("#EB161B24") : Color.parseColor("#EBF5F8FC");
-                int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
-                GradientDrawable cardBg = new GradientDrawable();
-                cardBg.setShape(GradientDrawable.RECTANGLE);
-                float r = dpToPx(24);
-                cardBg.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
-                cardBg.setColor(cardBgColor);
-                cardBg.setStroke(dpToPx(1), borderColor);
-                sheetCard.setBackground(cardBg);
-            }
+            updateCardTheme();
         }
         if (sCachedWebView != null) {
             injectTransparentBackground(sCachedWebView);
@@ -272,9 +262,26 @@ public class QuickChatSheetActivity extends ComponentActivity {
         currentHeight = defaultHeight;
     }
 
+    private void updateCardTheme() {
+        if (sheetCard != null) {
+            int cardBgColor = isDarkMode ? Color.parseColor("#EB10141B") : Color.parseColor("#EBF5F8FC");
+            int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
+            GradientDrawable cardBg = new GradientDrawable();
+            cardBg.setShape(GradientDrawable.RECTANGLE);
+            float r = dpToPx(24);
+            cardBg.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
+            cardBg.setColor(cardBgColor);
+            cardBg.setStroke(dpToPx(1), borderColor);
+            sheetCard.setBackground(cardBg);
+        }
+        if (sCachedWebView != null) {
+            injectTransparentBackground(sCachedWebView);
+        }
+    }
+
     private View buildUi() {
-        // 毛玻璃半透明底色（浅色：#EBF5F8FC 半透轻白蓝；深色：#EB161B24 半透深灰）
-        int cardBgColor = isDarkMode ? Color.parseColor("#EB161B24") : Color.parseColor("#EBF5F8FC");
+        // 毛玻璃半透明底色（浅色：#EBF5F8FC 半透轻白蓝；深色：#EB10141B 与 App 深蓝底色完全一致）
+        int cardBgColor = isDarkMode ? Color.parseColor("#EB10141B") : Color.parseColor("#EBF5F8FC");
         int textColor = isDarkMode ? Color.parseColor("#E8ECF4") : Color.parseColor("#1A2230");
         int lineColor = isDarkMode ? Color.parseColor("#302A3344") : Color.parseColor("#30E2E6EE");
         int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");
@@ -1160,6 +1167,11 @@ public class QuickChatSheetActivity extends ComponentActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        boolean dark = ThemeController.isDark(this);
+        if (dark != isDarkMode) {
+            isDarkMode = dark;
+            updateCardTheme();
+        }
         if (sCachedWebView != null) {
             // 1. 唤醒 WebView 渲染管线与 JS 定时器
             sCachedWebView.onResume();

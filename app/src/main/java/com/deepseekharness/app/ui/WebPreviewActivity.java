@@ -162,6 +162,10 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
         try {
             WebView view = new WebView(this);
             webView = view;
+            boolean dark = ThemeController.isDark(this);
+            int themeBg = dark ? Color.parseColor("#10141B") : Color.parseColor("#F7F8FB");
+            container.setBackgroundColor(themeBg);
+            view.setBackgroundColor(themeBg);
             PackageInfo provider = android.os.Build.VERSION.SDK_INT >= 26 ? WebView.getCurrentWebViewPackage() : null;
             browserInfo = provider == null ? "系统 WebView 版本未知"
                     : provider.packageName + " " + provider.versionName;
@@ -245,6 +249,7 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
         @Override public void onPageFinished(WebView view, String url) {
             if (webView != view || pageFailed) return;
             progress.setVisibility(View.GONE);
+            applyThemeToWebView(view);
             if (!WebPreviewPolicy.sameService(baseUrl, url)) return;
             view.evaluateJavascript(CAPABILITY_CHECK, result -> {
                 if (webView != view || pageFailed || isFinishing() || isDestroyed()) return;
@@ -401,6 +406,56 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
         if (webView != null) {
             webView.onResume();
             webView.resumeTimers();
+            applyThemeToWebView(webView);
+        }
+    }
+
+    /** 彻底将网页深色背景对齐 App UI 界面同款深蓝色 (#10141B / #161B24)，消除死黑色 */
+    private void applyThemeToWebView(WebView view) {
+        if (view == null) return;
+        boolean dark = ThemeController.isDark(this);
+        int themeBg = dark ? Color.parseColor("#10141B") : Color.parseColor("#F7F8FB");
+        if (container != null) container.setBackgroundColor(themeBg);
+        view.setBackgroundColor(themeBg);
+
+        if (dark) {
+            String css = ":root, [data-ds-dark-theme], .dark, body {\n"
+                    + "  --dsw-alias-bg-base: #10141B !important;\n"
+                    + "  --dsw-alias-bg-layer-1: #161B24 !important;\n"
+                    + "  --dsw-alias-bg-layer-2: #1C2330 !important;\n"
+                    + "  --dsw-alias-bg-layer-3: #2A3344 !important;\n"
+                    + "  --dsw-specific-sidebar-fill: #10141B !important;\n"
+                    + "  --dsh-boot-bg: #10141B !important;\n"
+                    + "  --dsw-specific-input-major: #161B24 !important;\n"
+                    + "  --dsw-alias-markdown-code-block: #161B24 !important;\n"
+                    + "  --dsw-alias-markdown-code-block-banner: #1C2330 !important;\n"
+                    + "  --dsw-static-neutral-bluish-950: #10141B !important;\n"
+                    + "  --dsw-static-neutral-bluish-900: #161B24 !important;\n"
+                    + "  --dsw-static-neutral-bluish-875: #1C2330 !important;\n"
+                    + "}\n"
+                    + "html, body, #root, [data-ds-dark-theme], main, .dsh-layout-root {\n"
+                    + "  background-color: #10141B !important;\n"
+                    + "}\n";
+            String js = "(function(){\n"
+                    + "  var s = document.getElementById('dsha-theme-override');\n"
+                    + "  if (!s) {\n"
+                    + "    s = document.createElement('style');\n"
+                    + "    s.id = 'dsha-theme-override';\n"
+                    + "    document.head.appendChild(s);\n"
+                    + "  }\n"
+                    + "  s.innerHTML = " + org.json.JSONObject.quote(css) + ";\n"
+                    + "  document.documentElement.classList.add('dark');\n"
+                    + "  document.documentElement.setAttribute('data-theme', 'dark');\n"
+                    + "})();";
+            view.evaluateJavascript(js, null);
+        } else {
+            String js = "(function(){\n"
+                    + "  var s = document.getElementById('dsha-theme-override');\n"
+                    + "  if (s) s.remove();\n"
+                    + "  document.documentElement.classList.remove('dark');\n"
+                    + "  document.documentElement.setAttribute('data-theme', 'light');\n"
+                    + "})();";
+            view.evaluateJavascript(js, null);
         }
     }
 
