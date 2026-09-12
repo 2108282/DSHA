@@ -43,7 +43,7 @@ public class HarnessService extends Service {
     private volatile boolean keepAliveRunning;
     private final java.util.concurrent.atomic.AtomicLong lastRestartAt =
             new java.util.concurrent.atomic.AtomicLong(0);
-    private static final long KEEPALIVE_INTERVAL_MS = 15000L;
+    private static final long KEEPALIVE_INTERVAL_MS = 60000L;
     private static final long RESTART_COOLDOWN_MS = 120000L;
     private static final int KEEPALIVE_MAX_FAIL = 3;
 

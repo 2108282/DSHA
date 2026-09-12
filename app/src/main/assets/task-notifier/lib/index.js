@@ -398,7 +398,7 @@ export function apply(ctx) {
           }
         }
       } catch {}
-    }, 300)
+    }, 1500)
 
     if (timer && typeof timer.unref === 'function') {
       timer.unref()

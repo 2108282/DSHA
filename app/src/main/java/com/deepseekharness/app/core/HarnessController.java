@@ -141,8 +141,9 @@ public class HarnessController {
     }
 
     /**
-     * 写入动态 WebSocket 心跳补丁：
-     * 纯本机模式彻底关闭心跳 (2147483647ms)，局域网模式 120s 防路由器断连。
+     * 写入动态 WebSocket 心跳补丁与技能目录防轮询：
+     * 纯本机模式彻底关闭心跳 (2147483647ms)，局域网模式 120s 防路由器断连；
+     * 预建技能空目录与拉长技能轮询，杜绝上游 watchFile 100ms 疯狂空转。
      */
     public void ensureHeartbeatPatch() {
         try {
@@ -151,8 +152,25 @@ public class HarnessController {
             int interval = config.isLanMode() ? 120_000 : 2147483647;
             String content = "- id: typert-gateway\n"
                     + "  config:\n"
-                    + "    websocketHeartbeatIntervalMs: " + interval + "\n";
+                    + "    websocketHeartbeatIntervalMs: " + interval + "\n"
+                    + "- id: skill-filesystem\n"
+                    + "  config:\n"
+                    + "    watchPollIntervalMs: 60000\n";
             Compat.write(patchFile, content.getBytes(StandardCharsets.UTF_8));
+
+            // 预先补齐技能与 agents 空目录，使 Chokidar 挂入内核 inotify 原生事件，彻底杜绝 100ms 轮询
+            String wd = config.getWorkdir();
+            String wdClean = wd.startsWith("/") ? wd.substring(1) : wd;
+            String[] skillDirs = {
+                    "root/.agents/skills",
+                    "root/.dsh/skills",
+                    "root/" + wdClean + "/.agents/skills",
+                    "root/" + wdClean + "/.dsh/skills"
+            };
+            for (String rel : skillDirs) {
+                File dir = new File(proot.getRootfsDir(), rel);
+                if (!dir.exists()) dir.mkdirs();
+            }
         } catch (Throwable e) {
             Log.w("DSHA", "写入心跳补丁失败: " + e.getMessage());
         }
