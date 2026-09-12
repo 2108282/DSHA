@@ -1010,9 +1010,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             view.evaluateJavascript(js, null);
         } catch (Throwable ignored) {}
     }
-            view.evaluateJavascript(js, null);
-        } catch (Throwable ignored) {}
-    }
 
     /** 从底部顺滑滑入展开（屏幕外静默就绪，绝不闪屏变形） */
     private void animateIn() {
