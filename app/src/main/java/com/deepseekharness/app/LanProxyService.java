@@ -135,8 +135,27 @@ public final class LanProxyService {
         return generated;
     }
 
+    /**
+     * 手动重新生成 256-bit LAN 访问凭据并写盘。
+     * 平时不调用本方法时，Token 永久固定，重启 Web 或 App 绝不变更。
+     */
+    public static synchronized String regenerateLanToken(Context ctx) {
+        byte[] bytes = new byte[32];
+        RANDOM.nextBytes(bytes);
+        String generated = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        lanToken = generated;
+        try {
+            if (ctx != null) {
+                ctx.getApplicationContext().getSharedPreferences(Constants.PREFS, Context.MODE_PRIVATE)
+                        .edit().putString(PREF_LAN_TOKEN, generated).apply();
+            }
+        } catch (Throwable ignored) {
+        }
+        return generated;
+    }
+
     private static boolean isValidLanToken(String value) {
-        return value != null && value.length() == 43 && value.matches("[A-Za-z0-9_-]{43}");
+        return value != null && value.length() >= 4 && value.length() <= 64 && value.matches("[A-Za-z0-9_-]+");
     }
 
     /**

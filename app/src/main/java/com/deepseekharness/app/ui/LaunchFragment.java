@@ -307,6 +307,13 @@ public class LaunchFragment extends Fragment {
         if (lanAddr != null) {
             items.add("📶 复制局域网访问地址（同 WiFi 其它设备）\n" + lanAddr);
             acts.add(() -> copyAddr("局域网地址", lanAddr));
+
+            items.add("🔄 重新生成局域网访问 Token（更换密码）");
+            acts.add(() -> {
+                LanProxyService.regenerateLanToken(requireContext());
+                refreshLanAddr();
+                Toast.makeText(requireContext(), "已生成新 Token 并更新地址", Toast.LENGTH_SHORT).show();
+            });
         } else if (lan) {
             items.add("📶 局域网模式已开启，等待获取 WiFi IP…");
             acts.add(() -> {});
