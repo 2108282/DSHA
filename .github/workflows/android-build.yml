@@ -45,20 +45,28 @@ jobs:
       - name: Fetch prebuilt offline rootfs from own release
         run: |
           set -euo pipefail
+          mkdir -p app/src/main/assets
+          BASE_TAG="0.1.5rc1-base"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
+
           if [ ! -f "app/src/main/assets/offline-rootfs.bin" ]; then
-            echo "==> 优先从自身仓库 Release 自动获取完全自主掌控的离线底包..."
-            # 优先 0.1.5rc1-base，其次 0.1.5rc.2-base，彻底摆脱外部仓库依赖
-            URL1="https://github.com/${{ github.repository }}/releases/download/0.1.5rc1-base/offline-rootfs.bin"
-            URL2="https://github.com/${{ github.repository }}/releases/download/0.1.5rc.2-base/offline-rootfs.bin"
-            if curl -f -s -I -L "$URL1" > /dev/null; then
-              echo "从自身 Release (0.1.5rc1-base) 下载..."
-              curl -L -f -o app/src/main/assets/offline-rootfs.bin "$URL1"
-            else
-              echo "从自身 Release (0.1.5rc.2-base) 下载..."
-              curl -L -f -o app/src/main/assets/offline-rootfs.bin "$URL2"
-            fi
+            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 offline-rootfs.bin..."
+            curl -L -f -o app/src/main/assets/offline-rootfs.bin "${BASE_URL}/offline-rootfs.bin"
           fi
+
+          if [ ! -f "app/src/main/assets/dsh-runtime.bin" ]; then
+            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 dsh-runtime.bin..."
+            curl -L -f -o app/src/main/assets/dsh-runtime.bin "${BASE_URL}/dsh-runtime.bin"
+          fi
+
+          if [ ! -f "app/src/main/assets/offline-rootfs.layout" ]; then
+            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 offline-rootfs.layout..."
+            curl -L -f -o app/src/main/assets/offline-rootfs.layout "${BASE_URL}/offline-rootfs.layout"
+          fi
+
           ls -lh app/src/main/assets/offline-rootfs.bin
+          ls -lh app/src/main/assets/dsh-runtime.bin
+          cat app/src/main/assets/offline-rootfs.layout
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew

@@ -15,10 +15,6 @@ on:
         description: '发布到自身仓库的 Tag (如 0.1.5rc1-base)'
         required: true
         default: '0.1.5rc1-base'
-      asset_name:
-        description: '底包资产文件名'
-        required: true
-        default: 'offline-rootfs.bin'
 
 jobs:
   sync:
@@ -31,24 +27,17 @@ jobs:
       - name: Download Asset from Source Release
         run: |
           set -euo pipefail
-          echo "==> 正在从源仓库 ${{ github.event.inputs.source_repo }} 的 ${{ github.event.inputs.source_tag }} 下载 ${{ github.event.inputs.asset_name }}..."
-          SRC_URL="https://github.com/${{ github.event.inputs.source_repo }}/releases/download/${{ github.event.inputs.source_tag }}/${{ github.event.inputs.asset_name }}"
-          
-          # 如果直接存在 offline-rootfs.bin 则直接下载
-          if curl -f -s -I -L "$SRC_URL" > /dev/null; then
-            echo "直接找到 $SRC_URL，开始下载..."
-            curl -L -f -o offline-rootfs.bin "$SRC_URL"
-          else
-            # 若源 Release 是 APK，则下载 APK 解压出 offline-rootfs.bin
-            echo "源 Release 无裸 bin，尝试从 APK 解压..."
-            APK_URL="https://github.com/${{ github.event.inputs.source_repo }}/releases/download/${{ github.event.inputs.source_tag }}/dsha-${{ github.event.inputs.source_tag }}.apk"
-            curl -L -f -o /tmp/source.apk "$APK_URL"
-            unzip -p /tmp/source.apk "assets/offline-rootfs.bin" > offline-rootfs.bin
-            rm -f /tmp/source.apk
-          fi
+          echo "==> 正在从源仓库 ${{ github.event.inputs.source_repo }} 的 ${{ github.event.inputs.source_tag }} 提取双包资产..."
+          APK_URL="https://github.com/${{ github.event.inputs.source_repo }}/releases/download/${{ github.event.inputs.source_tag }}/dsha-${{ github.event.inputs.source_tag }}.apk"
+          curl -L -f -o /tmp/source.apk "$APK_URL"
+          unzip -p /tmp/source.apk "assets/offline-rootfs.bin" > offline-rootfs.bin
+          unzip -p /tmp/source.apk "assets/dsh-runtime.bin" > dsh-runtime.bin
+          unzip -p /tmp/source.apk "assets/offline-rootfs.layout" > offline-rootfs.layout
+          rm -f /tmp/source.apk
 
           ls -lh offline-rootfs.bin
-          sha256sum offline-rootfs.bin
+          ls -lh dsh-runtime.bin
+          cat offline-rootfs.layout
 
       - name: Create or Update Own Release
         env:
@@ -60,12 +49,12 @@ jobs:
           echo "==> 检查自身仓库是否已有 Release $TARGET_TAG..."
           if gh release view "$TARGET_TAG" >/dev/null 2>&1; then
             echo "Release $TARGET_TAG 已存在，覆盖更新资产..."
-            gh release upload "$TARGET_TAG" offline-rootfs.bin --clobber
+            gh release upload "$TARGET_TAG" offline-rootfs.bin dsh-runtime.bin offline-rootfs.layout --clobber
           else
             echo "创建新 Release $TARGET_TAG 并上传资产..."
-            gh release create "$TARGET_TAG" offline-rootfs.bin \
+            gh release create "$TARGET_TAG" offline-rootfs.bin dsh-runtime.bin offline-rootfs.layout \
               --title "DSHA 基准离线底包 ($TARGET_TAG)" \
-              --notes "由 GitHub Actions 自动化工作流转存收拢的纯净精简离线底包资产。完全由当前仓库自主掌控。" \
+              --notes "由 GitHub Actions 自动化工作流转存收拢的纯净精简离线底包资产。包含 offline-rootfs.bin、dsh-runtime.bin、offline-rootfs.layout，完全由当前仓库自主掌控。" \
               --prerelease
           fi
           echo "==> 资产成功发布到自身 Release！"
