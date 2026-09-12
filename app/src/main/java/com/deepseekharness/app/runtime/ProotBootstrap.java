@@ -589,10 +589,15 @@ public class ProotBootstrap {
                                     try { Compat.symlink(up.getAbsolutePath(), pLink); } catch (Throwable ignored) {}
                                 }
                             }
-                            // 3. 插件自属软链：/root/.dsh/plugin-src/<pname>/node_modules -> 共享依赖池
+                            // 3. 确保第三方插件的 node_modules 是真实目录，并精准建立 @deepseek-ai 子软链
                             File pNm = new File(up, "node_modules");
-                            if (!pNm.exists()) {
-                                try { Compat.symlink(targetNm, pNm); } catch (Throwable ignored) {}
+                            if (Compat.isSymbolicLink(pNm)) {
+                                pNm.delete(); // 若之前误做成了整体软链，纠正删除
+                            }
+                            if (!pNm.exists()) pNm.mkdirs();
+                            File deepseekLink = new File(pNm, "@deepseek-ai");
+                            if (!deepseekLink.exists()) {
+                                try { Compat.symlink(targetNm + "/@deepseek-ai", deepseekLink); } catch (Throwable ignored) {}
                             }
                         }
                     }

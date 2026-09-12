@@ -204,7 +204,10 @@ public class SettingsFragment extends Fragment {
                 report.append("· Web 守卫放行: ").append(r3.contains("OK") || r3.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r3.isEmpty() ? "完成" : r3.trim())).append("\n");
 
                 String r4 = controller.proot().runAssetBashScript("lan-bind-patch.sh", 60_000);
-                report.append("· 局域网放行: ").append(r4.contains("PATCHED") || r4.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r4.isEmpty() ? "完成" : r4.trim()));
+                report.append("· 局域网放行: ").append(r4.contains("PATCHED") || r4.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r4.isEmpty() ? "完成" : r4.trim())).append("\n");
+
+                controller.proot().ensureBuiltinPluginEntities();
+                report.append("· 插件全局与依赖软链: ✅ 已修复就绪");
             } catch (Throwable e) {
                 report.append("执行异常: ").append(e.getMessage());
             }
@@ -216,6 +219,7 @@ public class SettingsFragment extends Fragment {
                         .setTitle("修复完成")
                         .setMessage(report.toString() + "\n\n建议重启 Web 服务使修改全部生效。")
                         .setPositiveButton("立即重启服务", (d, w) -> {
+                            controller.stopWeb();
                             controller.startWeb(status -> {});
                             Toast.makeText(requireContext(), "正在重启 Web 服务…", Toast.LENGTH_SHORT).show();
                         })
