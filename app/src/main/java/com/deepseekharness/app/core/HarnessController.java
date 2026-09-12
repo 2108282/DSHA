@@ -35,6 +35,7 @@ public class HarnessController {
     private final ConfigStore config;
     private final ProotBootstrap proot;
     private final WebProcessManager webProc;
+    private final StartupDiagnostics startupDiagnostics;
     /** 旧调用方仍会 new Controller，故队列与门控都必须是进程级。 */
     private static final WebLifecycle lifecycle = new WebLifecycle();
     private static final ScheduledExecutorService io = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -55,6 +56,11 @@ public class HarnessController {
         this.config = new ConfigStore(this.ctx);
         this.proot = new ProotBootstrap(this.ctx);
         this.webProc = new WebProcessManager(proot);
+        this.startupDiagnostics = new StartupDiagnostics(this.ctx);
+    }
+
+    public StartupDiagnostics startupDiagnostics() {
+        return startupDiagnostics;
     }
 
     public ConfigStore config() {
@@ -234,9 +240,11 @@ public class HarnessController {
         boolean draining = false;
         try {
             if (!lifecycle.isCurrent(generation)) return;
+            startupDiagnostics.begin(generation, safeMode);
             com.deepseekharness.app.LanProxyService.stop();
             webProc.stop(); // 先清掉可能残留的 dsh，否则新进程撞 EADDRINUSE
             if (!lifecycle.isCurrent(generation)) return;
+            startupDiagnostics.stage(generation, "检查环境与依赖");
             proot.ensureRuntimeFiles();
             if (!proot.isEnvironmentReady()) {
                 if (!proot.hasOfflineBundle()) {
@@ -281,7 +289,9 @@ public class HarnessController {
                 }
             }
             ensureHeartbeatPatch();
+            startupDiagnostics.stage(generation, "创建 Web 进程");
             Process p = proot.execRootfs(runCoreCommand());
+            startupDiagnostics.stage(generation, "等待鉴权链接");
             // 3090 桥就绪：agent 在容器里调设备能力（/exec /confirm /status）走这条通道。
             // 跨实例互斥，DeviceBridgeService 已起过则是幂等 no-op。
             try {
@@ -318,6 +328,7 @@ public class HarnessController {
     /** 读 dsh 进程输出：抓鉴权链接（宽松）、并把脱敏后的输出落到容器日志方便排查。 */
     private void drainWebOutput(Process p, long generation, Consumer<String> onStatus) {
         StringBuilder scan = new StringBuilder();
+        com.deepseekharness.app.util.DshAuthLog safeLog = new com.deepseekharness.app.util.DshAuthLog();
         try (InputStream in = p.getInputStream()) {
             byte[] buf = new byte[8192];
             int n;
@@ -328,10 +339,13 @@ public class HarnessController {
                 String url = null;
                 synchronized (lifecycle) {
                     if (!lifecycle.isCurrent(generation)) continue;
-                    appendHostLog(chunk);
+                    String lines = safeLog.append(chunk);
+                    appendHostLog(lines);
+                    startupDiagnostics.output(generation, lines);
                     if (webAuthUrl.isEmpty()) url = extractAuthUrl(scan.toString());
                     if (url != null) {
                         webAuthUrl = url;
+                        startupDiagnostics.stage(generation, "服务已就绪，等待进入网页");
                         lifecycle.finishStart(generation);
                         reportStatus(generation, onStatus, "鉴权链接已就绪，点「进入对话」即可进入 dsh");
                     }
@@ -374,6 +388,14 @@ public class HarnessController {
                 }
             }
         } catch (Exception ignored) {
+        } finally {
+            synchronized (lifecycle) {
+                if (lifecycle.isCurrent(generation)) {
+                    String lines = safeLog.finish();
+                    appendHostLog(lines);
+                    startupDiagnostics.output(generation, lines);
+                }
+            }
         }
         synchronized (lifecycle) {
             if (!lifecycle.isCurrent(generation)) return;
@@ -381,6 +403,9 @@ public class HarnessController {
             webAuthUrl = "";
             lifecycle.finishStart(generation);
             com.deepseekharness.app.LanProxyService.stop(generation);
+            String exitReason = "dsh 进程已退出" + (hadAuth ? "（鉴权后）" : "（鉴权前）");
+            startupDiagnostics.output(generation, exitReason);
+            startupDiagnostics.preserveFailure(new File(proot.getRootfsDir(), "root/dsh-web.log"), exitReason);
             reportStatus(generation, onStatus, hadAuth ? "dsh 进程已退出"
                     : "dsh 进程已退出且未打印鉴权链接，日志见 /root/dsh-web.log");
         }

@@ -33,6 +33,8 @@ public class LaunchFragment extends Fragment {
     private TextView launchLog;
     /** 启动按钮当前是否处于「进入」态（鉴权链接已就绪）。 */
     private boolean webReady;
+    /** 日志时间线版本号，防止无变更时重复刷新 DOM。 */
+    private long logRevision = -1;
     /** 本次启动开始时刻（显示耗时用）。 */
     private long startAtMs;
     private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -215,6 +217,18 @@ public class LaunchFragment extends Fragment {
             boolean starting = controller.isStarting();
             boolean stopping = controller.isStopping();
             boolean ready = !starting && !stopping && !controller.getWebAuthUrl().isEmpty();
+            com.deepseekharness.app.util.StartupTrace.Snapshot trace = controller.startupDiagnostics().snapshot();
+            if (launchLog != null && trace.revision != logRevision && !trace.log.isEmpty()) {
+                launchLog.setText(trace.log);
+                logRevision = trace.revision;
+                if (getView() != null) {
+                    try {
+                        android.widget.ScrollView sv = getView().findViewById(R.id.launch_log_scroll);
+                        if (sv != null) sv.post(() -> sv.fullScroll(View.FOCUS_DOWN));
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
             runState.setText(stopping ? "DSH 停止中…" : starting ? "DSH 启动中…"
                     : ready ? "DSH 已就绪，可进入" : controller.isUserStopped() ? "DSH 已停止" : "DSH 未就绪");
             if (start != null) {

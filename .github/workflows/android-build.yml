@@ -6,6 +6,7 @@ on:
       - '1.2.0-rc1.3test'
       - '1.2.0rc1test'
       - '0.1.5rc.2底包'
+      - 'test'
       - main
   workflow_dispatch:
 
@@ -41,13 +42,21 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Fetch prebuilt offline rootfs 0.1.5-rc.2 from release
+      - name: Fetch prebuilt offline rootfs from own release
         run: |
           set -euo pipefail
           if [ ! -f "app/src/main/assets/offline-rootfs.bin" ]; then
-            echo "==> 直接从自身仓库 Release (0.1.5rc.2-base) 秒级拉取已做好的 0.1.5-rc.2 底包..."
-            curl -L -f -o app/src/main/assets/offline-rootfs.bin \
-              "https://github.com/${{ github.repository }}/releases/download/0.1.5rc.2-base/offline-rootfs.bin"
+            echo "==> 优先从自身仓库 Release 自动获取完全自主掌控的离线底包..."
+            # 优先 0.1.5rc1-base，其次 0.1.5rc.2-base，彻底摆脱外部仓库依赖
+            URL1="https://github.com/${{ github.repository }}/releases/download/0.1.5rc1-base/offline-rootfs.bin"
+            URL2="https://github.com/${{ github.repository }}/releases/download/0.1.5rc.2-base/offline-rootfs.bin"
+            if curl -f -s -I -L "$URL1" > /dev/null; then
+              echo "从自身 Release (0.1.5rc1-base) 下载..."
+              curl -L -f -o app/src/main/assets/offline-rootfs.bin "$URL1"
+            else
+              echo "从自身 Release (0.1.5rc.2-base) 下载..."
+              curl -L -f -o app/src/main/assets/offline-rootfs.bin "$URL2"
+            fi
           fi
           ls -lh app/src/main/assets/offline-rootfs.bin
 

@@ -1,0 +1,71 @@
+name: Sync & Publish Base Rootfs Asset
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: '源仓库 (如 DSH-APP/DSHA 或 qiannianhuanxiang/DSHA)'
+        required: true
+        default: 'DSH-APP/DSHA'
+      source_tag:
+        description: '源 Release Tag (如 v0.1.5-rc1)'
+        required: true
+        default: 'v0.1.5-rc1'
+      target_tag:
+        description: '发布到自身仓库的 Tag (如 0.1.5rc1-base)'
+        required: true
+        default: '0.1.5rc1-base'
+      asset_name:
+        description: '底包资产文件名'
+        required: true
+        default: 'offline-rootfs.bin'
+
+jobs:
+  sync:
+    name: Sync Rootfs to Own Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Asset from Source Release
+        run: |
+          set -euo pipefail
+          echo "==> 正在从源仓库 ${{ github.event.inputs.source_repo }} 的 ${{ github.event.inputs.source_tag }} 下载 ${{ github.event.inputs.asset_name }}..."
+          SRC_URL="https://github.com/${{ github.event.inputs.source_repo }}/releases/download/${{ github.event.inputs.source_tag }}/${{ github.event.inputs.asset_name }}"
+          
+          # 如果直接存在 offline-rootfs.bin 则直接下载
+          if curl -f -s -I -L "$SRC_URL" > /dev/null; then
+            echo "直接找到 $SRC_URL，开始下载..."
+            curl -L -f -o offline-rootfs.bin "$SRC_URL"
+          else
+            # 若源 Release 是 APK，则下载 APK 解压出 offline-rootfs.bin
+            echo "源 Release 无裸 bin，尝试从 APK 解压..."
+            APK_URL="https://github.com/${{ github.event.inputs.source_repo }}/releases/download/${{ github.event.inputs.source_tag }}/dsha-${{ github.event.inputs.source_tag }}.apk"
+            curl -L -f -o /tmp/source.apk "$APK_URL"
+            unzip -p /tmp/source.apk "assets/offline-rootfs.bin" > offline-rootfs.bin
+            rm -f /tmp/source.apk
+          fi
+
+          ls -lh offline-rootfs.bin
+          sha256sum offline-rootfs.bin
+
+      - name: Create or Update Own Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TARGET_TAG="${{ github.event.inputs.target_tag }}"
+          
+          echo "==> 检查自身仓库是否已有 Release $TARGET_TAG..."
+          if gh release view "$TARGET_TAG" >/dev/null 2>&1; then
+            echo "Release $TARGET_TAG 已存在，覆盖更新资产..."
+            gh release upload "$TARGET_TAG" offline-rootfs.bin --clobber
+          else
+            echo "创建新 Release $TARGET_TAG 并上传资产..."
+            gh release create "$TARGET_TAG" offline-rootfs.bin \
+              --title "DSHA 基准离线底包 ($TARGET_TAG)" \
+              --notes "由 GitHub Actions 自动化工作流转存收拢的纯净精简离线底包资产。完全由当前仓库自主掌控。" \
+              --prerelease
+          fi
+          echo "==> 资产成功发布到自身 Release！"

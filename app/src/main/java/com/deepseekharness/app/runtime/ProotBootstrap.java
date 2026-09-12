@@ -1097,6 +1097,13 @@ public class ProotBootstrap {
         }
         rootfsDir.mkdirs();
         TarGzipExtractor.extractAuto(counted, rootfsDir, 0);
+        if ("split-runtime-v1".equals(readAssetString("offline-rootfs.layout").trim())) {
+            try (InputStream input = ctx.getAssets().open("dsh-runtime.bin")) {
+                TarGzipExtractor.extractAuto(input, rootfsDir, 0);
+            } catch (Throwable e) {
+                Log.w("DSHA", "解压独立 dsh-runtime 失败或不存在: " + e.getMessage());
+            }
+        }
         installBundledPython(rootfsDir);
         installBundledPnpm(rootfsDir);
         RuntimeTools.prepare(ctx, rootfsDir);
