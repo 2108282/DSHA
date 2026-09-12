@@ -209,6 +209,7 @@ public class ProotBootstrap {
             copyExec(findNativeLib("libandroidshmem.so"), new File(libDir, "libandroid-shmem.so"));
         }
         ensureDshRuntimePatches();
+        patchClientCombos();
         if (hasBash()) ensureNetworkTools();
     }
 
@@ -305,6 +306,40 @@ public class ProotBootstrap {
         } catch (Throwable e) {
             Log.w("DSHA", "settings persistence patch 失败（不影响启动）: "
                     + SensitiveData.redact(String.valueOf(e)));
+        }
+    }
+
+    /**
+     * 移植上游 3 秒极速启动补丁：网页脚本拼接缓存 (client-combo-cache)。
+     * 解决手机端 CPU 逐字符计算源码换行耗时 40 秒的致命性能瓶颈，使启动鉴权瞬间完成。
+     */
+    private void patchClientCombos() {
+        try {
+            File rootfs = getRootfsDir();
+            File module = new File(rootfs, "usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-modules/lib/index.js");
+            if (!module.isFile() || Compat.isSymbolicLink(module)) return;
+            String source = Compat.readAll(module);
+            if (source.contains("DSHA_COMBO_CACHE_V1")) return; // 已打补丁，跳过
+
+            String patchJson = readAssetString("client-combo-patch.json");
+            if (patchJson.isEmpty()) return;
+            org.json.JSONObject spec = new org.json.JSONObject(patchJson);
+            org.json.JSONArray patches = spec.getJSONArray("patches");
+            String patched = source;
+            for (int i = 0; i < patches.length(); i++) {
+                org.json.JSONObject p = patches.getJSONObject(i);
+                patched = com.deepseekharness.app.util.ExactTextPatch.apply(patched, p.getString("before"), p.getString("after"));
+            }
+            File cacheDir = new File(rootfs, "usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/dsha-client-combo-cache");
+            if (!cacheDir.exists()) cacheDir.mkdirs();
+            extractAssetFile("client-combo-cache/package.json", new File(cacheDir, "package.json"));
+            extractAssetFile("client-combo-cache/index.js", new File(cacheDir, "index.js"));
+            if (!source.equals(patched)) {
+                Compat.write(module, patched.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                Log.i("DSHA", "已打网页脚本拼接极速缓存补丁 (client-combo-cache)");
+            }
+        } catch (Throwable e) {
+            Log.w("DSHA", "网页拼接优化补丁跳过或失败: " + e.getMessage());
         }
     }
 
@@ -531,6 +566,35 @@ public class ProotBootstrap {
                     File gLink = new File(globalNm, p);
                     if (!gLink.exists()) {
                         try { Compat.symlink(orig, gLink); } catch (Throwable ignored) {}
+                    }
+                }
+                // 扫描用户导入的所有第三方插件（如 dsh-agy），建立全局与局部 node_modules 软链接，根除 ERR_MODULE_NOT_FOUND
+                File pluginSrcDir = new File(rootfs, "root/.dsh/plugin-src");
+                File profNm = new File(rootfs, "root/.dsh/profiles/web/node_modules");
+                if (pluginSrcDir.isDirectory()) {
+                    File[] userPlugins = pluginSrcDir.listFiles();
+                    if (userPlugins != null) {
+                        for (File up : userPlugins) {
+                            if (!up.isDirectory()) continue;
+                            String pname = up.getName();
+                            // 1. 全局软链：/usr/local/lib/node_modules/<pname> -> /root/.dsh/plugin-src/<pname>
+                            File gLink = new File(globalNm, pname);
+                            if (!gLink.exists()) {
+                                try { Compat.symlink(up.getAbsolutePath(), gLink); } catch (Throwable ignored) {}
+                            }
+                            // 2. profile 局部软链：/root/.dsh/profiles/web/node_modules/<pname>
+                            if (profNm.isDirectory()) {
+                                File pLink = new File(profNm, pname);
+                                if (!pLink.exists()) {
+                                    try { Compat.symlink(up.getAbsolutePath(), pLink); } catch (Throwable ignored) {}
+                                }
+                            }
+                            // 3. 插件自属软链：/root/.dsh/plugin-src/<pname>/node_modules -> 共享依赖池
+                            File pNm = new File(up, "node_modules");
+                            if (!pNm.exists()) {
+                                try { Compat.symlink(targetNm, pNm); } catch (Throwable ignored) {}
+                            }
+                        }
                     }
                 }
             }
