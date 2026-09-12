@@ -468,6 +468,7 @@ public class ProotBootstrap {
     }
 
     private void extractAssetFile(String assetPath, File dest) {
+        if (dest.getParentFile() != null && !dest.getParentFile().exists()) dest.getParentFile().mkdirs();
         try (InputStream in = ctx.getAssets().open(assetPath);
              java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
             byte[] buf = new byte[8192];
@@ -478,24 +479,36 @@ public class ProotBootstrap {
         } catch (Throwable ignored) {}
     }
 
-    /** 确保 task-notifier 与 status-overlay 实体脚本与 APK assets 保持最新同步 */
+    private void extractAssetDir(String assetDir, File targetDir) {
+        try {
+            String[] list = ctx.getAssets().list(assetDir);
+            if (list == null || list.length == 0) {
+                extractAssetFile(assetDir, targetDir);
+            } else {
+                if (!targetDir.exists()) targetDir.mkdirs();
+                for (String child : list) {
+                    String subAsset = assetDir.isEmpty() ? child : assetDir + "/" + child;
+                    File subTarget = new File(targetDir, child);
+                    extractAssetDir(subAsset, subTarget);
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /** 确保四个官方内置插件实体与 APK assets 保持最新同步释放 */
     public void ensureBuiltinPluginEntities() {
         File rootfs = getRootfsDir();
         if (rootfs == null || !rootfs.isDirectory()) return;
         try {
-            // 1. dsh-task-notifier
-            File tnDir = new File(rootfs, "root/dsha-task-notifier/lib");
-            if (!tnDir.exists()) tnDir.mkdirs();
-            extractAssetFile("task-notifier/package.json", new File(rootfs, "root/dsha-task-notifier/package.json"));
-            extractAssetFile("task-notifier/cordis.patch.yml", new File(rootfs, "root/dsha-task-notifier/cordis.patch.yml"));
-            extractAssetFile("task-notifier/lib/index.js", new File(rootfs, "root/dsha-task-notifier/lib/index.js"));
+            // 优先从 builtin-plugins/ 目录完整递归同步四个内置插件全部源码与补丁
+            extractAssetDir("builtin-plugins/dsh-device-shell-guide", new File(rootfs, "root/dsha-device-shell-guide"));
+            extractAssetDir("builtin-plugins/dsh-status-overlay", new File(rootfs, "root/dsha-status-overlay"));
+            extractAssetDir("builtin-plugins/dsh-task-notifier", new File(rootfs, "root/dsha-task-notifier"));
+            extractAssetDir("builtin-plugins/dsh-web-mobile", new File(rootfs, "root/dsha-web-mobile"));
 
-            // 2. dsh-status-overlay
-            File soDir = new File(rootfs, "root/dsha-status-overlay/lib");
-            if (!soDir.exists()) soDir.mkdirs();
-            extractAssetFile("status-overlay/package.json", new File(rootfs, "root/dsha-status-overlay/package.json"));
-            extractAssetFile("status-overlay/cordis.patch.yml", new File(rootfs, "root/dsha-status-overlay/cordis.patch.yml"));
-            extractAssetFile("status-overlay/lib/index.js", new File(rootfs, "root/dsha-status-overlay/lib/index.js"));
+            // 兼顾独立平级目录的旧资产覆盖
+            extractAssetDir("task-notifier", new File(rootfs, "root/dsha-task-notifier"));
+            extractAssetDir("status-overlay", new File(rootfs, "root/dsha-status-overlay"));
         } catch (Throwable ignored) {}
     }
 
