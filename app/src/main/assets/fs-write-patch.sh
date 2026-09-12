@@ -55,7 +55,7 @@ F=$(locate_pkg dsh-fs-local)
 if [ -z "${F:-}" ] || [ ! -f "${F:-}" ]; then
   log "未找到 dsh-fs-local/lib/index.js，跳过"
   echo FS_PATCH_SKIP
-elif grep -q 'DSHA_L2S_FIX3' "$F"; then
+elif grep -q 'DSHA_L2S_FIX3' "$F" || grep -q 'DSHA_ATOMIC_PUBLISH_V1' "$F"; then
   echo FS_PATCH_ALREADY
 else
   cp -f "$F" "$F.dsha-bak" 2>/dev/null || true
@@ -229,8 +229,11 @@ if [ -z "${S:-}" ] || [ ! -f "${S:-}" ]; then
   exit 0
 fi
 
-# 检查是否已打过补丁且 import 完好（必须同时有 rename 和 link）
-if grep -q 'await __dshaPublishLog(tmp, finalPath);' "$S" && grep -q 'DSHA_L2S_FIX4' "$S" && grep -q '\blink\b' "$S" && grep -q '\brename\b' "$S"; then
+# 检查是否已打过补丁且 import 完好（必须同时有 rename 和 link），或已内置 DSHA_ATOMIC_PUBLISH_V1
+if grep -q 'DSHA_ATOMIC_PUBLISH_V1' "$S"; then
+  echo SESSION_PATCH_ALREADY
+  exit 0
+elif grep -q 'await __dshaPublishLog(tmp, finalPath);' "$S" && grep -q 'DSHA_L2S_FIX4' "$S" && grep -q '\blink\b' "$S" && grep -q '\brename\b' "$S"; then
   echo SESSION_PATCH_ALREADY
   exit 0
 fi

@@ -355,6 +355,8 @@ public class ProotBootstrap {
         if (!f.isFile()) return;
         String c = new String(Compat.readAllBytes(f),
                 java.nio.charset.StandardCharsets.UTF_8);
+        // 如果底包已经内置了 DSHA_ATOMIC_PUBLISH_V1，说明已经优雅实现了原子发布且声明了 link，绝不能二次 patch 导致 Identifier link has already been declared 语法错误
+        if (c.contains("DSHA_ATOMIC_PUBLISH_V1")) return;
         boolean callsLink = c.contains("await link(tmp, finalPath);");
         boolean callsRename = c.contains("await rename(tmp, finalPath);") || c.contains("await __dshaPublishLog(tmp, finalPath);");
         if (!callsLink && !callsRename) return; // 版本不匹配或已无关
