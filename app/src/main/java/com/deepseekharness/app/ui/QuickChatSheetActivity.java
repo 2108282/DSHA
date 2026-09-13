@@ -800,10 +800,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             ws.setAllowContentAccess(true);
             ws.setCacheMode(WebSettings.LOAD_DEFAULT);
 
-            // 禁用系统自动算法反色
+            // 模式状态跟随容器，同时禁用系统自动算法反色
+            boolean initDark = ThemeController.isDark(getApplicationContext());
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
-                    ws.setForceDark(WebSettings.FORCE_DARK_OFF);
+                    ws.setForceDark(initDark ? WebSettings.FORCE_DARK_ON : WebSettings.FORCE_DARK_OFF);
                 } catch (Throwable ignored) {}
             }
             if (Build.VERSION.SDK_INT >= 33) {
@@ -980,7 +981,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
-    /** 覆写前端背景与输入框底座保护，确保沉浸透光同时彻底根除输入框塌陷与文字穿透重叠 */
+    /** 覆写前端背景与输入框底座保护，确保沉浸透光同时彻底根除输入框塌陷、文字穿透与二层菜单失真 */
     public static void refreshImmersiveTheme(Context context) {
         if (sCachedWebView == null || context == null) return;
         sCachedWebView.post(() -> {
@@ -988,20 +989,44 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 boolean dark = ThemeController.isDark(context);
                 boolean immersive = new com.deepseekharness.app.core.ConfigStore(context).isSheetImmersive();
 
-                String seatBg = dark ? "rgba(16, 20, 27, 0.45)" : "rgba(245, 248, 252, 0.45)";
+                // 动态同步 WebView 内核深浅色模式，使 (prefers-color-scheme: dark) 真实跟随容器模式
+                WebSettings ws = sCachedWebView.getSettings();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        ws.setForceDark(dark ? WebSettings.FORCE_DARK_ON : WebSettings.FORCE_DARK_OFF);
+                    } catch (Throwable ignored) {}
+                }
+                if (Build.VERSION.SDK_INT >= 33) {
+                    try {
+                        ws.setAlgorithmicDarkeningAllowed(false);
+                    } catch (Throwable ignored) {}
+                }
+
                 String inputBg = dark ? "rgba(255, 255, 255, 0.06)" : "rgba(255, 255, 255, 0.75)";
                 String inputBorder = dark ? "rgba(255, 255, 255, 0.12)" : "rgba(0, 0, 0, 0.08)";
 
+                // 二层菜单、抽屉与弹窗的防穿透高质感底色（暗色与 sheetCard 的 #10141B 融为一体；亮色与 #F5F8FC 统一）
+                String drawerBg = dark ? "rgba(16, 20, 27, 0.96)" : "rgba(245, 248, 252, 0.97)";
+                String menuBg = dark ? "rgba(24, 29, 38, 0.96)" : "rgba(255, 255, 255, 0.98)";
+                String selectorBg = dark ? "rgba(30, 36, 48, 0.96)" : "rgba(240, 243, 246, 0.96)";
+                String dialogBg = dark ? "rgba(20, 24, 32, 0.97)" : "rgba(255, 255, 255, 0.98)";
+                String menuBorder = dark ? "rgba(255, 255, 255, 0.12)" : "rgba(0, 0, 0, 0.08)";
+
                 String commonVars = "  --dsw-alias-bg-base: transparent !important;\n"
-                        + "  --dsw-alias-bg-layer-1: transparent !important;\n"
-                        + "  --dsw-alias-bg-layer-2: rgba(128, 128, 128, 0.05) !important;\n"
-                        + "  --dsw-alias-bg-layer-3: rgba(128, 128, 128, 0.08) !important;\n"
-                        + "  --dsw-specific-sidebar-fill: transparent !important;\n"
                         + "  --dsh-boot-bg: transparent !important;\n"
                         + "  /* 任务完成横幅彻底透明透光 */\n"
                         + "  --dsw-specific-tip: transparent !important;\n"
-                        + "  --dsw-specific-menu: transparent !important;\n"
-                        + "  --dsw-specific-selector: transparent !important;\n"
+                        + "  /* 二层菜单、抽屉与选择器恢复防穿透实体底色与毛玻璃变量 */\n"
+                        + "  --dsh-drawer-bg: " + drawerBg + " !important;\n"
+                        + "  --dsh-menu-bg: " + menuBg + " !important;\n"
+                        + "  --dsh-dialog-bg: " + dialogBg + " !important;\n"
+                        + "  --dsh-menu-border: " + menuBorder + " !important;\n"
+                        + "  --dsw-specific-sidebar-fill: " + drawerBg + " !important;\n"
+                        + "  --dsw-specific-menu: " + menuBg + " !important;\n"
+                        + "  --dsw-specific-selector: " + selectorBg + " !important;\n"
+                        + "  --dsw-alias-bg-layer-1: " + menuBg + " !important;\n"
+                        + "  --dsw-alias-bg-layer-2: " + dialogBg + " !important;\n"
+                        + "  --dsw-alias-bg-layer-3: " + menuBg + " !important;\n"
                         + "  /* 代码块与行内代码半透微光，彻底消除不透明黑块 */\n"
                         + "  --dsw-alias-markdown-code-block: rgba(128, 128, 128, 0.08) !important;\n"
                         + "  --dsw-alias-markdown-code-block-banner: rgba(128, 128, 128, 0.05) !important;\n"
@@ -1012,13 +1037,29 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         ? "  --dsw-alias-label-primary: #E8ECF4 !important;\n  --dsw-alias-label-secondary: #A6B0C3 !important;\n"
                         : "  --dsw-alias-label-primary: #1A2230 !important;\n  --dsw-alias-label-secondary: #4A5568 !important;\n";
 
+                String dashboardDarkCss = dark ? (
+                        "/* ===== dsh-api-dashboard 插件深色模式强制覆盖 ===== */\n"
+                        + ".dshadb_bar { background: #262a33 !important; border: 1px solid #363c48 !important; color: #9aa1b0 !important; }\n"
+                        + ".dshadb_bar_name, .dshadb_bar_amount { color: #f2f4f8 !important; }\n"
+                        + ".dshadb_bar_cost { border-left: 1px solid #363c48 !important; color: #8b91a0 !important; }\n"
+                        + ".dshadb_field { background: #1e222a !important; border-color: #363c48 !important; color: #f2f4f8 !important; }\n"
+                        + ".dshadb_field_select { background-image: linear-gradient(45deg,transparent 50%,#8b91a0 50%),linear-gradient(135deg,#8b91a0 50%,transparent 50%) !important; }\n"
+                        + ".dshadb_switch { background: #3d434f !important; }\n"
+                        + ".dshadb_tab { background: #262a33 !important; color: #9aa1b0 !important; }\n"
+                        + ".dshadb_kind, .dshadb_sub, .dshadb_wf_row, .dshadb_wf_row_col { background: #262a33 !important; border-color: #363c48 !important; color: #9aa1b0 !important; }\n"
+                        + ".dshadb_wf_name, .dshadb_sub_name { color: #f2f4f8 !important; }\n"
+                        + ".dshadb_whale-bubble { background: #262a33 !important; }\n"
+                        + ".dshadb_whale-bubble::after { border-top-color: #262a33 !important; }\n"
+                        + ".dshadb_whale-l-a { color: #d3d7e0 !important; }\n"
+                        + ".dshadb_whale-l-b { color: #f2f4f8 !important; }\n"
+                        + ".dshadb_whale-l-c { color: #9298a6 !important; }\n"
+                ) : "";
+
                 String cssImmersive = "html, body, #root, main, .dsh-layout-root, "
-                        + "div[class*='_root'], div[class*='_wrap'], div[class*='_container'], "
-                        + "div[class*='_boot'], div[class*='_onboardingStage'], div[class*='_stage'], "
-                        + "div[class*='_scrollBody'], div[class*='_viewArea'], div[class*='_body'], "
-                        + "div[class*='_composerHero'], div[class*='_dock'], div[class*='_panel'], "
-                        + "pre, code, div[class*='_bannerWrap'], .md-code-block, "
-                        + "header, section, article {\n"
+                        + "div[class*='pI_x6G_frame'], div[class*='pI_x6G_centerCol'], "
+                        + "div[class*='_scrollBody'], div[class*='_viewArea'], "
+                        + "div[class*='wSkVaW_root'], div[class*='_composerHero'], div[class*='_dock'], "
+                        + "div[class*='_bannerWrap'] {\n"
                         + "  background: transparent !important;\n"
                         + "  background-color: transparent !important;\n"
                         + "  background-image: none !important;\n"
@@ -1026,6 +1067,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + ":root, html, body, body[data-ds-dark-theme], .dark, [data-theme] {\n"
                         + commonVars + textColorVars
                         + "}\n"
+                        + dashboardDarkCss
                         + "/* 任务完成横幅：半透明微透光卡片，带精致圆角边框 */\n"
                         + "div[class*='lXshSW_root'] {\n"
                         + "  background: rgba(128, 128, 128, 0.06) !important;\n"
@@ -1057,6 +1099,97 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "}\n"
                         + "[data-mobile-nav=\"frame\"] {\n"
                         + "  padding-top: 0px !important;\n"
+                        + "}\n"
+                        + "/* ===== 全景下层遮挡自动隐身机制 ===== */\n"
+                        + "/* 当右侧边栏（文件列表/文档预览）、文件树、侧边栏会话列表、模态弹窗或全屏看板等展开时，底层主会话流、输入框与顶栏瞬间整体隐身，消灭字体重叠 */\n"
+                        + "[data-mobile-nav=\"frame\"]:has([data-sidebar-right-open]) div[class*='pI_x6G_centerCol'],\n"
+                        + "div[class*='pI_x6G_frame']:has([data-sidebar-right-open]) div[class*='pI_x6G_centerCol'],\n"
+                        + "body:has([data-sidebar-right-open]) div[class*='pI_x6G_centerCol'],\n"
+                        + "body:has([class*='P3OORG_panel'][data-sidebar-right-open]) div[class*='pI_x6G_centerCol'],\n"
+                        + "[data-mobile-nav=\"frame\"]:has([data-sidebar-right-open]) div[class*='_composerSeat'],\n"
+                        + "div[class*='pI_x6G_frame']:has([data-sidebar-right-open]) div[class*='_composerSeat'],\n"
+                        + "body:has([data-sidebar-right-open]) div[class*='_composerSeat'],\n"
+                        + "body:has([class*='P3OORG_panel'][data-sidebar-right-open]) div[class*='_composerSeat'],\n"
+                        + "[data-mobile-nav=\"frame\"]:has([data-sidebar-right-open]) [data-phase] header,\n"
+                        + "div[class*='pI_x6G_frame']:has([data-sidebar-right-open]) [data-phase] header,\n"
+                        + "body:has([data-sidebar-right-open]) [data-phase] header,\n"
+                        + "[data-mobile-nav=\"frame\"][data-aionui-preview-open] div[class*='pI_x6G_centerCol'],\n"
+                        + "[data-mobile-nav=\"frame\"][data-aionui-explorer-open] div[class*='pI_x6G_centerCol'],\n"
+                        + "[data-mobile-nav=\"frame\"][data-aionui-preview-open] div[class*='_composerSeat'],\n"
+                        + "[data-mobile-nav=\"frame\"][data-aionui-explorer-open] div[class*='_composerSeat'],\n"
+                        + "[data-mobile-nav=\"frame\"]:not([data-sidebar-collapsed]) div[class*='pI_x6G_centerCol'],\n"
+                        + "[data-mobile-nav=\"frame\"]:not([data-sidebar-collapsed]) div[class*='_composerSeat'],\n"
+                        + "body:has([aria-modal=\"true\"]) div[class*='pI_x6G_centerCol'],\n"
+                        + "body:has([aria-modal=\"true\"]) div[class*='_composerSeat'],\n"
+                        + "html[data-dsh-taskboard-active] div[class*='pI_x6G_centerCol'],\n"
+                        + "html[data-dsh-ssh-active] div[class*='pI_x6G_centerCol'],\n"
+                        + "html[data-dsh-taskboard-active] div[class*='_composerSeat'],\n"
+                        + "html[data-dsh-ssh-active] div[class*='_composerSeat'] {\n"
+                        + "  visibility: hidden !important;\n"
+                        + "  opacity: 0 !important;\n"
+                        + "  pointer-events: none !important;\n"
+                        + "}\n"
+                        + "/* ===== 二层菜单与抽屉防穿透加固 ===== */\n"
+                        + "/* 1. 移动端左侧抽屉（会话侧边栏）：防穿透实体底座，严格剔除 backdrop-filter 防止破坏 fixed 弹窗包含块 */\n"
+                        + "[data-mobile-nav=\"frame\"] > :first-child,\n"
+                        + "div[class*='pI_x6G_sidebarCol'],\n"
+                        + "div[class*='hHd-Xa_root'] {\n"
+                        + "  background: var(--dsh-drawer-bg) !important;\n"
+                        + "  background-color: var(--dsh-drawer-bg) !important;\n"
+                        + "  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3) !important;\n"
+                        + "  overflow-x: hidden !important;\n"
+                        + "}\n"
+                        + "/* 2. 移动端设置弹窗居中与全宽自适应加固 */\n"
+                        + "[aria-modal=\"true\"]:has(> :first-child > :last-child > button):not(:has([role=\"navigation\"])):not(:has([class*=\"ZuhsRW\"])) {\n"
+                        + "  box-sizing: border-box !important;\n"
+                        + "  left: 8px !important;\n"
+                        + "  right: 8px !important;\n"
+                        + "  width: calc(100vw - 16px) !important;\n"
+                        + "  max-width: calc(100vw - 16px) !important;\n"
+                        + "}\n"
+                        + "/* 3. 所有下拉菜单、选项列表、快捷操作卡片 */\n"
+                        + "[role=\"menu\"],\n"
+                        + "[role=\"listbox\"],\n"
+                        + "div[class*='_menu'],\n"
+                        + "ul[class*='_menu'],\n"
+                        + "div[class*='_submenu'],\n"
+                        + "div[class*='_list_1nxmc'],\n"
+                        + "div[class*='_submenu_1nxmc'],\n"
+                        + "div[class*='_opPanel'],\n"
+                        + "div[class*='bRhRbq_panel'],\n"
+                        + "div[class*='JObwrW_panel'],\n"
+                        + "div[class*='_dropdown'],\n"
+                        + "div[class*='_popover'] {\n"
+                        + "  background: var(--dsh-menu-bg) !important;\n"
+                        + "  background-color: var(--dsh-menu-bg) !important;\n"
+                        + "  backdrop-filter: blur(20px) !important;\n"
+                        + "  -webkit-backdrop-filter: blur(20px) !important;\n"
+                        + "  border: 1px solid var(--dsh-menu-border) !important;\n"
+                        + "  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35) !important;\n"
+                        + "}\n"
+                        + "/* 4. 模态弹窗与设置面板：毛玻璃防穿透 */\n"
+                        + "[aria-modal=\"true\"],\n"
+                        + "[role=\"dialog\"],\n"
+                        + "div[class*='_dialog_w1urq'] {\n"
+                        + "  background: var(--dsh-dialog-bg) !important;\n"
+                        + "  background-color: var(--dsh-dialog-bg) !important;\n"
+                        + "  border: 1px solid var(--dsh-menu-border) !important;\n"
+                        + "  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4) !important;\n"
+                        + "}\n"
+                        + "/* 5. 右侧文件列表、文档预览抽屉：保持 100% 全景全透明沉浸透光，透出手机桌面壁纸 */\n"
+                        + "[data-sidebar-right-panel],\n"
+                        + "[data-sidebar-right-open],\n"
+                        + "div[class*='P3OORG_panel'],\n"
+                        + "div[class*='P3OORG_panelBody'],\n"
+                        + "div[class*='k-1LKG_root'],\n"
+                        + "div[class*='k-1LKG_body'],\n"
+                        + "div[class*='Java6a_renderer'],\n"
+                        + "div[class*='_0RKuNG_document'],\n"
+                        + "[data-aionui-explorer-col],\n"
+                        + "[data-aionui-preview-col] {\n"
+                        + "  background: transparent !important;\n"
+                        + "  background-color: transparent !important;\n"
+                        + "  background-image: none !important;\n"
                         + "}\n";
 
                 String js = "(function() {"
@@ -1074,6 +1207,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                             + "  if (document.documentElement) document.documentElement.style.backgroundColor = '';\n"
                             + "  if (document.body) document.body.style.backgroundColor = '';\n")
                         + "  if (document.documentElement) {\n"
+                        + "    document.documentElement.style.colorScheme = " + (dark ? "'dark'" : "'light'") + ";\n"
                         + (dark
                                 ? "    document.documentElement.classList.add('dark'); document.documentElement.setAttribute('data-theme', 'dark');\n"
                                 : "    document.documentElement.classList.remove('dark'); document.documentElement.setAttribute('data-theme', 'light');\n")

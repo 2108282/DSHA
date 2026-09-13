@@ -21,6 +21,9 @@ public final class ThemeController {
     public static void select(Context context, String mode) {
         new ConfigStore(context).setUiTheme(mode);
         apply(context);
+        if (context != null) {
+            QuickChatSheetActivity.refreshImmersiveTheme(context.getApplicationContext());
+        }
     }
 
     public static boolean isDark(Context context) {
