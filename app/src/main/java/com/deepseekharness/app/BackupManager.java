@@ -192,30 +192,6 @@ public final class BackupManager {
           .append("echo OK\n");
         return sb.toString();
     }
-              .append("' 2>/dev/null || true\n");
-        }
-
-        sb.append("set --\n");
-        if (paths.length == 0) {
-            sb.append("set -- .dsh\n")
-              .append("[ -d .dsha-workspaces ] && set -- \"$@\" .dsha-workspaces\n");
-        } else {
-            for (String p : paths) {
-                sb.append("[ -e ").append(ShellQuote.arg(p)).append(" ] && set -- \"$@\" ")
-                  .append(ShellQuote.arg(p)).append("\n");
-            }
-        }
-        sb.append("[ -f .dsha-backup-manifest.json ] && set -- \"$@\" .dsha-backup-manifest.json\n")
-          .append("[ $# -gt 0 ] || { echo NOTHING_TO_PACK; exit 1; }\n")
-          .append("echo \"打包: $*\"\n")
-          .append("tar -czf .dsha-backup.tar.gz --ignore-failed-read \"$@\" || { echo TAR_FAIL; exit 1; }\n")
-          .append("rm -rf .dsha-workspaces\n")
-          .append("test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n")
-          .append("CNT=$(tar -tzf .dsha-backup.tar.gz 2>/dev/null | wc -l)\n")
-          .append("echo \"VERIFY_ENTRIES=$CNT\"\n")
-          .append("echo OK\n");
-        return sb.toString();
-    }
 
     private static int parseEntries(String out) {
         if (out == null) return 0;
