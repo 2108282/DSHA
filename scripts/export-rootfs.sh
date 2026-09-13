@@ -36,6 +36,10 @@ tar --numeric-owner -c \
     --exclude='./root/*.log' \
     --exclude='./root/.*.pid' \
     --exclude='./root/.bash_history' \
+    --exclude='./root/.dsh.pre-restore*' \
+    --exclude='./run/*' \
+    --exclude='./data/*' \
+    --exclude='./mnt/*' \
     --exclude='./root/.dsh/sessions/*' \
     --exclude='./root/.dsh/attachments/*' \
     --exclude='./root/.dsh/storages/*' \
