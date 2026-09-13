@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -20,13 +21,19 @@ public final class Compat {
     private Compat() {
     }
 
-    public static byte[] readAllBytes(File f) throws IOException {
-        try (FileInputStream in = new FileInputStream(f);
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+    public static byte[] readAllBytes(InputStream in) throws IOException {
+        if (in == null) return new byte[0];
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             byte[] buf = new byte[8192];
             int n;
             while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
             return out.toByteArray();
+        }
+    }
+
+    public static byte[] readAllBytes(File f) throws IOException {
+        try (FileInputStream in = new FileInputStream(f)) {
+            return readAllBytes(in);
         }
     }
 
