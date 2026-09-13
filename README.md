@@ -214,14 +214,38 @@ su -c "grep '/data/adb/dsha/rootfs' /proc/mounts"
 
 ---
 
-## 五、 底包维护与重新打包（开发者）
+## 五、 本地与云端打包指南
 
-当你在 chroot 终端内更新了 DSH 核心版本或安装了新的 Linux 工具链后，可通过如下脚本重新导出纯净脱敏的模块刷机包：
-```bash
-# 在手机终端内进入原生环境
-su -mm -c "/data/adb/dsha/scripts/term.sh"
+### 5.1 本地一键打包（开发者/手机端）
+项目已内置便捷打包脚本 `scripts/build-module.sh`：
 
-# 执行脱敏打包工具
-/sdcard/Download/DSHA/dsha-ksu-project/tools/export-rootfs.sh
-```
-该工具会自动剔除聊天记录、个人配置、API 密钥、历史命令及缓存，在 `/sdcard/Download/DSHA/dsha-ksu-project/release/` 输出新的刷机包与底包压缩包。
+* **方式 1：打包轻量版模块（~20KB，外置底包模式，推荐）**
+  ```bash
+  ./scripts/build-module.sh
+  ```
+  产物位于 `dist/dsha_ksu_native_lite.zip`，刷入时自动寻找手机存储的 `rootfs.tar.gz`。
+
+* **方式 2：打包全内置完整刷机包（~200MB，内置底包，开箱即用）**
+  ```bash
+  ./scripts/build-module.sh --full
+  ```
+  自动寻找本地底包并打包至 `dist/dsha_ksu_native_full.zip`，分发给其他用户无需单独下载底包。
+
+* **方式 3：从当前运行的手机环境导出并打包（脱敏维护）**
+  当你在 chroot 终端更新了 Node 依赖或工具链后，直接在 chroot 终端内执行：
+  ```bash
+  # 终端内执行脱敏导出
+  /sdcard/Download/DSHA/dsha-ksu-project/tools/export-rootfs.sh
+  ```
+  脚本会自动清理缓存、剔除敏感历史，并在 `/sdcard/Download/DSHA/dsha-ksu-project/release/` 输出全新的底包与刷机包。
+
+---
+
+### 5.2 云端自动打包（GitHub Actions CI/CD）
+本分支已配置 `.github/workflows/magisk-module-build.yml` 自动化工作流：
+1. **触发方式**：
+   * 向 `dsh-magisk` 分支执行 `git push`；
+   * 或在 GitHub 仓库页面「Actions」→「Package Magisk/KernelSU Native Module」点击「Run workflow」手动触发。
+2. **云端产物**：
+   * 自动生成轻量版 `dsha_ksu_native_lite.zip` 与全内置完整版 `dsha_ksu_native_full.zip`；
+   * 在对应 Actions 运行页面的 **Artifacts（构建产物）** 列表中即可一键下载使用！

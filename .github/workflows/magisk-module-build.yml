@@ -1,0 +1,65 @@
+name: Build KernelSU / Magisk Module
+
+on:
+  push:
+    branches:
+      - 'dsh-magisk'
+  workflow_dispatch:
+
+concurrency:
+  group: build-magisk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Package Magisk/KernelSU Native Module
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Lite Module Zip (External Rootfs Mode)
+        run: |
+          set -euo pipefail
+          echo "==> 正在打包轻量版模块 (外置底包模式, ~20KB)..."
+          mkdir -p dist
+          cd magisk-module
+          chmod +x customize.sh service.sh scripts/*.sh
+          zip -r9 ../dist/dsha_ksu_native_lite.zip META-INF module.prop customize.sh service.sh scripts
+          cd ..
+          ls -lh dist/dsha_ksu_native_lite.zip
+
+      - name: Fetch base rootfs asset from release
+        run: |
+          set -euo pipefail
+          BASE_TAG="0.1.5rc1-base"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
+          echo "==> 尝试从自身 Release (${BASE_TAG}) 下载 rootfs.tar.gz 资产..."
+          
+          # 优先尝试下载已有的 rootfs.tar.gz，若无则使用 offline-rootfs.bin 还原
+          if curl -s -f -I "${BASE_URL}/rootfs.tar.gz" >/dev/null 2>&1; then
+            curl -L -f -o /tmp/rootfs.tar.gz "${BASE_URL}/rootfs.tar.gz"
+          elif curl -s -f -I "${BASE_URL}/offline-rootfs.bin" >/dev/null 2>&1; then
+            echo "发现 offline-rootfs.bin，转换为通用 gzip 镜像..."
+            curl -L -f -o /tmp/offline-rootfs.bin "${BASE_URL}/offline-rootfs.bin"
+            cp /tmp/offline-rootfs.bin /tmp/rootfs.tar.gz
+          fi
+
+          if [ -f "/tmp/rootfs.tar.gz" ]; then
+            echo "==> 正在打包全内置完整刷机包 (含底包, ~200MB)..."
+            cd magisk-module
+            cp /tmp/rootfs.tar.gz ./rootfs.tar.gz
+            zip -r9 ../dist/dsha_ksu_native_full.zip META-INF module.prop customize.sh service.sh scripts rootfs.tar.gz
+            rm -f rootfs.tar.gz
+            cd ..
+            ls -lh dist/dsha_ksu_native_full.zip
+          else
+            echo "提示: 未获取到远程底包资产，跳过全内置包打包，仅产出轻量包。"
+          fi
+
+      - name: Upload Module Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsha-native-module
+          path: dist/*.zip
