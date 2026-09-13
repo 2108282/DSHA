@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的 tag（如 1.2.0-rc1.3-update2 或 v1.2.0-rc1.3-update2）'
+        description: '要发布的 tag（如 1.2.0-rc1.3-update2.1 或 v1.2.0-rc1.3-update2.1）'
         required: false
-        default: '1.2.0-rc1.3-update2'
+        default: '1.2.0-rc1.3-update2.1'
       prerelease:
         description: '标记为预发布'
         type: boolean
@@ -120,12 +120,12 @@ jobs:
           elif [ -n "${{ inputs.tag }}" ]; then
             TAG_VAL="${{ inputs.tag }}"
           else
-            TAG_VAL="1.2.0-rc1.3-update2"
+            TAG_VAL="1.2.0-rc1.3-update2.1"
           fi
           echo "value=$TAG_VAL" >> "$GITHUB_OUTPUT"
 
-          VN=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle | head -1 || echo "1.2.0-rc1.3-update2")
-          VC=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle | head -1 || echo "114")
+          VN=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle | head -1 || echo "1.2.0-rc1.3-update2.1")
+          VC=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle | head -1 || echo "115")
           echo "versionName=$VN" >> "$GITHUB_OUTPUT"
           echo "versionCode=$VC" >> "$GITHUB_OUTPUT"
 
@@ -157,12 +157,16 @@ jobs:
             sha256       ${{ steps.apk.outputs.sha }}
             ```
 
-            ### 核心更新与修复说明
+            ### 核心更新与修复说明 (1.2.0-rc1.3-update2.1)
             - **内置自主掌控 0.1.5-rc.2 离线底包**：开箱即用，全面摆脱外部依赖，内置核心运行与自愈补丁；
-            - **QuickChat 快捷对话抽屉全景沉浸**：
+            - **QuickChat 快捷对话抽屉 100% 全景全透明与智能隐身**：
               - 消除顶部状态栏空白条，全屏顶格沉浸；
+              - 恢复文件列表与代码/文档预览抽屉 100% 全景全透明，通透透出手机桌面壁纸；
+              - 智能全景下层自动隐身（展开右侧文件栏、文档预览、左侧栏或设置弹窗时，底层主会话流与输入框自动隐藏 `visibility: hidden`，彻底杜绝字体重影与穿透）；
+              - 修复深浅色模式与容器 App 状态动态同步，完美解决 `dsh-api-dashboard` 等插件白天模式异常；
+              - 解除抽屉包含块（containing block）束缚，彻底修复移动端设置面板偏左截断问题；
               - 继承 AppCompatActivity 完美联动日夜间模式，日间视口彻底透明透光、黑夜代码块与输入框半透明微光；
-              - 输入框底座全透明，采用视口二段物理截断（margin-bottom 联动），长对话滚动至输入框上方自然消失，彻底杜绝穿透与重叠；
+              - 输入框底座全透明，采用视口二段物理截断（margin-bottom 联动），长对话滚动至输入框上方自然消失；
               - 设置页新增【快捷抽屉沉浸全透明】独立开关，输入框底座自适应微透光；
             - **pnpm 包管理器全局部署与离线自愈**：安装与修复时同步部署到 `/usr/local/bin/pnpm` 系统全局路径，彻底根治插件管理器找不到 pnpm 报错；
             - **局域网访问与 Token 永久固定**：局域网访问 Token 永久持久化，重启不重置；
