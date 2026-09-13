@@ -63,37 +63,40 @@ public final class BackupManager {
                     lastError = "环境未就绪，无法备份（请先启动一次）";
                     return null;
                 }
-                // 1. 写 manifest（含 scope，恢复端靠它决定合并范围）
-                File manifest = new File(c.proot().getRootfsDir(), "root/.dsha-backup-manifest.json");
-                if (manifest.getParentFile() != null) manifest.getParentFile().mkdirs();
-                Compat.write(manifest, manifestJson(scope).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-
-                // 2. rootfs 内打包 + 验证条目数
+                boolean isKsu = "ksu_chroot".equals(c.proot().runtime().id());
+                // 1. rootfs 内打包 + 验证条目数并直接就地输出
                 String out = c.proot().execChecked(buildTarScript(scope));
-                manifest.delete();
 
-                File tmp = new File(c.proot().getRootfsDir(), "root/.dsha-backup.tar.gz");
-                if (!tmp.isFile() || tmp.length() == 0) {
-                    lastError = "打包产物未生成（tar 没产出 .dsha-backup.tar.gz）";
-                    return null;
-                }
-                // 验证：归档里确实有内容
                 int entries = parseEntries(out);
                 if (entries <= 0) {
                     lastError = "打包产物为空（磁盘可能已满，或该范围没有内容）";
                     return null;
                 }
 
-                // 3. 导出到 Download/DSHA（原子发布）
-                String path = exportArchive(ctx, tmp, LATEST_BACKUP_NAME);
+                String prefix = BackupScope.fileNamePrefix(scope);
+                String latestName = prefix + "latest.tar.gz";
+
+                if (isKsu) {
+                    File target = new File("/sdcard/Download/DSHA/" + latestName);
+                    if (!target.isFile() || target.length() == 0) {
+                        lastError = "备份导出验证失败：/sdcard/Download/DSHA 里未生成有效备份";
+                        return null;
+                    }
+                    return target.getAbsolutePath();
+                }
+
+                File tmp = new File(c.proot().getRootfsDir(), "root/.dsha-backup.tar.gz");
+                if (!tmp.isFile() || tmp.length() == 0) {
+                    lastError = "打包产物未生成（tar 没产出 .dsha-backup.tar.gz）";
+                    return null;
+                }
+                String path = exportArchive(ctx, tmp, latestName);
                 tmp.delete();
                 if (path == null) {
                     lastError = "导出到 Download/DSHA 失败（存储权限或空间不足）";
                     return null;
                 }
-
-                // 4. 验证导出文件确实存在且非空
-                File exported = resolveDownloadFile(ctx, LATEST_BACKUP_NAME);
+                File exported = resolveDownloadFile(ctx, latestName);
                 if (exported == null || !exported.isFile() || exported.length() == 0) {
                     lastError = "导出后验证失败：Download/DSHA 里没有找到有效备份文件";
                     return null;
@@ -107,27 +110,35 @@ public final class BackupManager {
     }
 
     private static String manifestJson(int scope) {
-        return "{\"formatVersion\":1,\"scope\":\"" + BackupScope.id(scope)
-                + "\",\"appVersion\":\"0.2.0-rewrite\",\"dshVersion\":\"0.1.2-alpha.4\","
-                + "\"createdAt\":\"" + new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(new Date())
-                + "\"}";
+        return "{\\\"formatVersion\\\":1,\\\"scope\\\":\\\"" + BackupScope.id(scope)
+                + "\\\",\\\"appVersion\\\":\\\"1.2.0-native\\\",\\\"dshVersion\\\":\\\"0.1.5-rc.2\\\","
+                + "\\\"createdAt\\\":\\\"" + new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(new Date())
+                + "\\\"}";
     }
 
     private static String buildTarScript(int scope) {
         String[] paths = BackupScope.dshPaths(scope);
+        String prefix = BackupScope.fileNamePrefix(scope);
+        String latestName = prefix + "latest.tar.gz";
         StringBuilder sb = new StringBuilder();
-        sb.append("cd /root || exit 1\n")
+        sb.append("set -e\n")
+          .append("cd /root || exit 1\n")
           .append("rm -f .dsha-backup.tar.gz\n")
           .append("[ -d .dsh ] || { echo NO_DSH_DIR; exit 1; }\n");
 
-        if (paths.length == 0) {
-            // 全量备份：动态扫描 workspace.json，把用户工作区的项目文件收集进 .dsha-workspaces 一同归档
+        // 写入 manifest 文件
+        sb.append("printf '%s' '").append(manifestJson(scope)).append("' > /root/.dsha-backup-manifest.json\n");
+
+        if (paths.length == 0 || scope == BackupScope.FULL) {
+            // 全量备份：动态扫描 workspace.json 以及默认工作区，把用户工作区项目文件收集进 .dsha-workspaces 一同归档
             sb.append("python3 -c '\n")
               .append("import json, os, shutil\n")
               .append("ws_stage = \"/root/.dsha-workspaces\"\n")
               .append("shutil.rmtree(ws_stage, ignore_errors=True)\n")
+              .append("os.makedirs(ws_stage, exist_ok=True)\n")
               .append("ws_file = \"/root/.dsh/storages/workspace.json\"\n")
               .append("meta = {}\n")
+              .append("ign = lambda d, files: {f for f in files if f in (\"node_modules\", \".git\", \"__pycache__\", \".pnpm-store\", \"dist\", \".next\", \".cache\", \".dsh\")}\n")
               .append("if os.path.isfile(ws_file):\n")
               .append("    try:\n")
               .append("        with open(ws_file, \"r\", encoding=\"utf-8\") as f:\n")
@@ -140,13 +151,47 @@ public final class BackupManager {
               .append("            dst = os.path.join(ws_stage, wid)\n")
               .append("            os.makedirs(dst, exist_ok=True)\n")
               .append("            meta[wid] = {\"title\": t, \"orig_path\": p}\n")
-              .append("            ign = lambda d, files: {f for f in files if f in (\"node_modules\", \".git\", \"__pycache__\", \".pnpm-store\", \"dist\", \".next\", \".cache\", \".dsh\")}\n")
               .append("            shutil.copytree(p, dst, dirs_exist_ok=True, ignore=ign)\n")
-              .append("        if meta:\n")
-              .append("            with open(os.path.join(ws_stage, \"meta.json\"), \"w\", encoding=\"utf-8\") as mf:\n")
-              .append("                json.dump(meta, mf, ensure_ascii=False)\n")
               .append("    except Exception:\n")
               .append("        pass\n")
+              .append("for extra_wd in [\"/root/内部存储/工作区\", \"/sdcard/Download/DSHA/工作区\"]:\n")
+              .append("    if os.path.isdir(extra_wd) and os.listdir(extra_wd):\n")
+              .append("        dst = os.path.join(ws_stage, \"default_workspace\")\n")
+              .append("        if not os.path.isdir(dst):\n")
+              .append("            os.makedirs(dst, exist_ok=True)\n")
+              .append("            meta[\"default_workspace\"] = {\"title\": \"默认工作区\", \"orig_path\": extra_wd}\n")
+              .append("            shutil.copytree(extra_wd, dst, dirs_exist_ok=True, ignore=ign)\n")
+              .append("if meta:\n")
+              .append("    with open(os.path.join(ws_stage, \"meta.json\"), \"w\", encoding=\"utf-8\") as mf:\n")
+              .append("        json.dump(meta, mf, ensure_ascii=False)\n")
+              .append("' 2>/dev/null || true\n");
+        }
+
+        sb.append("set --\n");
+        if (paths.length == 0) {
+            sb.append("set -- .dsh\n")
+              .append("[ -d .dsha-workspaces ] && set -- \"$@\" .dsha-workspaces\n");
+        } else {
+            for (String p : paths) {
+                sb.append("[ -e ").append(ShellQuote.arg(p)).append(" ] && set -- \"$@\" ")
+                  .append(ShellQuote.arg(p)).append("\n");
+            }
+        }
+        sb.append("[ -f .dsha-backup-manifest.json ] && set -- \"$@\" .dsha-backup-manifest.json\n")
+          .append("[ $# -gt 0 ] || { echo NOTHING_TO_PACK; exit 1; }\n")
+          .append("tar -czf .dsha-backup.tar.gz --ignore-failed-read \"$@\" || { echo TAR_FAIL; exit 1; }\n")
+          .append("rm -rf .dsha-workspaces .dsha-backup-manifest.json\n")
+          .append("test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n")
+          .append("CNT=$(tar -tzf .dsha-backup.tar.gz 2>/dev/null | wc -l)\n")
+          .append("echo \"VERIFY_ENTRIES=$CNT\"\n")
+          .append("mkdir -p /sdcard/Download/DSHA 2>/dev/null || true\n")
+          .append("cp -f .dsha-backup.tar.gz /sdcard/Download/DSHA/").append(latestName).append("\n")
+          .append("TS=$(date +%Y%m%d-%H%M%S)\n")
+          .append("cp -f .dsha-backup.tar.gz /sdcard/Download/DSHA/").append(prefix).append("$TS.tar.gz\n")
+          .append("echo \"EXPORT_PATH=/sdcard/Download/DSHA/").append(latestName).append("\"\n")
+          .append("echo OK\n");
+        return sb.toString();
+    }
               .append("' 2>/dev/null || true\n");
         }
 
@@ -343,6 +388,55 @@ public final class BackupManager {
      */
     public static String restoreFromBackup(Context ctx, HarnessController c, Uri backupUri)
             throws Exception {
+        boolean isKsu = "ksu_chroot".equals(c.proot().runtime().id());
+        if (isKsu) {
+            File stageTar = new File("/sdcard/Download/DSHA/.dsha-restore-stage.tar.gz");
+            if (stageTar.getParentFile() != null) stageTar.getParentFile().mkdirs();
+            try (InputStream in = ctx.getContentResolver().openInputStream(backupUri);
+                 FileOutputStream out = new FileOutputStream(stageTar)) {
+                if (in == null) throw new java.io.IOException("无法打开所选备份文件");
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                out.flush();
+            }
+
+            String script = c.readAsset("restore-merge.py");
+            if (script == null || script.isEmpty()) throw new java.io.IOException("restore-merge.py 缺失");
+            String b64 = android.util.Base64.encodeToString(script.getBytes(java.nio.charset.StandardCharsets.UTF_8), android.util.Base64.NO_WRAP);
+            String prepareCmd = "set -e; mkdir -p /root; "
+                    + "printf '%s' '" + b64 + "' | base64 -d > /root/.dsha-restore-merge.py; "
+                    + "chmod 755 /root/.dsha-restore-merge.py";
+            c.proot().execChecked(prepareCmd);
+
+            String wd = c.config().getWorkdir();
+            if (wd == null || wd.isEmpty()) wd = "/root/内部存储/工作区";
+            String runCmd = "set -e; cd /root; "
+                    + "rm -rf .dsha-restore-stage; mkdir -p .dsha-restore-stage; "
+                    + "tar -xzf /sdcard/Download/DSHA/.dsha-restore-stage.tar.gz -C .dsha-restore-stage --ignore-failed-read; "
+                    + "rm -f /sdcard/Download/DSHA/.dsha-restore-stage.tar.gz; "
+                    + "python3 /root/.dsha-restore-merge.py --stage /root/.dsha-restore-stage --root /root --workdir " + ShellQuote.arg(wd) + " 2>&1";
+            String out = c.proot().execChecked(runCmd);
+
+            // 恢复后的原生环境轻量自愈
+            String postHealCmd = "mkdir -p /sdcard/Download/DSHA/工作区 /root/.dsh 2>/dev/null || true; "
+                    + "rm -f /root/内部存储 2>/dev/null || true; "
+                    + "ln -sf /sdcard/Download/DSHA /root/内部存储 2>/dev/null || true; "
+                    + "chmod 777 /root/.dsh 2>/dev/null || true";
+            c.proot().execChecked(postHealCmd);
+            com.deepseekharness.app.HttpShellService.syncTokenToRootfsSync();
+
+            boolean committed = out != null && out.contains("RESTORE_DSH_COMMITTED");
+            boolean ok = out != null && (out.contains("RESTORE_OK") || out.contains("RESTORE_PARTIAL"));
+            if (!ok && !committed) {
+                throw new java.io.IOException("恢复未确认成功：\n" + tail(out));
+            }
+            int sessionCount = countSessions(c);
+            return "恢复完成（" + (committed ? "已完整提交" : "部分恢复") + "）"
+                    + "\n会话条目数：" + sessionCount
+                    + "\n\n" + tail(out);
+        }
+
         File rootDir = c.proot().getRootfsDir();
         // 0. 把 SAF 授权的内容读进 rootfs 中转
         File src = new File(rootDir, "root/.dsha-restore-src.tar.gz");
@@ -359,18 +453,7 @@ public final class BackupManager {
     /** 从归档恢复（本地 File 版，MediaStore 拷贝兜底后调用）。 */
     public static String restoreFromBackup(Context ctx, HarnessController c, File backup)
             throws Exception {
-        File rootDir = c.proot().getRootfsDir();
-        // scoped storage：Download/DSHA 的文件 owner 是 media_rw，App 直接 File 读会 EACCES。
-        //    先用 MediaStore 把备份拷进 App 缓存再恢复。
-        File readable = copyToAppCache(ctx, backup);
-        File src = new File(rootDir, "root/.dsha-restore-src.tar.gz");
-        try (FileInputStream in = new FileInputStream(readable);
-             FileOutputStream out = new FileOutputStream(src)) {
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
-        }
-        return restoreFromStaged(ctx, c, src);
+        return restoreFromBackup(ctx, c, Uri.fromFile(backup));
     }
 
     /** 共享的恢复执行：src 已是 rootfs 内的归档副本。 */
@@ -420,10 +503,8 @@ public final class BackupManager {
 
     private static int countSessions(HarnessController c) {
         try {
-            File sessions = new File(c.proot().getRootfsDir(), "root/.dsh/sessions");
-            if (!sessions.isDirectory()) return 0;
-            String[] children = sessions.list();
-            return children == null ? 0 : children.length;
+            String out = c.proot().execAndRead("ls -1 /root/.dsh/sessions 2>/dev/null | wc -l").trim();
+            return Integer.parseInt(out);
         } catch (Throwable e) {
             return 0;
         }

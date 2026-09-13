@@ -91,7 +91,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/gap_hair"
-                        android:text="稳定 / 预览更新通道"
+                        android:text="DSH 稳定版 · 测试版 · 客户端与模块"
                         android:textColor="@color/text_muted"
                         android:textSize="@dimen/text_caption" />
                 </LinearLayout>
@@ -196,7 +196,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="核心运行与鉴权修复"
+                        android:text="原生环境与存储直通自愈"
                         android:textColor="@color/text"
                         android:textSize="@dimen/text_body"
                         android:textStyle="bold" />
@@ -206,7 +206,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/gap_hair"
                         android:lineSpacingExtra="2dp"
-                        android:text="Token 双轨鉴权 · Web 守卫放行 · 附件写入修复 · 插件软链自愈 · 局域网放行"
+                        android:text="内部存储直通 · 默认工作区检查 · DNS 修复 · 插件软链自愈"
                         android:textColor="@color/text_muted"
                         android:textSize="@dimen/text_caption" />
                 </LinearLayout>

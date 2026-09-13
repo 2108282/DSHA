@@ -113,21 +113,30 @@ public final class BackupScope {
     /** {@code .dsh} 下要打包的子路径；空数组表示<b>整个 {@code .dsh}</b>。 */
     public static String[] dshPaths(int scope) {
         switch (scope) {
-            // dsh 1.2+：会话文件在 sessions/，UI 入口是 storages/workspace.json 注册表，
-            // 历史对话中的图片与文件附件在 attachments/，三者缺一不可。
-            case SESSIONS: return new String[] { ".dsh/sessions", ".dsh/storages", ".dsh/attachments" };
-            case PLUGINS:  return new String[] { ".dsh/profiles" };
-            case SETTINGS: return new String[] { ".dsh/settings.yaml" };
-            default:       return new String[0];   // 空 = 整个 .dsh
+            // 对话记录：会话文件 sessions/、工作区与会话索引 storages/、附件图片 attachments/、图书与知识库 books/library/documents
+            case SESSIONS: return new String[] {
+                    ".dsh/sessions", ".dsh/storages", ".dsh/attachments",
+                    ".dsh/books", ".dsh/library", ".dsh/documents", ".dsh/sessions-index.json"
+            };
+            // 插件数据：profiles 配置、plugin-src 第三方插件源码、plugins 扩展存储
+            case PLUGINS:  return new String[] {
+                    ".dsh/profiles", ".dsh/plugin-src", ".dsh/plugins", ".dsh/installed-plugins.json"
+            };
+            case SETTINGS: return new String[] { ".dsh/settings.yaml", ".dsh/.env" };
+            default:       return new String[0];   // 空 = 整个 .dsh (包含所有上述目录及配置文件)
         }
     }
 
     /** 恢复时要合并的 {@code .dsh} 子目录名；必须与 {@link #dshPaths(int)} 一一对应。 */
     public static String[] mergeSubdirs(int scope) {
         switch (scope) {
-            case SESSIONS: return new String[] { "sessions", "storages", "attachments" };
-            case PLUGINS:  return new String[] { "profiles" };
-            case SETTINGS: return new String[] { "settings.yaml" };
+            case SESSIONS: return new String[] {
+                    "sessions", "storages", "attachments", "books", "library", "documents", "sessions-index.json"
+            };
+            case PLUGINS:  return new String[] {
+                    "profiles", "plugin-src", "plugins", "installed-plugins.json"
+            };
+            case SETTINGS: return new String[] { "settings.yaml", ".env" };
             default:       return new String[0];
         }
     }

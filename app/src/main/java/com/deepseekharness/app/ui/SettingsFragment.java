@@ -125,7 +125,78 @@ public class SettingsFragment extends Fragment {
     }
 
     private void checkUpdate() {
-        startActivity(new Intent(requireContext(), UpdateActivity.class));
+        showUpdateDialog();
+    }
+
+    private void showUpdateDialog() {
+        String[] options = {
+                "① DSH 核心 · 稳定发布版 (当前 " + Constants.DSH_VERSION + ")",
+                "② DSH 核心 · 测试先行版 (@next 分支)",
+                "③ DSHA 客户端与 Magisk/KSU 模块 (Release)"
+        };
+
+        new AlertDialog.Builder(requireContext())
+                .setTitle("检查与获取更新")
+                .setItems(options, (d, which) -> {
+                    switch (which) {
+                        case 0:
+                            showDshStableUpdate();
+                            break;
+                        case 1:
+                            showDshNextUpdate();
+                            break;
+                        case 2:
+                            openUrl("https://github.com/2108282/DSHA/releases");
+                            break;
+                    }
+                })
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void showDshStableUpdate() {
+        new AlertDialog.Builder(requireContext())
+                .setTitle("DSH 核心 · 稳定版")
+                .setMessage("当前内置版本: " + Constants.DSH_VERSION + "\n\n"
+                        + "可在浏览器查看官方 GitHub 上游最新发布日志，或在终端执行 npm 升级命令:\n\n"
+                        + "npm i -g @deepseek-ai/dsh")
+                .setPositiveButton("查看官方 Release", (d, w) ->
+                        openUrl("https://github.com/deepseek-ai/deepseek-harness/releases"))
+                .setNeutralButton("复制升级命令", (d, w) -> copyText("npm i -g @deepseek-ai/dsh"))
+                .setNegativeButton("返回", null)
+                .show();
+    }
+
+    private void showDshNextUpdate() {
+        new AlertDialog.Builder(requireContext())
+                .setTitle("DSH 核心 · 测试先行版")
+                .setMessage("体验上游仓库最新合并的功能特性与测试分支。\n\n"
+                        + "升级方法：进入内置终端或 Termux，执行以下命令即可安装最新 @next 分支:\n\n"
+                        + "npm i -g @deepseek-ai/dsh@next")
+                .setPositiveButton("查看官方仓库", (d, w) ->
+                        openUrl("https://github.com/deepseek-ai/deepseek-harness"))
+                .setNeutralButton("复制测试版安装命令", (d, w) -> copyText("npm i -g @deepseek-ai/dsh@next"))
+                .setNegativeButton("返回", null)
+                .show();
+    }
+
+    private void openUrl(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)));
+        } catch (Throwable t) {
+            Toast.makeText(requireContext(), "打开链接失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void copyText(String text) {
+        try {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                    requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            if (cm != null) {
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("cmd", text));
+                Toast.makeText(requireContext(), "已复制到剪贴板", Toast.LENGTH_SHORT).show();
+            }
+        } catch (Throwable ignored) {}
     }
 
     private LinearLayout buildRow(final int index) {
@@ -192,23 +263,21 @@ public class SettingsFragment extends Fragment {
         }
     }
     private void confirmApplyPatches() {
-        String msg = "【包含的全部修复功能】\n"
-                + "1. 写入与附件自愈：强制使用原子 rename 发布，根除 Android 容器禁止硬链接引起的写文件报错与图片/文件附件丢失 (ATTACHMENT_WRITE_FAILED)；\n"
-                + "2. Token 双轨鉴权：打通 dsh 官方 Launch Token 与 Cookie 校验，放行本地与跨设备访问凭据；\n"
-                + "3. Web 守卫放行：解决网页服务报 401 鉴权失效、死循环或白屏；\n"
-                + "4. 局域网放行：修复回环地址校验，使同一 WiFi 下其他设备正常加载设置与模型列表；\n"
-                + "5. 插件软链自愈：原生修复第三方插件 (如 dsh-agy) 与内置插件依赖，根除 ERR_MODULE_NOT_FOUND 报错。\n\n"
-                + "【什么时候使用此功能】\n"
-                + "· 刚导入外部备份包后，启动报模块找不到或插件报错时；\n"
-                + "· 网页打不开、卡在「正在验证 Web 访问权限」、报 401 鉴权失败时；\n"
-                + "· 发送图片或文件报错、历史附件无法加载时；\n"
-                + "· 局域网其他设备连上提示 settings are unavailable 时；\n"
-                + "· 升级核心被覆盖后的一键重置复原。";
+        String msg = "【原生环境与存储直通自愈】\n\n"
+                + "1. 内部存储直通：重新建立 /root/内部存储 → /sdcard/Download/DSHA 软链接；\n"
+                + "2. 默认工作区检查：确保手机 Download/DSHA/工作区 存在且具备完全读写权限；\n"
+                + "3. 网络与 DNS 校验：重写 /etc/resolv.conf 权威公共 DNS，解决网络解析异常；\n"
+                + "4. 3090 设备桥令牌：重新同步并授权 /root/.dsh/.bridge_token 凭据；\n"
+                + "5. 插件运行环境自愈：补齐 web profile 插件软链接，保持 pnpm 原生硬链接无损。\n\n"
+                + "【适用场景】\n"
+                + "· 终端或工作区找不到「内部存储」时；\n"
+                + "· 导入备份包或重装模块后的首次环境修复；\n"
+                + "· 插件市场或内置插件报依赖找不到时。";
 
         new AlertDialog.Builder(requireContext())
-                .setTitle("核心运行与鉴权修复")
+                .setTitle("原生环境与存储直通自愈")
                 .setMessage(msg)
-                .setPositiveButton("开始修复", (d, w) -> runApplyPatches())
+                .setPositiveButton("开始自愈修复", (d, w) -> runApplyPatches())
                 .setNegativeButton("取消", null)
                 .show();
     }
@@ -216,28 +285,44 @@ public class SettingsFragment extends Fragment {
     private void runApplyPatches() {
         HarnessController controller = HarnessController.get(requireContext());
         AlertDialog progress = new AlertDialog.Builder(requireContext())
-                .setTitle("正在修复")
-                .setMessage("正在执行核心补丁，请稍候…")
+                .setTitle("正在自愈")
+                .setMessage("正在执行原生环境与直通校验，请稍候…")
                 .setCancelable(false)
                 .show();
 
         new Thread(() -> {
             StringBuilder report = new StringBuilder();
             try {
-                String r1 = controller.proot().runAssetBashScript("fs-write-patch.sh", 90_000);
-                report.append("· 写入与附件发布: ").append(r1.contains("OK") || r1.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r1.isEmpty() ? "完成" : r1.trim())).append("\n");
+                // 1. 直通软链接与工作区目录
+                String cmd1 = "mkdir -p /sdcard/Download/DSHA/工作区 /root/.dsh 2>/dev/null || true; "
+                        + "rm -f /root/内部存储 2>/dev/null || true; "
+                        + "ln -sf /sdcard/Download/DSHA /root/内部存储 2>/dev/null || true; "
+                        + "chmod 777 /root/.dsh 2>/dev/null || true; echo OK";
+                String r1 = controller.proot().execChecked(cmd1);
+                report.append("· 内部存储直通与工作区: ").append(r1.contains("OK") ? "✅ 已就绪 (/root/内部存储)" : "⚠️ 完成").append("\n");
 
-                String r2 = controller.proot().runAssetBashScript("dsh-token-patch.sh", 60_000);
-                report.append("· Token 双轨鉴权: ").append(r2.contains("OK") || r2.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r2.isEmpty() ? "完成" : r2.trim())).append("\n");
+                // 2. DNS 修复
+                String cmd2 = "mkdir -p /etc; rm -f /etc/resolv.conf; "
+                        + "printf 'nameserver 223.5.5.5\\nnameserver 119.29.29.29\\nnameserver 1.1.1.1\\n' > /etc/resolv.conf; echo OK";
+                String r2 = controller.proot().execChecked(cmd2);
+                report.append("· 网络与 DNS 解析配置: ").append(r2.contains("OK") ? "✅ 已更新 (公共 DNS)" : "⚠️ 完成").append("\n");
 
-                String r3 = controller.proot().runAssetBashScript("webserver-auth-patch.sh", 60_000);
-                report.append("· Web 守卫放行: ").append(r3.contains("OK") || r3.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r3.isEmpty() ? "完成" : r3.trim())).append("\n");
+                // 3. 3090 设备桥 Token 同步
+                com.deepseekharness.app.HttpShellService.syncTokenToRootfsSync();
+                report.append("· 3090 设备桥令牌: ✅ 同步就绪\n");
 
-                String r4 = controller.proot().runAssetBashScript("lan-bind-patch.sh", 60_000);
-                report.append("· 局域网放行: ").append(r4.contains("PATCHED") || r4.contains("ALREADY") ? "✅ 已就绪" : "⚠️ " + (r4.isEmpty() ? "完成" : r4.trim())).append("\n");
+                // 4. 插件轻量依赖修复
+                String cmd3 = "if [ -d /root/.dsh/profiles/web ]; then "
+                        + "mkdir -p /root/.dsh/profiles/web/node_modules 2>/dev/null; "
+                        + "if [ -d /root/.dsh/plugin-src ]; then "
+                        + "  for p in /root/.dsh/plugin-src/*; do [ -d \"$p\" ] || continue; "
+                        + "    name=$(basename \"$p\"); ln -sfn \"$p\" \"/root/.dsh/profiles/web/node_modules/$name\" 2>/dev/null || true; "
+                        + "  done; "
+                        + "fi; "
+                        + "echo OK; else echo OK; fi";
+                String r3 = controller.proot().execChecked(cmd3);
+                report.append("· 插件扩展依赖链: ").append(r3.contains("OK") ? "✅ 校验正常 (保持 pnpm 原生硬链接)" : "⚠️ 完成").append("\n");
 
-                String r5 = controller.proot().runAssetBashScript("dsha-plugin-heal.sh", 60_000);
-                report.append("· 插件全局与依赖软链自愈: ").append(r5.contains("OK") ? "✅ 已就绪" : "⚠️ 完成");
             } catch (Throwable e) {
                 report.append("执行异常: ").append(e.getMessage());
             }
@@ -246,7 +331,7 @@ public class SettingsFragment extends Fragment {
                 if (!isAdded()) return;
                 progress.dismiss();
                 new AlertDialog.Builder(requireContext())
-                        .setTitle("修复完成")
+                        .setTitle("自愈完成")
                         .setMessage(report.toString() + "\n\n建议重启 Web 服务使修改全部生效。")
                         .setPositiveButton("立即重启服务", (d, w) -> {
                             controller.stopWeb();
@@ -256,7 +341,7 @@ public class SettingsFragment extends Fragment {
                         .setNegativeButton("稍后手动重启", null)
                         .show();
             });
-        }, "dsha-manual-patch").start();
+        }, "dsha-native-heal").start();
     }
 
 }
