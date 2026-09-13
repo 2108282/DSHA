@@ -1266,6 +1266,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             }
         } catch (Throwable ignored) {}
 
+        // 开始收起动画时即刻冻结，彻底消除退出动画及过渡期的无谓空转
+        if (sCachedWebView != null) {
+            sCachedWebView.onPause();
+            sCachedWebView.pauseTimers();
+        }
+
         if (sheetCard != null) {
             sheetCard.animate()
                     .translationY(sheetCard.getHeight() + dpToPx(30))
@@ -1428,6 +1434,16 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     protected void onPause() {
         super.onPause();
         // 关键：抽屉退入后台/锁屏时，彻底冻结 JS 引擎与渲染管线，后台每秒心跳瞬间降为 0
+        if (sCachedWebView != null) {
+            sCachedWebView.onPause();
+            sCachedWebView.pauseTimers();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // 兜底保障：退至后台或系统熄屏时，彻底冻结 JS 引擎与渲染管线
         if (sCachedWebView != null) {
             sCachedWebView.onPause();
             sCachedWebView.pauseTimers();
