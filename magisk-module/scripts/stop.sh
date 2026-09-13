@@ -16,50 +16,30 @@ clean_umount() {
     done
 }
 
-# 1. 终止主进程（先 SIGTERM 释放文件锁，后 SIGKILL 确保终止）
+# 1. 优先按记录的 PID 终止
 if [ -f "$PID_FILE" ]; then
     MAIN_PID=$(cat "$PID_FILE" 2>/dev/null)
     if [ -n "$MAIN_PID" ] && kill -0 "$MAIN_PID" 2>/dev/null; then
         kill -15 "$MAIN_PID" 2>/dev/null
         for i in 1 2 3; do
             kill -0 "$MAIN_PID" 2>/dev/null || break
-            usleep 100000 2>/dev/null || sleep 1
+            sleep 0.1 2>/dev/null || sleep 1
         done
         kill -9 "$MAIN_PID" 2>/dev/null || true
     fi
-    rm -f "$PID_FILE"
+    rm -f "$PID_FILE" 2>/dev/null || true
 fi
 rm -f "$PORT_FILE" 2>/dev/null || true
 
-# 2. 终止 chroot 内的所有残留子进程（root 或 cwd 位于 ROOTFS 下的所有进程）
-for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
-    root_link=$(readlink "/proc/$pid/root" 2>/dev/null)
-    cwd_link=$(readlink "/proc/$pid/cwd" 2>/dev/null)
-    case "$root_link" in
-        "$ROOTFS"*) kill -9 "$pid" 2>/dev/null || true ;;
-        *)
-            case "$cwd_link" in
-                "$ROOTFS"*) kill -9 "$pid" 2>/dev/null || true ;;
-            esac
-            ;;
-    esac
-done
+# 2. 毫秒级精准按命令特征清理残留 Node / DSH 进程（避免循环遍历 /proc 的巨大开销）
+pkill -f 'node /usr/local/lib/node_modules/@deepseek-ai/dsh' 2>/dev/null || true
+pkill -f 'dsh web' 2>/dev/null || true
+pkill -f 'bin.js web' 2>/dev/null || true
 
 # 3. 只有传入 --umount 或 --all 时才卸载内核挂载点（卸载/重新安装模块时使用）
-# 日常停止 Web 服务无需反复卸载虚拟文件系统，保持常驻零待机功耗，且下次启动秒级就绪
 if [ "$1" = "--umount" ] || [ "$1" = "--all" ]; then
-    for i in 1 2 3; do
-        has_proc=0
-        for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
-            root_link=$(readlink "/proc/$pid/root" 2>/dev/null)
-            if [ "$root_link" = "$ROOTFS" ]; then
-                has_proc=1
-                break
-            fi
-        done
-        [ "$has_proc" = "0" ] && break
-        usleep 200000 2>/dev/null || sleep 1
-    done
+    pkill -9 -f "$ROOTFS" 2>/dev/null || true
+    sleep 0.2 2>/dev/null || sleep 1
 
     clean_umount "$ROOTFS/storage/emulated/0"
     clean_umount "$ROOTFS/sdcard"

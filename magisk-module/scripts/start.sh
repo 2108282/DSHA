@@ -199,9 +199,9 @@ NEW_PID=$!
 echo "$NEW_PID" > "$PID_FILE"
 echo -1000 > "/proc/$NEW_PID/oom_score_adj" 2>/dev/null || true
 
-# 7. 等待服务启动并提取鉴权 Token 链接（微步长轮询，一旦就绪立即返回）
+# 7. 等待服务启动并提取鉴权 Token 链接（150ms 浮点微步轮询，就绪即刻返回）
 AUTH_URL=""
-for i in $(seq 1 30); do
+for i in $(seq 1 15); do
     AUTH_URL=$(grep -o "http://127\.0\.0\.1:${PORT}/?token=[^ ]*" "$LOG_FILE" 2>/dev/null | tail -n 1)
     [ -z "$AUTH_URL" ] && AUTH_URL=$(grep -o 'http://127\.0\.0\.1:[0-9]*/?token=[^ ]*' "$LOG_FILE" 2>/dev/null | tail -n 1)
     if [ -n "$AUTH_URL" ]; then
@@ -212,7 +212,7 @@ for i in $(seq 1 30); do
         cat "$LOG_FILE"
         exit 1
     fi
-    usleep 150000 2>/dev/null || sleep 1
+    sleep 0.15 2>/dev/null || sleep 1
 done
 
 echo "STATUS:STARTED PID:$NEW_PID PORT:$PORT"
