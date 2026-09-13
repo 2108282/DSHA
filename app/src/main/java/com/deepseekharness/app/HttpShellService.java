@@ -331,6 +331,8 @@ public final class HttpShellService {
         if (!owner) return; // 非持有者：什么都别动，否则会把真桥的状态清掉
         owner = false;
         running = false;
+        isTaskActive = false;
+        HarnessService.onTaskStateChanged(ctx, false);
         writeBridgeStatus("stopped");
         instance = null;
         try {
@@ -565,6 +567,8 @@ public final class HttpShellService {
                 // 拔除运行中胶囊(2003)，无缝接力到结果胶囊(2002)
                 nm.cancel(Constants.NOTIF_TASK_RUNNING);
                 nm.cancel(Constants.NOTIF_TASK_STOPPED);
+                isTaskActive = false;
+                HarnessService.onTaskStateChanged(ctx, false);
 
                 Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
