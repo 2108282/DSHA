@@ -79,6 +79,9 @@ mkdir -p "$ROOTFS_DIR/sys"
 mkdir -p "$ROOTFS_DIR/sdcard"
 mkdir -p "$ROOTFS_DIR/root/.dsh"
 chmod 777 "$ROOTFS_DIR/root/.dsh" 2>/dev/null || true
+mkdir -p "$ROOTFS_DIR/sdcard/Download/DSHA/工作区" 2>/dev/null || true
+rm -f "$ROOTFS_DIR/root/内部存储" 2>/dev/null || true
+ln -sf /sdcard/Download/DSHA "$ROOTFS_DIR/root/内部存储" 2>/dev/null || true
 
 ui_print "-----------------------------------------"
 ui_print "安装成功！本模块开机不自启，0 功耗占用。"

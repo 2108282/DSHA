@@ -2,21 +2,26 @@
 ROOTFS="/data/adb/dsha/rootfs"
 RUN_DIR="/data/adb/dsha/run"
 PID_FILE="$RUN_DIR/dsh.pid"
+PORT_FILE="$RUN_DIR/port"
 LOG_FILE="$RUN_DIR/dsh-web.log"
 
 PORT="${1:-3080}"
+case "$PORT" in
+    ''|*[!0-9]*) PORT=3080 ;;
+esac
 
 mkdir -p "$RUN_DIR"
 chmod 777 "$RUN_DIR" 2>/dev/null || true
+echo "$PORT" > "$PORT_FILE" 2>/dev/null || true
 
 # 1. 检查是否已经在运行
 if [ -f "$PID_FILE" ]; then
     OLD_PID=$(cat "$PID_FILE" 2>/dev/null)
     if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-        echo "STATUS:ALREADY_RUNNING PID:$OLD_PID"
+        echo "STATUS:ALREADY_RUNNING PID:$OLD_PID PORT:$PORT"
         TOKEN_FILE="$ROOTFS/root/.dsh/.bridge_token"
         [ -s "$TOKEN_FILE" ] && echo "BRIDGE_TOKEN:$(cat "$TOKEN_FILE" 2>/dev/null)"
-        grep -o 'http://127\.0\.0\.1:[0-9]*/?token=[^ ]*' "$LOG_FILE" 2>/dev/null | tail -n 1
+        grep -o "http://127\.0\.0\.1:[0-9]*/?token=[^ ]*" "$LOG_FILE" 2>/dev/null | tail -n 1
         exit 0
     fi
     rm -f "$PID_FILE"
@@ -58,16 +63,24 @@ elif [ -d "/sdcard" ]; then
     mount_if_needed "$ROOTFS/sdcard" -o bind /sdcard
 fi
 
-# 4. 修复 DNS 配置（先删旧符号链接再写入真实文件）
+# 确保手机 Download/DSHA/工作区 存在，并在容器 root 下建立「内部存储」软链接直通
+mkdir -p "$ROOTFS/sdcard/Download/DSHA/工作区" 2>/dev/null || true
+mkdir -p "$ROOTFS/root" 2>/dev/null || true
+rm -f "$ROOTFS/root/内部存储" 2>/dev/null || true
+ln -sf /sdcard/Download/DSHA "$ROOTFS/root/内部存储" 2>/dev/null || true
+
+# 4. 修复 DNS 配置（若缺失则写入稳定公共 DNS）
 mkdir -p "$ROOTFS/etc"
-rm -f "$ROOTFS/etc/resolv.conf" 2>/dev/null || true
-cat << 'DNS_EOF' > "$ROOTFS/etc/resolv.conf"
+if [ ! -f "$ROOTFS/etc/resolv.conf" ] || [ ! -s "$ROOTFS/etc/resolv.conf" ]; then
+    rm -f "$ROOTFS/etc/resolv.conf" 2>/dev/null || true
+    cat << 'DNS_EOF' > "$ROOTFS/etc/resolv.conf"
 nameserver 223.5.5.5
 nameserver 119.29.29.29
 nameserver 1.1.1.1
 DNS_EOF
+fi
 
-# 5. 部署守护包装器与安全策略
+# 5. 部署守护包装器与安全策略（按需生成，免除每次重复 I/O）
 DSH_BIN="$ROOTFS/root/dsh-bin"
 mkdir -p "$DSH_BIN"
 mkdir -p "$ROOTFS/root/.dsh"
@@ -80,7 +93,8 @@ fi
 chmod 666 "$TOKEN_FILE" 2>/dev/null || true
 CURRENT_TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null)
 
-# 写入确认交互脚本 (与 3090 交互请求用户确认)
+# 写入确认交互脚本
+if [ ! -f "$ROOTFS/root/dsh-confirm.sh" ]; then
 cat << 'CONFIRM_EOF' > "$ROOTFS/root/dsh-confirm.sh"
 #!/bin/bash
 FORCE=0
@@ -103,8 +117,10 @@ case "$RES" in
 esac
 CONFIRM_EOF
 chmod 755 "$ROOTFS/root/dsh-confirm.sh"
+fi
 
 # 写入函数级命令守卫
+if [ ! -f "$ROOTFS/root/dsh-guard.sh" ]; then
 cat << 'GUARD_EOF' > "$ROOTFS/root/dsh-guard.sh"
 # DSHA 危险命令守卫
 if [ "${DSH_CONFIRM:-0}" = "1" ] || [ "${DSH_SHELL:-0}" = "1" ]; then
@@ -125,13 +141,15 @@ if [ "${DSH_CONFIRM:-0}" = "1" ] || [ "${DSH_SHELL:-0}" = "1" ]; then
 fi
 GUARD_EOF
 chmod 755 "$ROOTFS/root/dsh-guard.sh"
+fi
 
 # 注入 bashrc 自动加载
 if ! grep -q "dsh-guard.sh" "$ROOTFS/root/.bashrc" 2>/dev/null; then
     echo '[ -f /root/dsh-guard.sh ] && source /root/dsh-guard.sh' >> "$ROOTFS/root/.bashrc"
 fi
 
-# PATH 级命令守卫包装
+# PATH 级命令守卫包装（若缺失则补齐）
+if [ ! -f "$DSH_BIN/rm" ]; then
 for C in rm rmdir unlink truncate dd mkfs mkfs.ext4 mkfs.vfat fdisk reboot shutdown halt poweroff wipe; do
 cat << 'WRAPPER_EOF' > "$DSH_BIN/$C"
 #!/bin/bash
@@ -153,6 +171,7 @@ exit 1
 WRAPPER_EOF
 chmod 755 "$DSH_BIN/$C"
 done
+fi
 
 # 清空旧日志
 > "$LOG_FILE"
@@ -180,11 +199,11 @@ NEW_PID=$!
 echo "$NEW_PID" > "$PID_FILE"
 echo -1000 > "/proc/$NEW_PID/oom_score_adj" 2>/dev/null || true
 
-# 7. 等待服务启动并提取鉴权 Token 链接
+# 7. 等待服务启动并提取鉴权 Token 链接（微步长轮询，一旦就绪立即返回）
 AUTH_URL=""
-for i in 1 2 3 4 5 6; do
-    sleep 1
-    AUTH_URL=$(grep -o 'http://127\.0\.0\.1:[0-9]*/?token=[^ ]*' "$LOG_FILE" 2>/dev/null | tail -n 1)
+for i in $(seq 1 30); do
+    AUTH_URL=$(grep -o "http://127\.0\.0\.1:${PORT}/?token=[^ ]*" "$LOG_FILE" 2>/dev/null | tail -n 1)
+    [ -z "$AUTH_URL" ] && AUTH_URL=$(grep -o 'http://127\.0\.0\.1:[0-9]*/?token=[^ ]*' "$LOG_FILE" 2>/dev/null | tail -n 1)
     if [ -n "$AUTH_URL" ]; then
         break
     fi
@@ -193,6 +212,7 @@ for i in 1 2 3 4 5 6; do
         cat "$LOG_FILE"
         exit 1
     fi
+    usleep 150000 2>/dev/null || sleep 1
 done
 
 echo "STATUS:STARTED PID:$NEW_PID PORT:$PORT"
@@ -203,5 +223,5 @@ if [ -n "$AUTH_URL" ]; then
     echo "$AUTH_URL"
     echo "=========================================================="
 else
-    echo "提示: 未能在 6 秒内抓取到 Token 链接，请查看日志: cat $LOG_FILE"
+    echo "提示: 尚未在日志中捕获到 Token，后台仍正常启动中，日志见 $LOG_FILE"
 fi
