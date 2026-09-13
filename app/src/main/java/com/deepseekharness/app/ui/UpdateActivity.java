@@ -21,6 +21,7 @@ public final class UpdateActivity extends AppCompatActivity {
     private UpdateRepository repository;
     private boolean resumeInstall;
     @Override protected void onCreate(Bundle saved) {
+        ThemeController.apply(this);
         super.onCreate(saved); setContentView(R.layout.activity_update);
         repository = new ViewModelProvider(this).get(UpdateRepository.class);
         ((TextView) findViewById(R.id.update_current)).setText("当前 " + BuildConfig.VERSION_NAME + " · 版本码 " + BuildConfig.VERSION_CODE

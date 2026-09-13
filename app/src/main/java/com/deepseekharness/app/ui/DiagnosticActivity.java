@@ -30,6 +30,7 @@ public final class DiagnosticActivity extends AppCompatActivity {
         }, "diagnostic-export").start();
     });
     @Override protected void onCreate(Bundle saved) {
+        ThemeController.apply(this);
         super.onCreate(saved); setContentView(R.layout.activity_diagnostics);
         repository = new ViewModelProvider(this).get(DiagnosticRepository.class);
         steps = findViewById(R.id.diagnostic_steps);
