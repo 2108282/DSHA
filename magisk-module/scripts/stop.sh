@@ -25,6 +25,8 @@ done
 # 3. 干净卸载所有内核挂载点（释放文件锁与内存，实现 0 开销）
 umount -l "$ROOTFS/storage/emulated/0" 2>/dev/null || true
 umount -l "$ROOTFS/sdcard" 2>/dev/null || true
+umount -l "$ROOTFS/dev/block" 2>/dev/null || true
+umount -l "$ROOTFS/dev/shm" 2>/dev/null || true
 umount -l "$ROOTFS/dev/pts" 2>/dev/null || true
 umount -l "$ROOTFS/dev" 2>/dev/null || true
 umount -l "$ROOTFS/proc" 2>/dev/null || true
