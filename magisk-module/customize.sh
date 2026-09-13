@@ -26,9 +26,18 @@ chmod 755 "$SCRIPTS_DIR/"*.sh
 # 2. 处理 RootFS 底包解压
 mkdir -p "$ROOTFS_DIR"
 
-if [ -f "$ROOTFS_DIR/usr/local/bin/node" ]; then
+FORCE_CLEAN=0
+if [ -f "/sdcard/Download/DSHA/.clean_install" ] || [ -f "/data/media/0/Download/DSHA/.clean_install" ]; then
+    FORCE_CLEAN=1
+    rm -f "/sdcard/Download/DSHA/.clean_install" "/data/media/0/Download/DSHA/.clean_install" 2>/dev/null || true
+    ui_print "- 检测到全新安装标记，将清空旧运行环境并强制重解压。"
+    rm -rf "$ROOTFS_DIR"
+    mkdir -p "$ROOTFS_DIR"
+fi
+
+if [ "$FORCE_CLEAN" = "0" ] && [ -f "$ROOTFS_DIR/usr/local/bin/node" ]; then
     ui_print "- 检测到已存在现成的 DSH 环境，保留当前用户数据与配置。"
-    ui_print "- 如需全新重新部署，请手动清空 $ROOTFS_DIR 后重刷。"
+    ui_print "- 如需全新重新部署，请在 Download/DSHA 放入 .clean_install 文件后重刷。"
 else
     # 检查 zip 中是否存在 rootfs.tar.gz
     LOCAL_TAR=""
