@@ -1,0 +1,6 @@
+id=dsha_native
+name=DSHA Native Chroot Core
+version=v1.2.0
+versionCode=120
+author=DSHA
+description=DSHA 原生 Linux chroot 极速运行时，按需启停，0 虚拟化损耗，0 待机偷跑。
