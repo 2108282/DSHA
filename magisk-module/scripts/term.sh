@@ -1,16 +1,34 @@
 #!/system/bin/sh
 ROOTFS="/data/adb/dsha/rootfs"
 
-# 确保必要的挂载点存在
-mountpoint -q "$ROOTFS/dev" || mount -o bind /dev "$ROOTFS/dev"
-mountpoint -q "$ROOTFS/dev/pts" || mount -t devpts devpts "$ROOTFS/dev/pts"
+is_mounted() {
+    local target="${1%/}"
+    grep -q " $target " /proc/mounts 2>/dev/null || mountpoint -q "$target" 2>/dev/null
+}
+
+mount_if_needed() {
+    local target="$1"
+    shift
+    if ! is_mounted "$target"; then
+        mkdir -p "$target" 2>/dev/null
+        mount "$@" "$target"
+    fi
+}
+
+# 确保必要的挂载点存在（精准判重，防止多次打开终端层叠挂载）
+mount_if_needed "$ROOTFS/dev" -o bind /dev
+mount_if_needed "$ROOTFS/dev/pts" -t devpts devpts
 mkdir -p "$ROOTFS/dev/shm"
-mountpoint -q "$ROOTFS/dev/shm" || mount -t tmpfs tmpfs "$ROOTFS/dev/shm" -o mode=1777 2>/dev/null || true
+mount_if_needed "$ROOTFS/dev/shm" -t tmpfs tmpfs -o mode=1777
 mkdir -p "$ROOTFS/dev/block"
-mountpoint -q "$ROOTFS/dev/block" || mount -t tmpfs tmpfs "$ROOTFS/dev/block" -o mode=000 2>/dev/null || true
-mountpoint -q "$ROOTFS/proc" || mount -t proc proc "$ROOTFS/proc"
-mountpoint -q "$ROOTFS/sys" || mount -t sysfs sysfs "$ROOTFS/sys"
-mountpoint -q "$ROOTFS/sdcard" || mount -o bind /storage/emulated/0 "$ROOTFS/sdcard" 2>/dev/null || mount -o bind /sdcard "$ROOTFS/sdcard" 2>/dev/null || true
+mount_if_needed "$ROOTFS/dev/block" -t tmpfs tmpfs -o ro,mode=000
+mount_if_needed "$ROOTFS/proc" -t proc proc
+mount_if_needed "$ROOTFS/sys" -t sysfs sysfs
+if [ -d "/storage/emulated/0" ]; then
+    mount_if_needed "$ROOTFS/sdcard" -o bind /storage/emulated/0
+elif [ -d "/sdcard" ]; then
+    mount_if_needed "$ROOTFS/sdcard" -o bind /sdcard
+fi
 
 # 直接以原生 root 身份进入 bash
 exec chroot "$ROOTFS" /usr/bin/env -i \

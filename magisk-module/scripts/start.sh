@@ -14,6 +14,8 @@ if [ -f "$PID_FILE" ]; then
     OLD_PID=$(cat "$PID_FILE" 2>/dev/null)
     if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
         echo "STATUS:ALREADY_RUNNING PID:$OLD_PID"
+        TOKEN_FILE="$ROOTFS/root/.dsh/.bridge_token"
+        [ -s "$TOKEN_FILE" ] && echo "BRIDGE_TOKEN:$(cat "$TOKEN_FILE" 2>/dev/null)"
         grep -o 'http://127\.0\.0\.1:[0-9]*/?token=[^ ]*' "$LOG_FILE" 2>/dev/null | tail -n 1
         exit 0
     fi
@@ -23,11 +25,16 @@ fi
 # 2. 解除 Android 12+ 幽灵进程限制
 /system/bin/device_config put activity_manager max_phantom_processes 2147483647 2>/dev/null
 
-# 3. 挂载原生虚拟文件系统
+# 3. 挂载原生虚拟文件系统（基于 /proc/mounts 精准判重，杜绝挂载泄漏与层叠）
+is_mounted() {
+    local target="${1%/}"
+    grep -q " $target " /proc/mounts 2>/dev/null || mountpoint -q "$target" 2>/dev/null
+}
+
 mount_if_needed() {
-    target="$1"
+    local target="$1"
     shift
-    if ! mountpoint -q "$target"; then
+    if ! is_mounted "$target"; then
         mkdir -p "$target" 2>/dev/null
         mount "$@" "$target"
     fi
@@ -35,12 +42,11 @@ mount_if_needed() {
 
 mount_if_needed "$ROOTFS/dev" -o bind /dev
 mount_if_needed "$ROOTFS/dev/pts" -t devpts devpts
-# 挂载 POSIX 共享内存 tmpfs（提升 Python/Node 多进程性能）
 mkdir -p "$ROOTFS/dev/shm"
-mountpoint -q "$ROOTFS/dev/shm" || mount -t tmpfs tmpfs "$ROOTFS/dev/shm" -o mode=1777 2>/dev/null || true
-# 屏蔽物理块设备：防止 Agent 误写底层物理闪存 /dev/block 分区导致手机变砖
+mount_if_needed "$ROOTFS/dev/shm" -t tmpfs tmpfs -o mode=1777
+# 屏蔽物理块设备：只读且mode 000空tmpfs，从内核层彻底杜绝误写分区物理变砖
 mkdir -p "$ROOTFS/dev/block"
-mountpoint -q "$ROOTFS/dev/block" || mount -t tmpfs tmpfs "$ROOTFS/dev/block" -o mode=000 2>/dev/null || true
+mount_if_needed "$ROOTFS/dev/block" -t tmpfs tmpfs -o ro,mode=000
 mount_if_needed "$ROOTFS/proc" -t proc proc
 mount_if_needed "$ROOTFS/sys" -t sysfs sysfs
 
@@ -52,8 +58,9 @@ elif [ -d "/sdcard" ]; then
     mount_if_needed "$ROOTFS/sdcard" -o bind /sdcard
 fi
 
-# 4. 修复 DNS 配置
+# 4. 修复 DNS 配置（先删旧符号链接再写入真实文件）
 mkdir -p "$ROOTFS/etc"
+rm -f "$ROOTFS/etc/resolv.conf" 2>/dev/null || true
 cat << 'DNS_EOF' > "$ROOTFS/etc/resolv.conf"
 nameserver 223.5.5.5
 nameserver 119.29.29.29
@@ -65,9 +72,13 @@ DSH_BIN="$ROOTFS/root/dsh-bin"
 mkdir -p "$DSH_BIN"
 mkdir -p "$ROOTFS/root/.dsh"
 chmod 777 "$ROOTFS/root/.dsh" 2>/dev/null || true
-if [ -f "$ROOTFS/root/.dsh/.bridge_token" ]; then
-    chmod 666 "$ROOTFS/root/.dsh/.bridge_token" 2>/dev/null || true
+
+TOKEN_FILE="$ROOTFS/root/.dsh/.bridge_token"
+if [ ! -s "$TOKEN_FILE" ]; then
+    tr -dc 'a-zA-Z0-9' < /dev/urandom 2>/dev/null | head -c 32 > "$TOKEN_FILE" 2>/dev/null || echo "dsha_$(date +%s%N)" > "$TOKEN_FILE"
 fi
+chmod 666 "$TOKEN_FILE" 2>/dev/null || true
+CURRENT_TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null)
 
 # 写入确认交互脚本 (与 3090 交互请求用户确认)
 cat << 'CONFIRM_EOF' > "$ROOTFS/root/dsh-confirm.sh"
@@ -148,6 +159,11 @@ done
 mkdir -p "$ROOTFS/root"
 ln -sf "$LOG_FILE" "$ROOTFS/root/dsh-web.log" 2>/dev/null || true
 
+PATCH_ARG=""
+if [ -f "$ROOTFS/root/.dsh/heartbeat-patch.yml" ]; then
+    PATCH_ARG="--patch /root/.dsh/heartbeat-patch.yml"
+fi
+
 # 6. 原生拉起 Node.js DSH Web 服务
 chroot "$ROOTFS" /usr/bin/env -i \
     HOME=/root \
@@ -158,7 +174,7 @@ chroot "$ROOTFS" /usr/bin/env -i \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     DSH_CONFIRM=1 \
-    /usr/local/bin/node /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
+    /usr/local/bin/node /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
 
 NEW_PID=$!
 echo "$NEW_PID" > "$PID_FILE"
@@ -180,6 +196,7 @@ for i in 1 2 3 4 5 6; do
 done
 
 echo "STATUS:STARTED PID:$NEW_PID PORT:$PORT"
+[ -n "$CURRENT_TOKEN" ] && echo "BRIDGE_TOKEN:$CURRENT_TOKEN"
 if [ -n "$AUTH_URL" ]; then
     echo "=========================================================="
     echo "进入 Web 鉴权链接 (直接在手机浏览器打开):"
