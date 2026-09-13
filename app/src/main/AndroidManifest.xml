@@ -64,7 +64,7 @@
         <activity
             android:name=".ui.QuickChatSheetActivity"
             android:exported="true"
-            android:taskAffinity="com.dsh.client.quick_sheet"
+            android:taskAffinity="${applicationId}.quick_sheet"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustNothing"

@@ -197,7 +197,7 @@ public final class AdbBridge {
      *  之后开机广播可自动开启无线调试（保活依赖）。 */
     private static void grantSecureSettings(ProotBootstrap proot) {
         try {
-            String pkg = "com.dsh.client";
+            String pkg = proot.getContext().getPackageName();
             String r = proot.execAndReadWithProot("DSH_INTERNAL=1 python3 /root/.dsh/adb-shell.py pm grant "
                     + pkg + " android.permission.WRITE_SECURE_SETTINGS 2>&1 | head -2", 60_000);
             android.util.Log.i("DSHA-ADB", "WRITE_SECURE_SETTINGS 授权结果: " + SensitiveData.redact(r));

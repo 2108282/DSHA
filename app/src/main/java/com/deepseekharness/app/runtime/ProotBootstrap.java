@@ -56,6 +56,10 @@ public class ProotBootstrap {
         offlineMarkerFile = new File(baseDir, ".offline-extracted");
     }
 
+    public Context getContext() {
+        return ctx;
+    }
+
     public File getRootfsDir() {
         File ksuRootfs = new File("/data/adb/dsha/rootfs");
         if (ksuRootfs.exists() && (new File(ksuRootfs, "usr/bin/bash").exists() || new File(ksuRootfs, "bin/bash").exists())) {
