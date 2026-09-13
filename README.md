@@ -6,7 +6,7 @@
 
 > **💡 是否需要编译？**
 > * **本分支（`dsh-magisk`）完全不需要任何编译！**
-> * 本分支由纯 Shell 控制脚本、模块元数据与预置好的 Ubuntu RootFS 组成，使用 zip 打包即可刷入使用，无需 Gradle、NDK 或任何编译器。
+> * 本分支由纯 Shell 控制脚本、模块元数据与预置好的 Ubuntu RootFS 组成，直接输出为**单一完整模块刷机包**（`dsha_ksu_native_v1.2.0.zip`），开箱即用，无需 Gradle、NDK 或任何编译器。
 > * （编译仅适用于 Android 前端客户端分支 `magisk-apk`）。
 
 ---
@@ -34,99 +34,85 @@
 
 ---
 
-## 二、 底包准备与两种安装部署方式
+## 二、 模块安装使用与免 Magisk 解压部署说明
 
-### 2.1 底包文件（`rootfs.tar.gz`）放在哪里？
-为避免模块 zip 刷机包体积过大（数百 MB），本项目推荐采用**“外置底包分离模式”**：模块 zip 仅几 KB（只包含控制脚本），底包独立存放。
+模块打包产物为单一完整文件：`dsha_ksu_native_v1.2.0.zip`（内含控制脚本与完整 Ubuntu 底包）。
 
-* **底包默认存放路径（手机存储）**：
-  ```text
-  /sdcard/Download/DSHA/rootfs.tar.gz
-  ```
-  *(注：系统底层路径即 `/data/media/0/Download/DSHA/rootfs.tar.gz`)*
-* 将下载好的或导出的 `rootfs.tar.gz` 直接放进上述目录即可，模块安装脚本会自动探测该路径。
+你可以根据当前设备环境，从以下两种方式中二选一：
 
----
-
-### 2.2 安装方式 A：使用 KernelSU / APatch / Magisk 管理器刷入
-1. **准备文件**：
-   * 确保 `/sdcard/Download/DSHA/rootfs.tar.gz` 已就位；
-   * 获取模块刷机包 `dsha_ksu_native_v1.2.0.zip`。
-2. **刷入安装**：
-   * 打开 KernelSU / APatch / Magisk App；
-   * 点击「模块」页面的「从本地安装」，选中 `dsha_ksu_native_v1.2.0.zip`；
-   * 安装脚本（`customize.sh`）会自动检测并就地将底包解压到 `/data/adb/dsha/rootfs`，并将控制脚本部署至 `/data/adb/dsha/scripts/`。
+### 2.1 方式一：使用 KernelSU / APatch / Magisk 管理器安装（标准卡刷）
+适合手机已安装 root 管理器 App 的常规用户：
+1. **下载或获取模块包**：将 `dsha_ksu_native_v1.2.0.zip` 复制到手机存储（如 `/sdcard/Download/`）。
+2. **刷入模块**：
+   * 打开 KernelSU / APatch / Magisk 管理器；
+   * 进入「模块」页面，点击「从本地安装」；
+   * 选择 `dsha_ksu_native_v1.2.0.zip`，刷入脚本（`customize.sh`）会自动就地将底包解压到 `/data/adb/dsha/rootfs` 并配置好所有控制脚本。
 3. **完成状态**：
-   * **安装完成后无需重启手机！**（直接看第三节免重启验证）。
+   * **刷入成功后，完全不需要重启手机！**（直接看第三节免重启使用与验证）。
 
 ---
 
-### 2.3 安装方式 B：完全不使用管理器，纯命令行手动安装（免刷机包）
-如果你不想制作 zip 刷机包，也不想打开 Magisk/KernelSU 管理器，只需在具有 Root 权限的终端（如 Termux 执行 `tsu` 或电脑 `adb shell su`）中执行以下三步：
+### 2.2 方式二：不用 Magisk / KernelSU 管理器，纯命令行手动解压部署
+如果你不想打开管理器刷入，或者运行在自定义 Root 环境、电脑 `adb shell` 中，只需通过命令行从模块 zip 包中直接管道解压：
 
-#### 第一步：创建目录结构
+在终端中切换为 root 权限（电脑执行 `adb shell su` 或手机 Termux 执行 `tsu`）：
+
 ```bash
 su
+
+# 步骤 1：创建底层物理目录
 mkdir -p /data/adb/dsha/rootfs /data/adb/dsha/scripts /data/adb/dsha/run
-```
 
-#### 第二步：解压底包到物理分区
-假设底包放在 `/sdcard/Download/DSHA/rootfs.tar.gz`：
-```bash
-tar -xzf /sdcard/Download/DSHA/rootfs.tar.gz -C /data/adb/dsha/rootfs
-```
-*(解压约耗时 15~30 秒，取决于手机闪存读写速度)*
+# 步骤 2：直接从模块 zip 包中提取并解压 rootfs（流式管道，无需占用多余临时空间）
+# 假设模块文件位于 /sdcard/Download/dsha_ksu_native_v1.2.0.zip
+unzip -p /sdcard/Download/dsha_ksu_native_v1.2.0.zip rootfs.tar.gz | tar -xz -C /data/adb/dsha/rootfs
 
-#### 第三步：部署控制脚本并赋权
-将本仓库 `magisk-module/scripts/` 下的 4 个脚本复制到目标目录并赋权：
-```bash
-# 复制控制脚本
-cp -rf magisk-module/scripts/* /data/adb/dsha/scripts/
-
-# 赋予 755 可执行权限（必须）
+# 步骤 3：从模块包提取控制脚本并赋予可执行权限 (755)
+unzip -o /sdcard/Download/dsha_ksu_native_v1.2.0.zip "scripts/*" -d /tmp/dsha_tmp/
+cp -rf /tmp/dsha_tmp/scripts/* /data/adb/dsha/scripts/
 chmod 755 /data/adb/dsha/scripts/*.sh
+rm -rf /tmp/dsha_tmp
 ```
-部署即告完成！无需刷入模块，系统同样立即可用。
+
+解压耗时约 15~30 秒。完成后**同样无需重启手机**，环境已完全就绪！
 
 ---
 
-### 2.4 如何停止使用、停用或彻底卸载删除？
+### 2.3 如何停止使用或彻底卸载删除？
 
-* **临时不使用 / 释放内存与功耗**：
-  直接执行停止脚本：
+* **临时不使用 / 彻底释放后台开销**：
   ```bash
   su -mm -c "/data/adb/dsha/scripts/stop.sh"
   ```
-  所有进程瞬间退出，挂载点全部卸载，**后台 0 进程、0 内存、0 耗电**。
-* **彻底卸载与完全清除（100% 无残留）**：
-  先执行停止脚本，然后直接删除目录：
+  停止后所有挂载点自动解绑，**后台 0 进程、0 内存开销、0 功耗**。
+* **彻底卸载与完全清除**：
   ```bash
-  # 1. 确保服务与挂载点已干净卸载
+  # 1. 确保服务与挂载已干净卸载
   su -mm -c "/data/adb/dsha/scripts/stop.sh"
 
-  # 2. 彻底删除运行目录与模块记录
+  # 2. 彻底删除运行数据与模块记录
   su -c "rm -rf /data/adb/dsha /data/adb/modules/dsha_native"
   ```
-  此时整套 Linux 环境和脚本已被彻底抹除，手机系统恢复如初。
+  整套 Linux 环境和脚本即被物理抹除，系统 100% 恢复如初，无残留文件。
 
 ---
 
-## 三、 免重启手机直接验证与功能测试指南
+## 三、 免重启手机直接使用与功能测试指南
 
-由于本模块遵循按需拉起（On-demand）原则，不修改 Android 系统只读分区（Systemless），所有挂载与进程均由脚本按需接管，因此**刷入或部署完毕后不需要重启手机**，即可直接验证全部功能。
+由于本模块遵循按需拉起（On-demand）原则，不修改 Android 系统只读分区（Systemless），所有挂载与服务均由控制脚本独立按需接管，因此**安装完成后不需要重启手机**，即可直接在终端中验证全部功能：
 
 ### 步骤 1：验证控制脚本与权限就绪
-在终端（Termux 或 `adb shell`）执行：
+在终端（Termux 或电脑 `adb shell`）执行：
 ```bash
 su
 ls -la /data/adb/dsha/scripts/
 ```
-确认输出中 `start.sh`、`stop.sh`、`term.sh`、`status.sh` 四个脚本均存在且为 `rwxr-xr-x` 权限。
+确认输出中 `start.sh`、`stop.sh`、`term.sh`、`status.sh` 四个脚本均存在且权限为 `rwxr-xr-x` (755)。
 
 ---
 
-### 步骤 2：启动原生 DSH Web 服务并抓取 Token
-使用 `su -mm`（必须带 `-mm`，强制进入 Android 全局挂载命名空间）执行：
+### 步骤 2：启动原生 DSH Web 服务并获取 Token
+使用 `su -mm`（必须带 `-mm` 标志，强制挂入 Android 全局挂载命名空间）执行：
 ```bash
 su -mm -c "/data/adb/dsha/scripts/start.sh 3080"
 ```
@@ -142,11 +128,11 @@ http://127.0.0.1:3080/?token=xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ---
 
-### 步骤 3：验证 WebUI 交互与对话
-1. **手机浏览器直接访问**：
+### 步骤 3：进入 WebUI 交互与对话
+1. **浏览器直接访问**：
    复制终端输出中的 `http://127.0.0.1:3080/?token=...` 链接，直接在手机浏览器（Chrome / Via / Edge 等）粘贴打开，秒级进入 DSH Web 交互界面！
 2. **配合前端 APK 访问**：
-   若安装了 `DSHA-FR` (即 `magisk-apk` 分支构建的轻量安装包)，打开 App 点击「进入对话」，前端会自动探测后台守护进程并秒级载入。
+   若安装了 `DSHA-FR` (即 `magisk-apk` 分支构建的轻量前端外壳)，打开 App 点击「进入对话」，前端会自动探测后台守护进程并秒级载入。
 
 ---
 
@@ -204,48 +190,17 @@ su -c "grep '/data/adb/dsha/rootfs' /proc/mounts"
 
 ---
 
-## 四、 核心安全守卫机制
+## 四、 本地与云端打包指南
 
-在获得物理 Root 的同时，底座提供针对实体手机的双重防护体系：
-1. **内核级硬件物理隔离**：
-   `start.sh` 和 `term.sh` 会将 `$ROOTFS/dev/block` 挂载为只读、`mode=000` 的空 `tmpfs`，屏蔽物理设备节点，切断底层格盘变砖风险。
-2. **命令拦截与 3090 确认桥闭环**：
-   容器内预置 `dsh-guard.sh` 与 `dsh-confirm.sh`，默认拦截 `rm -rf /`、`mkfs`、`dd`、`reboot`、`shutdown` 等破坏性命令。执行高危操作时，必须通过 `127.0.0.1:3090/confirm` 由用户在手机屏幕上点击授权后方可执行。
-
----
-
-## 五、 本地与云端打包指南
-
-### 5.1 本地一键打包（开发者/手机端）
+### 4.1 本地一键打包完整模块包
 项目已内置便捷打包脚本 `scripts/build-module.sh`：
+```bash
+# 直接生成单一完整刷机包 (包含 rootfs 底包与全部控制脚本)
+./scripts/build-module.sh --full
+```
+产物位于 `dist/dsha_ksu_native_full.zip`（或 `/sdcard/Download/DSHA/dsha_ksu_native_v1.2.0.zip`），体积约 310MB，分发给其他用户无需单独下载底包，直接刷入或解压即可使用。
 
-* **方式 1：打包轻量版模块（~20KB，外置底包模式，推荐）**
-  ```bash
-  ./scripts/build-module.sh
-  ```
-  产物位于 `dist/dsha_ksu_native_lite.zip`，刷入时自动寻找手机存储的 `rootfs.tar.gz`。
-
-* **方式 2：打包全内置完整刷机包（~200MB，内置底包，开箱即用）**
-  ```bash
-  ./scripts/build-module.sh --full
-  ```
-  自动寻找本地底包并打包至 `dist/dsha_ksu_native_full.zip`，分发给其他用户无需单独下载底包。
-
-* **方式 3：从当前运行的手机环境导出并打包（脱敏维护）**
-  当你在 chroot 终端更新了 Node 依赖或工具链后，直接在 chroot 终端内执行：
-  ```bash
-  # 终端内执行脱敏导出
-  /sdcard/Download/DSHA/dsha-ksu-project/tools/export-rootfs.sh
-  ```
-  脚本会自动清理缓存、剔除敏感历史，并在 `/sdcard/Download/DSHA/dsha-ksu-project/release/` 输出全新的底包与刷机包。
-
----
-
-### 5.2 云端自动打包（GitHub Actions CI/CD）
+### 4.2 云端自动打包（GitHub Actions CI/CD）
 本分支已配置 `.github/workflows/magisk-module-build.yml` 自动化工作流：
-1. **触发方式**：
-   * 向 `dsh-magisk` 分支执行 `git push`；
-   * 或在 GitHub 仓库页面「Actions」→「Package Magisk/KernelSU Native Module」点击「Run workflow」手动触发。
-2. **云端产物**：
-   * 自动生成轻量版 `dsha_ksu_native_lite.zip` 与全内置完整版 `dsha_ksu_native_full.zip`；
-   * 在对应 Actions 运行页面的 **Artifacts（构建产物）** 列表中即可一键下载使用！
+1. **触发方式**：向 `dsh-magisk` 分支执行 `git push`，或在仓库页面 Actions 手动触发；
+2. **云端产物**：GitHub Actions 会自动从 Release 资产获取基础底包并构建出开箱即用的完整卡刷包，在 Actions 详情页的 **Artifacts（构建产物）** 列表中直接下载。
