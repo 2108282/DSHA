@@ -1,5 +1,6 @@
 package com.deepseekharness.app.runtime;
 import com.deepseekharness.app.util.Compat;
+import com.deepseekharness.app.util.ShellQuote;
 
 import android.content.Context;
 import android.system.Os;
@@ -974,7 +975,7 @@ public class ProotBootstrap {
                     + "HOME=/root USER=root LOGNAME=root "
                     + "PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "
                     + "TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8 "
-                    + "/bin/bash -c " + ShellQuote.quote(bashCommand);
+                    + "/bin/bash -c " + ShellQuote.arg(bashCommand);
             argv.add(fullCmd);
             ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
             Compat.redirectStdinDevNull(pb);
