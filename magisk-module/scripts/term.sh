@@ -17,7 +17,7 @@ mount_if_needed() {
 
 # 确保必要的挂载点存在（精准判重，防止多次打开终端层叠挂载）
 mount_if_needed "$ROOTFS/dev" -o bind /dev
-mount_if_needed "$ROOTFS/dev/pts" -t devpts devpts
+mount_if_needed "$ROOTFS/dev/pts" -o bind /dev/pts
 mkdir -p "$ROOTFS/dev/shm"
 mount_if_needed "$ROOTFS/dev/shm" -t tmpfs tmpfs -o mode=1777
 mkdir -p "$ROOTFS/dev/block"
@@ -37,7 +37,7 @@ mkdir -p "$ROOTFS/root" 2>/dev/null || true
 rm -f "$ROOTFS/root/内部存储" 2>/dev/null || true
 ln -sf /sdcard/Download/DSHA "$ROOTFS/root/内部存储" 2>/dev/null || true
 
-# 直接以原生 root 身份进入 bash，默认落位到 /root/内部存储/工作区
+# 直接以原生 root 身份进入 bash，默认落位在具备完全执行权限的 /root
 if [ $# -eq 0 ]; then
     exec chroot "$ROOTFS" /usr/bin/env -i \
         HOME=/root \
@@ -47,7 +47,7 @@ if [ $# -eq 0 ]; then
         TERM="${TERM:-xterm-256color}" \
         LANG=C.UTF-8 \
         LC_ALL=C.UTF-8 \
-        /bin/bash -c 'cd /root/内部存储/工作区 2>/dev/null || cd /root; exec /bin/bash -l'
+        /bin/bash -l
 else
     exec chroot "$ROOTFS" /usr/bin/env -i \
         HOME=/root \

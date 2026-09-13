@@ -1665,7 +1665,7 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     box-sizing: border-box !important;
     position: relative !important;
     grid-template-columns: minmax(0, 1fr) 0 0 !important;
-    padding-top: env(safe-area-inset-top, 0px) !important;
+    padding-top: 0px !important;
   }
 
   /* The sidebar column (first grid child) becomes a left drawer. The drawer
@@ -1692,7 +1692,7 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
        frame's padding box, so the frame's own safe-area padding does NOT
        reach it). The drawer background paints the status-bar strip, which
        the client's theme-color meta matches, so the strip reads seamless. */
-    padding-top: env(safe-area-inset-top, 0px) !important;
+    padding-top: 0px !important;
     /* Kill the official sidebarCol right border: with the backdrop the edge
        reads cleanly, and the settings dialog (width:100% of this box) stays
        pixel-flush with the drawer. */
@@ -2655,7 +2655,7 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
     height: 100dvh !important;
     max-height: none !important;
     box-sizing: border-box !important;
-    padding-top: env(safe-area-inset-top, 0px) !important;
+    padding-top: 0px !important;
     border-radius: 0 !important;
     box-shadow: none !important;
     z-index: 57 !important;

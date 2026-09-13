@@ -46,7 +46,7 @@ mount_if_needed() {
 }
 
 mount_if_needed "$ROOTFS/dev" -o bind /dev
-mount_if_needed "$ROOTFS/dev/pts" -t devpts devpts
+mount_if_needed "$ROOTFS/dev/pts" -o bind /dev/pts
 mkdir -p "$ROOTFS/dev/shm"
 mount_if_needed "$ROOTFS/dev/shm" -t tmpfs tmpfs -o mode=1777
 # 屏蔽物理块设备：只读且mode 000空tmpfs，从内核层彻底杜绝误写分区物理变砖
