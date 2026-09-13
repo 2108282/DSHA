@@ -128,7 +128,7 @@ public final class PtyTerminalFragment extends Fragment
         root.findViewById(R.id.pty_simple).setOnClickListener(v -> switchToSimple());
 
         if (!c.proot().isEnvironmentReady()) {
-            title.setText("环境未就绪 —— 先到「安装」页装完再回来");
+            title.setText("未检测到 /data/adb/dsha 原生模块或未授予 Root 权限");
             return;
         }
         attachOrStart();
@@ -334,7 +334,11 @@ public final class PtyTerminalFragment extends Fragment
         final PtySession exited = attachedSession;
         main.post(() -> {
             if (isAdded() && target != null && title == target) {
-                target.setText("会话已结束（退出码 " + status + "）");
+                if (status == 1 || status == 255) {
+                    target.setText("会话已退出（退出码 " + status + "，请在 KernelSU/Magisk 中确认已授权 Root）");
+                } else {
+                    target.setText("会话已结束（退出码 " + status + "）");
+                }
             }
         });
         if (session == exited) session = null;

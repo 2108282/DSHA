@@ -629,8 +629,10 @@ public class ProotBootstrap {
         synchronized (PLUGIN_SCRIPT_LOCK) {
         if (!isEnvironmentReady()) return "ENV_NOT_READY";
         if (!ensureBundledPython()) return "ERROR: Ubuntu Python 环境未就绪";
-        ensureBundledPnpm(); // 包管理器异常不能阻断列表、开关和删除；缺依赖的安装会单独报错。
-        ensureBuiltinPluginEntities(); // 同步 assets 内核插件实体到 rootfs
+        if (!"ksu_chroot".equals(runtime().id())) {
+            ensureBundledPnpm(); // 包管理器异常不能阻断列表、开关和删除；缺依赖的安装会单独报错。
+            ensureBuiltinPluginEntities(); // 同步 assets 内核插件实体到 rootfs
+        }
         try {
             String script = readAssetString(BUILTIN_REGISTER_SCRIPT);
             if (script.isEmpty()) return "ASSET_MISSING:" + BUILTIN_REGISTER_SCRIPT;
@@ -641,8 +643,7 @@ public class ProotBootstrap {
                     + "chmod +x /root/.dsh/" + BUILTIN_REGISTER_SCRIPT + "; "
                     + "python3 /root/.dsh/" + BUILTIN_REGISTER_SCRIPT
                     + (extraArgs.isEmpty() ? "" : " " + extraArgs) + " 2>&1";
-            // 内置插件注册脚本运行 Python，使用 execAndReadWithProot 保证链接器环境 100% 稳定
-            return execAndReadWithProot(cmd, 90_000);
+            return execAndRead(cmd, 90_000);
         } catch (Throwable e) {
             Log.w("DSHA", "内置插件脚本执行失败: " + SensitiveData.redact(String.valueOf(e)));
             return "ERROR: " + SensitiveData.redact(String.valueOf(e));
@@ -667,7 +668,9 @@ public class ProotBootstrap {
         synchronized (PLUGIN_SCRIPT_LOCK) {
         if (!isEnvironmentReady()) return "ENV_NOT_READY";
         if (!ensureBundledPython()) return "ERROR: Ubuntu Python 环境未就绪";
-        ensureBundledPnpm();
+        if (!"ksu_chroot".equals(runtime().id())) {
+            ensureBundledPnpm();
+        }
         try {
             String script = readAssetString(PLUGIN_MANAGER_SCRIPT);
             if (script.isEmpty()) return "ASSET_MISSING:" + PLUGIN_MANAGER_SCRIPT;
@@ -695,6 +698,27 @@ public class ProotBootstrap {
     /** 把本地文件推入容器（containerPath 为容器内绝对路径，如 /root/.dsh/import-upload.bin）。 */
     public boolean pushFileIntoContainer(java.io.File src, String containerPath) {
         if (src == null || !src.isFile() || containerPath == null) return false;
+        ContainerRuntime rt = runtime();
+        if ("ksu_chroot".equals(rt.id())) {
+            try {
+                java.io.File target = containerFile(containerPath);
+                Process p = Runtime.getRuntime().exec(new String[]{
+                        "su", "-mm", "-c", "mkdir -p " + ShellQuote.arg(target.getParentFile().getAbsolutePath())
+                        + " && cat > " + ShellQuote.arg(target.getAbsolutePath())
+                });
+                try (java.io.FileInputStream in = new java.io.FileInputStream(src);
+                     java.io.OutputStream out = p.getOutputStream()) {
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                    out.flush();
+                }
+                return p.waitFor() == 0;
+            } catch (Throwable e) {
+                Log.w("DSHA", "推文件进原生 rootfs 失败: " + SensitiveData.redact(String.valueOf(e)));
+                return false;
+            }
+        }
         try {
             java.io.File target = containerFile(containerPath);
             if (target.getParentFile() != null) target.getParentFile().mkdirs();
@@ -714,6 +738,26 @@ public class ProotBootstrap {
     /** 从容器取出文件到本地（containerPath 为容器内绝对路径）。 */
     public boolean pullFileFromContainer(String containerPath, java.io.File dest) {
         if (containerPath == null || dest == null) return false;
+        ContainerRuntime rt = runtime();
+        if ("ksu_chroot".equals(rt.id())) {
+            try {
+                java.io.File src = containerFile(containerPath);
+                Process p = Runtime.getRuntime().exec(new String[]{
+                        "su", "-mm", "-c", "cat " + ShellQuote.arg(src.getAbsolutePath())
+                });
+                if (dest.getParentFile() != null) dest.getParentFile().mkdirs();
+                try (java.io.InputStream in = p.getInputStream();
+                     java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                }
+                return p.waitFor() == 0;
+            } catch (Throwable e) {
+                Log.w("DSHA", "从原生 rootfs 取文件失败: " + SensitiveData.redact(String.valueOf(e)));
+                return false;
+            }
+        }
         try {
             java.io.File src = containerFile(containerPath);
             if (!src.isFile()) return false;
@@ -732,10 +776,10 @@ public class ProotBootstrap {
     }
 
     /** 容器内绝对路径 → 宿主文件系统路径（rootfs 根下）。 */
-    private java.io.File containerFile(String containerPath) {
+    public java.io.File containerFile(String containerPath) {
         String rel = containerPath.startsWith("/")
                 ? containerPath.substring(1) : containerPath;
-        return new java.io.File(rootfsDir, rel);
+        return new java.io.File(getRootfsDir(), rel);
     }
 
     /** 读 assets 文本（Windows 检出可能是 CRLF，统一转 LF 再交给容器脚本）。 */
@@ -1047,6 +1091,18 @@ public class ProotBootstrap {
      * 与 execRootfs 的差别：不带 -c、不重定向 stdin 到 /dev/null，且补 DSH_CONFIRM 交互确认。
      */
     public Process execRootfsInteractive() throws IOException {
+        ContainerRuntime rt = runtime();
+        if ("ksu_chroot".equals(rt.id())) {
+            List<String> argv = new ArrayList<>();
+            argv.add("su");
+            argv.add("-mm");
+            argv.add("-c");
+            argv.add("/data/adb/dsha/scripts/term.sh");
+            ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
+            pb.environment().put("DSH_CONFIRM", "1");
+            pb.environment().put("DSH_INTERACTIVE", "1");
+            return pb.start();
+        }
         ensureRuntimeFiles();
         ensureBundledPython();
         ensureBundledPnpm();
@@ -1065,6 +1121,13 @@ public class ProotBootstrap {
     public String[] ptyArgv(String... guestCmd) {
         ContainerRuntime rt = runtime();
         if ("ksu_chroot".equals(rt.id())) {
+            if (guestCmd != null && guestCmd.length > 0) {
+                StringBuilder sb = new StringBuilder("/data/adb/dsha/scripts/term.sh");
+                for (String arg : guestCmd) {
+                    sb.append(" ").append(ShellQuote.arg(arg));
+                }
+                return new String[]{"su", "-mm", "-c", sb.toString()};
+            }
             return new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/term.sh"};
         }
         java.util.List<String> argv = baseProotArgv();
@@ -1086,10 +1149,11 @@ public class ProotBootstrap {
         ContainerRuntime rt = runtime();
         if ("ksu_chroot".equals(rt.id())) {
             return new String[]{
-                    "PATH=/sbin:/system/sbin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin:/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk",
+                    "PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/system/bin",
                     "TERM=xterm-256color",
                     "LANG=C.UTF-8",
-                    "LC_ALL=C.UTF-8"
+                    "LC_ALL=C.UTF-8",
+                    "HOME=/root"
             };
         }
         ensureRuntimeFiles();
@@ -1291,6 +1355,9 @@ public class ProotBootstrap {
 
     /** 老用户覆盖安装时按需补齐 Python，不重解压或删除其 rootfs。 */
     public boolean ensureBundledPython() {
+        if ("ksu_chroot".equals(runtime().id())) {
+            return isEnvironmentReady();
+        }
         return ensureGlibcPython();
     }
 
@@ -1353,6 +1420,9 @@ public class ProotBootstrap {
     }
 
     public boolean ensureBundledPnpm() {
+        if ("ksu_chroot".equals(runtime().id())) {
+            return true;
+        }
         try {
             installBundledPnpm(rootfsDir);
             return true;

@@ -202,17 +202,12 @@ public class HarnessController {
 
             // 预先补齐技能与 agents 空目录，使 Chokidar 挂入内核 inotify 原生事件，彻底杜绝 100ms 轮询
             String wd = config.getWorkdir();
-            String wdClean = wd.startsWith("/") ? wd.substring(1) : wd;
-            String[] skillDirs = {
-                    "root/.agents/skills",
-                    "root/.dsh/skills",
-                    "root/" + wdClean + "/.agents/skills",
-                    "root/" + wdClean + "/.dsh/skills"
-            };
-            for (String rel : skillDirs) {
-                File dir = new File(proot.getRootfsDir(), rel);
-                if (!dir.exists()) dir.mkdirs();
-            }
+            File wdDir = proot.containerFile(wd.startsWith("/") ? wd : "/root/" + wd);
+            if (!wdDir.exists()) wdDir.mkdirs();
+            new File(proot.getRootfsDir(), "root/.agents/skills").mkdirs();
+            new File(proot.getRootfsDir(), "root/.dsh/skills").mkdirs();
+            new File(wdDir, ".agents/skills").mkdirs();
+            new File(wdDir, ".dsh/skills").mkdirs();
         } catch (Throwable e) {
             Log.w("DSHA", "写入心跳补丁失败: " + e.getMessage());
         }
@@ -499,20 +494,27 @@ public class HarnessController {
     /** 针对 ksu_chroot 后台守护进程的辅助轮询，防止 stdout 偶发截断遗漏 Token */
     private void pollWebAuthUrlIfEmpty(long generation, Consumer<String> onStatus) {
         new Thread(() -> {
-            for (int i = 0; i < 20; i++) {
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                    break;
-                }
+            try {
+                // 先等待 2.5 秒，让 start.sh 的标准输出先被 drainWebOutput 捕获，大部分情况直接命中
+                Thread.sleep(2500);
+            } catch (InterruptedException e) {
+                return;
+            }
+            int targetPort = config != null ? config.getPortInt() : 3080;
+            for (int i = 0; i < 8; i++) {
                 synchronized (lifecycle) {
                     if (!lifecycle.isCurrent(generation)) return;
                     if (!webAuthUrl.isEmpty()) return;
                 }
                 try {
                     Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                            "grep -o 'http://127\\.0\\.0\\.1:[0-9]*/?token=[^ ]*' /data/adb/dsha/run/dsh-web.log 2>/dev/null | tail -n 1"});
+                            "grep -o 'http://127\\.0\\.0\\.1:" + targetPort + "/?token=[^ ]*' /data/adb/dsha/run/dsh-web.log 2>/dev/null | tail -n 1"});
                     String out = new String(Compat.readAllBytes(p.getInputStream()), StandardCharsets.UTF_8).trim();
+                    if (out.isEmpty()) {
+                        Process pAny = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                                "grep -o 'http://127\\.0\\.0\\.1:[0-9]*/?token=[^ ]*' /data/adb/dsha/run/dsh-web.log 2>/dev/null | tail -n 1"});
+                        out = new String(Compat.readAllBytes(pAny.getInputStream()), StandardCharsets.UTF_8).trim();
+                    }
                     String url = extractAuthUrl(out);
                     if (url != null && !url.isEmpty()) {
                         synchronized (lifecycle) {
@@ -533,6 +535,11 @@ public class HarnessController {
                         return;
                     }
                 } catch (Throwable ignored) {
+                }
+                try {
+                    Thread.sleep(1500);
+                } catch (InterruptedException e) {
+                    break;
                 }
             }
         }, "dsh-url-poller").start();
@@ -703,8 +710,8 @@ public class HarnessController {
                 any = true;
             }
             String wd = config.getWorkdir();
-            java.io.File env = new java.io.File(proot.getRootfsDir(),
-                    "root/" + (wd.startsWith("/") ? wd.substring(1) : wd) + "/.env");
+            File wdDir = proot.containerFile(wd.startsWith("/") ? wd : "/root/" + wd);
+            java.io.File env = new java.io.File(wdDir, ".env");
             if (env.isFile()) {
                 //noinspection ResultOfMethodCallIgnored
                 env.delete();

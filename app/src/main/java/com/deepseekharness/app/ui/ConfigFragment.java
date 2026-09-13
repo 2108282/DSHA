@@ -53,17 +53,14 @@ public class ConfigFragment extends Fragment {
         EditText apiKey = v.findViewById(R.id.config_api_key);
         EditText port = v.findViewById(R.id.config_port);
         CheckBox confirm = v.findViewById(R.id.config_confirm_shell);
-        CheckBox rootShell = v.findViewById(R.id.config_root_shell);
         CheckBox checkUpdate = v.findViewById(R.id.config_check_update);
         CheckBox desktop = v.findViewById(R.id.config_desktop_mode);
         CheckBox backupKey = v.findViewById(R.id.config_backup_key);
-        CheckBox proroot = v.findViewById(R.id.config_proroot);
         CheckBox lan = v.findViewById(R.id.config_lan_mode);
         CheckBox overlay = v.findViewById(R.id.config_overlay_stream);
         CheckBox sensors = v.findViewById(R.id.config_cap_sensors);
         CheckBox location = v.findViewById(R.id.config_cap_location);
         EditText autoBackup = v.findViewById(R.id.config_auto_backup);
-        CheckBox adb = v.findViewById(R.id.config_adb_enable);
         Button save = v.findViewById(R.id.config_save);
 
         // 高级项折叠
@@ -75,14 +72,9 @@ public class ConfigFragment extends Fragment {
         apiKey.setText(c.getApiKey());
         port.setText(c.getPort());
         confirm.setChecked(c.isConfirmShell());
-        rootShell.setChecked(c.isRootShellAllowed());
         checkUpdate.setChecked(c.isCheckUpdate());
         desktop.setChecked(c.isDesktopMode());
-        CheckBox gecko = v.findViewById(R.id.config_gecko_core);
-        gecko.setVisibility(com.deepseekharness.app.BuildConfig.LOW_ANDROID ? View.VISIBLE : View.GONE);
-        gecko.setChecked(c.isGeckoCore());
         backupKey.setChecked(c.isBackupKey());
-        proroot.setChecked(c.isProroot());
         lan.setChecked(c.isLanMode());
         overlay.setChecked(pref(ctx, "overlay_stream", false));
         sensors.setChecked(pref(ctx, "cap_sensors", false));
@@ -94,13 +86,6 @@ public class ConfigFragment extends Fragment {
                         android.Manifest.permission.ACCESS_COARSE_LOCATION}, 104);
         });
         autoBackup.setText(String.valueOf(c.getAutoBackupLaunches()));
-        adb.setChecked(pref(ctx, "adb_enabled", false));
-        TextView adbStatus = v.findViewById(R.id.config_adb_status);
-        adb.setOnCheckedChangeListener((b, checked) ->
-                adbStatus.setText(checked
-                        ? "ADB 已开启。无线配对：开发者选项 → 无线调试"
-                        : "ADB 已关闭。不用无线调试就保持关闭。"));
-        refreshAdbStatus(adbStatus);
 
         // 待接回项（诚实提示）
         v.findViewById(R.id.config_translate).setOnClickListener(x -> toast("插件市场翻译待接回"));
@@ -116,32 +101,23 @@ public class ConfigFragment extends Fragment {
         // 悬浮条外观与行为（照 1.1.9.1：底色预设 + 不透明度/行数/字号/停留 + 行为开关）
         v.findViewById(R.id.config_overlay_style).setOnClickListener(x -> showOverlayStyleDialog());
 
-        // 设备通道提示
-        v.findViewById(R.id.config_adb_pair).setOnClickListener(x -> {
-            Toast.makeText(ctx, "当前运行在 KernelSU / Magisk 原生 Root 模式下，免 ADB 无线配对", Toast.LENGTH_SHORT).show();
-        });
         v.findViewById(R.id.config_battery_opt).setOnClickListener(x -> openBatteryOpt(ctx));
         v.findViewById(R.id.config_a11y).setOnClickListener(x -> openA11ySettings(ctx));
         refreshA11yStatus(v.findViewById(R.id.config_a11y_status));
-        v.findViewById(R.id.config_runtime_update).setOnClickListener(x -> checkScriptUpdate(ctx));
         v.findViewById(R.id.config_repo_link).setOnClickListener(x -> openRepo(ctx));
 
         save.setOnClickListener(x -> {
             c.setApiKey(apiKey.getText().toString());
             c.setPort(port.getText().toString());
             c.setConfirmShell(confirm.isChecked());
-            c.setRootShellAllowed(rootShell.isChecked());
             c.setCheckUpdate(checkUpdate.isChecked());
             c.setDesktopMode(desktop.isChecked());
-            if (com.deepseekharness.app.BuildConfig.LOW_ANDROID) c.setGeckoCore(gecko.isChecked());
             c.setBackupKey(backupKey.isChecked());
-            c.setProroot(proroot.isChecked());
             c.setLanMode(lan.isChecked());
             c.setAutoBackupLaunches(parseInt(autoBackup.getText().toString()));
             setPref(ctx, "overlay_stream", overlay.isChecked());
             setPref(ctx, "cap_sensors", sensors.isChecked());
             setPref(ctx, "cap_location", location.isChecked());
-            setPref(ctx, "adb_enabled", adb.isChecked());
             applyLanMode(c, lan.isChecked());
             if (lan.isChecked() && getActivity() instanceof MainActivity)
                 ((MainActivity) getActivity()).requestLocalNetwork();
@@ -177,21 +153,6 @@ public class ConfigFragment extends Fragment {
                 .addToBackStack(null)
                 .replace(R.id.fragment_container, f)
                 .commit();
-    }
-
-    /** 后台读 ADB 通道真实状态（key/deps/端口 + 保活服务的连接状态），刷到状态栏。 */
-    private void refreshAdbStatus(final TextView status) {
-        new Thread(() -> {
-            final String text = computeAdbStatus();
-            if (getActivity() == null || !isAdded()) return;
-            getActivity().runOnUiThread(() -> {
-                if (status != null && isAdded()) status.setText(text);
-            });
-        }, "adb-status").start();
-    }
-
-    private String computeAdbStatus() {
-        return "✅ 原生 Root 守护运行就绪（免 ADB 配对）";
     }
 
     private void openBatteryOpt(Context ctx) {
@@ -471,41 +432,6 @@ public class ConfigFragment extends Fragment {
             startActivity(new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
         } catch (Exception e) {
             toast("无法打开开发者选项");
-        }
-    }
-
-    private void checkScriptUpdate(Context ctx) {
-        toast("正在检查脚本更新…");
-        new Thread(() -> {
-            String tag = fetchLatestRelease();
-            requireActivity().runOnUiThread(() -> toast(
-                    tag == null ? "检查失败（网络不可用）" : "脚本层最新 " + tag + "（本版已内置）"));
-        }, "script-update").start();
-    }
-
-    private String fetchLatestRelease() {
-        try {
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(
-                    "https://api.github.com/repos/qiannianhuanxiang/DSHA/releases/latest")
-                    .openConnection();
-            conn.setConnectTimeout(8000);
-            conn.setReadTimeout(8000);
-            conn.setRequestProperty("User-Agent", "DSHA");
-            if (conn.getResponseCode() != 200) return null;
-            java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(
-                    conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = r.readLine()) != null) sb.append(line);
-            conn.disconnect();
-            String body = sb.toString();
-            int i = body.indexOf("\"tag_name\"");
-            if (i < 0) return null;
-            int c = body.indexOf('"', body.indexOf('"', i + 11) + 1);
-            int e = body.indexOf('"', c + 1);
-            return c >= 0 && e > c ? body.substring(c + 1, e) : null;
-        } catch (Exception e) {
-            return null;
         }
     }
 

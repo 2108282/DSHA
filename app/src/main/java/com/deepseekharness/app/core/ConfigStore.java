@@ -151,7 +151,12 @@ public class ConfigStore {
     }
 
     public String getWorkdir() {
-        return prefs.getString(Constants.KEY_WORKDIR, Constants.DEFAULT_WORKDIR);
+        String val = prefs.getString(Constants.KEY_WORKDIR, Constants.DEFAULT_WORKDIR);
+        if ("deepseek-harness".equals(val) || "/root/deepseek-harness".equals(val)) {
+            val = Constants.DEFAULT_WORKDIR;
+            prefs.edit().putString(Constants.KEY_WORKDIR, val).apply();
+        }
+        return val;
     }
 
     public void setWorkdir(String v) {

@@ -62,6 +62,25 @@ public class LaunchFragment extends Fragment {
         launchLog = v.findViewById(R.id.launch_log);
 
         restart.setText("重启");
+
+        android.widget.EditText portInput = v.findViewById(R.id.launch_port_input);
+        if (portInput != null) {
+            portInput.setText(String.valueOf(controller.config().getPortInt()));
+            portInput.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                @Override public void onTextChanged(CharSequence s, int start, int count, int after) {}
+                @Override public void afterTextChanged(android.text.Editable s) {
+                    String p = s.toString().trim();
+                    if (!p.isEmpty()) {
+                        controller.config().setPort(p);
+                    }
+                }
+            });
+            v.findViewById(R.id.launch_port_chip_3080).setOnClickListener(x -> portInput.setText("3080"));
+            v.findViewById(R.id.launch_port_chip_3088).setOnClickListener(x -> portInput.setText("3088"));
+            v.findViewById(R.id.launch_port_chip_8080).setOnClickListener(x -> portInput.setText("8080"));
+        }
+
         v.findViewById(R.id.launch_safe).setOnClickListener(x -> new androidx.appcompat.app.AlertDialog.Builder(requireContext())
                 .setTitle("安全启动 Web？")
                 .setMessage("暂时禁用第三方插件后启动，保留插件文件、会话和配置。可在插件管理中逐个启用或恢复之前的状态。")

@@ -93,6 +93,6 @@ public final class Constants {
     /** 自动备份频率（每启动 N 次，0=关）。 */
     public static final String KEY_AUTO_BACKUP = "auto_backup_launches";
 
-    /** 默认工作目录（容器内路径）。 */
-    public static final String DEFAULT_WORKDIR = "/root/deepseek-harness";
+    /** 默认工作目录（容器内路径，直通手机物理存储 Download/DSHA/工作区）。 */
+    public static final String DEFAULT_WORKDIR = "/root/内部存储/工作区";
 }

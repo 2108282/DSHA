@@ -129,7 +129,7 @@ extends Fragment {
         new Thread(() -> {
             try {
                 if (!this.c.proot().isEnvironmentReady()) {
-                    this.mainHandler.post(() -> this.appendLine("\u73af\u5883\u672a\u5c31\u7eea\uff0c\u8bf7\u5148\u5230\u300c\u5b89\u88c5\u300d\u9875\u5b8c\u6210\u5b89\u88c5"));
+                    this.mainHandler.post(() -> this.appendLine("未检测到 /data/adb/dsha 原生模块或未授予 Root 权限，请在授权管理器中允许"));
                     return;
                 }
             }

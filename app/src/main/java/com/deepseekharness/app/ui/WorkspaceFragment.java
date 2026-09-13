@@ -56,14 +56,15 @@ public class WorkspaceFragment extends Fragment {
             });
         }
 
-        // 文件共享（DocumentsProvider，MT 管理器可发现）
+        // 文件共享与原生存储映射
         TextView shareStatus = v.findViewById(R.id.workspace_share_status);
         if (shareStatus != null) {
-            shareStatus.setText("文件提供器已就绪（DocumentsProvider，无需 ROOT）\n\n"
-                    + "用法：MT 管理器 → 设置 → 添加本地存储 → 通过 DocumentsProvider → 选「DSHA」\n\n"
-                    + "容器根在：files → linux → ubuntu → root\n"
-                    + "配置在：files → linux → ubuntu → root → .dsh\n\n"
-                    + "（若 MT 里看不到，先打开本 App 保持进程运行）");
+            shareStatus.setText("KernelSU / Magisk 原生环境已打通直连：\n\n"
+                    + "· 原生根目录：/data/adb/dsha/rootfs\n"
+                    + "· 内部存储直通：/root/内部存储 → /sdcard/Download/DSHA\n"
+                    + "· 默认工作区：/root/内部存储/工作区（手机物理 Download/DSHA/工作区）\n"
+                    + "· 配置文件目录：/data/adb/dsha/rootfs/root/.dsh\n\n"
+                    + "支持在 MT 管理器、Termux 或手机系统文件管理器中直接访问与读写！");
         }
 
         // Root 权限检测
@@ -102,23 +103,23 @@ public class WorkspaceFragment extends Fragment {
                         .setNegativeButton("取消", null)
                         .show());
 
-        // 清除环境（下次启动重新解压）
+        // 清除环境（停止服务并抹除 /data/adb/dsha）
         v.findViewById(R.id.workspace_clear).setOnClickListener(x ->
                 new AlertDialog.Builder(requireContext())
                         .setTitle("清除环境？")
-                        .setMessage("将删除整个容器（rootfs），配置与对话保留。\n\n"
-                                + "下次启动 App 会重新解压内置环境（约几分钟）。")
+                        .setMessage("将停止服务并删除 /data/adb/dsha 运行环境。\n\n"
+                                + "如需重新安装，请在 KernelSU/Magisk 中重新刷入模块或运行 reinstall.sh 脚本。")
                         .setPositiveButton("清除", (d, w) -> {
-                            try {
-                                controller.stopWeb();
-                                controller.proot().uninstall();
-                                controller.resetExtraction();
-                                Toast.makeText(requireContext(), "已清除环境，下次启动会重新解压",
-                                        Toast.LENGTH_LONG).show();
-                            } catch (Throwable t) {
-                                Toast.makeText(requireContext(), "清除失败：" + t.getMessage(),
-                                        Toast.LENGTH_LONG).show();
-                            }
+                            new Thread(() -> {
+                                try {
+                                    controller.stopWeb();
+                                    Process p = Runtime.getRuntime().exec(new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/stop.sh --umount && rm -rf /data/adb/dsha"});
+                                    p.waitFor();
+                                    main.post(() -> Toast.makeText(requireContext(), "已清除 /data/adb/dsha 原生环境", Toast.LENGTH_LONG).show());
+                                } catch (Throwable t) {
+                                    main.post(() -> Toast.makeText(requireContext(), "清除失败：" + t.getMessage(), Toast.LENGTH_LONG).show());
+                                }
+                            }).start();
                         })
                         .setNegativeButton("取消", null)
                         .show());
