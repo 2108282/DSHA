@@ -214,13 +214,42 @@ public interface ContainerRuntime {
 
         @Override public String displayName() { return "KernelSU / Magisk 原生 Chroot（零损耗）"; }
 
+        public static String findSuBinary() {
+            String envPath = System.getenv("PATH");
+            if (envPath != null) {
+                for (String p : envPath.split(":")) {
+                    File f = new File(p.trim(), "su");
+                    if (f.exists() && f.canExecute()) {
+                        return f.getAbsolutePath();
+                    }
+                }
+            }
+            String[] candidates = {
+                    "/data/adb/ksu/bin/su",
+                    "/data/adb/ap/bin/su",
+                    "/data/adb/magisk/su",
+                    "/system/bin/su",
+                    "/system/xbin/su",
+                    "/sbin/su",
+                    "/vendor/bin/su"
+            };
+            for (String p : candidates) {
+                try {
+                    File f = new File(p);
+                    if (f.exists() && f.canExecute()) return p;
+                } catch (Throwable ignored) {}
+            }
+            return "su";
+        }
+
         public static boolean checkAvailable() {
             long now = System.currentTimeMillis();
             if (sCachedAvailable != null && (now - sLastCheckTime < 4000)) {
                 return sCachedAvailable;
             }
             try {
-                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "test -f /data/adb/dsha/scripts/start.sh"});
+                String su = findSuBinary();
+                Process p = Runtime.getRuntime().exec(new String[]{su, "-c", "test -f /data/adb/dsha/scripts/start.sh"});
                 boolean ok = (p.waitFor() == 0);
                 sCachedAvailable = ok;
                 sLastCheckTime = now;
@@ -242,7 +271,7 @@ public interface ContainerRuntime {
 
         @Override public List<String> baseArgv(File rootfsDir, boolean hardlinkSupported) {
             List<String> argv = new ArrayList<>();
-            argv.add("su");
+            argv.add(findSuBinary());
             argv.add("-mm");
             argv.add("-c");
             argv.add("/data/adb/dsha/scripts/term.sh");
@@ -255,7 +284,8 @@ public interface ContainerRuntime {
 
         @Override public void prepare() throws Exception {
             try {
-                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "chmod 755 /data/adb/dsha/scripts/*.sh 2>/dev/null"});
+                String su = findSuBinary();
+                Process p = Runtime.getRuntime().exec(new String[]{su, "-c", "chmod 755 /data/adb/dsha/scripts/*.sh 2>/dev/null"});
                 p.waitFor();
             } catch (Throwable ignored) {
             }

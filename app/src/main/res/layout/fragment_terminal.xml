@@ -25,7 +25,7 @@
             android:paddingTop="7dp"
             android:paddingEnd="@dimen/gap_control"
             android:paddingBottom="7dp"
-            android:text="Ubuntu · proot"
+            android:text="Ubuntu · 原生 Root"
             android:textColor="@color/text_secondary"
             android:textSize="@dimen/text_caption" />
 

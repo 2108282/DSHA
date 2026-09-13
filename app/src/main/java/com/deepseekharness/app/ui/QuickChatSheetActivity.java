@@ -95,6 +95,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private static WebView sCachedWebView = null;
     private static boolean sWebLoaded = false;
     private static long sLoadedGeneration = -1;
+    private static int sLoadedPort = 0;
 
     private FrameLayout rootOverlay;
     private LinearLayout sheetCard;
@@ -438,12 +439,14 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
             long currentGen = controller != null ? controller.getWebGeneration() : -1;
             boolean serviceRestarted = sLoadedGeneration != currentGen && currentGen > 0;
+            int port = controller != null ? controller.getPort() : 3080;
             String curUrl = sCachedWebView.getUrl();
-            boolean detached = curUrl == null || (!curUrl.startsWith("http://127.0.0.1:3080") && !curUrl.startsWith("http://localhost:3080"));
+            boolean detached = curUrl == null || (!curUrl.startsWith("http://127.0.0.1:" + port) && !curUrl.startsWith("http://localhost:" + port));
 
-            // 【识别新 Token】：若底层服务已重启（Token 失效）、脱离了本地服务或此前未成功载入，
+            // 【识别新 Token / 端口变更】：若底层服务已重启、端口已切换、脱离了本地服务或此前未成功载入，
             // 立即通过新 Token 重新加载主页并换新 Cookie，确保新对话与附件上传在最新有效凭证下进行
-            if (serviceRestarted || detached || !sWebLoaded) {
+            if (serviceRestarted || detached || !sWebLoaded || sLoadedPort != port) {
+                sLoadedPort = port;
                 reloadWithLatestToken();
                 return;
             }
@@ -825,7 +828,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             sCachedWebView.setWebViewClient(new WebViewClient() {
                 @Override
                 public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                    if (url != null && (url.startsWith("http://127.0.0.1:3080") || url.startsWith("http://localhost:3080"))) {
+                    if (url != null && (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:"))) {
                         return false;
                     }
                     openExternal(url);
@@ -838,7 +841,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                     // 只接管主框架的网页点击导航，不阻断 iframe 或子资源
                     if (!request.isForMainFrame()) return false;
                     String url = request.getUrl().toString();
-                    if (url.startsWith("http://127.0.0.1:3080") || url.startsWith("http://localhost:3080")) {
+                    if (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:")) {
                         return false;
                     }
                     openExternal(url);
@@ -911,17 +914,24 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             cookies.setAcceptCookie(true);
             cookies.setAcceptThirdPartyCookies(sCachedWebView, true);
 
+            int port = controller != null ? controller.getPort() : 3080;
+            String base = "http://127.0.0.1:" + port + "/";
+            sLoadedPort = port;
+
             // 预埋鉴权凭证 Cookie，确保 Web Worker 发起二进制文件上传(/api/session/uploadFileBinary)时带完整认证
             new Thread(() -> {
                 try {
                     String authCookie = controller != null ? controller.exchangeDshAuthCookie() : null;
                     if (authCookie != null && !authCookie.isEmpty()) {
                         String cookieVal = authCookie.contains(";") ? authCookie : (authCookie + "; Path=/; HttpOnly; SameSite=Lax");
-                        cookies.setCookie("http://127.0.0.1:3080/", cookieVal);
+                        cookies.setCookie(base, cookieVal);
+                        cookies.setCookie("http://127.0.0.1/", cookieVal);
                     }
                     String bt = com.deepseekharness.app.HttpShellService.ensureToken();
                     if (bt != null && !bt.isEmpty()) {
-                        cookies.setCookie("http://127.0.0.1:3080/", "dsha_t=" + bt + "; Path=/; SameSite=Lax; Max-Age=31536000");
+                        String dshaCookie = "dsha_t=" + bt + "; Path=/; SameSite=Lax; Max-Age=31536000";
+                        cookies.setCookie(base, dshaCookie);
+                        cookies.setCookie("http://127.0.0.1/", dshaCookie);
                     }
                     cookies.flush();
                 } catch (Throwable ignored) {}
@@ -936,6 +946,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 sCachedWebView.loadUrl(authUrl);
             } else {
                 if (progressBar != null) progressBar.setVisibility(View.VISIBLE);
+                if (controller != null) controller.tryRecoverRunningUrl();
                 // 若启动初期 Token 尚未打印就绪，后台轮询等待有效凭证，绝不拿裸地址触发 401
                 new Thread(() -> {
                     for (int step = 0; step < 30; step++) {
@@ -1362,12 +1373,17 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private void reloadWithLatestToken() {
         if (sCachedWebView == null || controller == null) return;
         final long currentGen = controller.getWebGeneration();
+        final int currentPort = controller.getPort();
         if (progressBar != null) progressBar.setVisibility(View.VISIBLE);
         authRetried = false;
         sLoadedGeneration = currentGen;
+        sLoadedPort = currentPort;
 
         new Thread(() -> {
             String targetUrl = controller.getWebAuthUrl();
+            if (targetUrl == null || targetUrl.isEmpty()) {
+                controller.tryRecoverRunningUrl();
+            }
             for (int step = 0; step < 25 && (targetUrl == null || targetUrl.isEmpty()); step++) {
                 try {
                     Thread.sleep(200);
@@ -1376,7 +1392,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 }
                 targetUrl = controller.getWebAuthUrl();
             }
-            if (targetUrl == null || targetUrl.isEmpty()) return;
+            if (targetUrl == null || targetUrl.isEmpty()) {
+                targetUrl = "http://127.0.0.1:" + currentPort + "/";
+            }
 
             final String finalUrl = targetUrl;
             try {
@@ -1384,7 +1402,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 if (authCookie != null && !authCookie.isEmpty()) {
                     android.webkit.CookieManager cookies = android.webkit.CookieManager.getInstance();
                     String cookieVal = authCookie.contains(";") ? authCookie : (authCookie + "; Path=/; HttpOnly; SameSite=Lax");
-                    cookies.setCookie("http://127.0.0.1:3080/", cookieVal);
+                    String base = "http://127.0.0.1:" + currentPort + "/";
+                    cookies.setCookie(base, cookieVal);
+                    cookies.setCookie("http://127.0.0.1/", cookieVal);
                     cookies.flush();
                 }
             } catch (Throwable ignored) {}
@@ -1413,12 +1433,17 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             sCachedWebView.onResume();
             sCachedWebView.resumeTimers();
 
-            // 2. 检查底层服务是否发生过重启（Token 是否已变更）
+            // 2. 检查底层服务是否发生过重启或端口已切换
             long currentGen = controller != null ? controller.getWebGeneration() : -1;
             boolean serviceRestarted = sLoadedGeneration != currentGen && currentGen > 0;
+            int currentPort = controller != null ? controller.getPort() : 3080;
+            boolean portChanged = sLoadedPort != currentPort && sLoadedPort != 0;
 
-            if (!sWebLoaded || serviceRestarted) {
-                // 服务重启过或未曾加载成功：自动通过新 Token 重载并刷新 Cookie
+            String curUrl = sCachedWebView.getUrl();
+            boolean detached = curUrl != null && !curUrl.startsWith("http://127.0.0.1:" + currentPort) && !curUrl.startsWith("http://localhost:" + currentPort);
+
+            if (!sWebLoaded || serviceRestarted || portChanged || detached) {
+                sLoadedPort = currentPort;
                 reloadWithLatestToken();
             }
         }

@@ -1094,7 +1094,7 @@ public class ProotBootstrap {
         ContainerRuntime rt = runtime();
         if ("ksu_chroot".equals(rt.id())) {
             List<String> argv = new ArrayList<>();
-            argv.add("su");
+            argv.add(ContainerRuntime.KsuChroot.findSuBinary());
             argv.add("-mm");
             argv.add("-c");
             argv.add("/data/adb/dsha/scripts/term.sh");
@@ -1121,14 +1121,15 @@ public class ProotBootstrap {
     public String[] ptyArgv(String... guestCmd) {
         ContainerRuntime rt = runtime();
         if ("ksu_chroot".equals(rt.id())) {
+            String su = ContainerRuntime.KsuChroot.findSuBinary();
             if (guestCmd != null && guestCmd.length > 0) {
                 StringBuilder sb = new StringBuilder("/data/adb/dsha/scripts/term.sh");
                 for (String arg : guestCmd) {
                     sb.append(" ").append(ShellQuote.arg(arg));
                 }
-                return new String[]{"su", "-mm", "-c", sb.toString()};
+                return new String[]{su, "-mm", "-c", sb.toString()};
             }
-            return new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/term.sh"};
+            return new String[]{su, "-mm", "-c", "/data/adb/dsha/scripts/term.sh"};
         }
         java.util.List<String> argv = baseProotArgv();
         if (guestCmd == null || guestCmd.length == 0) {
@@ -1148,13 +1149,25 @@ public class ProotBootstrap {
     public String[] ptyEnv() {
         ContainerRuntime rt = runtime();
         if ("ksu_chroot".equals(rt.id())) {
-            return new String[]{
-                    "PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/system/bin",
-                    "TERM=xterm-256color",
-                    "LANG=C.UTF-8",
-                    "LC_ALL=C.UTF-8",
-                    "HOME=/root"
-            };
+            List<String> list = new ArrayList<>();
+            java.util.Map<String, String> envMap = System.getenv();
+            if (envMap != null) {
+                for (java.util.Map.Entry<String, String> entry : envMap.entrySet()) {
+                    if ("PATH".equalsIgnoreCase(entry.getKey())) continue;
+                    if (entry.getKey() != null && entry.getValue() != null) {
+                        list.add(entry.getKey() + "=" + entry.getValue());
+                    }
+                }
+            }
+            String sysPath = System.getenv("PATH");
+            String fullPath = (sysPath != null && !sysPath.isEmpty() ? sysPath + ":" : "")
+                    + "/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk:/sbin:/system/sbin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin";
+            list.add("PATH=" + fullPath);
+            list.add("TERM=xterm-256color");
+            list.add("LANG=C.UTF-8");
+            list.add("LC_ALL=C.UTF-8");
+            list.add("HOME=/root");
+            return list.toArray(new String[0]);
         }
         ensureRuntimeFiles();
         ensureBundledPython();
