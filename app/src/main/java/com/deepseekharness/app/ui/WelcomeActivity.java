@@ -72,9 +72,7 @@ public class WelcomeActivity extends AppCompatActivity {
                 pager.setCurrentItem(cur + 1);
             } else {
                 new ConfigStore(this).setWelcomed(true);
-                HarnessController c = new HarnessController(this);
-                startActivity(new Intent(this,
-                        c.isEnvironmentReady() ? MainActivity.class : ExtractActivity.class));
+                startActivity(new Intent(this, MainActivity.class));
                 finish();
             }
         });

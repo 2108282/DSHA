@@ -919,14 +919,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         String cookieVal = authCookie.contains(";") ? authCookie : (authCookie + "; Path=/; HttpOnly; SameSite=Lax");
                         cookies.setCookie("http://127.0.0.1:3080/", cookieVal);
                     }
-                    String bt = "";
-                    java.io.File tf1 = new java.io.File("/root/.dsh/.bridge_token");
-                    java.io.File tf2 = new java.io.File(getFilesDir(), "linux/ubuntu/root/.dsh/.bridge_token");
-                    java.io.File tf3 = new java.io.File("/data/data/" + getPackageName() + "/files/linux/ubuntu/root/.dsh/.bridge_token");
-                    if (tf1.isFile()) bt = new String(com.deepseekharness.app.util.Compat.readAllBytes(tf1)).trim();
-                    else if (tf2.isFile()) bt = new String(com.deepseekharness.app.util.Compat.readAllBytes(tf2)).trim();
-                    else if (tf3.isFile()) bt = new String(com.deepseekharness.app.util.Compat.readAllBytes(tf3)).trim();
-                    if (!bt.isEmpty()) {
+                    String bt = com.deepseekharness.app.HttpShellService.ensureToken();
+                    if (bt != null && !bt.isEmpty()) {
                         cookies.setCookie("http://127.0.0.1:3080/", "dsha_t=" + bt + "; Path=/; SameSite=Lax; Max-Age=31536000");
                     }
                     cookies.flush();

@@ -229,8 +229,25 @@ public class LaunchFragment extends Fragment {
                     }
                 }
             }
-            runState.setText(stopping ? "DSH 停止中…" : starting ? "DSH 启动中…"
-                    : ready ? "DSH 已就绪，可进入" : controller.isUserStopped() ? "DSH 已停止" : "DSH 未就绪");
+            boolean running = controller.isWebRunning();
+            if (!ready && !starting && !stopping && running) {
+                controller.tryRecoverRunningUrl();
+            }
+            if (stopping) {
+                runState.setText("DSH 停止中…");
+            } else if (starting) {
+                runState.setText("DSH 启动中…");
+            } else if (ready) {
+                runState.setText("DSH 已就绪，可进入");
+            } else if (running) {
+                runState.setText("DSH 运行中，正在同步连接…");
+            } else if (!controller.isEnvironmentReady()) {
+                runState.setText("⚠️ 未检测到 KernelSU 模块或未授权 Root");
+            } else if (controller.isUserStopped()) {
+                runState.setText("DSH 已停止");
+            } else {
+                runState.setText("DSH 未就绪");
+            }
             if (start != null) {
                 webReady = ready;
                 start.setText(ready ? "进入" : "启动");

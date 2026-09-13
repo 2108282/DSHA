@@ -21,6 +21,23 @@ public final class DangerShellGuard {
     private DangerShellGuard() {
     }
 
+    /** 物理硬件保护：严禁触碰的策略级拦截（不予弹窗确认，直接永久拒绝） */
+    private static final String[] BLOCKED_PATTERNS = {
+            "/dev/block", "setenforce 0", "setenforce permissive",
+            "flash_image", "fastboot", "edl",
+            "remount,rw", "remount,rw /system", "remount,rw /"
+    };
+
+    /** 判断是否属于系统级永久拦截策略 */
+    public static boolean isPolicyBlocked(String cmd) {
+        if (cmd == null) return false;
+        String c = stripOwnWrapper(cmd.toLowerCase());
+        for (String p : BLOCKED_PATTERNS) {
+            if (c.contains(p)) return true;
+        }
+        return false;
+    }
+
     /** 直接子串匹配即可判危的模式：本身已经足够具体，不会误伤正常命令。 */
     private static final String[] PATTERNS = {
             // 删除

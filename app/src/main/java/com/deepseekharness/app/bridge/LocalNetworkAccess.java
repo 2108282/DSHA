@@ -17,8 +17,6 @@ public final class LocalNetworkAccess {
     public static void applyConfiguredFeatures(Context context) {
         if (!granted(context)) return;
         Context app = context.getApplicationContext();
-        if (com.deepseekharness.app.DeviceBridgeService.isAdbEnabled(app))
-            com.deepseekharness.app.DeviceBridgeService.apply(app);
         com.deepseekharness.app.core.ConfigStore config = new com.deepseekharness.app.core.ConfigStore(app);
         if (config.isLanMode()) {
             com.deepseekharness.app.core.HarnessController controller =

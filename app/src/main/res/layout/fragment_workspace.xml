@@ -113,7 +113,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/gap_section"
-            android:text="设备 Shell 能力（Shizuku）"
+            android:text="宿主 Root Shell 能力（KernelSU / Magisk）"
             android:textSize="@dimen/text_title"
             android:textStyle="bold" />
 
@@ -122,7 +122,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/gap_tight"
-            android:text="Shizuku 未授权"
+            android:text="正在检测 Root 权限..."
             android:textSize="@dimen/text_label" />
 
         <Button android:background="@drawable/bg_btn" android:textAllCaps="false"
@@ -130,14 +130,14 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/gap_control"
-            android:text="授权 Shizuku" />
+            android:text="测试 / 授予 Root 权限" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/gap_tight"
             android:lineSpacingExtra="3dp"
-            android:text="授权后，助手（Web UI 里的 agent）可在设备上执行 shell 命令：\ncurl http://127.0.0.1:3090/exec?cmd=..."
+            android:text="授权后，Agent 可通过 3090 硬件桥执行宿主 shell 命令：\ncurl http://127.0.0.1:3090/exec?cmd=..."
             android:textSize="@dimen/text_caption" />
 
         <Button android:background="@drawable/bg_btn" android:textAllCaps="false"

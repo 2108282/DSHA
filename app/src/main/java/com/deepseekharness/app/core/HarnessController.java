@@ -80,8 +80,21 @@ public class HarnessController {
         return config != null ? config.getPortInt() : 3080;
     }
 
-    /** Web 是否在运行（按 pid 文件 + kill -0 判断，不依赖端口反查）。 */
+    /** Web 是否在运行（针对 ksu_chroot 使用 Socket 探活与 status.sh，否则按 pid 文件 + kill -0）。 */
     public boolean isWebRunning() {
+        if ("ksu_chroot".equals(proot.runtime().id())) {
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.connect(new java.net.InetSocketAddress("127.0.0.1", config != null ? config.getPortInt() : 3080), 200);
+                return true;
+            } catch (Throwable ignored) {
+            }
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/status.sh"});
+                return p.waitFor() == 0;
+            } catch (Throwable e) {
+                return false;
+            }
+        }
         try {
             java.io.File pidFile = new java.io.File(proot.getRootfsDir(),
                     WebProcSel.pidFileRel(WebProcSel.PID_WEB));
@@ -92,6 +105,29 @@ public class HarnessController {
             return r != null && r.contains("YES");
         } catch (Throwable e) {
             return false;
+        }
+    }
+
+    /** 若服务已在后台运行但内存中鉴权链接丢失，尝试从模块运行日志中恢复鉴权链接。 */
+    public void tryRecoverRunningUrl() {
+        if (!webAuthUrl.isEmpty()) return;
+        if ("ksu_chroot".equals(proot.runtime().id()) && isWebRunning()) {
+            io.execute(() -> {
+                try {
+                    Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                            "grep -o 'http://127\\.0\\.0\\.1:[0-9]*/?token=[^ ]*' /data/adb/dsha/run/dsh-web.log 2>/dev/null | tail -n 1"});
+                    String out = new String(Compat.readAllBytes(p.getInputStream()), StandardCharsets.UTF_8).trim();
+                    String url = extractAuthUrl(out);
+                    if (url != null && !url.isEmpty()) {
+                        synchronized (lifecycle) {
+                            if (webAuthUrl.isEmpty()) {
+                                webAuthUrl = url;
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            });
         }
     }
 
@@ -245,6 +281,48 @@ public class HarnessController {
             webProc.stop(); // 先清掉可能残留的 dsh，否则新进程撞 EADDRINUSE
             if (!lifecycle.isCurrent(generation)) return;
             startupDiagnostics.stage(generation, "检查环境与依赖");
+
+            if ("ksu_chroot".equals(proot.runtime().id())) {
+                if (!proot.isEnvironmentReady()) {
+                    lifecycle.finishStart(generation);
+                    reportStatus(generation, onStatus, "未检测到 KernelSU/Magisk 模块或未授予 Root 权限，请在模块管理器中刷入并授权！");
+                    return;
+                }
+                // 确保 3090 设备桥 Token 同步到 rootfs
+                com.deepseekharness.app.HttpShellService.syncTokenToRootfsSync();
+                try {
+                    if (com.deepseekharness.app.HttpShellService.instance() == null) {
+                        new com.deepseekharness.app.HttpShellService(ctx).start();
+                    }
+                } catch (Throwable e) {
+                    Log.w("DSHA", "3090 桥启动失败: "
+                            + com.deepseekharness.app.util.SensitiveData.redact(String.valueOf(e)));
+                }
+
+                startupDiagnostics.stage(generation, "调用 start.sh 启动守护进程");
+                reportStatus(generation, onStatus, "正在拉起 KernelSU 原生守护进程 → 127.0.0.1:" + config.getPortInt() + "…");
+                Process p = Runtime.getRuntime().exec(new String[]{
+                        "su", "-mm", "-c", "/data/adb/dsha/scripts/start.sh " + config.getPortInt()
+                });
+                startupDiagnostics.stage(generation, "等待鉴权链接");
+                Thread drainer = new Thread(() -> drainWebOutput(p, generation, onStatus), "dsh-drain");
+                drainer.setDaemon(true);
+                drainer.start();
+
+                // 启动辅助轮询（如果 start.sh 标准输出未在首轮捕获，从日志继续抓取）
+                pollWebAuthUrlIfEmpty(generation, onStatus);
+
+                io.schedule(() -> {
+                    synchronized (lifecycle) {
+                        if (lifecycle.finishStart(generation)) {
+                            reportStatus(generation, onStatus, "等待鉴权链接超时，可查看日志或手动重启");
+                        }
+                    }
+                }, 45, TimeUnit.SECONDS);
+                draining = true;
+                return;
+            }
+
             proot.ensureRuntimeFiles();
             if (!proot.isEnvironmentReady()) {
                 if (!proot.hasOfflineBundle()) {
@@ -400,6 +478,12 @@ public class HarnessController {
         }
         synchronized (lifecycle) {
             if (!lifecycle.isCurrent(generation)) return;
+            if ("ksu_chroot".equals(proot.runtime().id())) {
+                // start.sh 本身将 Node 放入后台后退出是正常行为，只要后台正在运行就不应判定为退出
+                if (isWebRunning()) {
+                    return;
+                }
+            }
             boolean hadAuth = !webAuthUrl.isEmpty();
             webAuthUrl = "";
             lifecycle.finishStart(generation);
@@ -410,6 +494,48 @@ public class HarnessController {
             reportStatus(generation, onStatus, hadAuth ? "dsh 进程已退出"
                     : "dsh 进程已退出且未打印鉴权链接，日志见 /root/dsh-web.log");
         }
+    }
+
+    /** 针对 ksu_chroot 后台守护进程的辅助轮询，防止 stdout 偶发截断遗漏 Token */
+    private void pollWebAuthUrlIfEmpty(long generation, Consumer<String> onStatus) {
+        new Thread(() -> {
+            for (int i = 0; i < 20; i++) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    break;
+                }
+                synchronized (lifecycle) {
+                    if (!lifecycle.isCurrent(generation)) return;
+                    if (!webAuthUrl.isEmpty()) return;
+                }
+                try {
+                    Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                            "grep -o 'http://127\\.0\\.0\\.1:[0-9]*/?token=[^ ]*' /data/adb/dsha/run/dsh-web.log 2>/dev/null | tail -n 1"});
+                    String out = new String(Compat.readAllBytes(p.getInputStream()), StandardCharsets.UTF_8).trim();
+                    String url = extractAuthUrl(out);
+                    if (url != null && !url.isEmpty()) {
+                        synchronized (lifecycle) {
+                            if (!lifecycle.isCurrent(generation)) return;
+                            webAuthUrl = url;
+                            startupDiagnostics.stage(generation, "服务已就绪，等待进入网页");
+                            lifecycle.finishStart(generation);
+                            reportStatus(generation, onStatus, "鉴权链接已就绪，点「进入对话」即可进入 dsh");
+                        }
+                        if (config.isLanMode()) {
+                            for (int attempt = 0; attempt < 3 && lifecycle.isCurrent(generation); attempt++) {
+                                try {
+                                    if (exchangeDshAuthCookie(generation) != null) break;
+                                } catch (Throwable ignored) {}
+                                try { Thread.sleep(1200); } catch (InterruptedException ie) { break; }
+                            }
+                        }
+                        return;
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        }, "dsh-url-poller").start();
     }
 
     /** 提取鉴权链接：先严格（官方输出行），失败再宽松（直接扫 URL）。 */

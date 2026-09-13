@@ -23,11 +23,9 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
-import com.deepseekharness.app.DeviceBridgeService;
 import com.deepseekharness.app.DshaAccessibilityService;
 import com.deepseekharness.app.OverlayController;
 import com.deepseekharness.app.R;
-import com.deepseekharness.app.bridge.AdbBridge;
 import com.deepseekharness.app.core.ConfigStore;
 import com.deepseekharness.app.core.HarnessController;
 import com.deepseekharness.app.util.Constants;
@@ -118,13 +116,9 @@ public class ConfigFragment extends Fragment {
         // 悬浮条外观与行为（照 1.1.9.1：底色预设 + 不透明度/行数/字号/停留 + 行为开关）
         v.findViewById(R.id.config_overlay_style).setOnClickListener(x -> showOverlayStyleDialog());
 
-        // ADB 通道（可直接用）
+        // 设备通道提示
         v.findViewById(R.id.config_adb_pair).setOnClickListener(x -> {
-            if (android.os.Build.VERSION.SDK_INT < 30) {
-                new androidx.appcompat.app.AlertDialog.Builder(ctx).setTitle("当前系统没有配对码接口")
-                        .setMessage("无线调试配对码需要 Android 11+。Android 6—10 可使用 Shizuku 或由电脑开启 ADB TCP 通道；对话、插件和终端不受影响。")
-                        .setPositiveButton("知道了", null).show();
-            } else startActivity(new Intent(ctx, AdbPairActivity.class));
+            Toast.makeText(ctx, "当前运行在 KernelSU / Magisk 原生 Root 模式下，免 ADB 无线配对", Toast.LENGTH_SHORT).show();
         });
         v.findViewById(R.id.config_battery_opt).setOnClickListener(x -> openBatteryOpt(ctx));
         v.findViewById(R.id.config_a11y).setOnClickListener(x -> openA11ySettings(ctx));
@@ -148,13 +142,8 @@ public class ConfigFragment extends Fragment {
             setPref(ctx, "cap_sensors", sensors.isChecked());
             setPref(ctx, "cap_location", location.isChecked());
             setPref(ctx, "adb_enabled", adb.isChecked());
-            if (adb.isChecked()) {
-                DeviceBridgeService.apply(ctx);
-            } else {
-                ctx.stopService(new Intent(ctx, DeviceBridgeService.class));
-            }
             applyLanMode(c, lan.isChecked());
-            if ((adb.isChecked() || lan.isChecked()) && getActivity() instanceof MainActivity)
+            if (lan.isChecked() && getActivity() instanceof MainActivity)
                 ((MainActivity) getActivity()).requestLocalNetwork();
             Toast.makeText(ctx, "已保存（重启 Web 后生效）", Toast.LENGTH_SHORT).show();
         });
@@ -202,31 +191,7 @@ public class ConfigFragment extends Fragment {
     }
 
     private String computeAdbStatus() {
-        try {
-            String bridge = DeviceBridgeService.adbState;
-            String detail = DeviceBridgeService.adbDetail == null ? "" : DeviceBridgeService.adbDetail;
-            HarnessController hc = new HarnessController(requireContext());
-            String st = hc.proot().isEnvironmentReady()
-                    ? AdbBridge.status(hc.proot()) : "env:not_ready";
-            boolean key = st.contains("key=YES");
-            String port = "?";
-            int p = st.indexOf("port=");
-            if (p >= 0) port = st.substring(p + 5).trim();
-            if (key && !"-".equals(port)) {
-                return "✅ ADB 通道已就绪 · 端口 " + port
-                        + (detail.isEmpty() ? "" : "（" + detail + "）");
-            } else if ("need_pair".equals(bridge)) {
-                return "⚠️ 配对已失效，需重新配对（保活服务已提示）";
-            } else if ("reconnecting".equals(bridge)) {
-                return "⏳ 正在重连无线调试…";
-            } else if (key) {
-                return "🔑 已配对（密钥在位）· 连接端口待保活探活确认";
-            } else {
-                return "未配对：点下方「ADB 无线配对」完成一次配对即就绪";
-            }
-        } catch (Throwable e) {
-            return "ADB 状态读取失败：" + e.getMessage();
-        }
+        return "✅ 原生 Root 守护运行就绪（免 ADB 配对）";
     }
 
     private void openBatteryOpt(Context ctx) {

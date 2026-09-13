@@ -17,13 +17,11 @@ import com.deepseekharness.app.core.HarnessController;
 import com.deepseekharness.app.util.SensitiveData;
 
 /**
- * 前台保活服务：让 dsh Web UI 在后台稳定常驻。
- *  - startForeground 常驻通知，降低被系统回收概率；
- *  - START_STICKY 被杀后由系统重启；
- *  - 看门狗：TCP 探测 WebUI 端口，连续失联自动重启（带冷却防风暴）；
- *  - WakeLock/WifiLock 息屏保活（熄屏后 node 不被冻结、局域网桥不断）。
- *
- * 适配重启项目（精简版 HarnessController：startWeb(Consumer) / stopWeb / isWebRunning）。
+ * 前台保活服务：
+ *  - startForeground 常驻通知，防止 Android LMK 回收进程；
+ *  - 维护 3090 设备能力桥（HttpShellService / AppBridge）；
+ *  - 动态 WakeLock 调度（仅在长任务执行时持锁，任务结束与熄屏自动休眠）；
+ *  - 纯粹的前台保活，不设置误杀守护进程的看门狗。
  */
 public class HarnessService extends Service {
 
@@ -38,16 +36,7 @@ public class HarnessService extends Service {
     public static volatile HarnessService currentInstance;
     private android.content.BroadcastReceiver screenReceiver;
 
-    // ================= WebUI 监听保活 =================
-    private Thread keepAliveThread;
-    private volatile boolean keepAliveRunning;
-    private final java.util.concurrent.atomic.AtomicLong lastRestartAt =
-            new java.util.concurrent.atomic.AtomicLong(0);
-    private static final long KEEPALIVE_INTERVAL_MS = 60000L;
-    private static final long RESTART_COOLDOWN_MS = 120000L;
-    private static final int KEEPALIVE_MAX_FAIL = 3;
-
-    /** 息屏保活用的两把锁。 */
+    /** 动态休眠与任务保活使用的锁。 */
     private android.os.PowerManager.WakeLock wakeLock;
     private android.net.wifi.WifiManager.WifiLock wifiLock;
 
@@ -64,18 +53,25 @@ public class HarnessService extends Service {
             stopSelf();
             return;
         }
-        // 3090 桥（agent 调设备能力）随前台服务拉起；跨实例互斥，重复启动安全
+        // 3090 桥（Agent 调用设备能力）随前台服务拉起
+        ensureBridgeRunning();
+    }
+
+    private void ensureBridgeRunning() {
         try {
-            shellHttp = new HttpShellService(this);
-            shellHttp.start();
-        } catch (Throwable ignored) {
+            if (HttpShellService.instance() == null) {
+                shellHttp = new HttpShellService(this);
+                shellHttp.start();
+            } else {
+                shellHttp = HttpShellService.instance();
+            }
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "3090 桥启动异常: " + e.getMessage());
         }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Android 8+ 硬性契约：startForegroundService() 拉起的服务必须在 5 秒内 startForeground，
-        // 否则被强杀。每次 onStartCommand 无条件先立通知（幂等）。
         try {
             showForegroundNotification();
         } catch (Throwable e) {
@@ -88,16 +84,15 @@ public class HarnessService extends Service {
             stopWebAndSelf();
             return START_NOT_STICKY;
         }
-        if (!c.isStarting() && !c.canAutoRestart()) {
-            // 用户停止或哨兵仍在时不拉起；不在服务主线程执行 proot 探测。
-            return START_STICKY;
-        }
-        startKeepAlive();
+
+        ensureBridgeRunning();
+        startScreenWatcher();
         return START_STICKY;
     }
 
     private void stopWebAndSelf() {
-        stopKeepAlive();
+        stopScreenWatcher();
+        releaseLocks();
         try {
             c.stopWeb(msg -> { });
         } catch (Throwable ignored) {
@@ -106,28 +101,23 @@ public class HarnessService extends Service {
             if (shellHttp != null) shellHttp.stop();
         } catch (Throwable ignored) {
         }
-        try {
-            stopService(new Intent(this, DeviceBridgeService.class));
-        } catch (Throwable ignored) {
-        }
         stopForeground(true);
         stopSelf();
     }
 
-    // ================= 息屏保活与动态休眠 =================
+    // ================= 动态休眠与按需持锁 =================
 
     private synchronized void acquireLocks() {
         try {
-            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
-            boolean isInteractive = pm != null && pm.isInteractive();
-            if (!isInteractive && !isTaskRunning()) {
-                // 屏幕熄灭且当前无正在执行的任务：不持锁，允许系统进入深度睡眠（Doze / Suspend）
+            if (!isTaskRunning()) {
+                // 无后台长任务正在运行：不持锁，允许系统自由深睡
                 return;
             }
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
             if (pm != null && (wakeLock == null || !wakeLock.isHeld())) {
-                wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "DSHA:web");
+                wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "DSHA:task");
                 wakeLock.setReferenceCounted(false);
-                wakeLock.acquire();
+                wakeLock.acquire(10 * 60 * 1000L); // 单次任务最多持锁 10 分钟防死锁
             }
             android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
                     getApplicationContext().getSystemService(WIFI_SERVICE);
@@ -138,8 +128,7 @@ public class HarnessService extends Service {
                 wifiLock.acquire();
             }
         } catch (Throwable t) {
-            android.util.Log.w("DSHA", "[保活] 取锁失败（不致命）: "
-                    + SensitiveData.redact(String.valueOf(t)));
+            android.util.Log.w("DSHA", "[保活] 取锁失败: " + SensitiveData.redact(String.valueOf(t)));
         }
     }
 
@@ -165,15 +154,15 @@ public class HarnessService extends Service {
                     if (intent == null || intent.getAction() == null) return;
                     String action = intent.getAction();
                     if (Intent.ACTION_SCREEN_OFF.equals(action)) {
-                        // 熄屏：若无后台任务在跑，立即释放 WakeLock 与 WifiLock，系统进入深度休眠
+                        // 熄屏：若无任务在跑，立即释放锁进入深睡
                         if (!isTaskRunning()) {
                             releaseLocks();
                             android.util.Log.i("DSHA", "[保活] 屏幕熄灭且无运行任务，已释放锁进入休眠");
                         }
                     } else if (Intent.ACTION_SCREEN_ON.equals(action) || Intent.ACTION_USER_PRESENT.equals(action)) {
-                        // 亮屏/解锁：重新持锁保证前台极速响应
-                        acquireLocks();
-                        android.util.Log.i("DSHA", "[保活] 屏幕亮起，已重新持有 WakeLock/WifiLock");
+                        if (isTaskRunning()) {
+                            acquireLocks();
+                        }
                     }
                 }
             };
@@ -202,10 +191,9 @@ public class HarnessService extends Service {
 
     public void checkAndReleaseLocksIfIdle() {
         try {
-            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
-            if (pm != null && !pm.isInteractive() && !isTaskRunning()) {
+            if (!isTaskRunning()) {
                 releaseLocks();
-                android.util.Log.i("DSHA", "[保活] 任务结束且处于熄屏状态，已释放锁进入休眠");
+                android.util.Log.i("DSHA", "[保活] 任务已结束，已释放全部 WakeLock/WifiLock");
             }
         } catch (Throwable ignored) {}
     }
@@ -221,101 +209,11 @@ public class HarnessService extends Service {
         }
     }
 
-    // ================= 看门狗 =================
-
-    private void startKeepAlive() {
-        stopKeepAlive();
-        acquireLocks();
-        startScreenWatcher();
-        keepAliveRunning = true;
-        keepAliveThread = new Thread(() -> {
-            int fail = 0;
-            while (keepAliveRunning && !Thread.currentThread().isInterrupted()) {
-                try {
-                    Thread.sleep(KEEPALIVE_INTERVAL_MS);
-                } catch (InterruptedException e) {
-                    break;
-                }
-                if (!keepAliveRunning) break;
-                if (!c.canAutoRestart()) {
-                    synchronized (HarnessService.this) {
-                        // 只在用户停止时释放；下次手动启动由 startKeepAlive 重新取锁。
-                        if (c.isUserStopped()) releaseLocks();
-                    }
-                    fail = 0;
-                    continue;
-                }
-                android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
-                if (pm != null && !pm.isInteractive() && !isTaskRunning()) {
-                    // 屏幕熄灭且无任务在跑：跳过主动探活，让进程与网络协议栈完全休眠
-                    fail = 0;
-                    continue;
-                }
-                long generation = c.getWebGeneration();
-                // 顺手守着 ADB 设备桥（普通后台服务被回收时拉回来）
-                try {
-                    if (DeviceBridgeService.isAdbEnabled(HarnessService.this)
-                            && !DeviceBridgeService.isRunning()) {
-                        DeviceBridgeService.apply(HarnessService.this);
-                    }
-                } catch (Throwable ignored) {
-                }
-                if (isWebUp()) {
-                    fail = 0;
-                    continue;
-                }
-                // TCP 探测期间可能发生手动启停，不能沿用旧探测结果。
-                if (!keepAliveRunning || Thread.currentThread().isInterrupted()
-                        || generation != c.getWebGeneration() || !c.canAutoRestart()) {
-                    fail = 0;
-                    continue;
-                }
-                fail++;
-                if (fail < KEEPALIVE_MAX_FAIL) continue;
-                fail = 0;
-                long now = android.os.SystemClock.elapsedRealtime();
-                if (lastRestartAt.get() != 0 && now - lastRestartAt.get() < RESTART_COOLDOWN_MS) continue;
-                // Controller 持有启动门控直到就绪/失败/超时，无需异步返回即释放的第二把锁。
-                if (c.restartWebAutomatically(generation, msg -> { })) {
-                    lastRestartAt.set(now);
-                    android.util.Log.w("DSHA", "[保活] WebUI 连续失联，已提交自动重启");
-                }
-            }
-        }, "dsha-keepalive");
-        keepAliveThread.setDaemon(true);
-        keepAliveThread.start();
-    }
-
-    private void stopKeepAlive() {
-        stopScreenWatcher();
-        releaseLocks();
-        keepAliveRunning = false;
-        if (keepAliveThread != null) {
-            keepAliveThread.interrupt();
-            keepAliveThread = null;
-        }
-    }
-
-    /** TCP 探测 127.0.0.1:<port> 是否可达（proot 与宿主共享网络栈） */
-    private boolean isWebUp() {
-        int port;
-        try {
-            port = c.config().getPortInt();
-        } catch (Exception e) {
-            return false;
-        }
-        try (java.net.Socket s = new java.net.Socket()) {
-            s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 3000);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
     @Override
     public void onDestroy() {
         if (currentInstance == this) currentInstance = null;
-        stopKeepAlive();
+        stopScreenWatcher();
+        releaseLocks();
         if (shellHttp != null) {
             try {
                 shellHttp.stop();
@@ -332,20 +230,18 @@ public class HarnessService extends Service {
     }
 
     private void showForegroundNotification() {
-        Notification notification = buildNotification("DSHA运行中", "Web UI 正在后台保持运行");
+        Notification notification = buildNotification("DSHA 运行中", "原生 Linux 守护进程与 3090 设备桥保持在线");
         if (Build.VERSION.SDK_INT >= 34)
             startForeground(NOTIF_ID, notification,
                     android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         else startForeground(NOTIF_ID, notification);
     }
 
-    // ================= 通知 =================
-
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
                     CHANNEL_ID, "DSHA后台服务", NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription("保持 DeepSeek Harness Web UI 后台运行");
+            ch.setDescription("保持 DeepSeek Harness 原生守护与硬件桥后台运行");
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.createNotificationChannel(ch);
         }

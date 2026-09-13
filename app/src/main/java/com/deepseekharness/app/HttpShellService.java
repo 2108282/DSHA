@@ -184,34 +184,62 @@ public final class HttpShellService {
         }
     }
 
-    /** 生成/对账 token（rootfs 文件优先；缺失或无效则轮换并写入）。
-     *  注：token 属于 rootfs 内 agent 访问 3090 桥的共享凭据，不做 0600 之外的额外加密。 */
-    private static String ensureToken() {
+    /** 生成/对账 token（内存/首选项优先，通过 root 权限同步到 rootfs）。 */
+    public static String ensureToken() {
         synchronized (HttpShellService.class) {
+            if (authToken != null && !authToken.isEmpty()) {
+                return authToken;
+            }
+            Context c = null;
+            try {
+                if (instance() != null) c = instance().ctx;
+            } catch (Throwable ignored) {}
+            if (c == null) c = tokenCtx;
+            if (c != null) {
+                android.content.SharedPreferences sp = c.getSharedPreferences("dsha_bridge", Context.MODE_PRIVATE);
+                String saved = sp.getString("token", "");
+                if (saved.matches("[A-Za-z0-9_-]{16,64}")) {
+                    authToken = saved;
+                    syncTokenToRootfs();
+                    return authToken;
+                }
+            }
             java.io.File tf = tokenFileIfPossible();
             String fromFile = readTokenFromFile(tf);
             if (fromFile != null && !fromFile.isEmpty()) {
                 authToken = fromFile;
+                if (c != null) {
+                    c.getSharedPreferences("dsha_bridge", Context.MODE_PRIVATE).edit().putString("token", authToken).apply();
+                }
+                syncTokenToRootfs();
                 return authToken;
             }
-            // 无文件或内容无效 → 轮换（不能用旧内存值，否则 agent 读到的文件永远不会出现）
+            // 无文件或内容无效 → 轮换
             String t = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32);
             authToken = t;
-            if (tf != null) {
-                try {
-                    if (tf.getParentFile() != null) tf.getParentFile().mkdirs();
-                    Compat.write(tf, t.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                    try {
-                        Compat.chmod(tf, "rw-------");
-                    } catch (Throwable e) {
-            android.util.Log.w("DSHA", "token 文件写入失败，3090 桥将无法鉴权: " + safeError(e));
-        }
-                } catch (Throwable e) {
-            android.util.Log.w("DSHA", "token 文件读取/清理失败: " + safeError(e));
-        }
+            if (c != null) {
+                c.getSharedPreferences("dsha_bridge", Context.MODE_PRIVATE).edit().putString("token", authToken).apply();
             }
+            syncTokenToRootfs();
             return authToken;
         }
+    }
+
+    public static void syncTokenToRootfsSync() {
+        String t = ensureToken();
+        if (t == null || t.isEmpty()) return;
+        try {
+            String cmd = "mkdir -p /data/adb/dsha/rootfs/root/.dsh && echo -n '" + t
+                    + "' > /data/adb/dsha/rootfs/root/.dsh/.bridge_token && chmod 666 /data/adb/dsha/rootfs/root/.dsh/.bridge_token";
+            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+            p.waitFor();
+        } catch (Throwable e) {
+            android.util.Log.w("DSHA", "同步 token 到 rootfs 失败: " + e.getMessage());
+        }
+    }
+
+    public static void syncTokenToRootfs() {
+        new Thread(HttpShellService::syncTokenToRootfsSync, "dsha-token-sync").start();
     }
 
     /** 最近一次绑定结果：空 = 正常；非空 = 失败原因（自检与诊断读它）。
@@ -515,14 +543,19 @@ public final class HttpShellService {
                 result = "[NO_CMD]";
             } else if (path.startsWith("/confirm")) {
                 // rootfs 内包装器请求的确认：只弹窗，不执行
-                // force=1（adb-shell 报备）→ 所有命令都确认；否则仅危险命令
-                boolean force = path.contains("force=1");
-                boolean needConfirm = force || (confirmEnabled() && DangerShellGuard.isDangerous(cmd));
-                result = needConfirm ? (requestUserConfirm(cmd) ? "YES" : "NO") : "YES";
+                if (DangerShellGuard.isPolicyBlocked(cmd)) {
+                    result = "NO";
+                } else {
+                    boolean force = path.contains("force=1");
+                    boolean needConfirm = force || (confirmEnabled() && DangerShellGuard.isDangerous(cmd));
+                    result = needConfirm ? (requestUserConfirm(cmd) ? "YES" : "NO") : "YES";
+                }
+            } else if (DangerShellGuard.isPolicyBlocked(cmd)) {
+                result = "[POLICY_BLOCKED] 设备策略强制拦截：禁止修改底层块设备、分区、SELinux状态或挂载操作";
             } else if (DangerShellGuard.isDangerous(cmd) && confirmEnabled()) {
                 result = awaitConfirm(cmd);
             } else {
-                result = ShizukuShell.exec(cmd);
+                result = execRootCommand(cmd);
             }
             // 关键：result 必须包引号 —— 旧实现输出 {"result":YES} 是非法 JSON，
             // 客户端（adb-shell.py 判 '"YES"' in body / agent 用 json 解析）全部失效：
@@ -1565,9 +1598,40 @@ public final class HttpShellService {
                 .getBoolean("confirm_shell", true);
     }
 
+    /** 执行 Root 命令并获取返回结果（合并标准输出与错误，30秒超时保护） */
+    public static String execRootCommand(String cmd) {
+        if (cmd == null || cmd.trim().isEmpty()) return "[NO_CMD]";
+        try {
+            ProcessBuilder pb = new ProcessBuilder("su", "-c", cmd);
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            java.io.InputStream in = p.getInputStream();
+            byte[] buf = new byte[4096];
+            boolean finished = p.waitFor(30, TimeUnit.SECONDS);
+            if (!finished) {
+                p.destroyForcibly();
+                return "[TIMEOUT: 宿主命令执行超过 30 秒]";
+            }
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                bos.write(buf, 0, n);
+                if (bos.size() > 256 * 1024) break;
+            }
+            String out = bos.toString("UTF-8").trim();
+            int exitCode = p.exitValue();
+            if (exitCode != 0 && out.isEmpty()) {
+                return "[EXIT_CODE: " + exitCode + "]";
+            }
+            return out;
+        } catch (Throwable e) {
+            return "EXEC_ERROR: " + safeError(e);
+        }
+    }
+
     /** 危险命令：挂起等待用户确认（前台弹窗 / 后台通知），超时默认拒绝 */
     private String awaitConfirm(String cmd) {
-        return requestUserConfirm(cmd) ? ShizukuShell.exec(cmd) : "[USER_REJECTED]";
+        return requestUserConfirm(cmd) ? execRootCommand(cmd) : "[USER_REJECTED]";
     }
 
     /** 只请求用户确认（不执行命令），返回是否允许；/confirm 端点用。

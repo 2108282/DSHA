@@ -61,9 +61,8 @@ public class ProotBootstrap {
     }
 
     public File getRootfsDir() {
-        File ksuRootfs = new File("/data/adb/dsha/rootfs");
-        if (ksuRootfs.exists() && (new File(ksuRootfs, "usr/bin/bash").exists() || new File(ksuRootfs, "bin/bash").exists())) {
-            return ksuRootfs;
+        if ("ksu_chroot".equals(runtime().id())) {
+            return new File("/data/adb/dsha/rootfs");
         }
         return rootfsDir;
     }
@@ -73,6 +72,9 @@ public class ProotBootstrap {
     }
 
     public boolean hasBash() {
+        if ("ksu_chroot".equals(runtime().id())) {
+            return ContainerRuntime.KsuChroot.checkAvailable();
+        }
         return new File(rootfsDir, "usr/bin/bash").exists()
                 || new File(rootfsDir, "bin/bash").exists();
     }
@@ -105,7 +107,7 @@ public class ProotBootstrap {
 
     public boolean isEnvironmentReady() {
         if ("ksu_chroot".equals(runtime().id())) {
-            return hasBash();
+            return ContainerRuntime.KsuChroot.checkAvailable();
         }
         return isOfflineExtracted() && hasBash() && rootfsVersionMatches();
     }
@@ -212,6 +214,9 @@ public class ProotBootstrap {
 
     /** 复制 proot 的 NEEDED 依赖（libtalloc.so.2、libandroid-shmem.so），匹配 SONAME。 */
     public void ensureRuntimeFiles() {
+        if ("ksu_chroot".equals(runtime().id())) {
+            return;
+        }
         baseDir.mkdirs();
         tmpDir.mkdirs();
         libDir.mkdirs();
@@ -907,31 +912,7 @@ public class ProotBootstrap {
     // ================= 运行时选择 =================
 
     public ContainerRuntime runtime() {
-        try {
-            ContainerRuntime ksu = new ContainerRuntime.KsuChroot(ctx);
-            String pref = ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
-                    .getString("container_runtime", "auto");
-            if ("ksu_chroot".equals(pref) || ("auto".equals(pref) && ksu.available())) {
-                if (ksu.available()) {
-                    ksu.prepare();
-                    return ksu;
-                }
-            }
-            if (android.os.Build.VERSION.SDK_INT >= 26 && "proroot".equals(pref)) {
-                ContainerRuntime pr = new ContainerRuntime.Proroot(
-                        ctx, ContainerRuntime.Proroot.defaultDir(ctx));
-                if (pr.available()) {
-                    pr.prepare();
-                    return pr;
-                }
-                Log.w("DSHA", "proroot 不可用，本次降回 proot: "
-                        + SensitiveData.redact(pr.unavailableReason()));
-            }
-        } catch (Throwable e) {
-            Log.w("DSHA", "选择运行时失败，降回 proot: "
-                    + SensitiveData.redact(String.valueOf(e)));
-        }
-        return new ContainerRuntime.Proot(ctx, findNativeLib("libproot.so"));
+        return new ContainerRuntime.KsuChroot(ctx);
     }
 
     private List<String> baseProotArgv() {
@@ -1084,10 +1065,7 @@ public class ProotBootstrap {
     public String[] ptyArgv(String... guestCmd) {
         ContainerRuntime rt = runtime();
         if ("ksu_chroot".equals(rt.id())) {
-            if (new File("/data/adb/dsha/scripts/term.sh").exists()) {
-                return new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/term.sh"};
-            }
-            return new String[]{"su", "-mm", "-c", "chroot " + getRootfsDir().getAbsolutePath() + " /bin/bash -l"};
+            return new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/term.sh"};
         }
         java.util.List<String> argv = baseProotArgv();
         if (guestCmd == null || guestCmd.length == 0) {
@@ -1105,6 +1083,15 @@ public class ProotBootstrap {
 
     /** PTY 会话的环境变量（KEY=VALUE）。借临时 ProcessBuilder 复用 applyProotEnv，避免重抄漏项。 */
     public String[] ptyEnv() {
+        ContainerRuntime rt = runtime();
+        if ("ksu_chroot".equals(rt.id())) {
+            return new String[]{
+                    "PATH=/sbin:/system/sbin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin:/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk",
+                    "TERM=xterm-256color",
+                    "LANG=C.UTF-8",
+                    "LC_ALL=C.UTF-8"
+            };
+        }
         ensureRuntimeFiles();
         ensureBundledPython();
         ensureBundledPnpm();

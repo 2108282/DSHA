@@ -39,7 +39,6 @@ public class SettingsFragment extends Fragment {
     private final Handler main = new Handler(Looper.getMainLooper());
 
     private static final TabOption[] TAB_OPTIONS = {
-            new TabOption("安装", "分步安装 rootfs / 工具 / Node / harness", InstallFragment::new),
             new TabOption("配置", "API key · 端口 · 行为", ConfigFragment::new),
             new TabOption("数据与备份", "备份恢复 · 保存位置 · 工作区", WorkspaceFragment::new),
     };
@@ -91,7 +90,10 @@ public class SettingsFragment extends Fragment {
             });
         }
 
-        v.findViewById(R.id.settings_reextract).setOnClickListener(x -> confirmReextract());
+        View reextract = v.findViewById(R.id.settings_reextract);
+        if (reextract != null) {
+            reextract.setVisibility(View.GONE);
+        }
 
         return v;
     }

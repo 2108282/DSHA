@@ -51,14 +51,9 @@ public class MainActivity extends AppCompatActivity {
         HarnessController controller = HarnessController.get(this);
         boolean skipExtract = getIntent().getBooleanExtra("skip_extract", false);
 
-        // 启动门禁：未欢迎 → Welcome；环境未解压 → Extract
+        // 启动门禁：未欢迎 → Welcome
         if (!config.isWelcomed()) {
             startActivity(new Intent(this, WelcomeActivity.class));
-            finish();
-            return;
-        }
-        if (!skipExtract && !controller.isEnvironmentReady()) {
-            startActivity(new Intent(this, ExtractActivity.class));
             finish();
             return;
         }
@@ -138,17 +133,10 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         if (!isFinishing() && findViewById(R.id.bottom_nav) != null
-                && (new ConfigStore(this).isLanMode()
-                || com.deepseekharness.app.DeviceBridgeService.isAdbEnabled(this))
+                && new ConfigStore(this).isLanMode()
                 && !com.deepseekharness.app.bridge.LocalNetworkAccess.granted(this)
                 && !getSharedPreferences(com.deepseekharness.app.util.Constants.PREFS, MODE_PRIVATE)
                 .getBoolean("local_network_permission_asked", false)) requestLocalNetwork();
-        // Android 12+ 可能拒绝后台唤起前台服务，回到可见界面后补一次恢复。
-        if (!isFinishing() && findViewById(R.id.bottom_nav) != null
-                && com.deepseekharness.app.DeviceBridgeService.isAdbEnabled(this)
-                && !com.deepseekharness.app.DeviceBridgeService.isRunning()) {
-            com.deepseekharness.app.DeviceBridgeService.apply(this);
-        }
     }
 
     @Override

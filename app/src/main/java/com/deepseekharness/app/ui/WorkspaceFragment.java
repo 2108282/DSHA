@@ -17,7 +17,6 @@ import androidx.fragment.app.Fragment;
 
 import com.deepseekharness.app.BackupManager;
 import com.deepseekharness.app.R;
-import com.deepseekharness.app.ShizukuShell;
 import com.deepseekharness.app.core.HarnessController;
 import com.deepseekharness.app.util.BackupScope;
 
@@ -67,14 +66,22 @@ public class WorkspaceFragment extends Fragment {
                     + "（若 MT 里看不到，先打开本 App 保持进程运行）");
         }
 
-        // Shizuku 授权（备用 shell 通道）
+        // Root 权限检测
         v.findViewById(R.id.workspace_shizuku_auth).setOnClickListener(x -> {
-            if (!ShizukuShell.isAvailable()) {
-                Toast.makeText(requireContext(), "请先安装并启动 Shizuku", Toast.LENGTH_LONG).show();
-                return;
-            }
-            ShizukuShell.requestPermission((code, grantResult) -> refreshShizukuStatus());
-            refreshShizukuStatus();
+            new Thread(() -> {
+                boolean ok = false;
+                try {
+                    Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "id"});
+                    ok = (p.waitFor() == 0);
+                } catch (Throwable ignored) {}
+                final boolean rootOk = ok;
+                if (getActivity() != null) {
+                    getActivity().runOnUiThread(() -> {
+                        Toast.makeText(requireContext(), rootOk ? "✅ Root 授权正常（KernelSU/Magisk）" : "❌ 未获取到 Root 权限，请在授权管理器中允许", Toast.LENGTH_SHORT).show();
+                        refreshShizukuStatus();
+                    });
+                }
+            }).start();
         });
 
         // 清理损坏会话：1.2-alpha 的会话是 packed/zstd，对 DSHA 不透明，照原版隐藏该控制
@@ -125,15 +132,23 @@ public class WorkspaceFragment extends Fragment {
             TextView status = getView() == null ? null
                     : getView().findViewById(R.id.workspace_shizuku_status);
             if (status == null) return;
-            if (!ShizukuShell.isAvailable()) {
-                status.setText("Shizuku 未安装/未运行");
-            } else if (ShizukuShell.hasPermission() && ShizukuShell.isReady()) {
-                status.setText("Shizuku 已授权，设备 shell 通道可用");
-            } else if (ShizukuShell.hasPermission()) {
-                status.setText("Shizuku 已授权，等待绑定服务…");
-            } else {
-                status.setText("Shizuku 未授权，点下方授权");
-            }
+            new Thread(() -> {
+                boolean ok = false;
+                try {
+                    Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "id"});
+                    ok = (p.waitFor() == 0);
+                } catch (Throwable ignored) {}
+                final boolean rootOk = ok;
+                if (getActivity() != null) {
+                    getActivity().runOnUiThread(() -> {
+                        if (status != null && isAdded()) {
+                            status.setText(rootOk
+                                    ? "✅ 原生 Root 权限已就绪（免 ADB / 免 Shizuku）"
+                                    : "⚠️ 未获取到 Root 权限，请在 KernelSU/Magisk 中授权");
+                        }
+                    });
+                }
+            }).start();
         } catch (Throwable ignored) {
         }
     }

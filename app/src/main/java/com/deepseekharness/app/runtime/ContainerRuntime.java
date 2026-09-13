@@ -203,6 +203,8 @@ public interface ContainerRuntime {
     /** KernelSU / Magisk 原生 Linux chroot 运行时（0 虚拟化损耗，极致省电） */
     class KsuChroot implements ContainerRuntime {
         private final Context ctx;
+        private static volatile Boolean sCachedAvailable = null;
+        private static volatile long sLastCheckTime = 0;
 
         public KsuChroot(Context ctx) {
             this.ctx = ctx;
@@ -212,13 +214,30 @@ public interface ContainerRuntime {
 
         @Override public String displayName() { return "KernelSU / Magisk 原生 Chroot（零损耗）"; }
 
+        public static boolean checkAvailable() {
+            long now = System.currentTimeMillis();
+            if (sCachedAvailable != null && (now - sLastCheckTime < 4000)) {
+                return sCachedAvailable;
+            }
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "test -f /data/adb/dsha/scripts/start.sh"});
+                boolean ok = (p.waitFor() == 0);
+                sCachedAvailable = ok;
+                sLastCheckTime = now;
+                return ok;
+            } catch (Throwable e) {
+                sCachedAvailable = false;
+                sLastCheckTime = now;
+                return false;
+            }
+        }
+
         @Override public boolean available() {
-            File startScript = new File("/data/adb/dsha/scripts/start.sh");
-            return startScript.exists() || new File("/data/adb/modules/dsha_native/scripts/start.sh").exists();
+            return checkAvailable();
         }
 
         @Override public String unavailableReason() {
-            return "未检测到 /data/adb/dsha 模块环境，请先在 KernelSU/Magisk 中刷入 DSHA 原生模块";
+            return "未检测到 /data/adb/dsha 模块环境或未授予 Root 权限，请在 KernelSU/Magisk 中刷入 DSHA 原生模块并授权";
         }
 
         @Override public List<String> baseArgv(File rootfsDir, boolean hardlinkSupported) {
@@ -226,11 +245,7 @@ public interface ContainerRuntime {
             argv.add("su");
             argv.add("-mm");
             argv.add("-c");
-            if (new File("/data/adb/dsha/scripts/term.sh").exists()) {
-                argv.add("/data/adb/dsha/scripts/term.sh");
-            } else {
-                argv.add("chroot " + rootfsDir.getAbsolutePath() + " /bin/bash");
-            }
+            argv.add("/data/adb/dsha/scripts/term.sh");
             return argv;
         }
 
@@ -239,7 +254,11 @@ public interface ContainerRuntime {
         }
 
         @Override public void prepare() throws Exception {
-            Runtime.getRuntime().exec(new String[]{"su", "-c", "chmod 755 /data/adb/dsha/scripts/*.sh 2>/dev/null"});
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "chmod 755 /data/adb/dsha/scripts/*.sh 2>/dev/null"});
+                p.waitFor();
+            } catch (Throwable ignored) {
+            }
         }
     }
 

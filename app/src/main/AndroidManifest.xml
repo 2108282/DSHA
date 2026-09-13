@@ -26,10 +26,6 @@
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:targetApi="30" />
-    <uses-permission
-        android:name="android.permission.WRITE_SECURE_SETTINGS"
-        tools:ignore="ProtectedPermissions" />
-    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
     <queries>
         <intent><action android:name="android.intent.action.OPEN_DOCUMENT" /><data android:mimeType="*/*" /></intent>
@@ -121,18 +117,7 @@
             android:exported="false"
             android:theme="@style/Theme.DeepseekHarness" />
 
-        <activity
-            android:name=".ui.AdbPairActivity"
-            android:exported="false"
-            android:label="ADB 无线配对"
-            android:theme="@style/Theme.DeepseekHarness" />
-
-        <service
-            android:name=".DeviceBridgeService"
-            android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
-
-        <!-- 前台保活：dsh Web UI 后台常驻 + 看门狗自动重启 -->
+        <!-- 前台保活：dsh Web UI 后台常驻 -->
         <service
             android:name=".HarnessService"
             android:exported="false"
@@ -142,16 +127,9 @@
         </service>
 
         <service
-            android:name=".ShellService"
-            android:exported="false"
-            android:process=":shizuku"
-            android:permission="moe.shizuku.manager.permission.API_V23"
-            tools:ignore="Instantiatable" />
-
-        <service
             android:name=".DshaAccessibilityService"
             android:exported="false"
-            android:label="DSHA 配对助手"
+            android:label="DSHA 无障碍服务"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -160,10 +138,6 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
-
-        <receiver
-            android:name=".AdbKeepAliveReceiver"
-            android:exported="false" />
 
         <receiver
             android:name=".ConfirmReceiver"
@@ -178,13 +152,6 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
-        <provider
-            android:name="rikka.shizuku.ShizukuProvider"
-            android:authorities="${applicationId}.shizuku"
-            android:multiprocess="false"
-            android:enabled="true"
-            android:exported="true"
-            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
     </application>
 
