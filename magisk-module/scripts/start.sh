@@ -35,6 +35,9 @@ mount_if_needed() {
 
 mount_if_needed "$ROOTFS/dev" -o bind /dev
 mount_if_needed "$ROOTFS/dev/pts" -t devpts devpts
+# 挂载 POSIX 共享内存 tmpfs（提升 Python/Node 多进程性能）
+mkdir -p "$ROOTFS/dev/shm"
+mountpoint -q "$ROOTFS/dev/shm" || mount -t tmpfs tmpfs "$ROOTFS/dev/shm" -o mode=1777 2>/dev/null || true
 mount_if_needed "$ROOTFS/proc" -t proc proc
 mount_if_needed "$ROOTFS/sys" -t sysfs sysfs
 

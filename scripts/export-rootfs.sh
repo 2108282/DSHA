@@ -47,6 +47,9 @@ tar --numeric-owner -c \
     --exclude='./root/.dsh/dsh-api-dashboard.json' \
     --exclude='./.l2s' \
     --exclude='./.proroot-meta' \
+    --exclude='./root/.dsh/flatten-l2s.*' \
+    --exclude='./root/.dsh/repair-builtin.log' \
+    --exclude='./root/.dsh/__pycache__' \
     --exclude='./sdcard' \
     --exclude='./storage' \
     . | pigz -1 > "$ROOTFS_TAR_GZ"
