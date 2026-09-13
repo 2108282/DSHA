@@ -23,6 +23,14 @@ public class WebProcessManager {
      * 顺序不可换：先哨兵再杀，否则拉起者会在你杀完之后把 Web 拽回来（「秒复活」）。
      */
     public void stop() {
+        if ("ksu_chroot".equals(proot.runtime().id())) {
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/stop.sh"});
+                p.waitFor();
+            } catch (Exception ignored) {
+            }
+            return;
+        }
         String script = "touch " + WebProcSel.STOP_SENTINEL + "\n"
                 + "_p=$(cat " + WebProcSel.PID_WEB + " 2>/dev/null)\n"
                 + "case \"$_p\" in ''|*[!0-9]*) ;; *) kill \"$_p\" 2>/dev/null ;; esac\n"

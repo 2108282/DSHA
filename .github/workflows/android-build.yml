@@ -3,6 +3,7 @@ name: Build Android APK
 on:
   push:
     branches:
+      - 'magisk-apk'
       - '1.2.0-rc1.3test'
       - '1.2.0rc1test'
       - '0.1.5rc.2底包'
@@ -43,6 +44,7 @@ jobs:
           python-version: '3.11'
 
       - name: Fetch prebuilt offline rootfs from own release
+        if: github.ref != 'refs/heads/magisk-apk'
         run: |
           set -euo pipefail
           mkdir -p app/src/main/assets

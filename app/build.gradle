@@ -13,7 +13,7 @@ android {
 
     defaultConfig {
         applicationId "com.dsh.client"
-        minSdk 30
+        minSdk 31
         targetSdk 37
         versionCode 115
         versionName "1.2.0-rc1.3-update2.1"
@@ -27,19 +27,12 @@ android {
     productFlavors {
         standard {
             dimension 'androidSupport'
-            minSdk 30
+            minSdk 31
             buildConfigField 'boolean', 'LOW_ANDROID', 'false'
             resValue 'string', 'edition_description', '标准版 · Android 11+ · 系统 WebView'
             resValue 'string', 'browser_description', '使用系统 WebView，请保持 Android System WebView / Chrome 更新。'
         }
-        low {
-            dimension 'androidSupport'
-            minSdk 23
-            versionName '1.2.0-rc1.3-update2.1low'
-            buildConfigField 'boolean', 'LOW_ANDROID', 'true'
-            resValue 'string', 'edition_description', '兼容版 · Android 6+ · WebView / Gecko'
-            resValue 'string', 'browser_description', '旧系统 WebView 自动使用内置 Gecko；可手动开启兼容内核。'
-        }
+
     }
 
     signingConfigs {
@@ -129,8 +122,7 @@ tasks.named("preBuild").configure { dependsOn(prepareStandardAssets) }
 
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
-    lowImplementation 'org.mozilla.geckoview:geckoview-arm64-v8a:143.0.20251003115653'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
+        implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'dev.rikka.shizuku:api:13.1.5'
     implementation 'dev.rikka.shizuku:provider:13.1.5'

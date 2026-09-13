@@ -56,6 +56,10 @@ public class ProotBootstrap {
     }
 
     public File getRootfsDir() {
+        File ksuRootfs = new File("/data/adb/dsha/rootfs");
+        if (ksuRootfs.exists() && (new File(ksuRootfs, "usr/bin/bash").exists() || new File(ksuRootfs, "bin/bash").exists())) {
+            return ksuRootfs;
+        }
         return rootfsDir;
     }
 
@@ -95,6 +99,9 @@ public class ProotBootstrap {
     }
 
     public boolean isEnvironmentReady() {
+        if ("ksu_chroot".equals(runtime().id())) {
+            return hasBash();
+        }
         return isOfflineExtracted() && hasBash() && rootfsVersionMatches();
     }
 
@@ -896,8 +903,16 @@ public class ProotBootstrap {
 
     public ContainerRuntime runtime() {
         try {
-            if (android.os.Build.VERSION.SDK_INT >= 26 && "proroot".equals(ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
-                    .getString("container_runtime", "proot"))) {
+            ContainerRuntime ksu = new ContainerRuntime.KsuChroot(ctx);
+            String pref = ctx.getSharedPreferences("deepseekharness", Context.MODE_PRIVATE)
+                    .getString("container_runtime", "auto");
+            if ("ksu_chroot".equals(pref) || ("auto".equals(pref) && ksu.available())) {
+                if (ksu.available()) {
+                    ksu.prepare();
+                    return ksu;
+                }
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 26 && "proroot".equals(pref)) {
                 ContainerRuntime pr = new ContainerRuntime.Proroot(
                         ctx, ContainerRuntime.Proroot.defaultDir(ctx));
                 if (pr.available()) {
@@ -949,6 +964,22 @@ public class ProotBootstrap {
 
     /** 在 rootfs 内执行 bash 命令，返回进程（stderr 并入 stdout）。 */
     public Process execRootfs(String bashCommand) throws IOException {
+        ContainerRuntime rt = runtime();
+        if ("ksu_chroot".equals(rt.id())) {
+            List<String> argv = new ArrayList<>();
+            argv.add("su");
+            argv.add("-mm");
+            argv.add("-c");
+            String fullCmd = "chroot " + getRootfsDir().getAbsolutePath() + " /usr/bin/env -i "
+                    + "HOME=/root USER=root LOGNAME=root "
+                    + "PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "
+                    + "TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8 "
+                    + "/bin/bash -c " + ShellQuote.quote(bashCommand);
+            argv.add(fullCmd);
+            ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
+            Compat.redirectStdinDevNull(pb);
+            return pb.start();
+        }
         List<String> argv = baseProotArgv();
         argv.add("/bin/bash");
         argv.add("-c");
@@ -1046,6 +1077,13 @@ public class ProotBootstrap {
 
     /** PTY 会话的 argv：与 execRootfs 共用同一份 proot 构造逻辑（见 AGENTS.md 单源约束）。 */
     public String[] ptyArgv(String... guestCmd) {
+        ContainerRuntime rt = runtime();
+        if ("ksu_chroot".equals(rt.id())) {
+            if (new File("/data/adb/dsha/scripts/term.sh").exists()) {
+                return new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/term.sh"};
+            }
+            return new String[]{"su", "-mm", "-c", "chroot " + getRootfsDir().getAbsolutePath() + " /bin/bash -l"};
+        }
         java.util.List<String> argv = baseProotArgv();
         if (guestCmd == null || guestCmd.length == 0) {
             // 部分 Android/容器运行时组合创建的 PTY 会保留 -echo（输入看不到、回车却执行）。

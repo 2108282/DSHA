@@ -199,6 +199,50 @@ public interface ContainerRuntime {
      * proot 每次启动都会打 {@code can't sanitize binding "/linkerconfig": Permission denied}，
      * 污染终端/日志；而且 bind 失败 = 从没绑上，映射它是纯负收益。
      */
+
+    /** KernelSU / Magisk 原生 Linux chroot 运行时（0 虚拟化损耗，极致省电） */
+    class KsuChroot implements ContainerRuntime {
+        private final Context ctx;
+
+        public KsuChroot(Context ctx) {
+            this.ctx = ctx;
+        }
+
+        @Override public String id() { return "ksu_chroot"; }
+
+        @Override public String displayName() { return "KernelSU / Magisk 原生 Chroot（零损耗）"; }
+
+        @Override public boolean available() {
+            File startScript = new File("/data/adb/dsha/scripts/start.sh");
+            return startScript.exists() || new File("/data/adb/modules/dsha_native/scripts/start.sh").exists();
+        }
+
+        @Override public String unavailableReason() {
+            return "未检测到 /data/adb/dsha 模块环境，请先在 KernelSU/Magisk 中刷入 DSHA 原生模块";
+        }
+
+        @Override public List<String> baseArgv(File rootfsDir, boolean hardlinkSupported) {
+            List<String> argv = new ArrayList<>();
+            argv.add("su");
+            argv.add("-mm");
+            argv.add("-c");
+            if (new File("/data/adb/dsha/scripts/term.sh").exists()) {
+                argv.add("/data/adb/dsha/scripts/term.sh");
+            } else {
+                argv.add("chroot " + rootfsDir.getAbsolutePath() + " /bin/bash");
+            }
+            return argv;
+        }
+
+        @Override public void applyEnv(ProcessBuilder pb, File baseDir, File libDir, File tmpDir) {
+            // 原生环境不需要 LD_PRELOAD 变量
+        }
+
+        @Override public void prepare() throws Exception {
+            Runtime.getRuntime().exec(new String[]{"su", "-c", "chmod 755 /data/adb/dsha/scripts/*.sh 2>/dev/null"});
+        }
+    }
+
     String[][] BINDS = {
             {"/dev"},
             {"/dev/urandom", "/dev/random"},
