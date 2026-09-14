@@ -357,8 +357,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     }
 
     private int getCardBgColor(boolean dark) {
-        int opacity = new com.deepseekharness.app.core.ConfigStore(this).getSheetOpacity();
-        if (opacity < 30 || opacity > 100) opacity = 88;
+        com.deepseekharness.app.core.ConfigStore cfg = new com.deepseekharness.app.core.ConfigStore(this);
+        int opacity = dark ? cfg.getSheetOpacityNight() : cfg.getSheetOpacityDay();
+        if (opacity < 30 || opacity > 100) opacity = dark ? 80 : 88;
         int alpha = (int) Math.round(opacity * 255.0 / 100.0);
         return dark ? Color.argb(alpha, 0x10, 0x14, 0x1B) : Color.argb(alpha, 0xF5, 0xF8, 0xFC);
     }

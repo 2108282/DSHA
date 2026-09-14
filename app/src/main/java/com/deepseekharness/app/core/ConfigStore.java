@@ -181,12 +181,29 @@ public class ConfigStore {
     }
 
     public int getSheetOpacity() {
-        return prefs.getInt("sheet_opacity_percent", 88);
+        return getSheetOpacityDay();
     }
 
     public void setSheetOpacity(int percent) {
+        setSheetOpacityDay(percent);
+    }
+
+    public int getSheetOpacityDay() {
+        return prefs.getInt("sheet_opacity_day", prefs.getInt("sheet_opacity_percent", 88));
+    }
+
+    public void setSheetOpacityDay(int percent) {
         int p = Math.max(30, Math.min(100, percent));
-        prefs.edit().putInt("sheet_opacity_percent", p).apply();
+        prefs.edit().putInt("sheet_opacity_day", p).apply();
+    }
+
+    public int getSheetOpacityNight() {
+        return prefs.getInt("sheet_opacity_night", prefs.getInt("sheet_opacity_percent", 80));
+    }
+
+    public void setSheetOpacityNight(int percent) {
+        int p = Math.max(30, Math.min(100, percent));
+        prefs.edit().putInt("sheet_opacity_night", p).apply();
     }
 
     public boolean isSheetImmersive() {
