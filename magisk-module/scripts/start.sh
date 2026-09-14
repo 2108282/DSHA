@@ -93,31 +93,68 @@ fi
 chmod 666 "$TOKEN_FILE" 2>/dev/null || true
 CURRENT_TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null)
 
-# 写入确认交互脚本
-if [ ! -f "$ROOTFS/root/dsh-confirm.sh" ]; then
+# 写入确认交互脚本（支持 10 分钟临时免打扰租约、临时文件白名单放行与双端口兼容）
 cat << 'CONFIRM_EOF' > "$ROOTFS/root/dsh-confirm.sh"
 #!/bin/bash
+# 用法：dsh-confirm.sh [--force] <命令...>
+
+# 1. 检查统一的 10 分钟临时免审租约
+if [ -f /root/.dsh/.auth_lease ]; then
+  EXP=$(cat /root/.dsh/.auth_lease 2>/dev/null)
+  NOW=$(date +%s)
+  if [ -n "$EXP" ] && [ "${NOW:-0}" -lt "${EXP%.*}" ]; then
+    exit 0
+  fi
+fi
+
+# 2. 安全临时文件清理白名单（删除截图、临时文件免弹窗）
+is_safe_cleanup() {
+  local c="$1"
+  [[ "$c" =~ ^(rm|unlink)[[:space:]] ]] || return 1
+  [[ "$c" =~ -r|-R|\* ]] && return 1
+  for arg in $c; do
+    [[ "$arg" =~ ^(rm|unlink|-f|-v)$ ]] && continue
+    if [[ "$arg" =~ ^/sdcard/Download/DSHA/.*(png|jpg|jpeg|tmp)$ ]] || \
+       [[ "$arg" =~ ^/sdcard/Download/.*(png|jpg|jpeg|tmp)$ ]] || \
+       [[ "$arg" =~ ^/tmp/.* ]] || \
+       [[ "$arg" == "/root/.dsh/.auth_lease" ]]; then
+      continue
+    else
+      return 1
+    fi
+  done
+  return 0
+}
+
 FORCE=0
 if [ "$1" = "--force" ]; then FORCE=1; shift; fi
 CMD="$*"
-TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
-RES=$(curl -s -m 65 -G "http://127.0.0.1:3090/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
-case "$RES" in
-  *'"result":"YES"'*|*'"result":YES'*) exit 0 ;;
-  *'"result":"NO"'*|*'"result":NO'*)  echo "已拒绝: $CMD（用户在手机端拒绝了该操作）" >&2; exit 1 ;;
-  *)
-    if [ -n "$DSH_INTERACTIVE" ]; then
-      echo -n "确认执行危险操作 [$CMD] ? [y/N] " >&2
-      read -t 10 ans
-      case "$ans" in y|Y) exit 0 ;; esac
-    fi
-    echo "已拦截高危操作: $CMD (3090确认服务未就绪或超时)" >&2
-    exit 1
-    ;;
-esac
-CONFIRM_EOF
-chmod 755 "$ROOTFS/root/dsh-confirm.sh"
+
+if [ "$FORCE" != "1" ] && is_safe_cleanup "$CMD"; then
+  exit 0
 fi
+
+TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
+RES=""
+for PORT in 3095 3090; do
+  RES=$(curl -s -m 65 -G "http://127.0.0.1:$PORT/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
+  case "$RES" in
+    *'"result":"YES"'*|*'"result":YES'*) exit 0 ;;
+    *'"result":"NO"'*|*'"result":NO'*)  echo "已拒绝: $CMD（用户在手机端拒绝了该操作）" >&2; exit 1 ;;
+  esac
+  [ -n "$RES" ] && break
+done
+
+if [ -n "$DSH_INTERACTIVE" ]; then
+  echo -n "确认执行危险操作 [$CMD] ? [y/N] " >&2
+  read -t 10 ans
+  case "$ans" in y|Y) exit 0 ;; esac
+fi
+
+echo "已拦截高危操作: $CMD (3090确认服务未就绪或超时)" >&2
+exit 1
+CONFIRM_EOF
+chmod 755 "$ROOTFS/root/dsh-confirm.sh" 
 
 # 写入函数级命令守卫
 if [ ! -f "$ROOTFS/root/dsh-guard.sh" ]; then
