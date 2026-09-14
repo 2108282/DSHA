@@ -5,9 +5,9 @@ PID_FILE="$RUN_DIR/dsh.pid"
 PORT_FILE="$RUN_DIR/port"
 LOG_FILE="$RUN_DIR/dsh-web.log"
 
-PORT="${1:-3088}"
+PORT="${1:-3080}"
 case "$PORT" in
-    ''|*[!0-9]*) PORT=3088 ;;
+    ''|*[!0-9]*) PORT=3080 ;;
 esac
 
 mkdir -p "$RUN_DIR"

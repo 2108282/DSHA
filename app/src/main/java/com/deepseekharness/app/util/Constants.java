@@ -13,8 +13,8 @@ public final class Constants {
     public static final String PREFS = "deepseekharness";
 
     // ================= 端口契约（框架不变式，见 AGENTS.md） =================
-    /** WebUI 默认端口（Native 专属 3088，与 PRoot 3080 彻底隔离） */
-    public static final int DSH_WEB_PORT = 3088;
+    /** WebUI 默认端口（界面可选，缺省为标准 3080） */
+    public static final int DSH_WEB_PORT = 3080;
     /** App 能力桥（agent 调 Android）端口，Native 独立端口 3095，彻底与 PRoot 3090 隔离 */
     public static final int SHELL_BRIDGE_PORT = 3095;
     /** 局域网反向代理端口 */
