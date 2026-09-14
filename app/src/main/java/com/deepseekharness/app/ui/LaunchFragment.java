@@ -81,7 +81,7 @@ public class LaunchFragment extends Fragment {
             v.findViewById(R.id.launch_port_chip_8080).setOnClickListener(x -> portInput.setText("8080"));
         }
 
-        v.findViewById(R.id.launch_safe).setOnClickListener(x -> new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+        v.findViewById(R.id.launch_safe).setOnClickListener(x -> new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
                 .setTitle("安全启动 Web？")
                 .setMessage("暂时禁用第三方插件后启动，保留插件文件、会话和配置。可在插件管理中逐个启用或恢复之前的状态。")
                 .setNegativeButton("取消", null).setPositiveButton("安全启动", (dialog, which) -> doStart(activity, status, start, true)).show());
@@ -385,7 +385,7 @@ public class LaunchFragment extends Fragment {
             }
         });
 
-        new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
                 .setTitle("访问地址与鉴权凭据")
                 .setItems(items.toArray(new CharSequence[0]), (d, w) -> acts.get(w).run())
                 .setNegativeButton("关闭", null)

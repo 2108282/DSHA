@@ -37,6 +37,12 @@
              materialAlertDialogTheme 管 MaterialAlertDialogBuilder。 -->
         <item name="alertDialogTheme">@style/Dialog.DSHA.Alert</item>
         <item name="materialAlertDialogTheme">@style/Dialog.DSHA.Material</item>
+        <item name="colorBackgroundFloating">@color/card</item>
+        <item name="android:colorBackgroundFloating">@color/card</item>
+        <item name="colorSurfaceContainerHigh">@color/card</item>
+        <item name="colorSurfaceContainerHighest">@color/card</item>
+        <item name="dialogCornerRadius">@dimen/radius_card</item>
+        <item name="android:dialogCornerRadius">@dimen/radius_card</item>
 
         <!-- 关键：Material3 主题会把布局里的 <Button> 自动膨胀成 MaterialButton，
              而 MaterialButton 的默认样式是 filled —— 它用 backgroundTint=colorPrimary
@@ -56,18 +62,36 @@
     <style name="Dialog.DSHA.Alert" parent="Theme.Material3.DayNight.Dialog.Alert">
         <item name="colorPrimary">@color/primary</item>
         <item name="colorSurface">@color/card</item>
+        <item name="colorSurfaceContainerHigh">@color/card</item>
+        <item name="colorSurfaceContainerHighest">@color/card</item>
+        <item name="colorBackgroundFloating">@color/card</item>
+        <item name="android:colorBackground">@color/card</item>
+        <item name="android:colorBackgroundFloating">@color/card</item>
+        <item name="android:windowBackground">@drawable/bg_dialog</item>
         <item name="colorOnSurface">@color/text</item>
+        <item name="dialogCornerRadius">@dimen/radius_card</item>
+        <item name="android:dialogCornerRadius">@dimen/radius_card</item>
         <item name="android:textColorPrimary">@color/text</item>
         <item name="android:textColorSecondary">@color/text_secondary</item>
         <item name="shapeAppearanceOverlay">@style/Shape.DSHA.Dialog</item>
+        <item name="shapeAppearance">@style/Shape.DSHA.Dialog</item>
     </style>
 
     <!-- MaterialAlertDialogBuilder 专用（必须是 ThemeOverlay） -->
     <style name="Dialog.DSHA.Material" parent="ThemeOverlay.Material3.MaterialAlertDialog">
         <item name="colorPrimary">@color/primary</item>
         <item name="colorSurface">@color/card</item>
+        <item name="colorSurfaceContainerHigh">@color/card</item>
+        <item name="colorSurfaceContainerHighest">@color/card</item>
+        <item name="colorBackgroundFloating">@color/card</item>
+        <item name="android:colorBackground">@color/card</item>
+        <item name="android:colorBackgroundFloating">@color/card</item>
+        <item name="android:windowBackground">@drawable/bg_dialog</item>
         <item name="colorOnSurface">@color/text</item>
+        <item name="dialogCornerRadius">@dimen/radius_card</item>
+        <item name="android:dialogCornerRadius">@dimen/radius_card</item>
         <item name="shapeAppearanceOverlay">@style/Shape.DSHA.Dialog</item>
+        <item name="shapeAppearance">@style/Shape.DSHA.Dialog</item>
     </style>
 
     <style name="Shape.DSHA.Dialog" parent="">

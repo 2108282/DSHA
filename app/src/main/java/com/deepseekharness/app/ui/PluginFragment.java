@@ -22,6 +22,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -121,7 +122,7 @@ public class PluginFragment extends Fragment {
         view.findViewById(R.id.btnInstalled).setOnClickListener(v -> selectTab(false));
         view.findViewById(R.id.btnRefresh).setOnClickListener(v -> repository.refresh());
         view.findViewById(R.id.btnPluginUpdates).setOnClickListener(v -> repository.checkUpdates(null));
-        view.findViewById(R.id.btnPluginRestore).setOnClickListener(v -> new AlertDialog.Builder(requireContext())
+        view.findViewById(R.id.btnPluginRestore).setOnClickListener(v -> new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("恢复第三方插件？").setMessage("恢复安全启动前已启用的插件；之后手动禁用的插件保持禁用。恢复后重启 Web 生效。")
                 .setNegativeButton("取消", null).setPositiveButton("恢复", (d, which) -> repository.safeMode(false, null)).show());
         view.findViewById(R.id.btnPluginInstall).setOnClickListener(v -> installLink());
@@ -145,7 +146,7 @@ public class PluginFragment extends Fragment {
         TextView status = view.findViewById(R.id.statusText);
         status.setOnClickListener(v -> {
             if (current != null && !current.message.isEmpty())
-                new AlertDialog.Builder(requireContext()).setTitle("插件操作结果")
+                new MaterialAlertDialogBuilder(requireContext()).setTitle("插件操作结果")
                         .setMessage(current.message).setPositiveButton("关闭", null).show();
         });
         repository.state().observe(getViewLifecycleOwner(), state -> { current = state; render(); });
@@ -312,7 +313,7 @@ public class PluginFragment extends Fragment {
         for (PluginRepository.Item item : current.items) if (item.exportable) names.add(item.name);
         if (names.isEmpty()) { toast("没有可导出的插件"); return; }
         boolean[] checked = new boolean[names.size()];
-        AlertDialog dialog = new AlertDialog.Builder(requireContext())
+        AlertDialog dialog = new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("选择要导出的插件")
                 .setMultiChoiceItems(names.toArray(new String[0]), checked, (d, which, value) -> {
                     checked[which] = value;
@@ -342,7 +343,7 @@ public class PluginFragment extends Fragment {
     private void toggle(PluginRepository.Item item, boolean enabled) {
         if (repository.isBusy()) { adapter.notifyDataSetChanged(); return; }
         if (item.official && !enabled) {
-            new AlertDialog.Builder(requireContext()).setTitle("禁用官方核心？")
+            new MaterialAlertDialogBuilder(requireContext()).setTitle("禁用官方核心？")
                     .setMessage(item.name + " 是 Web 运行所需的核心，禁用后页面可能无法启动。")
                     .setPositiveButton("禁用", (d, which) -> repository.setEnabled(item, false))
                     .setNegativeButton("取消", null)
@@ -359,7 +360,7 @@ public class PluginFragment extends Fragment {
         if (item.updateAvailable) actions.add("更新至 " + item.latestVersion);
         if (!item.rollbackVersion.isEmpty()) actions.add("回退至 " + item.rollbackVersion);
         if (item.deletable) actions.add("删除插件");
-        new AlertDialog.Builder(requireContext()).setTitle(item.name)
+        new MaterialAlertDialogBuilder(requireContext()).setTitle(item.name)
                 .setItems(actions.toArray(new String[0]), (d, which) -> {
                     String action = actions.get(which);
                     if (action.equals("检查插件更新")) {
@@ -367,7 +368,7 @@ public class PluginFragment extends Fragment {
                     } else if (action.startsWith("更新至 ")) {
                         repository.prepareUpdate(item);
                     } else if (action.startsWith("回退至 ")) {
-                        new AlertDialog.Builder(requireContext()).setTitle("回退插件？")
+                        new MaterialAlertDialogBuilder(requireContext()).setTitle("回退插件？")
                                 .setMessage(item.name + "：" + item.version + " → " + item.rollbackVersion
                                         + "\n只恢复插件文件，当前启用状态和对话数据保留；重启 Web 生效。")
                                 .setNegativeButton("取消", null).setPositiveButton("回退", (confirm, button) -> repository.rollback(item)).show();
@@ -377,7 +378,7 @@ public class PluginFragment extends Fragment {
                         beginExport(names);
                     } else if (action.equals("删除插件")) {
                         if (repository.isBusy()) { toast("请等待当前插件操作完成"); return; }
-                        new AlertDialog.Builder(requireContext()).setTitle("删除插件？")
+                        new MaterialAlertDialogBuilder(requireContext()).setTitle("删除插件？")
                                 .setMessage("将删除 " + item.name + " 的安装文件和启用记录。"
                                         + "\n对话、其他插件及外部源码目录会保留。需要留存时可先导出。")
                                 .setNegativeButton("取消", null)

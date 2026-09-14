@@ -1,6 +1,7 @@
 package com.deepseekharness.app.ui;
 
 import androidx.appcompat.app.AlertDialog;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
@@ -99,7 +100,7 @@ public class SettingsFragment extends Fragment {
     }
 
     private void confirmReextract() {
-        new AlertDialog.Builder(requireContext())
+        new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("重新解压内置环境")
                 .setMessage("用 APK 里自带的环境覆盖当前容器，约数分钟。\n\n"
                         + "会保留：配置、API Key（自动备份后还原）。\n"
@@ -135,7 +136,7 @@ public class SettingsFragment extends Fragment {
                 "③ DSHA 客户端与 Magisk/KSU 模块 (Release)"
         };
 
-        new AlertDialog.Builder(requireContext())
+        new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("检查与获取更新")
                 .setItems(options, (d, which) -> {
                     switch (which) {
@@ -155,7 +156,7 @@ public class SettingsFragment extends Fragment {
     }
 
     private void showDshStableUpdate() {
-        new AlertDialog.Builder(requireContext())
+        new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("DSH 核心 · 稳定版")
                 .setMessage("当前内置版本: " + Constants.DSH_VERSION + "\n\n"
                         + "可在浏览器查看官方 GitHub 上游最新发布日志，或在终端执行 npm 升级命令:\n\n"
@@ -168,7 +169,7 @@ public class SettingsFragment extends Fragment {
     }
 
     private void showDshNextUpdate() {
-        new AlertDialog.Builder(requireContext())
+        new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("DSH 核心 · 测试先行版")
                 .setMessage("体验上游仓库最新合并的功能特性与测试分支。\n\n"
                         + "升级方法：进入内置终端或 Termux，执行以下命令即可安装最新 @next 分支:\n\n"
@@ -274,7 +275,7 @@ public class SettingsFragment extends Fragment {
                 + "· 导入备份包或重装模块后的首次环境修复；\n"
                 + "· 插件市场或内置插件报依赖找不到时。";
 
-        new AlertDialog.Builder(requireContext())
+        new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("原生环境与存储直通自愈")
                 .setMessage(msg)
                 .setPositiveButton("开始自愈修复", (d, w) -> runApplyPatches())
@@ -284,7 +285,7 @@ public class SettingsFragment extends Fragment {
 
     private void runApplyPatches() {
         HarnessController controller = HarnessController.get(requireContext());
-        AlertDialog progress = new AlertDialog.Builder(requireContext())
+        AlertDialog progress = new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("正在自愈")
                 .setMessage("正在执行原生环境与直通校验，请稍候…")
                 .setCancelable(false)
@@ -330,7 +331,7 @@ public class SettingsFragment extends Fragment {
             main.post(() -> {
                 if (!isAdded()) return;
                 progress.dismiss();
-                new AlertDialog.Builder(requireContext())
+                new MaterialAlertDialogBuilder(requireContext())
                         .setTitle("自愈完成")
                         .setMessage(report.toString() + "\n\n建议重启 Web 服务使修改全部生效。")
                         .setPositiveButton("立即重启服务", (d, w) -> {

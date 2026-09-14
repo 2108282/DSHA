@@ -1,6 +1,7 @@
 package com.deepseekharness.app.ui;
 
 import androidx.appcompat.app.AlertDialog;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -91,7 +92,7 @@ public class WorkspaceFragment extends Fragment {
 
         // 重置配置（保留对话记录）
         v.findViewById(R.id.workspace_reset).setOnClickListener(x ->
-                new AlertDialog.Builder(requireContext())
+                new MaterialAlertDialogBuilder(requireContext())
                         .setTitle("重置配置？")
                         .setMessage("将删除 settings.yaml 和 .env（对话记录保留），并重新写入 .env。")
                         .setPositiveButton("重置", (d, w) -> {
@@ -105,7 +106,7 @@ public class WorkspaceFragment extends Fragment {
 
         // 清除环境（停止服务并抹除 /data/adb/dsha）
         v.findViewById(R.id.workspace_clear).setOnClickListener(x ->
-                new AlertDialog.Builder(requireContext())
+                new MaterialAlertDialogBuilder(requireContext())
                         .setTitle("清除环境？")
                         .setMessage("将停止服务并删除 /data/adb/dsha 运行环境。\n\n"
                                 + "如需重新安装，请在 KernelSU/Magisk 中重新刷入模块或运行 reinstall.sh 脚本。")
@@ -160,7 +161,7 @@ public class WorkspaceFragment extends Fragment {
             choices[i] = BackupScope.label(BackupScope.ALL[i]) + "\n" + BackupScope.describe(BackupScope.ALL[i]);
         }
         final int[] selected = {0};
-        new AlertDialog.Builder(requireContext())
+        new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("选择备份范围")
                 .setSingleChoiceItems(choices, 0, (d, which) -> selected[0] = which)
                 .setPositiveButton("下一步", (d, which) -> confirmBackup(BackupScope.ALL[selected[0]]))
@@ -172,7 +173,7 @@ public class WorkspaceFragment extends Fragment {
         String summary = "即将备份：" + BackupScope.label(scope)
                 + "\n" + BackupScope.describe(scope)
                 + "\n\n保存为 DSHA-backup-latest.tar.gz（Download/DSHA）。默认不包含 API Key。";
-        new AlertDialog.Builder(requireContext())
+        new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("确认备份")
                 .setMessage(summary)
                 .setPositiveButton("开始备份", (d, w) -> doBackup(scope))
@@ -187,13 +188,13 @@ public class WorkspaceFragment extends Fragment {
             String path = BackupManager.backupToExternal(app, controller, scope);
             main.post(() -> {
                 if (path == null) {
-                    new AlertDialog.Builder(requireContext())
+                    new MaterialAlertDialogBuilder(requireContext())
                             .setTitle("备份失败")
                             .setMessage(BackupManager.lastError())
                             .setPositiveButton("关闭", null)
                             .show();
                 } else {
-                    new AlertDialog.Builder(requireContext())
+                    new MaterialAlertDialogBuilder(requireContext())
                             .setTitle("备份成功（已校验）")
                             .setMessage("已备份 " + BackupScope.label(scope) + "\n\n保存位置：\n" + path
                                     + "\n\n归档已通过条目数与大小校验。")
@@ -212,7 +213,7 @@ public class WorkspaceFragment extends Fragment {
                     });
 
     private void confirmRestore() {
-        new AlertDialog.Builder(requireContext())
+        new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("恢复备份")
                 .setMessage("选择要恢复的备份文件（Download/DSHA/ 下的 .tar.gz）。\n\n"
                         + "会覆盖当前配置/对话（恢复前会自动把现有 .dsh 挪到 .dsh.pre-restore-* 保留）。\n确定？")
@@ -239,7 +240,7 @@ public class WorkspaceFragment extends Fragment {
                 // 恢复前先尝试停止后台服务，释放文件句柄
                 try { controller.stopWeb(); } catch (Throwable ignored) {}
                 String report = BackupManager.restoreFromBackup(app, controller, backupUri);
-                main.post(() -> new AlertDialog.Builder(requireContext())
+                main.post(() -> new MaterialAlertDialogBuilder(requireContext())
                         .setTitle("恢复完成（已校验）")
                         .setMessage(report + "\n\n建议立即重启服务以加载恢复的数据。")
                         .setPositiveButton("立即重启", (d, w) -> {
@@ -251,7 +252,7 @@ public class WorkspaceFragment extends Fragment {
                         .show());
             } catch (Exception e) {
                 String msg = e.getMessage() == null ? e.toString() : e.getMessage();
-                main.post(() -> new AlertDialog.Builder(requireContext())
+                main.post(() -> new MaterialAlertDialogBuilder(requireContext())
                         .setTitle("恢复失败")
                         .setMessage(msg)
                         .setPositiveButton("关闭", null)

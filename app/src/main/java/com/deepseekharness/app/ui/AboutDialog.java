@@ -6,6 +6,7 @@ import android.net.Uri;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 /** 关于对话框：GitHub 仓库 / QQ 交流群入口（欢迎页 + 设置页 + 顶栏共用）。 */
 public final class AboutDialog {
@@ -22,7 +23,7 @@ public final class AboutDialog {
             version = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
         } catch (Exception ignored) {
         }
-        new AlertDialog.Builder(ctx)
+        new MaterialAlertDialogBuilder(ctx)
                 .setTitle("DSHA v" + version)
                 .setMessage("DeepSeek Harness 安卓启动器\n" + ctx.getString(com.deepseekharness.app.R.string.edition_description) + "\n\n"
                         + "🌟 GitHub：" + GITHUB_URL + "\n"

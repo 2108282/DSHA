@@ -29,6 +29,12 @@
 
         <item name="alertDialogTheme">@style/Dialog.DSHA.Alert</item>
         <item name="materialAlertDialogTheme">@style/Dialog.DSHA.Material</item>
+        <item name="colorBackgroundFloating">@color/card</item>
+        <item name="android:colorBackgroundFloating">@color/card</item>
+        <item name="colorSurfaceContainerHigh">@color/card</item>
+        <item name="colorSurfaceContainerHighest">@color/card</item>
+        <item name="dialogCornerRadius">@dimen/radius_card</item>
+        <item name="android:dialogCornerRadius">@dimen/radius_card</item>
 
         <!-- 必须和 values/themes.xml 保持一致：Material3 会把 <Button> 膨胀成
              MaterialButton 并用 backgroundTint=colorPrimary 填充，忽略
@@ -36,6 +42,42 @@
              配 text_secondary #A6B0C3 对比度只有约 1.3:1 —— 就是用户看到的
              「浅蓝底白字看不清」。上一版只改了 day 那份，深色模式毫无变化。 -->
         <item name="materialButtonStyle">@style/Widget.DSHA.Button</item>
+    </style>
+
+    <!-- appcompat / framework AlertDialog 深色模式：跟随 @color/card 深蓝色与 18dp 圆角 -->
+    <style name="Dialog.DSHA.Alert" parent="Theme.Material3.DayNight.Dialog.Alert">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorSurface">@color/card</item>
+        <item name="colorSurfaceContainerHigh">@color/card</item>
+        <item name="colorSurfaceContainerHighest">@color/card</item>
+        <item name="colorBackgroundFloating">@color/card</item>
+        <item name="android:colorBackground">@color/card</item>
+        <item name="android:colorBackgroundFloating">@color/card</item>
+        <item name="android:windowBackground">@drawable/bg_dialog</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="dialogCornerRadius">@dimen/radius_card</item>
+        <item name="android:dialogCornerRadius">@dimen/radius_card</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="shapeAppearanceOverlay">@style/Shape.DSHA.Dialog</item>
+        <item name="shapeAppearance">@style/Shape.DSHA.Dialog</item>
+    </style>
+
+    <!-- MaterialAlertDialogBuilder 深色模式 -->
+    <style name="Dialog.DSHA.Material" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorSurface">@color/card</item>
+        <item name="colorSurfaceContainerHigh">@color/card</item>
+        <item name="colorSurfaceContainerHighest">@color/card</item>
+        <item name="colorBackgroundFloating">@color/card</item>
+        <item name="android:colorBackground">@color/card</item>
+        <item name="android:colorBackgroundFloating">@color/card</item>
+        <item name="android:windowBackground">@drawable/bg_dialog</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="dialogCornerRadius">@dimen/radius_card</item>
+        <item name="android:dialogCornerRadius">@dimen/radius_card</item>
+        <item name="shapeAppearanceOverlay">@style/Shape.DSHA.Dialog</item>
+        <item name="shapeAppearance">@style/Shape.DSHA.Dialog</item>
     </style>
 
     <!-- 快捷抽屉弹层专用全屏透明主题（深色模式） -->
