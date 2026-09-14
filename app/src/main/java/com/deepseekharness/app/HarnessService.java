@@ -13,6 +13,7 @@ import android.os.IBinder;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 
+import com.deepseekharness.app.core.ConfigStore;
 import com.deepseekharness.app.core.HarnessController;
 import com.deepseekharness.app.util.Constants;
 import com.deepseekharness.app.util.SensitiveData;
@@ -123,7 +124,7 @@ public class HarnessService extends Service {
                 wakeLock.acquire(10 * 60 * 1000L); // 单次任务最多持锁 10 分钟防死锁
             }
             // 仅在局域网模式下才需要申请 WifiLock；本机回环 127.0.0.1 绝不占用 Wi-Fi 硬件，彻底消除射频待机耗电
-            boolean isLan = new ConfigStore(this).isLanMode();
+            boolean isLan = new com.deepseekharness.app.core.ConfigStore(this).isLanMode();
             if (isLan) {
                 android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
                         getApplicationContext().getSystemService(WIFI_SERVICE);
