@@ -95,27 +95,26 @@ public class ConfirmReceiver extends BroadcastReceiver {
             nm.cancel(Constants.NOTIF_TASK_STOPPED);
         }
 
-        // 2. 立即注销清理租约文件，关闭设备操作权限；同时通知 DSH 插件停止 Agent 工作并杀掉活动的工具命令
+        // 2. 立即注入取消标志文件并杀掉阻塞命令（多通道保底机制）
         try {
-            HarnessController hc = HarnessController.get(ctx);
-            if (hc != null && hc.getProot() != null && hc.getProot().getRootfsDir() != null) {
-                File dshDir = new File(hc.getProot().getRootfsDir(), "root/.dsh");
-                if (!dshDir.exists()) dshDir.mkdirs();
+            // A. 直接写物理存储目录（应用直接可写，毫秒级生效，无需等待 root）
+            File extDir = new File("/sdcard/Download/DSHA");
+            if (!extDir.exists()) extDir.mkdirs();
+            File cancelFlagExt = new File(extDir, ".cancel_requested");
+            cancelFlagExt.createNewFile();
 
-                File lf = new File(dshDir, ".auth_lease");
-                if (lf.exists()) lf.delete();
-
-                // 创建取消请求标志文件，由 dsh-task-notifier 插件调用 agent.cancel()
-                File cancelFlag = new File(dshDir, ".cancel_requested");
-                cancelFlag.createNewFile();
-
-                // 强制中止容器内可能正在阻塞运行的外部命令（如长命令 bash/python/curl）
-                new Thread(() -> {
-                    try {
-                        hc.getProot().execAndRead("killall -9 bash python3 2>/dev/null || true");
-                    } catch (Throwable ignored) {}
-                }, "stop-task-kill").start();
-            }
+            // B. 通过 root 权限写入 rootfs 并强制终止长耗时外部子进程
+            new Thread(() -> {
+                try {
+                    String cmd = "mkdir -p /data/adb/dsha/rootfs/root/.dsh 2>/dev/null && "
+                            + "touch /data/adb/dsha/rootfs/root/.dsh/.cancel_requested && "
+                            + "chmod 666 /data/adb/dsha/rootfs/root/.dsh/.cancel_requested 2>/dev/null; "
+                            + "rm -f /data/adb/dsha/rootfs/root/.dsh/.auth_lease 2>/dev/null; "
+                            + "killall -9 bash python3 2>/dev/null || true";
+                    Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+                    p.waitFor();
+                } catch (Throwable ignored) {}
+            }, "stop-task-kill").start();
         } catch (Throwable ignored) {}
 
         // 3. 震动反馈 150ms

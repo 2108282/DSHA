@@ -18,7 +18,11 @@ export const inject = []
 // Instant notification on turn/end without 30s throttling
 const lastNotified = new Map()
 
-const CANCEL_FLAG = '/root/.dsh/.cancel_requested'
+const CANCEL_FLAGS = [
+  '/root/.dsh/.cancel_requested',
+  '/sdcard/Download/DSHA/.cancel_requested',
+  '/root/内部存储/.cancel_requested'
+]
 const PENDING_PROMPT = '/root/.dsh/.pending_prompt'
 const TOKEN_PATH = '/root/.dsh/.bridge_token'
 
@@ -203,6 +207,33 @@ export function apply(ctx) {
         return
       }
 
+      if (type === 'approval/asked') {
+        if (trailingTimer) {
+          clearTimeout(trailingTimer)
+          trailingTimer = null
+        }
+        pendingState = null
+        const tool = event?.data?.toolName || '敏感操作'
+        const reason = event?.data?.reason || `模型申请执行 ${tool}，等待安全审批`
+        lastSentState = reason
+        lastSentTime = Date.now()
+        void callBridge('/app/task/running', {
+          title: '⚠️ 等待审批',
+          text: reason
+        })
+        return
+      }
+
+      if (type === 'approval/decided') {
+        lastSentState = '已完成审批，正在继续执行...'
+        lastSentTime = Date.now()
+        void callBridge('/app/task/running', {
+          title: '正在执行',
+          text: lastSentState
+        })
+        return
+      }
+
       if (type === 'tool/call') {
         const toolName = String(event?.data?.name || '')
         // 提问工具：立即通知手机切换为「💬 助手提问 / 等待回答」状态，挂载「返回对话」抽屉按钮（穿透节流，立即生效）
@@ -339,12 +370,16 @@ export function apply(ctx) {
   ctx.inject(['agents'], (agentScope) => {
     let timer = setInterval(async () => {
       try {
-        // A. 处理用户点击通知栏「🛑 停止任务」紧急制动
-        if (existsSync(CANCEL_FLAG)) {
+        // A. 处理用户点击通知栏「🛑 停止任务」紧急制动（多路径检测）
+        let cancelHit = false
+        for (const flag of CANCEL_FLAGS) {
+          if (existsSync(flag)) {
+            cancelHit = true
+            try { unlinkSync(flag) } catch {}
+          }
+        }
+        if (cancelHit) {
           lastCancelByNotification = Date.now()
-          try {
-            unlinkSync(CANCEL_FLAG)
-          } catch {}
           try {
             const list = agentScope.agents.list()
             for (const ag of list) {
@@ -355,6 +390,10 @@ export function apply(ctx) {
               } catch {}
             }
           } catch {}
+          void callBridge('/app/notify', {
+            title: '⚠️ 任务已终止',
+            text: '已按指令停止操作，点击查看或继续对话'
+          })
         }
 
         // B. 处理用户在通知栏输入文字「💬 继续对话 / 重新输入」
@@ -398,7 +437,7 @@ export function apply(ctx) {
           }
         }
       } catch {}
-    }, 1500)
+    }, 400)
 
     if (timer && typeof timer.unref === 'function') {
       timer.unref()

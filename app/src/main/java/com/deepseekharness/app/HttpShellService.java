@@ -2101,10 +2101,54 @@ public final class HttpShellService {
         } catch (Throwable ignored) {}
     }
 
+    private void showApprovalWaitingNotification(String reason) {
+        try {
+            createConfirmChannel();
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            PendingIntent contentPi = PendingIntent.getActivity(ctx, 115, openAppIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            NotificationCompat.Action returnAction = new NotificationCompat.Action.Builder(
+                    R.drawable.ic_alarm_white, "💬 进入审批", contentPi)
+                    .build();
+
+            String displayDesc = (reason != null && !reason.trim().isEmpty())
+                    ? safeDisplay(reason)
+                    : "模型申请执行敏感操作，等待你在对话中审批";
+
+            NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
+                    .setSmallIcon(R.drawable.ic_whale_logo)
+                    .setContentTitle("⚠️ 等待审批")
+                    .setContentText(displayDesc)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(displayDesc))
+                    .setContentIntent(contentPi)
+                    .addAction(returnAction)
+                    .setOngoing(true)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH);
+
+            attachFocusCapsule(ctx, nb, "⚠️ 等待审批", displayDesc, "等待审批", "进入审批", "等待审批", contentPi, true);
+
+            if (nm != null) {
+                nm.cancel(Constants.NOTIF_TASK_RUNNING);
+                nm.cancel(CONFIRM_NOTIF_ID);
+                nm.notify(CONFIRM_NOTIF_ID, nb.build());
+            }
+        } catch (Throwable ignored) {}
+    }
+
     private void showRunningNotification(String title, String text) {
         try {
             isTaskActive = true;
             HarnessService.onTaskStateChanged(ctx, true);
+            if ("⚠️ 等待审批".equals(title) || "等待审批".equals(title) || "安全确认".equals(title) ||
+                (text != null && (text.contains("等待审批") || text.contains("等待安全审批") || text.contains("等待授权"))) ||
+                (title != null && (title.contains("审批") || title.contains("授权")))) {
+                cancelRunningNotification();
+                showApprovalWaitingNotification(text);
+                return;
+            }
             if ("💬 助手提问".equals(title) || "等待回答".equals(title) ||
                 (text != null && (text.contains("ask_user") || text.contains("ask_question"))) ||
                 (title != null && (title.contains("ask_user") || title.contains("ask_question")))) {

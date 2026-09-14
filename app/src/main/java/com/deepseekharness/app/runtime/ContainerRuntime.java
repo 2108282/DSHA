@@ -285,7 +285,11 @@ public interface ContainerRuntime {
         @Override public void prepare() throws Exception {
             try {
                 String su = findSuBinary();
-                Process p = Runtime.getRuntime().exec(new String[]{su, "-c", "chmod 755 /data/adb/dsha/scripts/*.sh 2>/dev/null"});
+                String syncCmd = "if [ -d /sdcard/Download/DSHA/scripts ]; then "
+                        + "cp -f /sdcard/Download/DSHA/scripts/*.sh /data/adb/dsha/scripts/ 2>/dev/null; "
+                        + "fi; "
+                        + "chmod 755 /data/adb/dsha/scripts/*.sh 2>/dev/null";
+                Process p = Runtime.getRuntime().exec(new String[]{su, "-c", syncCmd});
                 p.waitFor();
             } catch (Throwable ignored) {
             }
