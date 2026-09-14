@@ -17,6 +17,14 @@ public final class WebLifecycle {
         return ++generation;
     }
 
+    /** 强制启动/重启：打破任何残留卡死状态，开启全新代次。 */
+    public synchronized long forceBeginStart() {
+        userStopped = false;
+        stopping = false;
+        starting = true;
+        return ++generation;
+    }
+
     /** 停止请求立即撤销旧代次，重复停止合并。 */
     public synchronized long beginStop() {
         if (!stopping) {

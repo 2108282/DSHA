@@ -15,43 +15,24 @@ clean_umount() {
     done
 }
 
-# 1. 终止主进程（先 SIGTERM 释放文件锁，后 SIGKILL 确保终止）
+# 1. 优先按 PID 精准终止主进程与属于该容器的直接子进程（毫秒级完成，杜绝遍历 /proc 的巨大卡死开销）
 if [ -f "$PID_FILE" ]; then
     MAIN_PID=$(cat "$PID_FILE" 2>/dev/null)
     if [ -n "$MAIN_PID" ] && kill -0 "$MAIN_PID" 2>/dev/null; then
+        # 仅杀该主进程派生的子进程（绝不误伤其他容器或宿主进程）
+        pkill -9 -P "$MAIN_PID" 2>/dev/null || true
         kill -15 "$MAIN_PID" 2>/dev/null
         for i in 1 2 3; do
             kill -0 "$MAIN_PID" 2>/dev/null || break
-            usleep 300000 2>/dev/null || sleep 1
+            sleep 0.1 2>/dev/null || sleep 1
         done
         kill -9 "$MAIN_PID" 2>/dev/null || true
     fi
-    rm -f "$PID_FILE"
+    rm -f "$PID_FILE" 2>/dev/null || true
 fi
+rm -f "$RUN_DIR/port" 2>/dev/null || true
 
-# 2. 终止属于该 chroot 容器的子进程（仅限定 root 为 ROOTFS 的进程，绝不误杀宿主或其他容器）
-for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
-    root_link=$(readlink "/proc/$pid/root" 2>/dev/null)
-    if [ "$root_link" = "$ROOTFS" ]; then
-        kill -9 "$pid" 2>/dev/null || true
-    fi
-done
-
-# 3. 等待子进程平稳退出
-for i in 1 2 3; do
-    has_proc=0
-    for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
-        root_link=$(readlink "/proc/$pid/root" 2>/dev/null)
-        if [ "$root_link" = "$ROOTFS" ]; then
-            has_proc=1
-            break
-        fi
-    done
-    [ "$has_proc" = "0" ] && break
-    usleep 200000 2>/dev/null || sleep 1
-done
-
-# 4. 仅在显式传入 --umount 时卸载内核挂载点（普通停止服务绝不卸载挂载，保证其他操作与环境稳定）
+# 2. 仅在显式传入 --umount 时卸载内核挂载点（普通停止服务绝不卸载挂载，保证其他操作与环境稳定）
 if [ "$1" = "--umount" ]; then
     clean_umount "$ROOTFS/storage/emulated/0"
     clean_umount "$ROOTFS/sdcard"

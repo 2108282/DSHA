@@ -244,6 +244,22 @@ public class HarnessController {
         return requestStart(onStatus, false, 0, true);
     }
 
+    /** 用户手动点击「重启」：强制清除旧状态与旧进程，重新发起一次启动。 */
+    public boolean restartWeb(Consumer<String> onStatus) {
+        synchronized (lifecycle) {
+            long generation = lifecycle.forceBeginStart();
+            webAuthUrl = "";
+            try {
+                io.execute(() -> startWeb(generation, onStatus, false));
+                return true;
+            } catch (RuntimeException e) {
+                lifecycle.finishStart(generation);
+                reportStatus(generation, onStatus, "重启排队失败：" + e.getMessage());
+                return false;
+            }
+        }
+    }
+
     /** 看门狗不能撤销用户停止意图；检查与入队在同一把锁内完成。 */
     public boolean restartWebAutomatically(long expectedGeneration, Consumer<String> onStatus) {
         return requestStart(onStatus, true, expectedGeneration, false);

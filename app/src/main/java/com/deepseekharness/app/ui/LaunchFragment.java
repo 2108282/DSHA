@@ -88,7 +88,7 @@ public class LaunchFragment extends Fragment {
 
         // 启动按钮：未就绪时是「启动」；鉴权链接就绪后自动变为「进入」，点击进 WebUI。
         start.setOnClickListener(x -> {
-            if (webReady || !controller.getWebAuthUrl().isEmpty()) {
+            if ((webReady || !controller.getWebAuthUrl().isEmpty()) && controller.isWebRunning()) {
                 enterWeb();
                 return;
             }
@@ -96,8 +96,7 @@ public class LaunchFragment extends Fragment {
         });
 
         restart.setOnClickListener(x -> {
-            // startWeb 本身串行执行「清旧进程 → 启动」，无需拆成两次请求。
-            doStart(activity, status, start);
+            doRestart(activity, status, start);
         });
 
         stop.setOnClickListener(x -> {
@@ -118,6 +117,38 @@ public class LaunchFragment extends Fragment {
         });
 
         return v;
+    }
+
+    /** 强制重启 dsh：破除残留死锁状态，强制清旧进程后拉起。 */
+    private void doRestart(Activity activity, TextView status, Button start) {
+        final View root = getView();
+        startAtMs = System.currentTimeMillis();
+        String time = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+                .format(new java.util.Date());
+        status.setText("重启中…（" + time + "）");
+        start.setText("启动");
+        webReady = false;
+        appendLog("—— 强制重启 " + time + " ——");
+        java.util.function.Consumer<String> startStatus = msg -> {
+            long generation = controller.getWebGeneration();
+            activity.runOnUiThread(() -> {
+                if (getView() != root || generation != controller.getWebGeneration()) return;
+                status.setText(msg);
+                if (!controller.getWebAuthUrl().isEmpty() && !webReady) {
+                    long sec = (System.currentTimeMillis() - startAtMs) / 1000;
+                    appendLog("启动成功，耗时 " + sec + "s");
+                    appendLog("本机打开：" + controller.getWebAuthUrl()
+                            + "　（仅本机；其它设备请用「局域网地址」那条）");
+                    if (com.deepseekharness.app.HarnessService.currentInstance != null) {
+                        com.deepseekharness.app.HarnessService.currentInstance.refreshNotification();
+                    }
+                }
+                refreshRunState();
+                refreshLanAddr();
+            });
+        };
+        controller.restartWeb(startStatus);
+        refreshRunState();
     }
 
     /** 启动 dsh：记录启动时刻，鉴权链接就绪后把「启动」变「进入」并输出 URL 到日志。 */
