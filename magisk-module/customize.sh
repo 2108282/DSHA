@@ -38,11 +38,11 @@ choose_overwrite() {
 
         local events=$(timeout 1 getevent -l 2>/dev/null || true)
         case "$events" in
-            *KEY_VOLUMEUP*|*0001 0073*|*key_volumeup*)
+            *KEY_VOLUMEUP*|*"0001 0073"*|*"0001 0073 00000001"*|*key_volumeup*)
                 ui_print "👉 已按下【音量 +】: 选择「彻底覆盖全新安装（不备份）」"
                 return 0
                 ;;
-            *KEY_VOLUMEDOWN*|*0001 0072*|*key_volumedown*)
+            *KEY_VOLUMEDOWN*|*"0001 0072"*|*"0001 0072 00000001"*|*key_volumedown*)
                 ui_print "👉 已按下【音量 -】: 选择「保留现有数据（不覆盖）」"
                 return 1
                 ;;
