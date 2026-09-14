@@ -15,6 +15,7 @@ import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -918,6 +919,20 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
             sCachedWebView.setWebViewClient(new WebViewClient() {
                 @Override
+                public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                    super.onPageStarted(view, url, favicon);
+                    view.setAlpha(0.0f);
+                    injectTransparentBackground(view);
+                }
+
+                @Override
+                public void onPageCommitVisible(WebView view, String url) {
+                    super.onPageCommitVisible(view, url);
+                    injectTransparentBackground(view);
+                    view.animate().alpha(1.0f).setDuration(120).start();
+                }
+
+                @Override
                 public boolean shouldOverrideUrlLoading(WebView view, String url) {
                     if (url != null && (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:"))) {
                         return false;
@@ -945,8 +960,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                     sWebLoaded = true;
                     authRetried = false;
                     if (progressBar != null) progressBar.setVisibility(View.GONE);
-                    // 彻底覆写 DSH 前端 CSS 变量与 DOM 背景，消除纯黑实心色，透出半透明毛玻璃卡片
                     injectTransparentBackground(view);
+                    view.setAlpha(1.0f);
                 }
 
                 @Override
@@ -1071,6 +1086,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             sCachedWebView.getSettings().setAllowContentAccess(true);
             sCachedWebView.setWebChromeClient(new SheetChromeClient());
             injectTransparentBackground(sCachedWebView);
+            sCachedWebView.setAlpha(0.0f);
         }
 
         webContainer.addView(sCachedWebView, new FrameLayout.LayoutParams(
@@ -1514,6 +1530,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
             runOnUiThread(() -> {
                 if (sCachedWebView != null && !isFinishing() && !isDestroyed()) {
+                    sCachedWebView.setAlpha(0.0f);
                     sCachedWebView.loadUrl(finalUrl);
                 }
             });

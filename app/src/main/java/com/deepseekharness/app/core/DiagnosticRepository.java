@@ -8,7 +8,9 @@ import androidx.lifecycle.MutableLiveData;
 import com.deepseekharness.app.BuildConfig;
 import com.deepseekharness.app.runtime.ProotBootstrap;
 import com.deepseekharness.app.util.SensitiveData;
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.InputStreamReader;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -28,12 +30,32 @@ public final class DiagnosticRepository extends AndroidViewModel {
             if (repair) {
                 try {
                     ProotBootstrap proot = HarnessController.get(getApplication()).proot();
-                    if (!proot.isEnvironmentReady()) throw new java.io.IOException("环境未就绪，请先完成首次解压");
-                    proot.ensureRuntimeFiles();
-                    if (!proot.ensureGlibcPython() || !proot.ensureBundledPnpm()) throw new java.io.IOException("内置 Python / pnpm 修复失败");
-                    String output = proot.execAndReadWithProot("python3 -c 'import ssl; ssl.create_default_context()' && npm --version && printf '\\nDSHA_NETWORK_REPAIR_OK\\n'", 30000);
-                    if (!output.contains("DSHA_NETWORK_REPAIR_OK")) throw new java.io.IOException(output);
-                    repairResult = "证书、Python、npm 与 pnpm 已修复并通过启动检查。\n";
+                    if ("ksu_chroot".equals(proot.runtime().id())) {
+                        String cmd = "mkdir -p /data/adb/dsha/rootfs/etc/ssl/certs 2>/dev/null && "
+                                + "if [ -f /data/adb/dsha/rootfs/usr/local/share/dsha/ca-certificates.crt ]; then "
+                                + "  cp -f /data/adb/dsha/rootfs/usr/local/share/dsha/ca-certificates.crt /data/adb/dsha/rootfs/etc/ssl/certs/ca-certificates.crt; "
+                                + "fi && "
+                                + "chmod 644 /data/adb/dsha/rootfs/etc/ssl/certs/ca-certificates.crt 2>/dev/null && "
+                                + "chroot /data/adb/dsha/rootfs python3 -c 'import ssl; ssl.create_default_context()' && "
+                                + "echo DSHA_NETWORK_REPAIR_OK";
+                        Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+                        BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+                        StringBuilder sb = new StringBuilder();
+                        String line;
+                        while ((line = br.readLine()) != null) sb.append(line).append('\n');
+                        p.waitFor();
+                        if (!sb.toString().contains("DSHA_NETWORK_REPAIR_OK")) {
+                            throw new java.io.IOException("底层修复执行未通过：" + sb);
+                        }
+                        repairResult = "✅ 根证书与网络环境已成功修复并导入 /etc/ssl/certs！\n";
+                    } else {
+                        if (!proot.isEnvironmentReady()) throw new java.io.IOException("环境未就绪，请先完成首次解压");
+                        proot.ensureRuntimeFiles();
+                        if (!proot.ensureGlibcPython() || !proot.ensureBundledPnpm()) throw new java.io.IOException("内置 Python / pnpm 修复失败");
+                        String output = proot.execAndReadWithProot("python3 -c 'import ssl; ssl.create_default_context()' && npm --version && printf '\\nDSHA_NETWORK_REPAIR_OK\\n'", 30000);
+                        if (!output.contains("DSHA_NETWORK_REPAIR_OK")) throw new java.io.IOException(output);
+                        repairResult = "证书、Python、npm 与 pnpm 已修复并通过启动检查。\n";
+                    }
                 } catch (Exception e) { repairResult = "修复失败：" + SensitiveData.redact(String.valueOf(e.getMessage())) + "\n"; }
                 DiagnosticLog.record(getApplication(), "REPAIR_NETWORK_TOOLS", repairResult);
             }
@@ -62,15 +84,48 @@ public final class DiagnosticRepository extends AndroidViewModel {
         ProotBootstrap proot = HarnessController.get(getApplication()).proot();
         out.append("\n环境检查\n");
         out.append("离线环境：").append(proot.isEnvironmentReady() ? "已就绪" : "未就绪，请完成首次解压").append('\n');
-        File root = proot.getRootfsDir();
-        String[][] probes = {{"Node", "usr/local/bin/node"}, {"npm", "usr/local/lib/node_modules/npm/bin/npm-cli.js"},
-                {"npm 入口", "root/dsh-bin/npm"}, {"CA 证书", "usr/local/share/dsha/ca-certificates.crt"},
-                {"插件管理器", "root/.dsh/plugin-manager.py"}};
-        for (String[] probe : probes) out.append(probe[0]).append("：").append(new File(root, probe[1]).isFile() ? "存在" : "缺失，可尝试修复证书与 npm").append('\n');
-        if (proot.isEnvironmentReady()) {
-            String probe = proot.execAndReadWithProot("printf 'Node: '; node --version; printf 'npm: '; npm --version; printf 'Python: '; python3 --version", 20000);
-            if (probe.length() > 1500) probe = probe.substring(0, 1500);
-            out.append(SensitiveData.redact(probe)).append('\n');
+        if ("ksu_chroot".equals(proot.runtime().id())) {
+            String probeCmd = "chroot /data/adb/dsha/rootfs /bin/sh -c '"
+                    + "test -x /usr/local/bin/node && echo NODE_OK || echo NODE_FAIL; "
+                    + "test -f /usr/local/lib/node_modules/npm/bin/npm-cli.js && echo NPM_OK || echo NPM_FAIL; "
+                    + "test -f /root/dsh-bin/npm && echo NPM_BIN_OK || echo NPM_BIN_FAIL; "
+                    + "test -f /etc/ssl/certs/ca-certificates.crt && echo CERT_OK || echo CERT_FAIL; "
+                    + "test -f /root/.dsh/plugin-manager.py && echo PM_OK || echo PM_FAIL; "
+                    + "printf "Node: "; node -v 2>/dev/null || true; "
+                    + "printf "npm: "; npm -v 2>/dev/null || true; "
+                    + "printf "Python: "; python3 --version 2>/dev/null || true;'";
+            String probeOut = "";
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", probeCmd});
+                BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = br.readLine()) != null) sb.append(line).append('\n');
+                p.waitFor();
+                probeOut = sb.toString();
+            } catch (Exception ignored) {}
+
+            out.append("Node：").append(probeOut.contains("NODE_OK") ? "存在" : "缺失，可尝试修复证书与 npm").append('\n');
+            out.append("npm：").append(probeOut.contains("NPM_OK") ? "存在" : "缺失，可尝试修复证书与 npm").append('\n');
+            out.append("npm 入口：").append(probeOut.contains("NPM_BIN_OK") ? "存在" : "缺失").append('\n');
+            out.append("CA 证书：").append(probeOut.contains("CERT_OK") ? "存在" : "缺失，可尝试修复证书与 npm").append('\n');
+            out.append("插件管理器：").append(probeOut.contains("PM_OK") ? "存在" : "缺失").append('\n');
+
+            int verIdx = probeOut.indexOf("Node: ");
+            if (verIdx >= 0) {
+                out.append(SensitiveData.redact(probeOut.substring(verIdx))).append('\n');
+            }
+        } else {
+            File root = proot.getRootfsDir();
+            String[][] probes = {{"Node", "usr/local/bin/node"}, {"npm", "usr/local/lib/node_modules/npm/bin/npm-cli.js"},
+                    {"npm 入口", "root/dsh-bin/npm"}, {"CA 证书", "usr/local/share/dsha/ca-certificates.crt"},
+                    {"插件管理器", "root/.dsh/plugin-manager.py"}};
+            for (String[] probe : probes) out.append(probe[0]).append("：").append(new File(root, probe[1]).isFile() ? "存在" : "缺失，可尝试修复证书与 npm").append('\n');
+            if (proot.isEnvironmentReady()) {
+                String probe = proot.execAndReadWithProot("printf 'Node: '; node --version; printf 'npm: '; npm --version; printf 'Python: '; python3 --version", 20000);
+                if (probe.length() > 1500) probe = probe.substring(0, 1500);
+                out.append(SensitiveData.redact(probe)).append('\n');
+            }
         }
         out.append("\n最近操作与失败步骤\n").append(DiagnosticLog.read(getApplication()));
         out.append("\n建议操作\n证书或 npm 异常：点击「修复证书与 npm」。\n文件选择无返回：到插件页使用「其他文件选择器」。\n第三方插件导致启动失败：使用启动页的安全启动，再逐个恢复插件。\n存储不足：清理下载目录后重试，避免重新解压整个环境。\n");

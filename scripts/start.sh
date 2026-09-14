@@ -31,6 +31,17 @@ fi
 # 2. 解除 Android 12+ 幽灵进程限制
 /system/bin/device_config put activity_manager max_phantom_processes 2147483647 2>/dev/null
 
+# 2.5 自动补齐 CA 根证书与前端首帧防闪白样式
+mkdir -p "$ROOTFS/etc/ssl/certs"
+if [ -f "$ROOTFS/usr/local/share/dsha/ca-certificates.crt" ] && [ ! -f "$ROOTFS/etc/ssl/certs/ca-certificates.crt" ]; then
+    cp -f "$ROOTFS/usr/local/share/dsha/ca-certificates.crt" "$ROOTFS/etc/ssl/certs/ca-certificates.crt" 2>/dev/null || true
+    chmod 644 "$ROOTFS/etc/ssl/certs/ca-certificates.crt" 2>/dev/null || true
+fi
+INDEX_HTML="$ROOTFS/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist/index.html"
+if [ -f "$INDEX_HTML" ] && ! grep -q "dsh-boot-style" "$INDEX_HTML"; then
+    sed -i 's|<head>|<head><style id="dsh-boot-style">html,body,#root{background:transparent!important;background-color:transparent!important;}</style>|' "$INDEX_HTML" 2>/dev/null || true
+fi
+
 # 3. 挂载原生虚拟文件系统（基于 /proc/mounts 精准判重，杜绝挂载泄漏与层叠）
 is_mounted() {
     local target="${1%/}"
