@@ -29,7 +29,7 @@ public class HarnessService extends Service {
     public static final String ACTION_START = "com.deepseekharness.app.START";
     public static final String ACTION_STOP = "com.deepseekharness.app.STOP";
 
-    private static final String CHANNEL_ID = "dsh_harness_channel_fr";
+    private static final String CHANNEL_ID = "dsh_harness_channel";
     private static final int NOTIF_ID = 1001;
 
     private HarnessController c;
@@ -232,7 +232,7 @@ public class HarnessService extends Service {
 
     private void showForegroundNotification() {
         int port = c != null ? c.getPort() : Constants.DSH_WEB_PORT;
-        Notification notification = buildNotification("DSHA-FR 运行中", "Web UI: http://127.0.0.1:" + port);
+        Notification notification = buildNotification("DSHA 运行中", "Web UI: http://127.0.0.1:" + port);
         if (Build.VERSION.SDK_INT >= 34)
             startForeground(NOTIF_ID, notification,
                     android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
@@ -244,7 +244,7 @@ public class HarnessService extends Service {
             int port = c != null ? c.getPort() : Constants.DSH_WEB_PORT;
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) {
-                nm.notify(NOTIF_ID, buildNotification("DSHA-FR 运行中", "Web UI: http://127.0.0.1:" + port));
+                nm.notify(NOTIF_ID, buildNotification("DSHA 运行中", "Web UI: http://127.0.0.1:" + port));
             }
         } catch (Throwable ignored) {}
     }
@@ -252,8 +252,8 @@ public class HarnessService extends Service {
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
-                    CHANNEL_ID, "DSHA-FR后台服务", NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription("保持 DSHA-FR 原生守护与硬件桥后台运行");
+                    CHANNEL_ID, "DSHA后台服务", NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription("保持 DeepSeek Harness 原生守护与硬件桥后台运行");
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.createNotificationChannel(ch);
         }
@@ -277,7 +277,7 @@ public class HarnessService extends Service {
                 .setSmallIcon(R.drawable.ic_whale_logo)
                 .setContentTitle(title)
                 .setContentText(text)
-                .setContentIntent(pi)
+                .setContentIntent(sheetPi)
                 .setOngoing(true)
                 .addAction(0, "💬 打开抽屉", sheetPi)
                 .addAction(0, "🛑 停止", stopPi);

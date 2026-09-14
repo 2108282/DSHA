@@ -44,15 +44,15 @@ public final class Constants {
     /** DeviceBridgeService 常驻设备桥卡 */
     public static final int NOTIF_ADB_CARD = 3006;
 
-    // ================= 通知渠道（FR Native 专属隔离，防止与旧版挤占重叠） =================
+    // ================= 通知渠道 =================
     /** 智能体运行状态通知渠道（带停止任务按钮） */
-    public static final String CHANNEL_AGENT_RUNNING = "dsh_agent_channel_fr";
+    public static final String CHANNEL_AGENT_RUNNING = "dsh_agent_channel";
     /** 智能体任务结果与交互渠道（完成/报错/终止，带 RemoteInput 继续对话） */
-    public static final String CHANNEL_TASK_RESULT = "dsh_task_result_fr";
-    public static final String CHANNEL_TASK = "dsh_task_channel_fr";
+    public static final String CHANNEL_TASK_RESULT = "dsh_task_result_v2";
+    public static final String CHANNEL_TASK = "dsh_task_channel";
     public static final String CHANNEL_ADB_PAIR = "dsh_adbpair_channel";
     public static final String CHANNEL_ADB_WATCH = "dsh_adb_watch_channel";
-    public static final String CHANNEL_SHELL_CONFIRM = "dsh_confirm_channel_fr";
+    public static final String CHANNEL_SHELL_CONFIRM = "dsh_confirm_channel";
 
     // ================= dsh 版本（出厂内置版本） =================
     /**

@@ -1399,7 +1399,8 @@ public final class HttpShellService {
             return new AuthPromptInfo("应用敏感操作确认", target, "敏感操作", "敏感确认", btn0, btn1);
         }
 
-        if (s.contains("危险操作") || s.contains("高危操作") || s.contains("高危设备操作") || s.contains("高危权限")) {
+        if (s.contains("危险操作") || s.contains("高危操作") || s.contains("高危设备操作") || s.contains("高危权限")
+                || s.contains("等待审批") || s.contains("安全审批") || s.contains("敏感操作") || s.contains("审批")) {
             String target = s;
             target = target.replace("【危险操作授权】", "")
                            .replace("【安全确认】", "")
@@ -1796,17 +1797,17 @@ public final class HttpShellService {
     }
 
     public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat, boolean islandFirstFloat) {
-        b.setSubText("大肥鱼-FR");
+        b.setSubText("大肥鱼");
+        b.setOnlyAlertOnce(true);
         b.setShowWhen(false);
         b.setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
         b.setCategory(NotificationCompat.CATEGORY_STATUS);
         b.setPriority(enableFloat ? NotificationCompat.PRIORITY_HIGH : NotificationCompat.PRIORITY_DEFAULT);
-        b.setOnlyAlertOnce(!enableFloat);
 
         ensureCachedIcons(ctx);
         boolean hasDualActions = (secondaryActionPi != null && secondaryActionTitle != null && !secondaryActionTitle.isEmpty());
 
-        if (sCachedWhaleBmp != null) {
+        if (!hasDualActions && sCachedWhaleBmp != null) {
             try { b.setLargeIcon(sCachedWhaleBmp); } catch (Throwable ignored) {}
         }
 
@@ -1814,7 +1815,6 @@ public final class HttpShellService {
         android.os.Bundle extras = b.getExtras();
         if (extras != null) {
             extras.putBoolean("android.requestPromotedOngoing", true);
-            extras.putCharSequence("android.shortCriticalText", capsuleText != null ? capsuleText : "正在执行");
             extras.putString("android.shortCriticalText", capsuleText != null ? capsuleText : "正在执行");
         }
         try {
@@ -1822,15 +1822,15 @@ public final class HttpShellService {
             m.invoke(b, true);
         } catch (Throwable ignored) {}
 
-        // 2. 小米澎湃 OS (HyperOS / HyperIsland 灵动岛) 焦点通知标准协议（FR 业务隔离标识）
+        // 2. 小米澎湃 OS (HyperOS / HyperIsland 灵动岛) 焦点通知标准协议
         try {
             org.json.JSONObject paramV2 = new org.json.JSONObject();
             paramV2.put("protocol", 1);
-            paramV2.put("business", "schedule_reminder_fr");
+            paramV2.put("business", "schedule_reminder");
             paramV2.put("enableFloat", enableFloat);
             paramV2.put("islandFirstFloat", islandFirstFloat);
-            paramV2.put("ticker", "大肥鱼-FR " + (capsuleText != null ? capsuleText : "正在执行"));
-            paramV2.put("aodTitle", title != null ? "[FR] " + title : "DSHA-FR");
+            paramV2.put("ticker", "大肥鱼 " + (capsuleText != null ? capsuleText : "正在执行"));
+            paramV2.put("aodTitle", title != null ? title : "DSHA");
             paramV2.put("aodPic", "miui.focus.pic_big_island");
 
             org.json.JSONObject island = new org.json.JSONObject();
@@ -1839,7 +1839,7 @@ public final class HttpShellService {
             org.json.JSONObject bigIslandArea = new org.json.JSONObject();
             org.json.JSONObject leftImgText = new org.json.JSONObject();
             leftImgText.put("type", 1);
-            if (sCachedWhaleBmp != null) {
+            if (!hasDualActions && sCachedWhaleBmp != null) {
                 org.json.JSONObject leftPicInfo = new org.json.JSONObject();
                 leftPicInfo.put("type", 1);
                 leftPicInfo.put("pic", "miui.focus.pic_big_island");
@@ -1847,7 +1847,7 @@ public final class HttpShellService {
             }
 
             org.json.JSONObject leftTextInfo = new org.json.JSONObject();
-            leftTextInfo.put("title", "大肥鱼-FR");
+            leftTextInfo.put("title", "大肥鱼");
             leftTextInfo.put("showHighlightColor", true);
             leftImgText.put("textInfo", leftTextInfo);
             bigIslandArea.put("imageTextInfoLeft", leftImgText);
@@ -1859,7 +1859,7 @@ public final class HttpShellService {
             bigIslandArea.put("islandTimeout", 900);
 
             island.put("bigIslandArea", bigIslandArea);
-            if (sCachedWhaleBmp != null) {
+            if (!hasDualActions && sCachedWhaleBmp != null) {
                 org.json.JSONObject smallIsland = new org.json.JSONObject();
                 org.json.JSONObject smallPicInfo = new org.json.JSONObject();
                 smallPicInfo.put("type", 1);
@@ -1872,7 +1872,7 @@ public final class HttpShellService {
 
             org.json.JSONObject baseInfo = new org.json.JSONObject();
             baseInfo.put("type", 2);
-            baseInfo.put("title", title != null ? "[FR] " + title : "DSHA-FR");
+            baseInfo.put("title", title != null ? title : "DSHA");
 
             if (hasDualActions) {
                 baseInfo.put("content", detail != null ? detail : "");
@@ -1922,14 +1922,14 @@ public final class HttpShellService {
                     hintInfo.put("actionInfo", actionInfo);
                 }
                 paramV2.put("hintInfo", hintInfo);
-            }
 
-            if (sCachedWhaleBmp != null) {
-                org.json.JSONObject picInfo = new org.json.JSONObject();
-                picInfo.put("type", 1);
-                picInfo.put("pic", "miui.focus.icon_feature");
-                picInfo.put("picDark", "miui.focus.icon_feature");
-                paramV2.put("picInfo", picInfo);
+                if (sCachedWhaleBmp != null) {
+                    org.json.JSONObject picInfo = new org.json.JSONObject();
+                    picInfo.put("type", 1);
+                    picInfo.put("pic", "miui.focus.icon_feature");
+                    picInfo.put("picDark", "miui.focus.icon_feature");
+                    paramV2.put("picInfo", picInfo);
+                }
             }
 
             org.json.JSONObject root = new org.json.JSONObject();
@@ -2128,22 +2128,21 @@ public final class HttpShellService {
             PendingIntent denyPi = PendingIntent.getBroadcast(ctx, 132, denyI,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-            String displayDesc = (reason != null && !reason.trim().isEmpty())
-                    ? safeDisplay(reason)
-                    : "模型申请执行敏感操作，等待你在对话中审批";
+            String rawPrompt = (reason != null && !reason.trim().isEmpty()) ? reason : title;
+            AuthPromptInfo info = parseAuthPrompt(rawPrompt, "⚠️ 危险权限授权申请", new String[]{"允许", "拒绝"});
 
             NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                     .setSmallIcon(R.drawable.ic_whale_logo)
-                    .setContentTitle(title != null ? title : "⚠️ 安全确认")
-                    .setContentText(displayDesc)
-                    .setStyle(new NotificationCompat.BigTextStyle().bigText(displayDesc))
+                    .setContentTitle(info.title)
+                    .setContentText(info.detail)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(info.detail))
                     .setContentIntent(contentPi)
-                    .addAction(0, "允许", allowPi)
-                    .addAction(0, "拒绝", denyPi)
+                    .addAction(0, info.primaryBtn, allowPi)
+                    .addAction(0, info.secondaryBtn, denyPi)
                     .setOngoing(true)
                     .setPriority(NotificationCompat.PRIORITY_HIGH);
 
-            attachFocusCapsule(ctx, nb, title != null ? title : "⚠️ 安全确认", displayDesc, "等待审批", "允许", "等待审批", allowPi, "拒绝", denyPi, true);
+            attachFocusCapsule(ctx, nb, info.title, info.detail, info.statusLabel, info.primaryBtn, info.capsuleText, allowPi, info.secondaryBtn, denyPi, true);
 
             if (nm != null) {
                 nm.cancel(Constants.NOTIF_TASK_RUNNING);
@@ -2203,7 +2202,7 @@ public final class HttpShellService {
                 nm.cancel(Constants.NOTIF_ASK_QUESTION);
             }
 
-            String displayTitle = "[FR] 正在执行";
+            String displayTitle = "正在执行";
             String displayDetail = compactDetail;
 
             NotificationCompat.Action stopAction = new NotificationCompat.Action.Builder(
