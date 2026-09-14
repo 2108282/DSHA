@@ -1463,7 +1463,7 @@ public final class HttpShellService {
                 .setContentText(info.detail)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(info.detail))
                 .setContentIntent(contentPi)
-                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setOngoing(true);
 
         PendingIntent pi0 = null;
@@ -1499,23 +1499,12 @@ public final class HttpShellService {
 
         attachFocusCapsule(ctx, nb, info.title, info.detail, info.statusLabel, info.primaryBtn, info.capsuleText, pi0, info.secondaryBtn, pi1, true);
 
-        androidx.core.app.RemoteInput remoteInput = new androidx.core.app.RemoteInput.Builder(ConfirmReceiver.EXTRA_REPLY_TEXT)
-                .setLabel("输入回复内容...")
-                .build();
-        Intent replyIntent = new Intent(ctx, ConfirmReceiver.class)
-                .setAction(ConfirmReceiver.ACTION_ASK_REPLY)
-                .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
-        PendingIntent replyPi = PendingIntent.getBroadcast(ctx, 49, replyIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0));
-        NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
-                R.drawable.ic_launch, "💬 快捷输入", replyPi)
-                .addRemoteInput(remoteInput)
-                .build();
-        nb.addAction(replyAction);
-
         try {
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) nm.notify(Constants.NOTIF_ASK_QUESTION, nb.build());
+            if (nm != null) {
+                nm.cancel(Constants.NOTIF_ASK_QUESTION);
+                nm.notify(Constants.NOTIF_ASK_QUESTION, nb.build());
+            }
         } catch (Throwable ignored) {}
     }
 
@@ -1806,20 +1795,23 @@ public final class HttpShellService {
 
     public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat, boolean islandFirstFloat) {
         b.setSubText("大肥鱼");
-        b.setOnlyAlertOnce(true);
         b.setShowWhen(false);
         b.setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
-        b.setCategory(NotificationCompat.CATEGORY_STATUS);
         if (!enableFloat) {
             b.setPriority(NotificationCompat.PRIORITY_DEFAULT);
+            b.setCategory(NotificationCompat.CATEGORY_STATUS);
+            b.setOnlyAlertOnce(true);
         } else {
             b.setPriority(NotificationCompat.PRIORITY_HIGH);
+            b.setCategory(NotificationCompat.CATEGORY_REMINDER);
+            b.setOnlyAlertOnce(false);
+            b.setDefaults(NotificationCompat.DEFAULT_VIBRATE | NotificationCompat.DEFAULT_LIGHTS);
         }
 
         ensureCachedIcons(ctx);
         boolean hasDualActions = (secondaryActionPi != null && secondaryActionTitle != null && !secondaryActionTitle.isEmpty());
 
-        if (!hasDualActions && sCachedWhaleBmp != null) {
+        if (sCachedWhaleBmp != null) {
             try { b.setLargeIcon(sCachedWhaleBmp); } catch (Throwable ignored) {}
         }
 
@@ -1827,6 +1819,7 @@ public final class HttpShellService {
         android.os.Bundle extras = b.getExtras();
         if (extras != null) {
             extras.putBoolean("android.requestPromotedOngoing", true);
+            extras.putCharSequence("android.shortCriticalText", capsuleText != null ? capsuleText : "正在执行");
             extras.putString("android.shortCriticalText", capsuleText != null ? capsuleText : "正在执行");
         }
         try {
@@ -1851,7 +1844,7 @@ public final class HttpShellService {
             org.json.JSONObject bigIslandArea = new org.json.JSONObject();
             org.json.JSONObject leftImgText = new org.json.JSONObject();
             leftImgText.put("type", 1);
-            if (!hasDualActions && sCachedWhaleBmp != null) {
+            if (sCachedWhaleBmp != null) {
                 org.json.JSONObject leftPicInfo = new org.json.JSONObject();
                 leftPicInfo.put("type", 1);
                 leftPicInfo.put("pic", "miui.focus.pic_big_island");
@@ -1871,7 +1864,7 @@ public final class HttpShellService {
             bigIslandArea.put("islandTimeout", 900);
 
             island.put("bigIslandArea", bigIslandArea);
-            if (!hasDualActions && sCachedWhaleBmp != null) {
+            if (sCachedWhaleBmp != null) {
                 org.json.JSONObject smallIsland = new org.json.JSONObject();
                 org.json.JSONObject smallPicInfo = new org.json.JSONObject();
                 smallPicInfo.put("type", 1);
@@ -1934,14 +1927,14 @@ public final class HttpShellService {
                     hintInfo.put("actionInfo", actionInfo);
                 }
                 paramV2.put("hintInfo", hintInfo);
+            }
 
-                if (sCachedWhaleBmp != null) {
-                    org.json.JSONObject picInfo = new org.json.JSONObject();
-                    picInfo.put("type", 1);
-                    picInfo.put("pic", "miui.focus.icon_feature");
-                    picInfo.put("picDark", "miui.focus.icon_feature");
-                    paramV2.put("picInfo", picInfo);
-                }
+            if (sCachedWhaleBmp != null) {
+                org.json.JSONObject picInfo = new org.json.JSONObject();
+                picInfo.put("type", 1);
+                picInfo.put("pic", "miui.focus.icon_feature");
+                picInfo.put("picDark", "miui.focus.icon_feature");
+                paramV2.put("picInfo", picInfo);
             }
 
             org.json.JSONObject root = new org.json.JSONObject();
@@ -2215,7 +2208,10 @@ public final class HttpShellService {
 
         try {
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) nm.notify(CONFIRM_NOTIF_ID, cb.build());
+            if (nm != null) {
+                nm.cancel(CONFIRM_NOTIF_ID);
+                nm.notify(CONFIRM_NOTIF_ID, cb.build());
+            }
         } catch (Throwable ignored) {}
     }
 
@@ -2230,6 +2226,8 @@ public final class HttpShellService {
                     CONFIRM_CHANNEL, "安全确认",
                     NotificationManager.IMPORTANCE_HIGH);
             ch.setDescription("模型执行危险操作时的确认提醒");
+            ch.enableVibration(true);
+            ch.enableLights(true);
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.createNotificationChannel(ch);
         }

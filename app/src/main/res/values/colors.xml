@@ -26,4 +26,7 @@
     <color name="disabled">#E9ECF2</color>
     <!-- 状态色的浅底（用于状态条/标签背景，不刺眼） -->
     <color name="err_bg">#14C45A5A</color>
+    <!-- 危险操作按钮：背景深红 + 纯白文字高对比度 -->
+    <color name="btn_danger_bg">#C45A5A</color>
+    <color name="btn_danger_text">#FFFFFF</color>
 </resources>

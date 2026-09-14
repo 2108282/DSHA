@@ -20,7 +20,7 @@
             </item>
             <item>
                 <shape android:shape="rectangle">
-                    <solid android:color="@color/err" />
+                    <solid android:color="@color/btn_danger_bg" />
                     <corners android:radius="@dimen/radius_control" />
                 </shape>
             </item>

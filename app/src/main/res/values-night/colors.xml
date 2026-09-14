@@ -20,4 +20,7 @@
     <color name="ripple">#337DA7F4</color>
     <color name="disabled">#1B2130</color>
     <color name="err_bg">#1AE08A8A</color>
+    <!-- 危险操作按钮深色模式：暗红背景 + 纯白文字高对比度 -->
+    <color name="btn_danger_bg">#992B2B</color>
+    <color name="btn_danger_text">#FFFFFF</color>
 </resources>

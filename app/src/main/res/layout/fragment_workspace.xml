@@ -220,7 +220,8 @@
                 android:background="@drawable/bg_btn_danger"
                 android:text="清除环境（重置全部配置）"
                 android:textAllCaps="false"
-                android:textColor="@color/err"
+                android:textColor="@color/btn_danger_text"
+                android:textStyle="bold"
                 android:textSize="@dimen/text_body" />
         </LinearLayout>
 
