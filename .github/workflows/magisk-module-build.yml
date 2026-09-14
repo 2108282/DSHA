@@ -25,7 +25,7 @@ jobs:
           cd magisk-module
           chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
 
-      - name: Upload Flashable Lite Module (With Builtin Plugins, Direct Flashable)
+      - name: Upload Flashable Lite Module (With All 7 Plugins, Direct Flashable)
         uses: actions/upload-artifact@v4
         with:
           name: dsha_ksu_native_lite
@@ -38,13 +38,14 @@ jobs:
             magisk-module/uninstall.sh
             magisk-module/scripts
             magisk-module/builtin-plugins
+            magisk-module/plugin-src.tar.gz
 
       - name: Fetch and Merge Base Rootfs Asset
         run: |
           set -euo pipefail
           BASE_TAG="0.1.5rc1-base"
           BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
-          echo "==> 尝试获取并合成完整的 Linux RootFS 底包资产..."
+          echo "==> 尝试获取并合成包含全部插件的 Linux RootFS 底包资产..."
           
           mkdir -p /tmp/merged_rootfs
 
@@ -71,24 +72,47 @@ jobs:
             fi
           fi
 
-          # 4. 关键：将最新的 4 大原生内置插件直接注入进 rootfs 底包中并建好符号链接与注册清单
-          echo "==> 正在将 DSHA 内置插件注入 rootfs..."
+          # 4. 关键：将全部 7 大原生内置插件与扩展插件完整注入 rootfs 底包中
+          echo "==> 正在将全部 7 大核心与扩展插件注入 rootfs..."
+          mkdir -p /tmp/merged_rootfs/root
           mkdir -p /tmp/merged_rootfs/root/.dsh/profiles/web/node_modules
+          mkdir -p /tmp/merged_rootfs/root/.dsh/plugin-src
           mkdir -p /tmp/merged_rootfs/usr/local/lib/node_modules
 
+          # 内置 4 大插件
           for pdir in magisk-module/builtin-plugins/*; do
             [ -d "$pdir" ] || continue
-            pname=$(basename "$pdir") # e.g. dsh-web-mobile
-            rname="dsha-${pname#dsh-}" # e.g. dsha-web-mobile
+            pname=$(basename "$pdir")
+            rname="dsha-${pname#dsh-}"
             
             rm -rf "/tmp/merged_rootfs/root/$rname"
             cp -rf "$pdir" "/tmp/merged_rootfs/root/$rname"
             touch "/tmp/merged_rootfs/root/$rname-installed"
             
-            # 建立 Profile 与全局软链
             ln -sfn "/root/$rname" "/tmp/merged_rootfs/root/.dsh/profiles/web/node_modules/$pname"
             ln -sfn "/root/$rname" "/tmp/merged_rootfs/usr/local/lib/node_modules/$pname"
           done
+
+          # 扩展 3 大插件 (dsh-agy, dsh-api-dashboard, @xmanrui)
+          if [ -f "magisk-module/plugin-src.tar.gz" ]; then
+            tar -xzf magisk-module/plugin-src.tar.gz -C /tmp/merged_rootfs/root/.dsh/plugin-src
+            for edir in /tmp/merged_rootfs/root/.dsh/plugin-src/*; do
+              [ -d "$edir" ] || continue
+              bname=$(basename "$edir")
+              if [ "${bname:0:1}" = "@" ]; then
+                mkdir -p "/tmp/merged_rootfs/root/.dsh/profiles/web/node_modules/$bname" "/tmp/merged_rootfs/usr/local/lib/node_modules/$bname"
+                for sub in "$edir"/*; do
+                  [ -d "$sub" ] || continue
+                  subname=$(basename "$sub")
+                  ln -sfn "/root/.dsh/plugin-src/$bname/$subname" "/tmp/merged_rootfs/root/.dsh/profiles/web/node_modules/$bname/$subname"
+                  ln -sfn "/root/.dsh/plugin-src/$bname/$subname" "/tmp/merged_rootfs/usr/local/lib/node_modules/$bname/$subname"
+                done
+              else
+                ln -sfn "/root/.dsh/plugin-src/$bname" "/tmp/merged_rootfs/root/.dsh/profiles/web/node_modules/$bname"
+                ln -sfn "/root/.dsh/plugin-src/$bname" "/tmp/merged_rootfs/usr/local/lib/node_modules/$bname"
+              fi
+            done
+          fi
 
           printf 'dsh-device-shell-guide\ndsh-task-notifier\ndsh-status-overlay\ndsh-web-mobile\n' > /tmp/merged_rootfs/root/dsha-builtin.txt
 
@@ -98,14 +122,14 @@ jobs:
           cd -
 
           if [ -f "magisk-module/rootfs.tar.gz" ]; then
-            echo "✓ 注入内置插件后的完整底包已就绪："
+            echo "✓ 注入全部 7 大插件后的完整底包已就绪："
             ls -lh magisk-module/rootfs.tar.gz
           else
             echo "错误: 未能获取到底包资产！" >&2
             exit 1
           fi
 
-      - name: Upload Flashable Full Module (With Rootfs & Builtin Plugins, Direct Flashable)
+      - name: Upload Flashable Full Module (With Rootfs & All 7 Plugins, Direct Flashable)
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -119,4 +143,5 @@ jobs:
             magisk-module/uninstall.sh
             magisk-module/scripts
             magisk-module/builtin-plugins
+            magisk-module/plugin-src.tar.gz
             magisk-module/rootfs.tar.gz
