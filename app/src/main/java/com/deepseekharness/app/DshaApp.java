@@ -26,28 +26,28 @@ public class DshaApp extends Application {
             if (nm != null) {
                 // 1. 常驻后台服务渠道
                 NotificationChannel chService = new NotificationChannel(
-                        "dsh_harness_channel", "DSHA后台服务", NotificationManager.IMPORTANCE_LOW);
-                chService.setDescription("保持 DeepSeek Harness 原生守护与硬件桥后台运行");
+                        "dsh_harness_channel_fr", "DSHA-FR后台服务", NotificationManager.IMPORTANCE_LOW);
+                chService.setDescription("保持 DSHA-FR 原生守护与硬件桥后台运行");
                 nm.createNotificationChannel(chService);
 
                 // 2. 运行状态实时胶囊渠道
                 NotificationChannel chRunning = new NotificationChannel(
-                        Constants.CHANNEL_AGENT_RUNNING, "Agent 运行状态", NotificationManager.IMPORTANCE_DEFAULT);
-                chRunning.setDescription("智能体运行中实时操作步骤通知");
+                        Constants.CHANNEL_AGENT_RUNNING, "Agent 运行状态 (FR)", NotificationManager.IMPORTANCE_DEFAULT);
+                chRunning.setDescription("DSHA-FR 智能体运行中实时操作步骤通知");
                 nm.createNotificationChannel(chRunning);
 
                 // 3. 任务结果与交付卡片渠道
                 NotificationChannel chResult = new NotificationChannel(
-                        Constants.CHANNEL_TASK_RESULT, "任务结果与交互", NotificationManager.IMPORTANCE_HIGH);
-                chResult.setDescription("智能体任务完成、异常结束或终止时的结果通知");
+                        Constants.CHANNEL_TASK_RESULT, "任务结果与交互 (FR)", NotificationManager.IMPORTANCE_HIGH);
+                chResult.setDescription("DSHA-FR 智能体任务完成、异常结束或终止时的结果通知");
                 chResult.enableVibration(true);
                 chResult.enableLights(true);
                 nm.createNotificationChannel(chResult);
 
                 // 4. 安全确认与助手提问渠道
                 NotificationChannel chConfirm = new NotificationChannel(
-                        Constants.CHANNEL_SHELL_CONFIRM, "安全确认", NotificationManager.IMPORTANCE_HIGH);
-                chConfirm.setDescription("模型执行危险操作时的确认提醒与助手提问");
+                        Constants.CHANNEL_SHELL_CONFIRM, "安全确认 (FR)", NotificationManager.IMPORTANCE_HIGH);
+                chConfirm.setDescription("DSHA-FR 模型执行危险操作时的确认提醒与助手提问");
                 chConfirm.enableVibration(true);
                 chConfirm.enableLights(true);
                 nm.createNotificationChannel(chConfirm);

@@ -27,8 +27,8 @@
  */
 import { readFileSync } from 'node:fs'
 
-/** 桥地址（App 侧只监听回环，容器与宿主共享网络命名空间，所以直接连得上）。 */
-const BRIDGE = 'http://127.0.0.1:3090/app/overlay'
+/** 桥地址（优先 3095，兜底 3090）。 */
+const BRIDGE_PORTS = [3095, 3090]
 const TOKEN_PATH = '/root/.dsh/.bridge_token'
 /** 合并窗口：120ms 一次，肉眼看起来仍是连续流动的。 */
 const FLUSH_MS = 120
@@ -143,25 +143,26 @@ async function send(key, kind, text) {
   const tok = bridgeToken()
   if (!tok) return
   if (Date.now() < cooldownUntil) return
-  const url = `${BRIDGE}?kind=${encodeURIComponent(kind)}`
-    + `&session=${encodeURIComponent(key)}`
-    + `&text=${encodeURIComponent(text || '')}`
-  try {
-    const res = await fetch(url, {
-      headers: { 'X-Token': tok },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    })
-    const body = (await res.text()).trim()
-    if (body === 'DISABLED' || body === 'NO_PERMISSION') {
-      // 用户没开这个功能或没授权 —— 进冷却，别一直敲一扇关着的门
-      cooldownUntil = Date.now() + COOLDOWN_MS
-    } else if (body === 'SKIP_REASONING') {
-      // 功能开着，只是这会儿不看思考过程：别整段冷却，只停这一类，而且**要带时效**
-      skipReasoningUntil = Date.now() + REASONING_RETRY_MS
+  for (const port of BRIDGE_PORTS) {
+    const url = `http://127.0.0.1:${port}/app/overlay?kind=${encodeURIComponent(kind)}`
+      + `&session=${encodeURIComponent(key)}`
+      + `&text=${encodeURIComponent(text || '')}`
+    try {
+      const res = await fetch(url, {
+        headers: { 'X-Token': tok },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      })
+      if (!res.ok) continue
+      const body = (await res.text()).trim()
+      if (body === 'DISABLED' || body === 'NO_PERMISSION') {
+        cooldownUntil = Date.now() + COOLDOWN_MS
+      } else if (body === 'SKIP_REASONING') {
+        skipReasoningUntil = Date.now() + REASONING_RETRY_MS
+      }
+      return
+    } catch {
+      cooldownUntil = Date.now() + 5000
     }
-  } catch {
-    // 桥没起、超时、被拒：这功能不重要，静默降级
-    cooldownUntil = Date.now() + 5000
   }
 }
 
@@ -362,11 +363,13 @@ function reportPluginStates(ctx) {
     try {
       const st = collectPluginStates(ctx)
       if (!st.loaded.length && !st.failed.length) return
-      const url = 'http://127.0.0.1:3090/app/plugins'
-        + '?loaded=' + encodeURIComponent(st.loaded.join(','))
-        + '&failed=' + encodeURIComponent(st.failed.join(','))
-        + '&token=' + encodeURIComponent(T)
-      fetch(url).catch(() => {})
+      for (const port of BRIDGE_PORTS) {
+        const url = `http://127.0.0.1:${port}/app/plugins`
+          + '?loaded=' + encodeURIComponent(st.loaded.join(','))
+          + '&failed=' + encodeURIComponent(st.failed.join(','))
+          + '&token=' + encodeURIComponent(T)
+        fetch(url).then(r => { if (r.ok) return }).catch(() => {})
+      }
     } catch (e) {
       // 上报失败不影响任何既有功能
     }

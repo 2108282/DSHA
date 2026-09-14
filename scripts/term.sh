@@ -46,25 +46,25 @@ ln -sf /sdcard/Download/DSHA "$ROOTFS/root/内部存储" 2>/dev/null || true
 # 恢复标准终端设置
 stty sane 2>/dev/null || true
 
-# 直接以原生 root 身份进入 bash，默认落位在具备完全执行权限的 /root
+# 直接以原生 root 身份进入 bash，通过 setsid -c 强制绑定 PTY 控制终端，彻底根除 Inappropriate ioctl 与 job control 报错
 if [ $# -eq 0 ]; then
-    exec chroot "$ROOTFS" /bin/bash -c "cd /root && exec /usr/bin/env -i \
+    exec chroot "$ROOTFS" /usr/bin/env -i \
         HOME=/root \
         USER=root \
         LOGNAME=root \
         PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-        TERM=\"\${TERM:-xterm-256color}\" \
+        TERM="${TERM:-xterm-256color}" \
         LANG=C.UTF-8 \
         LC_ALL=C.UTF-8 \
-        /bin/bash -l"
+        /usr/bin/setsid -c /bin/bash -c "cd /root && exec /bin/bash -l"
 else
-    exec chroot "$ROOTFS" /bin/bash -c "cd /root && exec /usr/bin/env -i \
+    exec chroot "$ROOTFS" /usr/bin/env -i \
         HOME=/root \
         USER=root \
         LOGNAME=root \
         PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-        TERM=\"\${TERM:-xterm-256color}\" \
+        TERM="${TERM:-xterm-256color}" \
         LANG=C.UTF-8 \
         LC_ALL=C.UTF-8 \
-        /bin/bash \"\$@\""
+        /usr/bin/setsid -c /bin/bash -c "cd /root && exec /bin/bash \"\$@\""
 fi

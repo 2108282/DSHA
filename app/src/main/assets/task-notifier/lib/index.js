@@ -33,21 +33,28 @@ function bridgeToken() {
   return cachedToken
 }
 
-/** 通过 3090 桥发送 HTTP 请求 */
+const BRIDGE_PORTS = [3095, 3090]
+
+/** 通过硬件桥发送 HTTP 请求（Native 3095 优先，3090 兜底） */
 async function callBridge(endpoint, params = {}) {
   const token = bridgeToken()
   if (!token) return
-  try {
-    const url = new URL(`http://127.0.0.1:3090${endpoint}`)
-    url.searchParams.set('token', token)
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) {
-        url.searchParams.set(k, String(v))
+  for (const port of BRIDGE_PORTS) {
+    try {
+      const url = new URL(`http://127.0.0.1:${port}${endpoint}`)
+      url.searchParams.set('token', token)
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null) {
+          url.searchParams.set(k, String(v))
+        }
       }
-    }
-    const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(5000) })
-    await resp.text()
-  } catch {}
+      const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(3000) })
+      if (resp.ok) {
+        await resp.text()
+        return
+      }
+    } catch {}
+  }
 }
 
 const TOOL_LABELS = [
@@ -203,6 +210,33 @@ export function apply(ctx) {
         return
       }
 
+      if (type === 'approval/asked') {
+        if (trailingTimer) {
+          clearTimeout(trailingTimer)
+          trailingTimer = null
+        }
+        pendingState = null
+        const tool = event?.data?.toolName || '敏感操作'
+        const reason = event?.data?.reason || `模型申请执行 ${tool}，等待安全审批`
+        lastSentState = reason
+        lastSentTime = Date.now()
+        void callBridge('/app/task/confirm', {
+          title: '⚠️ 等待审批',
+          text: reason
+        })
+        return
+      }
+
+      if (type === 'approval/decided') {
+        lastSentState = '已完成审批，正在继续执行...'
+        lastSentTime = Date.now()
+        void callBridge('/app/task/running', {
+          title: '正在执行',
+          text: lastSentState
+        })
+        return
+      }
+
       if (type === 'tool/call') {
         const toolName = String(event?.data?.name || '')
         // 提问工具：立即通知手机切换为「💬 助手提问 / 等待回答」状态，挂载「返回对话」抽屉按钮（穿透节流，立即生效）
@@ -222,7 +256,7 @@ export function apply(ctx) {
           } catch {}
           lastSentState = questionText
           lastSentTime = Date.now()
-          void callBridge('/app/task/running', {
+          void callBridge('/app/task/confirm', {
             title: '💬 助手提问',
             text: questionText
           })
@@ -342,9 +376,7 @@ export function apply(ctx) {
         // A. 处理用户点击通知栏「🛑 停止任务」紧急制动
         if (existsSync(CANCEL_FLAG)) {
           lastCancelByNotification = Date.now()
-          try {
-            unlinkSync(CANCEL_FLAG)
-          } catch {}
+          try { unlinkSync(CANCEL_FLAG) } catch {}
           try {
             const list = agentScope.agents.list()
             for (const ag of list) {
@@ -355,6 +387,10 @@ export function apply(ctx) {
               } catch {}
             }
           } catch {}
+          void callBridge('/app/notify', {
+            title: '⚠️ 任务已终止',
+            text: '已按指令停止操作，点击查看或继续对话'
+          })
         }
 
         // B. 处理用户在通知栏输入文字「💬 继续对话 / 重新输入」
@@ -398,7 +434,7 @@ export function apply(ctx) {
           }
         }
       } catch {}
-    }, 1500)
+    }, 400)
 
     if (timer && typeof timer.unref === 'function') {
       timer.unref()

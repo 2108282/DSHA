@@ -1796,7 +1796,7 @@ public final class HttpShellService {
     }
 
     public static void attachFocusCapsule(Context ctx, NotificationCompat.Builder b, String title, String detail, String statusLabel, String actionTitle, String capsuleText, PendingIntent primaryActionPi, String secondaryActionTitle, PendingIntent secondaryActionPi, boolean enableFloat, boolean islandFirstFloat) {
-        b.setSubText("大肥鱼");
+        b.setSubText("大肥鱼-FR");
         b.setShowWhen(false);
         b.setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
         b.setCategory(NotificationCompat.CATEGORY_STATUS);
@@ -1822,15 +1822,15 @@ public final class HttpShellService {
             m.invoke(b, true);
         } catch (Throwable ignored) {}
 
-        // 2. 小米澎湃 OS (HyperOS / HyperIsland 灵动岛) 焦点通知标准协议
+        // 2. 小米澎湃 OS (HyperOS / HyperIsland 灵动岛) 焦点通知标准协议（FR 业务隔离标识）
         try {
             org.json.JSONObject paramV2 = new org.json.JSONObject();
             paramV2.put("protocol", 1);
-            paramV2.put("business", "schedule_reminder");
+            paramV2.put("business", "schedule_reminder_fr");
             paramV2.put("enableFloat", enableFloat);
             paramV2.put("islandFirstFloat", islandFirstFloat);
-            paramV2.put("ticker", "大肥鱼 " + (capsuleText != null ? capsuleText : "正在执行"));
-            paramV2.put("aodTitle", title != null ? title : "DSHA");
+            paramV2.put("ticker", "大肥鱼-FR " + (capsuleText != null ? capsuleText : "正在执行"));
+            paramV2.put("aodTitle", title != null ? "[FR] " + title : "DSHA-FR");
             paramV2.put("aodPic", "miui.focus.pic_big_island");
 
             org.json.JSONObject island = new org.json.JSONObject();
@@ -1847,7 +1847,7 @@ public final class HttpShellService {
             }
 
             org.json.JSONObject leftTextInfo = new org.json.JSONObject();
-            leftTextInfo.put("title", "大肥鱼");
+            leftTextInfo.put("title", "大肥鱼-FR");
             leftTextInfo.put("showHighlightColor", true);
             leftImgText.put("textInfo", leftTextInfo);
             bigIslandArea.put("imageTextInfoLeft", leftImgText);
@@ -1872,7 +1872,7 @@ public final class HttpShellService {
 
             org.json.JSONObject baseInfo = new org.json.JSONObject();
             baseInfo.put("type", 2);
-            baseInfo.put("title", title != null ? title : "DSHA");
+            baseInfo.put("title", title != null ? "[FR] " + title : "DSHA-FR");
 
             if (hasDualActions) {
                 baseInfo.put("content", detail != null ? detail : "");
@@ -2203,7 +2203,7 @@ public final class HttpShellService {
                 nm.cancel(Constants.NOTIF_ASK_QUESTION);
             }
 
-            String displayTitle = "正在执行";
+            String displayTitle = "[FR] 正在执行";
             String displayDetail = compactDetail;
 
             NotificationCompat.Action stopAction = new NotificationCompat.Action.Builder(

@@ -5,9 +5,9 @@ PID_FILE="$RUN_DIR/dsh.pid"
 PORT_FILE="$RUN_DIR/port"
 LOG_FILE="$RUN_DIR/dsh-web.log"
 
-PORT="${1:-3080}"
+PORT="${1:-3088}"
 case "$PORT" in
-    ''|*[!0-9]*) PORT=3080 ;;
+    ''|*[!0-9]*) PORT=3088 ;;
 esac
 
 mkdir -p "$RUN_DIR"
@@ -93,8 +93,8 @@ fi
 chmod 666 "$TOKEN_FILE" 2>/dev/null || true
 CURRENT_TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null)
 
-# 写入确认交互脚本
-if [ ! -f "$ROOTFS/root/dsh-confirm.sh" ]; then
+# 写入确认交互脚本（缺失或端口仍为 3090 时自动刷新为 3095）
+if [ ! -f "$ROOTFS/root/dsh-confirm.sh" ] || grep -q "3090" "$ROOTFS/root/dsh-confirm.sh" 2>/dev/null; then
 cat << 'CONFIRM_EOF' > "$ROOTFS/root/dsh-confirm.sh"
 #!/bin/bash
 FORCE=0
@@ -118,6 +118,15 @@ esac
 CONFIRM_EOF
 chmod 755 "$ROOTFS/root/dsh-confirm.sh"
 fi
+
+# 自动热对齐内置插件到 3095 专属桥端口（兼容旧底包残留 3090）
+for p_idx in "$ROOTFS/root/dsha-task-notifier/lib/index.js" \
+             "$ROOTFS/root/dsha-status-overlay/lib/index.js" \
+             "$ROOTFS/root/dsha-device-shell-guide/lib/index.js"; do
+    if [ -f "$p_idx" ] && grep -q "http://127.0.0.1:3090" "$p_idx" 2>/dev/null; then
+        sed -i 's|http://127.0.0.1:3090|http://127.0.0.1:3095|g' "$p_idx" 2>/dev/null || true
+    fi
+done
 
 # 写入函数级命令守卫
 if [ ! -f "$ROOTFS/root/dsh-guard.sh" ]; then
