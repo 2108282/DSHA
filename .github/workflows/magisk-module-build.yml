@@ -25,7 +25,7 @@ jobs:
           cd magisk-module
           chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
 
-      - name: Upload Flashable Lite Module (With All 7 Plugins, Direct Flashable)
+      - name: Upload Flashable Lite Module (Direct Flashable)
         uses: actions/upload-artifact@v4
         with:
           name: dsha_ksu_native_lite
@@ -40,96 +40,19 @@ jobs:
             magisk-module/builtin-plugins
             magisk-module/plugin-src.tar.gz
 
-      - name: Fetch and Merge Base Rootfs Asset
+      - name: Download Verified Local Rootfs Asset from Release
         run: |
           set -euo pipefail
           BASE_TAG="0.1.5rc1-base"
           BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
-          echo "==> 尝试获取并合成包含全部插件的 Linux RootFS 底包资产..."
+          echo "==> 直接下载手机本地验证通过的完整 249MB rootfs.tar.gz 底包..."
           
-          mkdir -p /tmp/merged_rootfs
+          curl -L -f -o "$GITHUB_WORKSPACE/magisk-module/rootfs.tar.gz" "${BASE_URL}/rootfs.tar.gz"
+          
+          echo "✓ 完整本地底包下载完毕，零二次拼凑："
+          ls -lh "$GITHUB_WORKSPACE/magisk-module/rootfs.tar.gz"
 
-          # 1. 优先尝试直接下载已有的 rootfs.tar.gz
-          if curl -s -f -I "${BASE_URL}/rootfs.tar.gz" >/dev/null 2>&1; then
-            echo "从 Release ${BASE_TAG} 下载已有的 rootfs.tar.gz..."
-            curl -L -f -o /tmp/raw_rootfs.tar.gz "${BASE_URL}/rootfs.tar.gz"
-            tar -xzf /tmp/raw_rootfs.tar.gz -C /tmp/merged_rootfs --no-same-owner
-          # 2. 尝试从 0.1.5rc.2-base 下载底包 (202MB)
-          elif curl -s -f -I "https://github.com/${{ github.repository }}/releases/download/0.1.5rc.2-base/offline-rootfs.bin" >/dev/null 2>&1; then
-            echo "从 Release 0.1.5rc.2-base 下载离线底包..."
-            curl -L -f -o /tmp/raw_rootfs.tar.gz "https://github.com/${{ github.repository }}/releases/download/0.1.5rc.2-base/offline-rootfs.bin"
-            tar -xzf /tmp/raw_rootfs.tar.gz -C /tmp/merged_rootfs --no-same-owner
-          # 3. 组合 offline-rootfs.bin (Ubuntu) + dsh-runtime.bin (Node+DSH) 双包合成
-          elif curl -s -f -I "${BASE_URL}/offline-rootfs.bin" >/dev/null 2>&1; then
-            echo "从 ${BASE_TAG} 下载 offline-rootfs.bin..."
-            curl -L -f -o /tmp/offline-rootfs.bin "${BASE_URL}/offline-rootfs.bin"
-            tar -xzf /tmp/offline-rootfs.bin -C /tmp/merged_rootfs --no-same-owner
-            
-            if curl -s -f -I "${BASE_URL}/dsh-runtime.bin" >/dev/null 2>&1; then
-              echo "从 ${BASE_TAG} 下载并合并 dsh-runtime.bin..."
-              curl -L -f -o /tmp/dsh-runtime.bin "${BASE_URL}/dsh-runtime.bin"
-              tar -xzf /tmp/dsh-runtime.bin -C /tmp/merged_rootfs --no-same-owner
-            fi
-          fi
-
-          # 4. 关键：将全部 7 大原生内置插件与扩展插件完整注入 rootfs 底包中
-          echo "==> 正在将全部 7 大核心与扩展插件注入 rootfs..."
-          mkdir -p /tmp/merged_rootfs/root
-          mkdir -p /tmp/merged_rootfs/root/.dsh/profiles/web/node_modules
-          mkdir -p /tmp/merged_rootfs/root/.dsh/plugin-src
-          mkdir -p /tmp/merged_rootfs/usr/local/lib/node_modules
-
-          # 内置 4 大插件
-          for pdir in magisk-module/builtin-plugins/*; do
-            [ -d "$pdir" ] || continue
-            pname=$(basename "$pdir")
-            rname="dsha-${pname#dsh-}"
-            
-            rm -rf "/tmp/merged_rootfs/root/$rname"
-            cp -rf "$pdir" "/tmp/merged_rootfs/root/$rname"
-            touch "/tmp/merged_rootfs/root/$rname-installed"
-            
-            ln -sfn "/root/$rname" "/tmp/merged_rootfs/root/.dsh/profiles/web/node_modules/$pname"
-            ln -sfn "/root/$rname" "/tmp/merged_rootfs/usr/local/lib/node_modules/$pname"
-          done
-
-          # 扩展 3 大插件 (dsh-agy, dsh-api-dashboard, @xmanrui)
-          if [ -f "magisk-module/plugin-src.tar.gz" ]; then
-            tar -xzf magisk-module/plugin-src.tar.gz -C /tmp/merged_rootfs/root/.dsh/plugin-src
-            for edir in /tmp/merged_rootfs/root/.dsh/plugin-src/*; do
-              [ -d "$edir" ] || continue
-              bname=$(basename "$edir")
-              if [ "${bname:0:1}" = "@" ]; then
-                mkdir -p "/tmp/merged_rootfs/root/.dsh/profiles/web/node_modules/$bname" "/tmp/merged_rootfs/usr/local/lib/node_modules/$bname"
-                for sub in "$edir"/*; do
-                  [ -d "$sub" ] || continue
-                  subname=$(basename "$sub")
-                  ln -sfn "/root/.dsh/plugin-src/$bname/$subname" "/tmp/merged_rootfs/root/.dsh/profiles/web/node_modules/$bname/$subname"
-                  ln -sfn "/root/.dsh/plugin-src/$bname/$subname" "/tmp/merged_rootfs/usr/local/lib/node_modules/$bname/$subname"
-                done
-              else
-                ln -sfn "/root/.dsh/plugin-src/$bname" "/tmp/merged_rootfs/root/.dsh/profiles/web/node_modules/$bname"
-                ln -sfn "/root/.dsh/plugin-src/$bname" "/tmp/merged_rootfs/usr/local/lib/node_modules/$bname"
-              fi
-            done
-          fi
-
-          printf 'dsh-device-shell-guide\ndsh-task-notifier\ndsh-status-overlay\ndsh-web-mobile\n' > /tmp/merged_rootfs/root/dsha-builtin.txt
-
-          echo "正在重新打包合成完整 rootfs.tar.gz..."
-          cd /tmp/merged_rootfs
-          tar -czf "$GITHUB_WORKSPACE/magisk-module/rootfs.tar.gz" .
-          cd -
-
-          if [ -f "magisk-module/rootfs.tar.gz" ]; then
-            echo "✓ 注入全部 7 大插件后的完整底包已就绪："
-            ls -lh magisk-module/rootfs.tar.gz
-          else
-            echo "错误: 未能获取到底包资产！" >&2
-            exit 1
-          fi
-
-      - name: Upload Flashable Full Module (With Rootfs & All 7 Plugins, Direct Flashable)
+      - name: Upload Flashable Full Module (With Verified Local Rootfs, Direct Flashable)
         if: success()
         uses: actions/upload-artifact@v4
         with:
