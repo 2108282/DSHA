@@ -5,9 +5,9 @@ PID_FILE="$RUN_DIR/dsh.pid"
 PORT_FILE="$RUN_DIR/port"
 LOG_FILE="$RUN_DIR/dsh-web.log"
 
-PORT="${1:-3080}"
+PORT="${1:-3088}"
 case "$PORT" in
-    ''|*[!0-9]*) PORT=3080 ;;
+    ''|*[!0-9]*) PORT=3088 ;;
 esac
 
 mkdir -p "$RUN_DIR"
@@ -263,6 +263,15 @@ done
 
 echo "STATUS:STARTED PID:$NEW_PID PORT:$PORT"
 [ -n "$CURRENT_TOKEN" ] && echo "BRIDGE_TOKEN:$CURRENT_TOKEN"
+
+# 动态同步 KernelSU / Magisk 模块描述状态
+for p_mod in "/data/adb/modules/dsha_native/module.prop" \
+             "/data/adb/modules_update/dsha_native/module.prop"; do
+    if [ -f "$p_mod" ]; then
+        sed -i "s|^description=.*|description=[🟢 运行中 :${PORT}] DSHA 原生 Linux chroot 极速运行时，按需启停，0 虚拟化损耗，0 待机偷跑。|" "$p_mod" 2>/dev/null || true
+    fi
+done
+
 if [ -n "$AUTH_URL" ]; then
     echo "=========================================================="
     echo "进入 Web 鉴权链接 (直接在手机浏览器打开):"

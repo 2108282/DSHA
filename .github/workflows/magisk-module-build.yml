@@ -25,8 +25,8 @@ jobs:
           echo "==> 正在打包轻量版模块 (外置底包模式, ~20KB)..."
           mkdir -p dist
           cd magisk-module
-          chmod +x customize.sh service.sh scripts/*.sh
-          zip -r9 ../dist/dsha_ksu_native_lite.zip META-INF module.prop customize.sh service.sh scripts
+          chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
+          zip -r9 ../dist/dsha_ksu_native_lite.zip META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts webroot
           cd ..
           ls -lh dist/dsha_ksu_native_lite.zip
 
@@ -50,7 +50,7 @@ jobs:
             echo "==> 正在打包全内置完整刷机包 (含底包, ~200MB)..."
             cd magisk-module
             cp /tmp/rootfs.tar.gz ./rootfs.tar.gz
-            zip -r9 ../dist/dsha_ksu_native_full.zip META-INF module.prop customize.sh service.sh scripts rootfs.tar.gz
+            zip -r9 ../dist/dsha_ksu_native_full.zip META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts webroot rootfs.tar.gz
             rm -f rootfs.tar.gz
             cd ..
             ls -lh dist/dsha_ksu_native_full.zip

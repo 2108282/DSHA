@@ -8,36 +8,61 @@ DATA_DIR="/data/adb/dsha"
 ROOTFS_DIR="$DATA_DIR/rootfs"
 SCRIPTS_DIR="$DATA_DIR/scripts"
 
-# 1. 解压模块控制脚本
-ui_print "- 正在安装控制脚本..."
+# 0. 热升级安全防护：若检测到旧实例正在运行，先平稳停止以保证原子覆盖
+if [ -f "$SCRIPTS_DIR/stop.sh" ] && [ -f "$DATA_DIR/run/dsh.pid" ]; then
+    ui_print "- 检测到 DSHA 正在运行，正在平稳停止旧进程以保证安全更新..."
+    sh "$SCRIPTS_DIR/stop.sh" --umount >/dev/null 2>&1 || true
+fi
+
+# 1. 解压模块控制脚本与 WebUI 控制面板
+ui_print "- 正在安装控制脚本与操作界面..."
 mkdir -p "$MODPATH/scripts"
+mkdir -p "$MODPATH/webroot"
 mkdir -p "$SCRIPTS_DIR"
 mkdir -p "$DATA_DIR/run"
 
 unzip -o "$ZIPFILE" 'scripts/*' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'module.prop' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'service.sh' -d "$MODPATH" >&2
+unzip -o "$ZIPFILE" 'action.sh' -d "$MODPATH" >&2
+unzip -o "$ZIPFILE" 'uninstall.sh' -d "$MODPATH" >&2
+unzip -o "$ZIPFILE" 'webroot/*' -d "$MODPATH" >&2
 
+# 清空旧脚本，确保无废弃遗留脚本，实现 100% 干净覆盖
+rm -f "$SCRIPTS_DIR"/*.sh 2>/dev/null || true
 cp -rf "$MODPATH/scripts/"* "$SCRIPTS_DIR/"
-chmod 755 "$MODPATH/service.sh"
-chmod 755 "$MODPATH/scripts/"*.sh
-chmod 755 "$SCRIPTS_DIR/"*.sh
 
-# 2. 处理 RootFS 底包解压
+chmod 755 "$MODPATH/service.sh" 2>/dev/null || true
+chmod 755 "$MODPATH/action.sh" 2>/dev/null || true
+chmod 755 "$MODPATH/uninstall.sh" 2>/dev/null || true
+chmod 755 "$MODPATH/scripts/"*.sh 2>/dev/null || true
+chmod 755 "$SCRIPTS_DIR/"*.sh 2>/dev/null || true
+
+# 2. 处理 RootFS 底包解压与覆盖策略
 mkdir -p "$ROOTFS_DIR"
 
 FORCE_CLEAN=0
 if [ -f "/sdcard/Download/DSHA/.clean_install" ] || [ -f "/data/media/0/Download/DSHA/.clean_install" ]; then
     FORCE_CLEAN=1
     rm -f "/sdcard/Download/DSHA/.clean_install" "/data/media/0/Download/DSHA/.clean_install" 2>/dev/null || true
-    ui_print "- 检测到全新安装标记，将清空旧运行环境并强制重解压。"
-    rm -rf "$ROOTFS_DIR"
-    mkdir -p "$ROOTFS_DIR"
+    ui_print "- 检测到全新安装标记 (.clean_install)，将重置运行环境。"
+
+    # 关键防变砖与防误删内部存储安全检查：在删除旧 rootfs 之前，必须严密卸载其下的所有子挂载点
+    for m in $(grep "$ROOTFS_DIR" /proc/mounts 2>/dev/null | awk '{print $2}' | sort -r); do
+        umount -l "$m" 2>/dev/null || true
+    done
+
+    if grep -q "$ROOTFS_DIR" /proc/mounts 2>/dev/null; then
+        ui_print "⚠️ 警告: 检测到挂载点未能完全脱钩，跳过递归删除以保护内部存储安全！"
+    else
+        rm -rf "$ROOTFS_DIR"
+        mkdir -p "$ROOTFS_DIR"
+    fi
 fi
 
 if [ "$FORCE_CLEAN" = "0" ] && [ -f "$ROOTFS_DIR/usr/local/bin/node" ]; then
-    ui_print "- 检测到已存在现成的 DSH 环境，保留当前用户数据与配置。"
-    ui_print "- 如需全新重新部署，请在 Download/DSHA 放入 .clean_install 文件后重刷。"
+    ui_print "- 检测到已存在现成的 DSH 环境，保留当前用户数据与配置（保活更新）。"
+    ui_print "- 如需彻底重装，请在 Download/DSHA 放入 .clean_install 文件后重刷。"
 else
     # 检查 zip 中是否存在 rootfs.tar.gz
     LOCAL_TAR=""
@@ -85,6 +110,7 @@ ln -sf /sdcard/Download/DSHA "$ROOTFS_DIR/root/内部存储" 2>/dev/null || true
 
 ui_print "-----------------------------------------"
 ui_print "安装成功！本模块开机不自启，0 功耗占用。"
-ui_print "通过 DSHA App 即可一键拉起或停止。"
+ui_print "支持通过 KernelSU/APatch 模块「操作」按钮一键启停，"
+ui_print "或通过 DSHA App / WebUI 随时拉起与管理。"
 ui_print "终端快速进入命令: su -c /data/adb/dsha/scripts/term.sh"
 ui_print "*****************************************"

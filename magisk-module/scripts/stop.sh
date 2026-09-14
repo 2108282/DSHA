@@ -51,5 +51,13 @@ if [ "$1" = "--umount" ] || [ "$1" = "--all" ]; then
     clean_umount "$ROOTFS/sys"
 fi
 
+# 动态同步 KernelSU / Magisk 模块描述状态为已停止
+for p_mod in "/data/adb/modules/dsha_native/module.prop" \
+             "/data/adb/modules_update/dsha_native/module.prop"; do
+    if [ -f "$p_mod" ]; then
+        sed -i 's|^description=.*|description=[🔴 已停止] DSHA 原生 Linux chroot 极速运行时，按需启停，0 虚拟化损耗，0 待机偷跑。|' "$p_mod" 2>/dev/null || true
+    fi
+done
+
 echo "STATUS:STOPPED"
 exit 0

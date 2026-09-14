@@ -5,9 +5,9 @@ PID_FILE="$RUN_DIR/dsh.pid"
 PORT_FILE="$RUN_DIR/port"
 LOG_FILE="$RUN_DIR/dsh-web.log"
 
-PORT="3080"
+PORT="3088"
 [ -f "$PORT_FILE" ] && PORT=$(cat "$PORT_FILE" 2>/dev/null)
-case "$PORT" in ''|*[!0-9]*) PORT=3080 ;; esac
+case "$PORT" in ''|*[!0-9]*) PORT=3088 ;; esac
 
 if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE" 2>/dev/null)
