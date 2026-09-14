@@ -210,6 +210,15 @@ chmod 755 "$DSH_BIN/$C"
 done
 fi
 
+# 宿主 Android 命令穿透直通包装（利用 nsenter 映射宿主 /system/bin 命令）
+for HCMD in am pm cmd input screencap dumpsys getprop logcat; do
+cat << HCMD_EOF > "$DSH_BIN/$HCMD"
+#!/bin/bash
+exec /usr/bin/nsenter -t 1 -m /system/bin/$HCMD "\$@"
+HCMD_EOF
+chmod 755 "$DSH_BIN/$HCMD"
+done
+
 # 清空旧日志
 > "$LOG_FILE"
 mkdir -p "$ROOTFS/root"
