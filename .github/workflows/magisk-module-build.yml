@@ -94,7 +94,7 @@ jobs:
 
           echo "正在重新打包合成完整 rootfs.tar.gz..."
           cd /tmp/merged_rootfs
-          tar -czf ../../magisk-module/rootfs.tar.gz .
+          tar -czf "$GITHUB_WORKSPACE/magisk-module/rootfs.tar.gz" .
           cd -
 
           if [ -f "magisk-module/rootfs.tar.gz" ]; then
