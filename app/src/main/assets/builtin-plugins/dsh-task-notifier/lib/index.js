@@ -20,6 +20,7 @@ const lastNotified = new Map()
 
 const CANCEL_FLAG = '/root/.dsh/.cancel_requested'
 const PENDING_PROMPT = '/root/.dsh/.pending_prompt'
+const DECISION_FLAG = '/root/.dsh/.approval_decision'
 const TOKEN_PATH = '/root/.dsh/.bridge_token'
 
 let cachedToken = ''
@@ -443,5 +444,53 @@ export function apply(ctx) {
     agentScope.on('dispose', () => {
       if (timer) clearInterval(timer)
     })
+  })
+
+  // 4. 双向闭环审批监听：竞速响应手机灵动岛与网页端点击
+  ctx.on('approval/request', async (req, next) => {
+    try {
+      if (existsSync(DECISION_FLAG)) unlinkSync(DECISION_FLAG)
+    } catch {}
+
+    const tool = req?.toolName || '敏感操作'
+    const reason = req?.reason || `模型申请执行 ${tool}，等待安全审批`
+    void callBridge('/app/task/confirm', {
+      title: '⚠️ 危险权限授权申请',
+      text: reason
+    })
+
+    let phoneTimer = null
+    const phoneDecisionPromise = new Promise((resolve) => {
+      phoneTimer = setInterval(() => {
+        try {
+          if (existsSync(DECISION_FLAG)) {
+            const decision = readFileSync(DECISION_FLAG, 'utf-8').trim()
+            try { unlinkSync(DECISION_FLAG) } catch {}
+            if (decision === 'allowed-once' || decision === 'rejected') {
+              if (phoneTimer) clearInterval(phoneTimer)
+              phoneTimer = null
+              resolve(decision)
+            }
+          }
+        } catch {}
+      }, 100)
+    })
+
+    if (req?.signal) {
+      req.signal.addEventListener('abort', () => {
+        if (phoneTimer) clearInterval(phoneTimer)
+      }, { once: true })
+    }
+
+    const webDecisionPromise = next ? next() : Promise.resolve('unavailable')
+
+    try {
+      return await Promise.race([phoneDecisionPromise, webDecisionPromise])
+    } finally {
+      if (phoneTimer) clearInterval(phoneTimer)
+      try {
+        if (existsSync(DECISION_FLAG)) unlinkSync(DECISION_FLAG)
+      } catch {}
+    }
   })
 }

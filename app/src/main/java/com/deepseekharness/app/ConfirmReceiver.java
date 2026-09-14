@@ -78,15 +78,22 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 svc.resolveAsk(intent.getStringExtra(EXTRA_ANSWER), epoch);
             } else if (ACTION_ALLOW.equals(act)) {
                 triggerVibrate(context, 50);
+                writeApprovalDecision("allowed-once");
                 svc.resolveConfirm(true, epoch);
             } else if (ACTION_DENY.equals(act)) {
                 triggerVibrate(context, 50);
+                writeApprovalDecision("rejected");
                 svc.resolveConfirm(false, epoch);
             }
         } else {
             NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null && (ACTION_ALLOW.equals(act) || ACTION_DENY.equals(act))) {
                 nm.cancel(Constants.NOTIF_SHELL_CONFIRM);
+            }
+            if (ACTION_ALLOW.equals(act)) {
+                writeApprovalDecision("allowed-once");
+            } else if (ACTION_DENY.equals(act)) {
+                writeApprovalDecision("rejected");
             }
         }
     }
@@ -242,5 +249,17 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 v.vibrate(android.os.VibrationEffect.createOneShot(ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
             }
         } catch (Throwable ignored) {}
+    }
+
+    private static void writeApprovalDecision(String decision) {
+        new Thread(() -> {
+            try {
+                String cmd = "mkdir -p /data/adb/dsha/rootfs/root/.dsh 2>/dev/null && "
+                        + "echo -n '" + decision + "' > /data/adb/dsha/rootfs/root/.dsh/.approval_decision && "
+                        + "chmod 666 /data/adb/dsha/rootfs/root/.dsh/.approval_decision 2>/dev/null";
+                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+                p.waitFor();
+            } catch (Throwable ignored) {}
+        }, "approval-decision-writer").start();
     }
 }
