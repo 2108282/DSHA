@@ -230,11 +230,22 @@ public class HarnessService extends Service {
     }
 
     private void showForegroundNotification() {
-        Notification notification = buildNotification("DSHA 运行中", "原生 Linux 守护进程与 3090 设备桥保持在线");
+        int port = c != null ? c.getPort() : 3080;
+        Notification notification = buildNotification("DSHA 运行中", "Web UI: http://127.0.0.1:" + port);
         if (Build.VERSION.SDK_INT >= 34)
             startForeground(NOTIF_ID, notification,
                     android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         else startForeground(NOTIF_ID, notification);
+    }
+
+    public void refreshNotification() {
+        try {
+            int port = c != null ? c.getPort() : 3080;
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                nm.notify(NOTIF_ID, buildNotification("DSHA 运行中", "Web UI: http://127.0.0.1:" + port));
+            }
+        } catch (Throwable ignored) {}
     }
 
     private void createChannel() {
@@ -251,17 +262,30 @@ public class HarnessService extends Service {
         Intent intent = new Intent(this, com.deepseekharness.app.ui.MainActivity.class);
         PendingIntent pi = PendingIntent.getActivity(this, 0, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Intent stop = new Intent(this, HarnessService.class).setAction(ACTION_STOP);
-        PendingIntent stopPi = PendingIntent.getService(this, 1, stop,
+
+        Intent sheetIntent = new Intent(this, com.deepseekharness.app.ui.QuickChatSheetActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent sheetPi = PendingIntent.getActivity(this, 1, sheetIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        return new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_menu_manage)
+        Intent stop = new Intent(this, HarnessService.class).setAction(ACTION_STOP);
+        PendingIntent stopPi = PendingIntent.getService(this, 2, stop,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_whale_logo)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOngoing(true)
-                .addAction(0, "停止", stopPi)
-                .build();
+                .addAction(0, "💬 打开抽屉", sheetPi)
+                .addAction(0, "🛑 停止", stopPi);
+
+        try {
+            android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeResource(getResources(), R.drawable.ic_whale_logo);
+            if (bmp != null) b.setLargeIcon(bmp);
+        } catch (Throwable ignored) {}
+
+        return b.build();
     }
 }

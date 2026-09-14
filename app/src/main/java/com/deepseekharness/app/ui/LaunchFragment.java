@@ -145,6 +145,9 @@ public class LaunchFragment extends Fragment {
                     appendLog("启动成功，耗时 " + sec + "s");
                     appendLog("本机打开：" + controller.getWebAuthUrl()
                             + "　（仅本机；其它设备请用「局域网地址」那条）");
+                    if (com.deepseekharness.app.HarnessService.currentInstance != null) {
+                        com.deepseekharness.app.HarnessService.currentInstance.refreshNotification();
+                    }
                 }
                 refreshRunState();
                 refreshLanAddr();
