@@ -2,6 +2,7 @@ package com.deepseekharness.app.ui;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.widget.TextView;
 
@@ -56,6 +57,14 @@ public class MainActivity extends AppCompatActivity {
             startActivity(new Intent(this, WelcomeActivity.class));
             finish();
             return;
+        }
+
+        // Android 13+ (API 33+) 动态申请通知权限，避免重装后系统默认禁用导致通知与胶囊彻底哑火
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 101);
+            }
         }
 
         setContentView(R.layout.activity_main);

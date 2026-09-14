@@ -19,16 +19,18 @@ TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
 # 桥的监听地址随 App 版本不同（新版绑 127.0.0.1 并附加 [::1]，旧版只绑 [::1]）：
 # 两个地址族都试，避免「桥活着但连不上 → 确认弹窗永不出现」。
 RES=""
-for H in 127.0.0.1 '[::1]'; do
-  RES=$(curl -s -m 65 -G "http://$H:3090/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
-  # 严格匹配 {"result":"YES"}：宽松的 grep YES 会被响应里的其它字段或命令回显
-  # 带偏（吸收上游 PR#24）
-  case "$RES" in
-    *'"result":"YES"'*) exit 0 ;;
-    *'"result":"NO"'*)  echo "已拒绝: $CMD（用户点了拒绝）" >&2; exit 1 ;;
-    *'"result":YES'*)   exit 0 ;;  # 兼容老版 App 的非法 JSON 响应
-  esac
-  [ -n "$RES" ] && break
+for P in 3095 3090; do
+  for H in 127.0.0.1 '[::1]'; do
+    RES=$(curl -s -m 65 -G "http://$H:$P/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
+    # 严格匹配 {"result":"YES"}：宽松的 grep YES 会被响应里的其它字段或命令回显
+    # 带偏（吸收上游 PR#24）
+    case "$RES" in
+      *'"result":"YES"'*) exit 0 ;;
+      *'"result":"NO"'*)  echo "已拒绝: $CMD（用户点了拒绝）" >&2; exit 1 ;;
+      *'"result":YES'*)   exit 0 ;;  # 兼容老版 App 的非法 JSON 响应
+    esac
+    [ -n "$RES" ] && break 2
+  done
 done
 if [ -n "$RES" ]; then
   # 有响应但既不是 YES 也不是 NO：桥说了别的（如 Shizuku 未就绪），一律拒绝

@@ -37,21 +37,28 @@ function bridgeToken() {
   return cachedToken
 }
 
-/** 通过 3090 桥发送 HTTP 请求 */
+const BRIDGE_PORTS = [3095, 3090]
+
+/** 通过硬件桥发送 HTTP 请求（Native 3095 优先，3090 兜底） */
 async function callBridge(endpoint, params = {}) {
   const token = bridgeToken()
   if (!token) return
-  try {
-    const url = new URL(`http://127.0.0.1:3090${endpoint}`)
-    url.searchParams.set('token', token)
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) {
-        url.searchParams.set(k, String(v))
+  for (const port of BRIDGE_PORTS) {
+    try {
+      const url = new URL(`http://127.0.0.1:${port}${endpoint}`)
+      url.searchParams.set('token', token)
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null) {
+          url.searchParams.set(k, String(v))
+        }
       }
-    }
-    const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(5000) })
-    await resp.text()
-  } catch {}
+      const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(3000) })
+      if (resp.ok) {
+        await resp.text()
+        return
+      }
+    } catch {}
+  }
 }
 
 const TOOL_LABELS = [
@@ -217,7 +224,7 @@ export function apply(ctx) {
         const reason = event?.data?.reason || `模型申请执行 ${tool}，等待安全审批`
         lastSentState = reason
         lastSentTime = Date.now()
-        void callBridge('/app/task/running', {
+        void callBridge('/app/task/confirm', {
           title: '⚠️ 等待审批',
           text: reason
         })
@@ -253,7 +260,7 @@ export function apply(ctx) {
           } catch {}
           lastSentState = questionText
           lastSentTime = Date.now()
-          void callBridge('/app/task/running', {
+          void callBridge('/app/task/confirm', {
             title: '💬 助手提问',
             text: questionText
           })

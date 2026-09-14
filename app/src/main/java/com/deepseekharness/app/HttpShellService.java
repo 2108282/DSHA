@@ -43,7 +43,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class HttpShellService {
 
-    public static final int PORT = 3090;
+    public static final int PORT = Constants.SHELL_BRIDGE_PORT;
     private static final String CONFIRM_CHANNEL = "dsh_confirm_channel";
     private static final int CONFIRM_NOTIF_ID = Constants.NOTIF_SHELL_CONFIRM;
     private static final long CONFIRM_TIMEOUT_S = 60;
@@ -484,6 +484,8 @@ public final class HttpShellService {
             String result;
             if (!authed) {
                 result = "[UNAUTHORIZED]";
+            } else if (path.startsWith("/app/task/confirm")) {
+                result = appTaskConfirm(path);
             } else if (path.startsWith("/app/task/running")) {
                 result = appTaskRunning(path);
             } else if (path.startsWith("/app/task/cancel")) {
@@ -852,16 +854,16 @@ public final class HttpShellService {
     }
 
     private String appHelp() {
-        return "DSHA 3090 桥端点清单（BRIDGE_PROTOCOL=" + BRIDGE_PROTOCOL + "）\n"
+        return "DSHA " + PORT + " 桥端点清单（BRIDGE_PROTOCOL=" + BRIDGE_PROTOCOL + "）\n"
             + "token 取自 /root/.dsh/.bridge_token，下面记为 $T。\n"
             + "带中文/空格的参数一律用 -G --data-urlencode，别手写 URL 编码。\n"
             + "\n"
             + "== 屏幕操作（无障碍服务，不需要 ADB/Shizuku）==\n"
-            + "读屏  curl -s \"127.0.0.1:3090/app/ui/dump?token=$T\"\n"
+            + "读屏  curl -s \"127.0.0.1:" + PORT + "/app/ui/dump?token=$T\"\n"
             + "      → 每行「[序号] \"文字\" 可点击 中心=(x,y) 区域=l,t,r,b」\n"
-            + "点按  curl -s -G 127.0.0.1:3090/app/ui/tap --data-urlencode \"text=设置\" --data-urlencode \"token=$T\"\n"
+            + "点按  curl -s -G 127.0.0.1:" + PORT + "/app/ui/tap --data-urlencode \"text=设置\" --data-urlencode \"token=$T\"\n"
             + "      → 优先按文字点：控件位置随滚动/动画变，文字不变。没有文字才用 ?x=&y=\n"
-            + "输入  curl -s -G 127.0.0.1:3090/app/ui/input --data-urlencode \"text=内容\" --data-urlencode \"token=$T\"\n"
+            + "输入  curl -s -G 127.0.0.1:" + PORT + "/app/ui/input --data-urlencode \"text=内容\" --data-urlencode \"token=$T\"\n"
             + "      → 填到当前焦点框；没有焦点先 tap 一下输入框\n"
             + "按键  /app/ui/key?name=back  （back/home/recents/notifications/quicksettings/lock）\n"
             + "滑动  /app/ui/swipe?x1=500&y1=1500&x2=500&y2=500&ms=300\n"
@@ -1797,16 +1799,9 @@ public final class HttpShellService {
         b.setSubText("大肥鱼");
         b.setShowWhen(false);
         b.setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
-        if (!enableFloat) {
-            b.setPriority(NotificationCompat.PRIORITY_DEFAULT);
-            b.setCategory(NotificationCompat.CATEGORY_STATUS);
-            b.setOnlyAlertOnce(true);
-        } else {
-            b.setPriority(NotificationCompat.PRIORITY_HIGH);
-            b.setCategory(NotificationCompat.CATEGORY_REMINDER);
-            b.setOnlyAlertOnce(false);
-            b.setDefaults(NotificationCompat.DEFAULT_VIBRATE | NotificationCompat.DEFAULT_LIGHTS);
-        }
+        b.setCategory(NotificationCompat.CATEGORY_STATUS);
+        b.setPriority(enableFloat ? NotificationCompat.PRIORITY_HIGH : NotificationCompat.PRIORITY_DEFAULT);
+        b.setOnlyAlertOnce(!enableFloat);
 
         ensureCachedIcons(ctx);
         boolean hasDualActions = (secondaryActionPi != null && secondaryActionTitle != null && !secondaryActionTitle.isEmpty());
@@ -2101,7 +2096,20 @@ public final class HttpShellService {
         } catch (Throwable ignored) {}
     }
 
-    private void showApprovalWaitingNotification(String reason) {
+    private String appTaskConfirm(String path) {
+        try {
+            cancelRunningNotification();
+            String q = queryOf(path);
+            String title = getParam(q, "title", "⚠️ 安全确认");
+            String text = getParam(q, "text", "模型请求执行敏感操作，请确认是否允许");
+            showApprovalWaitingNotification(title, text);
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + safeError(e);
+        }
+    }
+
+    private void showApprovalWaitingNotification(String title, String reason) {
         try {
             createConfirmChannel();
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -2110,9 +2118,15 @@ public final class HttpShellService {
             PendingIntent contentPi = PendingIntent.getActivity(ctx, 115, openAppIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-            NotificationCompat.Action returnAction = new NotificationCompat.Action.Builder(
-                    R.drawable.ic_alarm_white, "💬 进入审批", contentPi)
-                    .build();
+            long myEpoch = confirmEpoch.incrementAndGet();
+            Intent allowI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_ALLOW)
+                    .putExtra(ConfirmReceiver.EXTRA_EPOCH, myEpoch);
+            Intent denyI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_DENY)
+                    .putExtra(ConfirmReceiver.EXTRA_EPOCH, myEpoch);
+            PendingIntent allowPi = PendingIntent.getBroadcast(ctx, 131, allowI,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            PendingIntent denyPi = PendingIntent.getBroadcast(ctx, 132, denyI,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
             String displayDesc = (reason != null && !reason.trim().isEmpty())
                     ? safeDisplay(reason)
@@ -2120,15 +2134,16 @@ public final class HttpShellService {
 
             NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                     .setSmallIcon(R.drawable.ic_whale_logo)
-                    .setContentTitle("⚠️ 等待审批")
+                    .setContentTitle(title != null ? title : "⚠️ 安全确认")
                     .setContentText(displayDesc)
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(displayDesc))
                     .setContentIntent(contentPi)
-                    .addAction(returnAction)
+                    .addAction(0, "允许", allowPi)
+                    .addAction(0, "拒绝", denyPi)
                     .setOngoing(true)
                     .setPriority(NotificationCompat.PRIORITY_HIGH);
 
-            attachFocusCapsule(ctx, nb, "⚠️ 等待审批", displayDesc, "等待审批", "进入审批", "等待审批", contentPi, true);
+            attachFocusCapsule(ctx, nb, title != null ? title : "⚠️ 安全确认", displayDesc, "等待审批", "允许", "等待审批", allowPi, "拒绝", denyPi, true);
 
             if (nm != null) {
                 nm.cancel(Constants.NOTIF_TASK_RUNNING);

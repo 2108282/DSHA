@@ -27,8 +27,8 @@
  */
 import { readFileSync } from 'node:fs'
 
-/** 桥地址（App 侧只监听回环，容器与宿主共享网络命名空间，所以直接连得上）。 */
-const BRIDGE = 'http://127.0.0.1:3090/app/overlay'
+/** 桥地址（优先 3095，兜底 3090）。 */
+const BRIDGE_PORTS = [3095, 3090]
 const TOKEN_PATH = '/root/.dsh/.bridge_token'
 /** 合并窗口：120ms 一次，肉眼看起来仍是连续流动的。 */
 const FLUSH_MS = 120
@@ -47,15 +47,18 @@ const TIMEOUT_MS = 1500
 
 /** 工具名 → 人话。命中越具体的放前面；没命中的兜底成「正在使用 X」。 */
 const TOOL_LABELS = [
-  [/bash|shell|command|exec|terminal/i, '⚙ 正在执行命令'],
-  [/write|create.*file|edit|patch|apply/i, '⚙ 正在修改文件'],
-  [/read|cat|view|open.*file/i, '⚙ 正在读取文件'],
-  [/glob|grep|search|find/i, '⚙ 正在搜索'],
-  [/fetch|web|http|browse|url/i, '⚙ 正在联网查资料'],
-  [/todo|plan/i, '⚙ 正在整理任务清单'],
-  [/task|agent|subagent|dispatch/i, '⚙ 正在派子任务'],
-  [/image|screenshot|vision/i, '⚙ 正在看图'],
-  [/notify|toast|share|clip/i, '⚙ 正在调用手机功能'],
+  [/^ask_user/i, "💬 助手提问"],
+  [/^read_image|image|screenshot|vision/i, "⚙ 正在分析画面"],
+  [/^todo|plan|goal/i, "⚙ 正在规划任务清单"],
+  [/^web_search|fetch|web|http|browse|url/i, "⚙ 正在联网查资料"],
+  [/^write|create.*file|edit|patch|apply/i, "⚙ 正在修改文件"],
+  [/^read|cat|view|open.*file/i, "⚙ 正在读取文件"],
+  [/^glob|grep|find|search/i, "⚙ 正在搜索文件"],
+  [/^task|agent|subagent|dispatch|workflow|ralph/i, "⚙ 正在调度子任务"],
+  [/^skill/i, "⚙ 正在加载技能"],
+  [/^tap|input|swipe|dump|launch/i, "⚙ 正在执行屏幕操作"],
+  [/^notify|toast|share|clip|vibrate|sensor|location|torch/i, "⚙ 正在调用手机功能"],
+  [/^bash|shell|command|exec|terminal|shizuku/i, "⚙ 正在执行命令"],
 ]
 
 function toolLabel(name) {
@@ -92,10 +95,8 @@ function toolDetail(argsJson) {
 }
 
 let token
-let tokenReadAt = 0
 function bridgeToken() {
-  if (token !== undefined && Date.now() - tokenReadAt < 5000) return token
-  tokenReadAt = Date.now()
+  if (token !== undefined) return token
   try {
     token = readFileSync(TOKEN_PATH, 'utf8').trim()
   } catch {
@@ -142,25 +143,26 @@ async function send(key, kind, text) {
   const tok = bridgeToken()
   if (!tok) return
   if (Date.now() < cooldownUntil) return
-  const url = `${BRIDGE}?kind=${encodeURIComponent(kind)}`
-    + `&session=${encodeURIComponent(key)}`
-    + `&text=${encodeURIComponent(text || '')}`
-  try {
-    const res = await fetch(url, {
-      headers: { 'X-Token': tok },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    })
-    const body = (await res.text()).trim()
-    if (body === 'DISABLED' || body === 'NO_PERMISSION') {
-      // 用户没开这个功能或没授权 —— 进冷却，别一直敲一扇关着的门
-      cooldownUntil = Date.now() + COOLDOWN_MS
-    } else if (body === 'SKIP_REASONING') {
-      // 功能开着，只是这会儿不看思考过程：别整段冷却，只停这一类，而且**要带时效**
-      skipReasoningUntil = Date.now() + REASONING_RETRY_MS
+  for (const port of BRIDGE_PORTS) {
+    const url = `http://127.0.0.1:${port}/app/overlay?kind=${encodeURIComponent(kind)}`
+      + `&session=${encodeURIComponent(key)}`
+      + `&text=${encodeURIComponent(text || '')}`
+    try {
+      const res = await fetch(url, {
+        headers: { 'X-Token': tok },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      })
+      if (!res.ok) continue
+      const body = (await res.text()).trim()
+      if (body === 'DISABLED' || body === 'NO_PERMISSION') {
+        cooldownUntil = Date.now() + COOLDOWN_MS
+      } else if (body === 'SKIP_REASONING') {
+        skipReasoningUntil = Date.now() + REASONING_RETRY_MS
+      }
+      return
+    } catch {
+      cooldownUntil = Date.now() + 5000
     }
-  } catch {
-    // 桥没起、超时、被拒：这功能不重要，静默降级
-    cooldownUntil = Date.now() + 5000
   }
 }
 
@@ -172,10 +174,7 @@ function bucket(key) {
     // 会话数量不该无限涨（异常情况下也就几十个）
     if (state.size > 16) {
       const oldest = state.keys().next().value
-      if (oldest !== key) {
-        clearTimeout(state.get(oldest)?.timer)
-        state.delete(oldest)
-      }
+      if (oldest !== key) state.delete(oldest)
     }
   }
   return b
@@ -202,7 +201,7 @@ function schedule(key, kind, getter) {
 export function apply(ctx) {
   // 顺带把插件真实加载状态报给 App（见 reportPluginStates 的注释）
   reportPluginStates(ctx)
-  const onEvent = (session, event) => {
+  ctx.on('session/event', (session, event) => {
     try {
       if (!bridgeToken()) return
       const key = sessionKey(session)
@@ -230,6 +229,14 @@ export function apply(ctx) {
       }
 
       if (type === 'tool/call') {
+        const toolName = String(data?.name || '')
+        if (toolName.includes('ask_user') || toolName.includes('ask_question')) {
+          const b = bucket(key)
+          b.line = ''
+          b.think = ''
+          void send(key, 'clear', '')
+          return
+        }
         const b = bucket(key)
         // 「正在执行命令」看不出到底要跑什么 —— 把命令原文（或路径/模式）带上，
         // 这也是悬浮条上就地批准危险命令时唯一的判断依据。
@@ -259,6 +266,18 @@ export function apply(ctx) {
           clearTimeout(b.timer)
           b.timer = undefined
         }
+        const reasonObj = event.data?.reason
+        if (reasonObj?.kind === 'error') {
+          const err = reasonObj?.error
+          const statusPart = err?.status ? ` (${err.status})` : ""
+          const errLine = `❌ 模型请求失败: ${msg}${statusPart}`.slice(0, 60)
+          void send(key, 'tool', errLine)
+          setTimeout(() => {
+            void send(key, 'done', errLine)
+            state.delete(key)
+          }, 3500)
+          return
+        }
         // 留着最后一句让它自然淡出（App 侧几秒后自己收起来）
         void send(key, 'done', b.line)
         state.delete(key)
@@ -266,21 +285,6 @@ export function apply(ctx) {
     } catch {
       // 事件回调里抛异常会影响 agent 主链路，一律吞掉
     }
-  }
-  ctx.on('session/event', onEvent)
-  // dsh 0.1.5 的增量属于进程内流，持久日志只在一次尝试结束时写完整 assistant/message。
-  ctx.on('agent/assistant-stream', ({ agent, frame }) => {
-    try {
-      if (!agent?.session || !frame) return
-      const key = sessionKey(agent.session)
-      if (frame.type === 'start') {
-        const b = bucket(key)
-        clearTimeout(b.timer)
-        b.timer = undefined; b.line = ''; b.think = ''
-      } else if (frame.type === 'chunk') {
-        onEvent(agent.session, { type: 'assistant/chunk', data: { chunk: frame.chunk } })
-      }
-    } catch { /* 悬浮条不能中断模型流。 */ }
   })
 
   ctx.on('dispose', () => {
@@ -308,7 +312,7 @@ export function apply(ctx) {
  *
  * 全程宽容：registry 的形状随 cordis 版本可能变，取不到就少报一点，绝不影响悬浮条本身。
  */
-export function collectPluginStates(ctx) {
+function collectPluginStates(ctx) {
   const loaded = []
   const failed = []
   try {
@@ -336,7 +340,7 @@ export function collectPluginStates(ctx) {
         const st = String(raw).toLowerCase()
         // 状态可能是字符串也可能是枚举数字，两种都认；认不出的一律当"没起来"上报，
         // 宁可多报一条让用户去查，也不要漏掉真正卡住的插件
-        if (st === 'active' || st === '2') {
+        if (st === 'active' || st === '2' || st === '3') {
           ok = true
           break
         }
@@ -355,19 +359,19 @@ function reportPluginStates(ctx) {
   const T = bridgeToken()
   if (!T) return
   // 延后再报：apply 阶段别的插件可能还在 LOADING，太早报会把它们全算成没加载起来
-  const timer = setTimeout(() => {
+  setTimeout(() => {
     try {
       const st = collectPluginStates(ctx)
       if (!st.loaded.length && !st.failed.length) return
-      const url = 'http://127.0.0.1:3090/app/plugins'
-        + '?loaded=' + encodeURIComponent(st.loaded.join(','))
-        + '&failed=' + encodeURIComponent(st.failed.join(','))
-        + '&token=' + encodeURIComponent(T)
-      fetch(url, { signal: AbortSignal.timeout(1500) }).then(response => response.text()).catch(() => {})
+      for (const port of BRIDGE_PORTS) {
+        const url = `http://127.0.0.1:${port}/app/plugins`
+          + '?loaded=' + encodeURIComponent(st.loaded.join(','))
+          + '&failed=' + encodeURIComponent(st.failed.join(','))
+          + '&token=' + encodeURIComponent(T)
+        fetch(url).then(r => { if (r.ok) return }).catch(() => {})
+      }
     } catch (e) {
       // 上报失败不影响任何既有功能
     }
   }, 8000)
-  timer.unref?.()
-  ctx.on('dispose', () => clearTimeout(timer))
 }

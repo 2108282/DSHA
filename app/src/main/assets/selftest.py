@@ -234,15 +234,17 @@ def check_bridge():
     import urllib.error
     import urllib.parse
     ok_hosts, bodies = [], []
-    for host in ("127.0.0.1", "[::1]"):
-        url = ("http://%s:3090/exec?cmd=%s&token=%s"
-               % (host, urllib.parse.quote("echo dsha-selftest"), urllib.parse.quote(token)))
-        try:
-            with urllib.request.urlopen(url, timeout=8) as r:
-                bodies.append(r.read().decode("utf-8", "replace"))
-            ok_hosts.append(host)
-        except Exception:
-            pass
+    for port in (3095, 3090):
+        for host in ("127.0.0.1", "[::1]"):
+            url = ("http://%s:%d/exec?cmd=%s&token=%s"
+                   % (host, port, urllib.parse.quote("echo dsha-selftest"), urllib.parse.quote(token)))
+            try:
+                with urllib.request.urlopen(url, timeout=4) as r:
+                    bodies.append((port, r.read().decode("utf-8", "replace")))
+                ok_hosts.append("%s:%d" % (host, port))
+            except Exception:
+                pass
+        if ok_hosts: break
     if not ok_hosts:
         # 没开 ADB 设备通道时桥本来就不会启动，这种情况不算失败
         adb_on = arg("adb-on", "1") == "1"
@@ -259,12 +261,12 @@ def check_bridge():
                 "两个回环地址都连不上 —— App 需在运行中，且「配置」页勾过「启用 ADB 设备通道」并保存"
                 if adb_on else "未启用 ADB 设备通道，桥不启动（正常）")
         return
-    body = bodies[0]
+    matched_port, body = bodies[0]
     if '"result"' not in body:
-        add("FAIL", "3090 桥响应", "响应不含 result 字段：%s\n    到「配置」页重开「设备桥」；若仍异常请把这段贴到 GitHub issue" % body[:80])
+        add("FAIL", "设备桥响应", "响应不含 result 字段：%s\n    到「配置」页重开「设备桥」；若仍异常请把这段贴到 GitHub issue" % body[:80])
         return
     if "[UNAUTHORIZED]" in body:
-        add("FAIL", "3090 桥鉴权", "token 不匹配 —— 删掉 .bridge_token 后重开 App 让它重签")
+        add("FAIL", "设备桥鉴权", "token 不匹配 —— 删掉 .bridge_token 后重开 App 让它重签")
         return
     # 合法 JSON 检查：旧版本输出 {"result":YES} 不带引号，客户端判定会全线失效
     try:
@@ -272,11 +274,11 @@ def check_bridge():
         json_ok = True
     except Exception:
         json_ok = False
-    add("PASS" if json_ok else "FAIL", "3090 桥",
+    add("PASS" if json_ok else "FAIL", "设备桥",
         "可达地址 %s；响应%s合法 JSON" % ("+".join(ok_hosts), "是" if json_ok else "不是"))
     # 顺带抽查 App 层接口（agent 能直接调的那批能力）
     try:
-        url = "http://127.0.0.1:3090/app/device?token=" + urllib.parse.quote(token)
+        url = ("http://127.0.0.1:%d/app/device?token=" % matched_port) + urllib.parse.quote(token)
         with urllib.request.urlopen(url, timeout=8) as r:
             d = json.loads(r.read().decode("utf-8", "replace")).get("result", "")
         first = d.split("\n")[0] if d else ""

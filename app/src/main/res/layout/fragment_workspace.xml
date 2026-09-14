@@ -174,7 +174,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/gap_tight"
                 android:lineSpacingExtra="3dp"
-                android:text="授权后，Agent 可通过 3090 硬件桥执行宿主 shell 命令：\ncurl http://127.0.0.1:3090/exec?cmd=..." />
+                android:text="授权后，Agent 可通过 3095 硬件桥执行宿主 shell 命令：\ncurl http://127.0.0.1:3095/exec?cmd=..." />
         </LinearLayout>
 
         <!-- 高级维护与重置卡片 -->

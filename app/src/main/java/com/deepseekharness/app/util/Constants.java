@@ -15,8 +15,8 @@ public final class Constants {
     // ================= 端口契约（框架不变式，见 AGENTS.md） =================
     /** WebUI 默认端口 */
     public static final int DSH_WEB_PORT = 3080;
-    /** App 能力桥（agent 调 Android）端口 */
-    public static final int SHELL_BRIDGE_PORT = 3090;
+    /** App 能力桥（agent 调 Android）端口，Native 独立端口 3095，彻底与 PRoot 3090 隔离 */
+    public static final int SHELL_BRIDGE_PORT = 3095;
     /** 局域网反向代理端口 */
     public static final int LAN_BRIDGE_PORT = 3081;
     /** ADB 传统连接端口（兜底，非可靠路径） */
