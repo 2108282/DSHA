@@ -273,6 +273,38 @@ exports.createPreviewCloseTask = createPreviewCloseTask;
 exports.createSheetRiseTask = createSheetRiseTask;
 const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
 /** dsh-web-ui 兼容：explorer / preview 列的显隐标记与升起动画（同域同机制，合并一处）。 */
+function installApprovalSync(ctx) {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    try {
+        ctx.on('session/event', (session, event) => {
+            try {
+                if (event && event.type === 'approval/decided') {
+                    const outcome = event.data?.outcome;
+                    const isAllow = outcome === 'allowed-once';
+                    const targetText = isAllow ? '允许一次' : '拒绝';
+                    const fallbackText = isAllow ? 'Allow once' : 'Reject';
+                    const panel = document.querySelector('[data-approval-key]');
+                    if (panel) {
+                        const btns = panel.querySelectorAll('button');
+                        let clicked = false;
+                        for (let i = 0; i < btns.length; i++) {
+                            const txt = (btns[i].innerText || btns[i].textContent || '').trim();
+                            if (txt.includes(targetText) || txt.includes(fallbackText)) {
+                                btns[i].click();
+                                clicked = true;
+                                break;
+                            }
+                        }
+                        if (!clicked && btns.length >= 2) {
+                            btns[isAllow ? btns.length - 1 : 0].click();
+                        }
+                    }
+                }
+            } catch {}
+        });
+    } catch {}
+}
+exports.installApprovalSync = installApprovalSync;
 function installAionuiCompat(ctx) {
     (0, phone_chrome_ts_1.installMobileEffect)(ctx, 'dsh-web-mobile: aionui explorer close marker', () => {
         const onChevronClick = (event) => {
@@ -5757,6 +5789,7 @@ function apply(ctx) {
     (0, composer_keyboard_guard_ts_1.installComposerKeyboardGuard)(ctx);
     (0, phone_chrome_ts_1.installPhoneChrome)(ctx);
     (0, aionui_compat_ts_1.installAionuiCompat)(ctx);
+    installApprovalSync(ctx);
     // Debug badge (?mobile-nav-debug=1): live state overlay for phone-side
     // repros. No-op without the query param (docs: README, AGENTS.md).
     (0, debug_ts_1.installDebugBadge)(ctx);

@@ -20,7 +20,11 @@ const lastNotified = new Map()
 
 const CANCEL_FLAG = '/root/.dsh/.cancel_requested'
 const PENDING_PROMPT = '/root/.dsh/.pending_prompt'
-const DECISION_FLAG = '/root/.dsh/.approval_decision'
+const DECISION_FLAGS = [
+  '/root/.dsh/.approval_decision',
+  '/sdcard/Download/DSHA/.approval_decision',
+  '/root/内部存储/.approval_decision'
+]
 const TOKEN_PATH = '/root/.dsh/.bridge_token'
 
 let cachedToken = ''
@@ -257,7 +261,7 @@ export function apply(ctx) {
           } catch {}
           lastSentState = questionText
           lastSentTime = Date.now()
-          void callBridge('/app/task/confirm', {
+          void callBridge('/app/task/running', {
             title: '💬 助手提问',
             text: questionText
           })
@@ -449,7 +453,9 @@ export function apply(ctx) {
   // 4. 双向闭环审批监听：竞速响应手机灵动岛与网页端点击
   ctx.on('approval/request', async (req, next) => {
     try {
-      if (existsSync(DECISION_FLAG)) unlinkSync(DECISION_FLAG)
+      for (const flag of DECISION_FLAGS) {
+        if (existsSync(flag)) unlinkSync(flag)
+      }
     } catch {}
 
     const tool = req?.toolName || '敏感操作'
@@ -463,13 +469,16 @@ export function apply(ctx) {
     const phoneDecisionPromise = new Promise((resolve) => {
       phoneTimer = setInterval(() => {
         try {
-          if (existsSync(DECISION_FLAG)) {
-            const decision = readFileSync(DECISION_FLAG, 'utf-8').trim()
-            try { unlinkSync(DECISION_FLAG) } catch {}
-            if (decision === 'allowed-once' || decision === 'rejected') {
-              if (phoneTimer) clearInterval(phoneTimer)
-              phoneTimer = null
-              resolve(decision)
+          for (const flag of DECISION_FLAGS) {
+            if (existsSync(flag)) {
+              const decision = readFileSync(flag, 'utf-8').trim()
+              try { unlinkSync(flag) } catch {}
+              if (decision === 'allowed-once' || decision === 'rejected') {
+                if (phoneTimer) clearInterval(phoneTimer)
+                phoneTimer = null
+                resolve(decision)
+                return
+              }
             }
           }
         } catch {}
@@ -489,7 +498,9 @@ export function apply(ctx) {
     } finally {
       if (phoneTimer) clearInterval(phoneTimer)
       try {
-        if (existsSync(DECISION_FLAG)) unlinkSync(DECISION_FLAG)
+        for (const flag of DECISION_FLAGS) {
+          if (existsSync(flag)) unlinkSync(flag)
+        }
       } catch {}
     }
   })

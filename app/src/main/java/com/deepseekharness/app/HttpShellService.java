@@ -1358,6 +1358,12 @@ public final class HttpShellService {
         String btn0 = (opts != null && opts.length > 0 && !opts[0].isEmpty()) ? opts[0] : "允许";
         String btn1 = (opts != null && opts.length > 1 && !opts[1].isEmpty()) ? opts[1] : "拒绝";
 
+        if (s.contains("助手提问") || s.contains("ask_user") || s.contains("ask_question") || s.contains("请选择") || s.contains("多选")) {
+            String cleanText = s.replace("请问", "").trim();
+            if (cleanText.length() > 30) cleanText = cleanText.substring(0, 29) + "…";
+            return new AuthPromptInfo("💬 助手提问", cleanText, "等待回答", "等待回答", "返回对话", "");
+        }
+
         if (s.contains("免打扰") || s.contains("租约") || s.contains("系统高级") || (s.contains("危险命令") && s.contains("权限"))) {
             return new AuthPromptInfo("危险权限授权申请", "申请 10分钟免打扰租约", "权限申请", "危险授权", btn0, btn1);
         }
@@ -1500,7 +1506,7 @@ public final class HttpShellService {
             nb.addAction(0, opt, pi);
         }
 
-        attachFocusCapsule(ctx, nb, info.title, info.detail, info.statusLabel, info.primaryBtn, info.capsuleText, pi0, info.secondaryBtn, pi1, true);
+        attachFocusCapsule(ctx, nb, "💬 助手提问", info.detail, "等待回答", "返回对话", "等待回答", contentPi, true);
 
         try {
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -1722,6 +1728,8 @@ public final class HttpShellService {
             // 允许操作时自动授予 10 分钟免打扰操作租约
             uiGrantUntil = System.currentTimeMillis() + UI_GRANT_MS;
         }
+
+        com.deepseekharness.app.ui.QuickChatSheetActivity.syncApprovalDecision(allow);
 
         CountDownLatch l = pendingLatch;
         if (l == null || l.getCount() == 0) return; // 异步通知无挂起阻塞线程，直接完成
@@ -2110,7 +2118,11 @@ public final class HttpShellService {
             String q = queryOf(path);
             String title = getParam(q, "title", "⚠️ 安全确认");
             String text = getParam(q, "text", "模型请求执行敏感操作，请确认是否允许");
-            showApprovalWaitingNotification(title, text);
+            if (title.contains("提问") || title.contains("ask") || text.contains("ask") || text.contains("提问")) {
+                showAskWaitingNotification(text);
+            } else {
+                showApprovalWaitingNotification(title, text);
+            }
             return "OK";
         } catch (Throwable e) {
             return "ERROR: " + safeError(e);
@@ -2119,6 +2131,13 @@ public final class HttpShellService {
 
     private void showApprovalWaitingNotification(String title, String reason) {
         try {
+            String rawPrompt = (reason != null && !reason.trim().isEmpty()) ? reason : title;
+            AuthPromptInfo info = parseAuthPrompt(rawPrompt, "⚠️ 危险权限授权申请", new String[]{"允许", "拒绝"});
+            if (info.title.contains("提问") || title.contains("提问") || title.contains("ask")) {
+                showAskWaitingNotification(rawPrompt);
+                return;
+            }
+
             createConfirmChannel();
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
@@ -2137,9 +2156,6 @@ public final class HttpShellService {
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             PendingIntent denyPi = PendingIntent.getBroadcast(ctx, 132, denyI,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
-            String rawPrompt = (reason != null && !reason.trim().isEmpty()) ? reason : title;
-            AuthPromptInfo info = parseAuthPrompt(rawPrompt, "⚠️ 危险权限授权申请", new String[]{"允许", "拒绝"});
 
             NotificationCompat.Builder nb = new NotificationCompat.Builder(ctx, CONFIRM_CHANNEL)
                     .setSmallIcon(R.drawable.ic_whale_logo)

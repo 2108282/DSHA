@@ -96,6 +96,55 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private static boolean sWebLoaded = false;
     private static long sLoadedGeneration = -1;
     private static int sLoadedPort = 0;
+    public static volatile String sPendingApprovalDecision = null;
+
+    public static void syncApprovalDecision(boolean allow) {
+        sPendingApprovalDecision = allow ? "allowed-once" : "rejected";
+        if (sCachedWebView != null) {
+            sCachedWebView.post(() -> {
+                try {
+                    executeApprovalDecisionScript(sCachedWebView, allow);
+                } catch (Throwable ignored) {}
+            });
+        }
+    }
+
+    public static void executeApprovalDecisionScript(WebView webView, boolean allow) {
+        if (webView == null) return;
+        String targetText = allow ? "允许一次" : "拒绝";
+        String fallbackText = allow ? "Allow once" : "Reject";
+        String js = "(function() {\n" +
+                "  var clicked = false;\n" +
+                "  var panel = document.querySelector('[data-approval-key]');\n" +
+                "  if (panel) {\n" +
+                "    var pbtns = panel.querySelectorAll('button');\n" +
+                "    for (var i = 0; i < pbtns.length; i++) {\n" +
+                "      var txt = (pbtns[i].innerText || pbtns[i].textContent || '').trim();\n" +
+                "      if (txt.indexOf('" + targetText + "') !== -1 || txt.indexOf('" + fallbackText + "') !== -1) {\n" +
+                "        pbtns[i].click();\n" +
+                "        clicked = true;\n" +
+                "        break;\n" +
+                "      }\n" +
+                "    }\n" +
+                "    if (!clicked && pbtns.length >= 2) {\n" +
+                "      pbtns[" + (allow ? "pbtns.length - 1" : "0") + "].click();\n" +
+                "      clicked = true;\n" +
+                "    }\n" +
+                "  }\n" +
+                "  if (!clicked) {\n" +
+                "    var allBtns = document.querySelectorAll('button');\n" +
+                "    for (var j = 0; j < allBtns.length; j++) {\n" +
+                "      var btxt = (allBtns[j].innerText || allBtns[j].textContent || '').trim();\n" +
+                "      if (btxt === '" + targetText + "' || btxt === '" + fallbackText + "') {\n" +
+                "        allBtns[j].click();\n" +
+                "        clicked = true;\n" +
+                "        break;\n" +
+                "      }\n" +
+                "    }\n" +
+                "  }\n" +
+                "})();";
+        webView.evaluateJavascript(js, null);
+    }
 
     private FrameLayout rootOverlay;
     private LinearLayout sheetCard;
@@ -253,6 +302,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         }
         if (sCachedWebView != null) {
             injectTransparentBackground(sCachedWebView);
+            if (sPendingApprovalDecision != null) {
+                boolean allow = "allowed-once".equals(sPendingApprovalDecision);
+                sPendingApprovalDecision = null;
+                executeApprovalDecisionScript(sCachedWebView, allow);
+            }
             // 确保 WebView 100% 挂载在当前窗口的容器中，防止因生命周期波动导致 View 容器留空
             if (sCachedWebView.getParent() != webContainer) {
                 if (sCachedWebView.getParent() instanceof ViewGroup) {
@@ -1428,6 +1482,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         if (sCachedWebView != null) {
             // 确保每次切回前台时根据最新配置刷新全透明沉浸样式
             injectTransparentBackground(sCachedWebView);
+            if (sPendingApprovalDecision != null) {
+                boolean allow = "allowed-once".equals(sPendingApprovalDecision);
+                sPendingApprovalDecision = null;
+                executeApprovalDecisionScript(sCachedWebView, allow);
+            }
 
             // 1. 唤醒 WebView 渲染管线与 JS 定时器
             sCachedWebView.onResume();

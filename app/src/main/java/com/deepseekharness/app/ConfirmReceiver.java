@@ -80,10 +80,12 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 triggerVibrate(context, 50);
                 writeApprovalDecision("allowed-once");
                 svc.resolveConfirm(true, epoch);
+                com.deepseekharness.app.ui.QuickChatSheetActivity.syncApprovalDecision(true);
             } else if (ACTION_DENY.equals(act)) {
                 triggerVibrate(context, 50);
                 writeApprovalDecision("rejected");
                 svc.resolveConfirm(false, epoch);
+                com.deepseekharness.app.ui.QuickChatSheetActivity.syncApprovalDecision(false);
             }
         } else {
             NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -92,8 +94,10 @@ public class ConfirmReceiver extends BroadcastReceiver {
             }
             if (ACTION_ALLOW.equals(act)) {
                 writeApprovalDecision("allowed-once");
+                com.deepseekharness.app.ui.QuickChatSheetActivity.syncApprovalDecision(true);
             } else if (ACTION_DENY.equals(act)) {
                 writeApprovalDecision("rejected");
+                com.deepseekharness.app.ui.QuickChatSheetActivity.syncApprovalDecision(false);
             }
         }
     }
@@ -254,9 +258,11 @@ public class ConfirmReceiver extends BroadcastReceiver {
     private static void writeApprovalDecision(String decision) {
         new Thread(() -> {
             try {
-                String cmd = "mkdir -p /data/adb/dsha/rootfs/root/.dsh 2>/dev/null && "
-                        + "echo -n '" + decision + "' > /data/adb/dsha/rootfs/root/.dsh/.approval_decision && "
-                        + "chmod 666 /data/adb/dsha/rootfs/root/.dsh/.approval_decision 2>/dev/null";
+                String cmd = "mkdir -p /data/adb/dsha/rootfs/root/.dsh /sdcard/Download/DSHA /data/user/0/com.dsh.client/files/linux/ubuntu/root/.dsh 2>/dev/null; "
+                        + "echo -n '" + decision + "' > /data/adb/dsha/rootfs/root/.dsh/.approval_decision; "
+                        + "echo -n '" + decision + "' > /sdcard/Download/DSHA/.approval_decision; "
+                        + "echo -n '" + decision + "' > /data/user/0/com.dsh.client/files/linux/ubuntu/root/.dsh/.approval_decision 2>/dev/null; "
+                        + "chmod 666 /data/adb/dsha/rootfs/root/.dsh/.approval_decision /sdcard/Download/DSHA/.approval_decision /data/user/0/com.dsh.client/files/linux/ubuntu/root/.dsh/.approval_decision 2>/dev/null || true";
                 Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
                 p.waitFor();
             } catch (Throwable ignored) {}
