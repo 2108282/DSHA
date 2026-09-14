@@ -19,16 +19,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Lite Module Zip (External Rootfs Mode)
+      - name: Prepare Module Files & Permissions
         run: |
           set -euo pipefail
-          echo "==> 正在打包轻量版模块 (外置底包模式, ~20KB)..."
-          mkdir -p dist
           cd magisk-module
           chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
-          zip -r9 ../dist/dsha_ksu_native_lite.zip META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts
-          cd ..
-          ls -lh dist/dsha_ksu_native_lite.zip
+
+      - name: Upload Flashable Lite Module (~20KB, Direct Flashable)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsha_ksu_native_lite
+          path: |
+            magisk-module/META-INF
+            magisk-module/module.prop
+            magisk-module/customize.sh
+            magisk-module/service.sh
+            magisk-module/action.sh
+            magisk-module/uninstall.sh
+            magisk-module/scripts
 
       - name: Fetch and Merge Base Rootfs Asset
         run: |
@@ -42,11 +50,11 @@ jobs:
           # 1. 优先尝试直接下载完整的 rootfs.tar.gz
           if curl -s -f -I "${BASE_URL}/rootfs.tar.gz" >/dev/null 2>&1; then
             echo "从 Release ${BASE_TAG} 下载已有的 rootfs.tar.gz..."
-            curl -L -f -o /tmp/rootfs.tar.gz "${BASE_URL}/rootfs.tar.gz"
+            curl -L -f -o magisk-module/rootfs.tar.gz "${BASE_URL}/rootfs.tar.gz"
           # 2. 尝试从 0.1.5rc.2-base 下载单一大底包 (202MB)
           elif curl -s -f -I "https://github.com/${{ github.repository }}/releases/download/0.1.5rc.2-base/offline-rootfs.bin" >/dev/null 2>&1; then
             echo "从 Release 0.1.5rc.2-base 下载完整离线底包..."
-            curl -L -f -o /tmp/rootfs.tar.gz "https://github.com/${{ github.repository }}/releases/download/0.1.5rc.2-base/offline-rootfs.bin"
+            curl -L -f -o magisk-module/rootfs.tar.gz "https://github.com/${{ github.repository }}/releases/download/0.1.5rc.2-base/offline-rootfs.bin"
           # 3. 组合 offline-rootfs.bin (Ubuntu) + dsh-runtime.bin (Node+DSH) 双包合成完整 rootfs
           elif curl -s -f -I "${BASE_URL}/offline-rootfs.bin" >/dev/null 2>&1; then
             echo "从 ${BASE_TAG} 下载 offline-rootfs.bin (基础系统)..."
@@ -62,25 +70,29 @@ jobs:
             
             echo "正在重新打包合成完整 rootfs.tar.gz..."
             cd /tmp/merged_rootfs
-            tar -czf /tmp/rootfs.tar.gz .
+            tar -czf ../../magisk-module/rootfs.tar.gz .
             cd -
           fi
 
-          if [ -f "/tmp/rootfs.tar.gz" ]; then
-            echo "==> 正在打包全内置完整刷机包 (含完整底包, ~200MB)..."
-            cd magisk-module
-            cp /tmp/rootfs.tar.gz ./rootfs.tar.gz
-            zip -r9 ../dist/dsha_ksu_native_full.zip META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts rootfs.tar.gz
-            rm -f rootfs.tar.gz
-            cd ..
-            echo "✓ 全内置完整模块刷机包生成完毕："
-            ls -lh dist/dsha_ksu_native_full.zip
+          if [ -f "magisk-module/rootfs.tar.gz" ]; then
+            echo "✓ 完整底包已就绪："
+            ls -lh magisk-module/rootfs.tar.gz
           else
-            echo "提示: 未获取到远程底包资产，跳过全内置包打包，仅产出轻量包。"
+            echo "错误: 未能获取到底包资产！" >&2
+            exit 1
           fi
 
-      - name: Upload Module Artifacts
+      - name: Upload Flashable Full Module (~200MB, Direct Flashable)
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: dsha-native-module
-          path: dist/*.zip
+          name: dsha_ksu_native_full
+          path: |
+            magisk-module/META-INF
+            magisk-module/module.prop
+            magisk-module/customize.sh
+            magisk-module/service.sh
+            magisk-module/action.sh
+            magisk-module/uninstall.sh
+            magisk-module/scripts
+            magisk-module/rootfs.tar.gz
