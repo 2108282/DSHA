@@ -359,7 +359,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     private void updateCardTheme() {
         if (sheetCard != null) {
-            int cardBgColor = isDarkMode ? Color.parseColor("#EB10141B") : Color.parseColor("#EBF5F8FC");
+            int cardBgColor = isDarkMode ? Color.parseColor("#E610141B") : Color.parseColor("#E6F5F8FC");
             int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
             GradientDrawable cardBg = new GradientDrawable();
             cardBg.setShape(GradientDrawable.RECTANGLE);
@@ -375,8 +375,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     }
 
     private View buildUi() {
-        // 毛玻璃半透明底色（浅色：#EBF5F8FC 半透轻白蓝；深色：#EB10141B 与 App 深蓝底色完全一致）
-        int cardBgColor = isDarkMode ? Color.parseColor("#EB10141B") : Color.parseColor("#EBF5F8FC");
+        // 毛玻璃半透明底色（浅色：#E6F5F8FC 半透轻白蓝；深色：#E610141B 与 App 深蓝底色完全一致）
+        int cardBgColor = isDarkMode ? Color.parseColor("#E610141B") : Color.parseColor("#E6F5F8FC");
         int textColor = isDarkMode ? Color.parseColor("#E8ECF4") : Color.parseColor("#1A2230");
         int lineColor = isDarkMode ? Color.parseColor("#302A3344") : Color.parseColor("#30E2E6EE");
         int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");
@@ -848,12 +848,24 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             heightAnimator.cancel();
         }
 
+        if (sheetCard != null) {
+            sheetCard.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        }
+
         heightAnimator = ValueAnimator.ofInt(startH, targetH);
         heightAnimator.setDuration(180);
         heightAnimator.setInterpolator(new DecelerateInterpolator());
         heightAnimator.addUpdateListener(animation -> {
             currentHeight = (int) animation.getAnimatedValue();
             updateCardHeight(currentHeight);
+        });
+        heightAnimator.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                if (sheetCard != null) {
+                    sheetCard.setLayerType(View.LAYER_TYPE_NONE, null);
+                }
+            }
         });
         heightAnimator.start();
     }
@@ -1241,10 +1253,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "div[class*='_popover'] {\n"
                         + "  background: var(--dsh-menu-bg) !important;\n"
                         + "  background-color: var(--dsh-menu-bg) !important;\n"
-                        + "  backdrop-filter: blur(20px) !important;\n"
-                        + "  -webkit-backdrop-filter: blur(20px) !important;\n"
+                        + "  backdrop-filter: blur(8px) !important;\n"
+                        + "  -webkit-backdrop-filter: blur(8px) !important;\n"
                         + "  border: 1px solid var(--dsh-menu-border) !important;\n"
-                        + "  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35) !important;\n"
+                        + "  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25) !important;\n"
+                        + "  transform: translateZ(0) !important;\n"
+                        + "  will-change: transform !important;\n"
                         + "}\n"
                         + "/* 4. 模态弹窗与设置面板：毛玻璃防穿透 */\n"
                         + "[aria-modal=\"true\"],\n"
@@ -1253,7 +1267,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "  background: var(--dsh-dialog-bg) !important;\n"
                         + "  background-color: var(--dsh-dialog-bg) !important;\n"
                         + "  border: 1px solid var(--dsh-menu-border) !important;\n"
-                        + "  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4) !important;\n"
+                        + "  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25) !important;\n"
+                        + "  transform: translateZ(0) !important;\n"
+                        + "  will-change: transform !important;\n"
                         + "}\n"
                         + "/* 5. 右侧文件列表、文档预览抽屉：保持 100% 全景全透明沉浸透光，透出手机桌面壁纸 */\n"
                         + "[data-sidebar-right-panel],\n"
@@ -1325,6 +1341,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         .translationY(0)
                         .setDuration(220)
                         .setInterpolator(new DecelerateInterpolator())
+                        .withLayer()
                         .setListener(null)
                         .start();
             });
@@ -1345,20 +1362,20 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             }
         } catch (Throwable ignored) {}
 
-        // 开始收起动画时即刻冻结，彻底消除退出动画及过渡期的无谓空转
-        if (sCachedWebView != null) {
-            sCachedWebView.onPause();
-            sCachedWebView.pauseTimers();
-        }
-
         if (sheetCard != null) {
             sheetCard.animate()
                     .translationY(sheetCard.getHeight() + dpToPx(30))
                     .setDuration(180)
                     .setInterpolator(new DecelerateInterpolator())
+                    .withLayer()
                     .setListener(new AnimatorListenerAdapter() {
                         @Override
                         public void onAnimationEnd(Animator animation) {
+                            // 动画完全滑出屏幕后，再立即冻结 JS 与渲染管线，待机 0 空转
+                            if (sCachedWebView != null) {
+                                sCachedWebView.onPause();
+                                sCachedWebView.pauseTimers();
+                            }
                             moveTaskToBack(true);
                             overridePendingTransition(0, 0);
                             isDismissing = false;
@@ -1366,6 +1383,10 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                     })
                     .start();
         } else {
+            if (sCachedWebView != null) {
+                sCachedWebView.onPause();
+                sCachedWebView.pauseTimers();
+            }
             moveTaskToBack(true);
             overridePendingTransition(0, 0);
             isDismissing = false;

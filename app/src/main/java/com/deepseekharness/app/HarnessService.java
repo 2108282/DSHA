@@ -40,6 +40,7 @@ public class HarnessService extends Service {
     /** 动态休眠与任务保活使用的锁。 */
     private android.os.PowerManager.WakeLock wakeLock;
     private android.net.wifi.WifiManager.WifiLock wifiLock;
+    private static volatile long sLastTaskActiveTime = 0L;
 
     @Override
     public void onCreate() {
@@ -114,23 +115,35 @@ public class HarnessService extends Service {
                 // 无后台长任务正在运行：不持锁，允许系统自由深睡
                 return;
             }
+            sLastTaskActiveTime = System.currentTimeMillis();
             android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
             if (pm != null && (wakeLock == null || !wakeLock.isHeld())) {
                 wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "DSHA:task");
                 wakeLock.setReferenceCounted(false);
                 wakeLock.acquire(10 * 60 * 1000L); // 单次任务最多持锁 10 分钟防死锁
             }
-            android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
-                    getApplicationContext().getSystemService(WIFI_SERVICE);
-            if (wm != null && (wifiLock == null || !wifiLock.isHeld())) {
-                wifiLock = wm.createWifiLock(
-                        android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "DSHA:wifi");
-                wifiLock.setReferenceCounted(false);
-                wifiLock.acquire();
+            // 仅在局域网模式下才需要申请 WifiLock；本机回环 127.0.0.1 绝不占用 Wi-Fi 硬件，彻底消除射频待机耗电
+            boolean isLan = c != null && c.isLanMode();
+            if (isLan) {
+                android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                        getApplicationContext().getSystemService(WIFI_SERVICE);
+                if (wm != null && (wifiLock == null || !wifiLock.isHeld())) {
+                    wifiLock = wm.createWifiLock(
+                            android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "DSHA:wifi");
+                    wifiLock.setReferenceCounted(false);
+                    wifiLock.acquire();
+                }
             }
         } catch (Throwable t) {
             android.util.Log.w("DSHA", "[保活] 取锁失败: " + SensitiveData.redact(String.valueOf(t)));
         }
+    }
+
+    private synchronized void releaseWifiLock() {
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+        } catch (Throwable ignored) {}
+        wifiLock = null;
     }
 
     private synchronized void releaseLocks() {
@@ -138,12 +151,8 @@ public class HarnessService extends Service {
             if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         } catch (Throwable ignored) {
         }
-        try {
-            if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
-        } catch (Throwable ignored) {
-        }
+        releaseWifiLock();
         wakeLock = null;
-        wifiLock = null;
     }
 
     private void startScreenWatcher() {
@@ -155,10 +164,14 @@ public class HarnessService extends Service {
                     if (intent == null || intent.getAction() == null) return;
                     String action = intent.getAction();
                     if (Intent.ACTION_SCREEN_OFF.equals(action)) {
-                        // 熄屏：若无任务在跑，立即释放锁进入深睡
-                        if (!isTaskRunning()) {
+                        // 熄屏：无论是否有任务，本机回环均无须占用物理 Wi-Fi 射频芯片，立即放锁让网卡休眠
+                        releaseWifiLock();
+                        long idleTime = System.currentTimeMillis() - sLastTaskActiveTime;
+                        // 若无任务在跑，或任务已超过 5 分钟无任何刷新（防假活/丢包死锁），立即释放 WakeLock 进入系统 Deep Sleep
+                        if (!isTaskRunning() || idleTime > 5 * 60 * 1000L) {
+                            HttpShellService.isTaskActive = false;
                             releaseLocks();
-                            android.util.Log.i("DSHA", "[保活] 屏幕熄灭且无运行任务，已释放锁进入休眠");
+                            android.util.Log.i("DSHA", "[保活] 屏幕熄灭且无活跃任务，已彻底释放全部锁进入深睡");
                         }
                     } else if (Intent.ACTION_SCREEN_ON.equals(action) || Intent.ACTION_USER_PRESENT.equals(action)) {
                         if (isTaskRunning()) {
