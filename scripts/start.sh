@@ -5,10 +5,10 @@ PID_FILE="$RUN_DIR/dsh.pid"
 PORT_FILE="$RUN_DIR/port"
 LOG_FILE="$RUN_DIR/dsh-web.log"
 
-PORT="${1:-3080}"
+PORT="${1:-3088}"
 TASKSET_CPUS="${2:-}"
 case "$PORT" in
-    ''|*[!0-9]*) PORT=3080 ;;
+    ''|*[!0-9]*) PORT=3088 ;;
 esac
 
 mkdir -p "$RUN_DIR"
@@ -111,40 +111,68 @@ fi
 chmod 666 "$TOKEN_FILE" 2>/dev/null || true
 CURRENT_TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null)
 
-# 写入确认交互脚本（缺失或端口仍为 3090 时自动刷新为 3095）
-if [ ! -f "$ROOTFS/root/dsh-confirm.sh" ] || grep -q "3090" "$ROOTFS/root/dsh-confirm.sh" 2>/dev/null; then
+# 写入确认交互脚本（支持 10 分钟临时免打扰租约、临时文件白名单放行与双端口兼容）
 cat << 'CONFIRM_EOF' > "$ROOTFS/root/dsh-confirm.sh"
 #!/bin/bash
+# 用法：dsh-confirm.sh [--force] <命令...>
+
+# 1. 检查统一的 10 分钟临时免审租约
+if [ -f /root/.dsh/.auth_lease ]; then
+  EXP=$(cat /root/.dsh/.auth_lease 2>/dev/null)
+  NOW=$(date +%s)
+  if [ -n "$EXP" ] && [ "${NOW:-0}" -lt "${EXP%.*}" ]; then
+    exit 0
+  fi
+fi
+
+# 2. 安全临时文件清理白名单（删除截图、临时文件免弹窗）
+is_safe_cleanup() {
+  local c="$1"
+  [[ "$c" =~ ^(rm|unlink)[[:space:]] ]] || return 1
+  [[ "$c" =~ -r|-R|\* ]] && return 1
+  for arg in $c; do
+    [[ "$arg" =~ ^(rm|unlink|-f|-v)$ ]] && continue
+    if [[ "$arg" =~ ^/sdcard/Download/DSHA/.*(png|jpg|jpeg|tmp)$ ]] || \
+       [[ "$arg" =~ ^/sdcard/Download/.*(png|jpg|jpeg|tmp)$ ]] || \
+       [[ "$arg" =~ ^/tmp/.* ]] || \
+       [[ "$arg" == "/root/.dsh/.auth_lease" ]]; then
+      continue
+    else
+      return 1
+    fi
+  done
+  return 0
+}
+
 FORCE=0
 if [ "$1" = "--force" ]; then FORCE=1; shift; fi
 CMD="$*"
-TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
-RES=$(curl -s -m 65 -G "http://127.0.0.1:3095/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
-case "$RES" in
-  *'"result":"YES"'*|*'"result":YES'*) exit 0 ;;
-  *'"result":"NO"'*|*'"result":NO'*)  echo "已拒绝: $CMD（用户在手机端拒绝了该操作）" >&2; exit 1 ;;
-  *)
-    if [ -n "$DSH_INTERACTIVE" ]; then
-      echo -n "确认执行危险操作 [$CMD] ? [y/N] " >&2
-      read -t 10 ans
-      case "$ans" in y|Y) exit 0 ;; esac
-    fi
-    echo "已拦截高危操作: $CMD (3095确认服务未就绪或超时)" >&2
-    exit 1
-    ;;
-esac
-CONFIRM_EOF
-chmod 755 "$ROOTFS/root/dsh-confirm.sh"
+
+if [ "$FORCE" != "1" ] && is_safe_cleanup "$CMD"; then
+  exit 0
 fi
 
-# 自动热对齐内置插件到 3095 专属桥端口（兼容旧底包残留 3090）
-for p_idx in "$ROOTFS/root/dsha-task-notifier/lib/index.js" \
-             "$ROOTFS/root/dsha-status-overlay/lib/index.js" \
-             "$ROOTFS/root/dsha-device-shell-guide/lib/index.js"; do
-    if [ -f "$p_idx" ] && grep -q "http://127.0.0.1:3090" "$p_idx" 2>/dev/null; then
-        sed -i 's|http://127.0.0.1:3090|http://127.0.0.1:3095|g' "$p_idx" 2>/dev/null || true
-    fi
+TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
+RES=""
+for PORT in 3095 3090; do
+  RES=$(curl -s -m 65 -G "http://127.0.0.1:$PORT/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
+  case "$RES" in
+    *'"result":"YES"'*|*'"result":YES'*) exit 0 ;;
+    *'"result":"NO"'*|*'"result":NO'*)  echo "已拒绝: $CMD（用户在手机端拒绝了该操作）" >&2; exit 1 ;;
+  esac
+  [ -n "$RES" ] && break
 done
+
+if [ -n "$DSH_INTERACTIVE" ]; then
+  echo -n "确认执行危险操作 [$CMD] ? [y/N] " >&2
+  read -t 10 ans
+  case "$ans" in y|Y) exit 0 ;; esac
+fi
+
+echo "已拦截高危操作: $CMD (3090确认服务未就绪或超时)" >&2
+exit 1
+CONFIRM_EOF
+chmod 755 "$ROOTFS/root/dsh-confirm.sh" 
 
 # 写入函数级命令守卫
 if [ ! -f "$ROOTFS/root/dsh-guard.sh" ]; then
@@ -200,6 +228,15 @@ chmod 755 "$DSH_BIN/$C"
 done
 fi
 
+# 宿主 Android 命令穿透直通包装（利用 nsenter 映射宿主 /system/bin 命令）
+for HCMD in am pm cmd input screencap dumpsys getprop logcat; do
+cat << HCMD_EOF > "$DSH_BIN/$HCMD"
+#!/bin/bash
+exec /usr/bin/nsenter -t 1 -m /system/bin/$HCMD "\$@"
+HCMD_EOF
+chmod 755 "$DSH_BIN/$HCMD"
+done
+
 # 清空旧日志
 > "$LOG_FILE"
 mkdir -p "$ROOTFS/root"
@@ -221,13 +258,18 @@ chroot "$ROOTFS" /usr/bin/env -i \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     DSH_CONFIRM=1 \
-    /usr/local/bin/node /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
+    nice -n 10 /usr/local/bin/node --v8-pool-size=2 /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
 
 NEW_PID=$!
 echo "$NEW_PID" > "$PID_FILE"
 echo -800 > "/proc/$NEW_PID/oom_score_adj" 2>/dev/null || true
 
-# 应用用户在 APK 设置中指定的 CPU 核心绑定 (仅在用户显式配置时生效，留空则完全由系统调度，绝不越权强制绑核)
+# 纳入系统后台 cpuctl 组（仅限制频率上限与能耗调度，绝对不覆盖/干预核心亲和性）
+if [ -d "/dev/cpuctl/background" ]; then
+    echo "$NEW_PID" > /dev/cpuctl/background/cgroup.procs 2>/dev/null || true
+fi
+
+# 核心亲和性：100% 严格遵循用户在 APK 设置中配置的 Taskset（留空则不干预，由系统全核自由调度）
 if [ -z "$TASKSET_CPUS" ]; then
     if [ -s "$RUN_DIR/taskset" ]; then
         TASKSET_CPUS=$(cat "$RUN_DIR/taskset" 2>/dev/null | tr -d ' \n\r')
@@ -239,9 +281,9 @@ if [ -n "$TASKSET_CPUS" ]; then
     chroot "$ROOTFS" /usr/bin/taskset -a -p -c "$TASKSET_CPUS" "$NEW_PID" >/dev/null 2>&1 || true
 fi
 
-# 7. 等待服务启动并提取鉴权 Token 链接（最长等待 15 秒，就绪即刻毫秒级返回）
+# 7. 等待服务启动并提取鉴权 Token 链接（150ms 浮点微步轮询，就绪即刻返回）
 AUTH_URL=""
-for i in $(seq 1 30); do
+for i in $(seq 1 15); do
     AUTH_URL=$(grep -o "http://127\.0\.0\.1:${PORT}/?token=[^ ]*" "$LOG_FILE" 2>/dev/null | tail -n 1)
     [ -z "$AUTH_URL" ] && AUTH_URL=$(grep -o 'http://127\.0\.0\.1:[0-9]*/?token=[^ ]*' "$LOG_FILE" 2>/dev/null | tail -n 1)
     if [ -n "$AUTH_URL" ]; then
@@ -252,11 +294,20 @@ for i in $(seq 1 30); do
         cat "$LOG_FILE"
         exit 1
     fi
-    sleep 0.5 2>/dev/null || sleep 1
+    sleep 0.15 2>/dev/null || sleep 1
 done
 
 echo "STATUS:STARTED PID:$NEW_PID PORT:$PORT"
 [ -n "$CURRENT_TOKEN" ] && echo "BRIDGE_TOKEN:$CURRENT_TOKEN"
+
+# 动态同步 KernelSU / Magisk 模块描述状态
+for p_mod in "/data/adb/modules/dsha_native/module.prop" \
+             "/data/adb/modules_update/dsha_native/module.prop"; do
+    if [ -f "$p_mod" ]; then
+        sed -i "s|^description=.*|description=[🟢 运行中 :${PORT}] DSHA 原生 Linux chroot 极速运行时，按需启停，0 虚拟化损耗，0 待机偷跑。|" "$p_mod" 2>/dev/null || true
+    fi
+done
+
 if [ -n "$AUTH_URL" ]; then
     echo "=========================================================="
     echo "进入 Web 鉴权链接 (直接在手机浏览器打开):"

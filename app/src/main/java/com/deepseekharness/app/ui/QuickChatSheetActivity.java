@@ -551,23 +551,26 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         fullscreenLp.setMarginStart(dpToPx(4));
         btnFullscreen.setLayoutParams(fullscreenLp);
         btnFullscreen.setOnClickListener(v -> {
-            String url = controller != null ? controller.getWebAuthUrl() : "";
-            if (url != null && !url.isEmpty()) {
-                new Thread(() -> {
-                    String cookie = controller.exchangeDshAuthCookie();
-                    runOnUiThread(() -> {
-                        Intent intent = WebPreviewActivity.intent(this, url, cookie);
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                        startActivity(intent);
-                        dismissSheet();
-                    });
-                }, "sheet-expand-web").start();
-            } else {
-                Intent intent = new Intent(this, MainActivity.class);
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                startActivity(intent);
-                dismissSheet();
+            String currentUrl = sCachedWebView != null ? sCachedWebView.getUrl() : null;
+            if (currentUrl == null || currentUrl.isEmpty() || "about:blank".equals(currentUrl)) {
+                currentUrl = controller != null ? controller.getWebAuthUrl() : null;
             }
+            if (currentUrl == null || currentUrl.isEmpty()) {
+                int port = controller != null ? controller.getPort() : 3080;
+                currentUrl = "http://127.0.0.1:" + port + "/";
+            }
+
+            final String finalUrl = currentUrl;
+            new Thread(() -> {
+                String cookie = controller != null ? controller.exchangeDshAuthCookie() : null;
+                runOnUiThread(() -> {
+                    Intent intent = WebPreviewActivity.intent(this, finalUrl, cookie);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                    startActivity(intent);
+                    finish();
+                    overridePendingTransition(0, 0);
+                });
+            }, "sheet-expand-web").start();
         });
         rightGroup.addView(btnFullscreen);
         headerBar.addView(rightGroup);
@@ -921,7 +924,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 @Override
                 public void onPageStarted(WebView view, String url, Bitmap favicon) {
                     super.onPageStarted(view, url, favicon);
-                    view.setAlpha(0.0f);
                     injectTransparentBackground(view);
                 }
 
@@ -929,7 +931,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 public void onPageCommitVisible(WebView view, String url) {
                     super.onPageCommitVisible(view, url);
                     injectTransparentBackground(view);
-                    view.animate().alpha(1.0f).setDuration(120).start();
                 }
 
                 @Override
@@ -961,7 +962,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                     authRetried = false;
                     if (progressBar != null) progressBar.setVisibility(View.GONE);
                     injectTransparentBackground(view);
-                    view.setAlpha(1.0f);
                 }
 
                 @Override
@@ -1086,7 +1086,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             sCachedWebView.getSettings().setAllowContentAccess(true);
             sCachedWebView.setWebChromeClient(new SheetChromeClient());
             injectTransparentBackground(sCachedWebView);
-            sCachedWebView.setAlpha(0.0f);
         }
 
         webContainer.addView(sCachedWebView, new FrameLayout.LayoutParams(
@@ -1530,7 +1529,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
             runOnUiThread(() -> {
                 if (sCachedWebView != null && !isFinishing() && !isDestroyed()) {
-                    sCachedWebView.setAlpha(0.0f);
                     sCachedWebView.loadUrl(finalUrl);
                 }
             });
