@@ -519,7 +519,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             if (sCachedWebView == null) return;
 
             long currentGen = controller != null ? controller.getWebGeneration() : -1;
-            boolean serviceRestarted = sLoadedGeneration != currentGen && currentGen > 0;
+            boolean serviceRestarted = sLoadedGeneration > 0 && currentGen > 0 && sLoadedGeneration != currentGen;
             int port = controller != null ? controller.getPort() : 3080;
             String curUrl = sCachedWebView.getUrl();
             boolean detached = curUrl == null || (!curUrl.startsWith("http://127.0.0.1:" + port) && !curUrl.startsWith("http://localhost:" + port));
@@ -921,76 +921,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
             }
 
-            sCachedWebView.setWebViewClient(new WebViewClient() {
-                @Override
-                public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                    super.onPageStarted(view, url, favicon);
-                    injectTransparentBackground(view);
-                }
-
-                @Override
-                public void onPageCommitVisible(WebView view, String url) {
-                    super.onPageCommitVisible(view, url);
-                    injectTransparentBackground(view);
-                }
-
-                @Override
-                public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                    if (url != null && (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:"))) {
-                        return false;
-                    }
-                    openExternal(url);
-                    return true;
-                }
-
-                @Override
-                public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                    if (request == null || request.getUrl() == null) return false;
-                    // 只接管主框架的网页点击导航，不阻断 iframe 或子资源
-                    if (!request.isForMainFrame()) return false;
-                    String url = request.getUrl().toString();
-                    if (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:")) {
-                        return false;
-                    }
-                    openExternal(url);
-                    return true;
-                }
-
-                @Override
-                public void onPageFinished(WebView view, String url) {
-                    super.onPageFinished(view, url);
-                    sWebLoaded = true;
-                    authRetried = false;
-                    if (progressBar != null) progressBar.setVisibility(View.GONE);
-                    injectTransparentBackground(view);
-                }
-
-                @Override
-                public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                    super.onReceivedError(view, request, error);
-                    if (request != null && request.isForMainFrame() && errorHint != null) {
-                        if (progressBar != null) progressBar.setVisibility(View.GONE);
-                        errorHint.setVisibility(View.VISIBLE);
-                        errorHint.setText("DSHA 服务未就绪，请先在控制台启动");
-                    }
-                }
-
-                @Override
-                public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse errorResponse) {
-                    super.onReceivedHttpError(view, request, errorResponse);
-                    // 严格限制：仅限主页面 401/403 且仅允许单次重试，绝不处理子资源，彻底根治主线程死循环卡死！
-                    if (request != null && request.isForMainFrame() && !authRetried) {
-                        int code = errorResponse != null ? errorResponse.getStatusCode() : 0;
-                        if (code == 401 || code == 403) {
-                            authRetried = true;
-                            String retryUrl = controller != null ? controller.getWebAuthUrl() : "";
-                            if (retryUrl != null && !retryUrl.isEmpty()) {
-                                view.post(() -> view.loadUrl(retryUrl));
-                            }
-                        }
-                    }
-                }
-            });
+            sCachedWebView.setWebViewClient(createSheetWebViewClient());
 
             sCachedWebView.setWebChromeClient(new SheetChromeClient());
             sCachedWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
@@ -1081,11 +1012,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             if (sCachedWebView.getParent() instanceof ViewGroup) {
                 ((ViewGroup) sCachedWebView.getParent()).removeView(sCachedWebView);
             }
+            sCachedWebView.getSettings().setAllowContentAccess(true);
+            sCachedWebView.setWebViewClient(createSheetWebViewClient());
+            sCachedWebView.setWebChromeClient(new SheetChromeClient());
             if (progressBar != null) {
                 progressBar.setVisibility(sWebLoaded ? View.GONE : View.VISIBLE);
             }
-            sCachedWebView.getSettings().setAllowContentAccess(true);
-            sCachedWebView.setWebChromeClient(new SheetChromeClient());
             injectTransparentBackground(sCachedWebView);
         }
 
@@ -1452,6 +1384,79 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         }
     }
 
+    private WebViewClient createSheetWebViewClient() {
+        return new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                injectTransparentBackground(view);
+            }
+
+            @Override
+            public void onPageCommitVisible(WebView view, String url) {
+                super.onPageCommitVisible(view, url);
+                injectTransparentBackground(view);
+                sWebLoaded = true;
+                if (progressBar != null) progressBar.setVisibility(View.GONE);
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                if (url != null && (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:"))) {
+                    return false;
+                }
+                openExternal(url);
+                return true;
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                if (request == null || request.getUrl() == null) return false;
+                if (!request.isForMainFrame()) return false;
+                String url = request.getUrl().toString();
+                if (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:")) {
+                    return false;
+                }
+                openExternal(url);
+                return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                sWebLoaded = true;
+                authRetried = false;
+                if (progressBar != null) progressBar.setVisibility(View.GONE);
+                injectTransparentBackground(view);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                super.onReceivedError(view, request, error);
+                if (request != null && request.isForMainFrame() && errorHint != null) {
+                    if (progressBar != null) progressBar.setVisibility(View.GONE);
+                    errorHint.setVisibility(View.VISIBLE);
+                    errorHint.setText("DSHA 服务未就绪，请先在控制台启动");
+                }
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse errorResponse) {
+                super.onReceivedHttpError(view, request, errorResponse);
+                if (request != null && request.isForMainFrame() && !authRetried) {
+                    int code = errorResponse != null ? errorResponse.getStatusCode() : 0;
+                    if (code == 401 || code == 403) {
+                        authRetried = true;
+                        String retryUrl = controller != null ? controller.getWebAuthUrl() : "";
+                        if (retryUrl != null && !retryUrl.isEmpty()) {
+                            view.post(() -> view.loadUrl(retryUrl));
+                        }
+                    }
+                }
+            }
+        };
+    }
+
     private class SheetChromeClient extends WebChromeClient {
         @Override
         public boolean onConsoleMessage(android.webkit.ConsoleMessage message) {
@@ -1493,7 +1498,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         if (sCachedWebView == null || controller == null) return;
         final long currentGen = controller.getWebGeneration();
         final int currentPort = controller.getPort();
-        if (progressBar != null) progressBar.setVisibility(View.VISIBLE);
+        if (progressBar != null && !sWebLoaded) {
+            progressBar.setVisibility(View.VISIBLE);
+        }
         authRetried = false;
         sLoadedGeneration = currentGen;
         sLoadedPort = currentPort;
@@ -1559,7 +1566,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
             // 2. 检查底层服务是否发生过重启或端口已切换
             long currentGen = controller != null ? controller.getWebGeneration() : -1;
-            boolean serviceRestarted = sLoadedGeneration != currentGen && currentGen > 0;
+            boolean serviceRestarted = sLoadedGeneration > 0 && currentGen > 0 && sLoadedGeneration != currentGen;
             int currentPort = controller != null ? controller.getPort() : 3080;
             boolean portChanged = sLoadedPort != currentPort && sLoadedPort != 0;
 
