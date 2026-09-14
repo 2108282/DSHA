@@ -14,7 +14,7 @@ jobs:
   build:
     name: Package Magisk/KernelSU Native Module
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -30,29 +30,50 @@ jobs:
           cd ..
           ls -lh dist/dsha_ksu_native_lite.zip
 
-      - name: Fetch base rootfs asset from release
+      - name: Fetch and Merge Base Rootfs Asset
         run: |
           set -euo pipefail
           BASE_TAG="0.1.5rc1-base"
           BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
-          echo "==> 尝试从自身 Release (${BASE_TAG}) 下载 rootfs.tar.gz 资产..."
+          echo "==> 尝试获取完整的 Linux RootFS 底包资产..."
           
-          # 优先尝试下载已有的 rootfs.tar.gz，若无则使用 offline-rootfs.bin 还原
+          mkdir -p /tmp/merged_rootfs
+
+          # 1. 优先尝试直接下载完整的 rootfs.tar.gz
           if curl -s -f -I "${BASE_URL}/rootfs.tar.gz" >/dev/null 2>&1; then
+            echo "从 Release ${BASE_TAG} 下载已有的 rootfs.tar.gz..."
             curl -L -f -o /tmp/rootfs.tar.gz "${BASE_URL}/rootfs.tar.gz"
+          # 2. 尝试从 0.1.5rc.2-base 下载单一大底包 (202MB)
+          elif curl -s -f -I "https://github.com/${{ github.repository }}/releases/download/0.1.5rc.2-base/offline-rootfs.bin" >/dev/null 2>&1; then
+            echo "从 Release 0.1.5rc.2-base 下载完整离线底包..."
+            curl -L -f -o /tmp/rootfs.tar.gz "https://github.com/${{ github.repository }}/releases/download/0.1.5rc.2-base/offline-rootfs.bin"
+          # 3. 组合 offline-rootfs.bin (Ubuntu) + dsh-runtime.bin (Node+DSH) 双包合成完整 rootfs
           elif curl -s -f -I "${BASE_URL}/offline-rootfs.bin" >/dev/null 2>&1; then
-            echo "发现 offline-rootfs.bin，转换为通用 gzip 镜像..."
+            echo "从 ${BASE_TAG} 下载 offline-rootfs.bin (基础系统)..."
             curl -L -f -o /tmp/offline-rootfs.bin "${BASE_URL}/offline-rootfs.bin"
-            cp /tmp/offline-rootfs.bin /tmp/rootfs.tar.gz
+            echo "解压基础系统..."
+            tar -xzf /tmp/offline-rootfs.bin -C /tmp/merged_rootfs --no-same-owner
+            
+            if curl -s -f -I "${BASE_URL}/dsh-runtime.bin" >/dev/null 2>&1; then
+              echo "从 ${BASE_TAG} 下载并合并 dsh-runtime.bin (Node.js + DSH)..."
+              curl -L -f -o /tmp/dsh-runtime.bin "${BASE_URL}/dsh-runtime.bin"
+              tar -xzf /tmp/dsh-runtime.bin -C /tmp/merged_rootfs --no-same-owner
+            fi
+            
+            echo "正在重新打包合成完整 rootfs.tar.gz..."
+            cd /tmp/merged_rootfs
+            tar -czf /tmp/rootfs.tar.gz .
+            cd -
           fi
 
           if [ -f "/tmp/rootfs.tar.gz" ]; then
-            echo "==> 正在打包全内置完整刷机包 (含底包, ~200MB)..."
+            echo "==> 正在打包全内置完整刷机包 (含完整底包, ~200MB)..."
             cd magisk-module
             cp /tmp/rootfs.tar.gz ./rootfs.tar.gz
             zip -r9 ../dist/dsha_ksu_native_full.zip META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts rootfs.tar.gz
             rm -f rootfs.tar.gz
             cd ..
+            echo "✓ 全内置完整模块刷机包生成完毕："
             ls -lh dist/dsha_ksu_native_full.zip
           else
             echo "提示: 未获取到远程底包资产，跳过全内置包打包，仅产出轻量包。"
