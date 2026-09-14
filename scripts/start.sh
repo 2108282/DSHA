@@ -101,7 +101,7 @@ FORCE=0
 if [ "$1" = "--force" ]; then FORCE=1; shift; fi
 CMD="$*"
 TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
-RES=$(curl -s -m 65 -G "http://127.0.0.1:3090/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
+RES=$(curl -s -m 65 -G "http://127.0.0.1:3095/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
 case "$RES" in
   *'"result":"YES"'*|*'"result":YES'*) exit 0 ;;
   *'"result":"NO"'*|*'"result":NO'*)  echo "已拒绝: $CMD（用户在手机端拒绝了该操作）" >&2; exit 1 ;;
@@ -111,7 +111,7 @@ case "$RES" in
       read -t 10 ans
       case "$ans" in y|Y) exit 0 ;; esac
     fi
-    echo "已拦截高危操作: $CMD (3090确认服务未就绪或超时)" >&2
+    echo "已拦截高危操作: $CMD (3095确认服务未就绪或超时)" >&2
     exit 1
     ;;
 esac

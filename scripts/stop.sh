@@ -29,22 +29,16 @@ if [ -f "$PID_FILE" ]; then
     rm -f "$PID_FILE"
 fi
 
-# 2. 终止 chroot 内的所有残留子进程（root 或 cwd 位于 ROOTFS 下的所有进程）
+# 2. 终止属于该 chroot 容器的子进程（仅限定 root 为 ROOTFS 的进程，绝不误杀宿主或其他容器）
 for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
     root_link=$(readlink "/proc/$pid/root" 2>/dev/null)
-    cwd_link=$(readlink "/proc/$pid/cwd" 2>/dev/null)
-    case "$root_link" in
-        "$ROOTFS"*) kill -9 "$pid" 2>/dev/null || true ;;
-        *)
-            case "$cwd_link" in
-                "$ROOTFS"*) kill -9 "$pid" 2>/dev/null || true ;;
-            esac
-            ;;
-    esac
+    if [ "$root_link" = "$ROOTFS" ]; then
+        kill -9 "$pid" 2>/dev/null || true
+    fi
 done
 
-# 3. 等待子进程与文件描述符平稳释放（防僵尸进程阻塞 umount）
-for i in 1 2 3 4; do
+# 3. 等待子进程平稳退出
+for i in 1 2 3; do
     has_proc=0
     for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
         root_link=$(readlink "/proc/$pid/root" 2>/dev/null)
@@ -54,18 +48,20 @@ for i in 1 2 3 4; do
         fi
     done
     [ "$has_proc" = "0" ] && break
-    usleep 300000 2>/dev/null || sleep 1
+    usleep 200000 2>/dev/null || sleep 1
 done
 
-# 4. 彻底卸载所有内核挂载点（多层循环卸载，杜绝层叠泄漏，实现 0 开销）
-clean_umount "$ROOTFS/storage/emulated/0"
-clean_umount "$ROOTFS/sdcard"
-clean_umount "$ROOTFS/dev/block"
-clean_umount "$ROOTFS/dev/shm"
-clean_umount "$ROOTFS/dev/pts"
-clean_umount "$ROOTFS/dev"
-clean_umount "$ROOTFS/proc"
-clean_umount "$ROOTFS/sys"
+# 4. 仅在显式传入 --umount 时卸载内核挂载点（普通停止服务绝不卸载挂载，保证其他操作与环境稳定）
+if [ "$1" = "--umount" ]; then
+    clean_umount "$ROOTFS/storage/emulated/0"
+    clean_umount "$ROOTFS/sdcard"
+    clean_umount "$ROOTFS/dev/block"
+    clean_umount "$ROOTFS/dev/shm"
+    clean_umount "$ROOTFS/dev/pts"
+    clean_umount "$ROOTFS/dev"
+    clean_umount "$ROOTFS/proc"
+    clean_umount "$ROOTFS/sys"
+fi
 
 echo "STATUS:STOPPED"
 exit 0
