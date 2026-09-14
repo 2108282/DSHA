@@ -107,20 +107,40 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 } catch (Throwable ignored) {}
             });
         }
+        try {
+            WebPreviewActivity prev = WebPreviewActivity.currentInstance;
+            if (prev != null && prev.getWebView() != null) {
+                WebView pv = prev.getWebView();
+                pv.post(() -> {
+                    try {
+                        executeApprovalDecisionScript(pv, allow);
+                    } catch (Throwable ignored) {}
+                });
+            }
+        } catch (Throwable ignored) {}
     }
 
     public static void executeApprovalDecisionScript(WebView webView, boolean allow) {
         if (webView == null) return;
-        String targetText = allow ? "允许一次" : "拒绝";
-        String fallbackText = allow ? "Allow once" : "Reject";
+        String keywordsJson = allow
+                ? "['允许一次', '允许本次', '允许', '同意', 'Allow once', 'Allow', 'Approve', 'Yes']"
+                : "['拒绝', '不允许', '取消', 'Reject', 'Deny', 'Cancel', 'No']";
         String js = "(function() {\n" +
+                "  var targets = " + keywordsJson + ";\n" +
+                "  function matches(t) {\n" +
+                "    if (!t) return false;\n" +
+                "    for (var k = 0; k < targets.length; k++) {\n" +
+                "      if (t.indexOf(targets[k]) !== -1) return true;\n" +
+                "    }\n" +
+                "    return false;\n" +
+                "  }\n" +
                 "  var clicked = false;\n" +
-                "  var panel = document.querySelector('[data-approval-key]');\n" +
+                "  var panel = document.querySelector('[data-approval-key]') || document.querySelector('.approval-dialog') || document.querySelector('[role=\"dialog\"]');\n" +
                 "  if (panel) {\n" +
                 "    var pbtns = panel.querySelectorAll('button');\n" +
                 "    for (var i = 0; i < pbtns.length; i++) {\n" +
                 "      var txt = (pbtns[i].innerText || pbtns[i].textContent || '').trim();\n" +
-                "      if (txt.indexOf('" + targetText + "') !== -1 || txt.indexOf('" + fallbackText + "') !== -1) {\n" +
+                "      if (matches(txt)) {\n" +
                 "        pbtns[i].click();\n" +
                 "        clicked = true;\n" +
                 "        break;\n" +
@@ -135,7 +155,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 "    var allBtns = document.querySelectorAll('button');\n" +
                 "    for (var j = 0; j < allBtns.length; j++) {\n" +
                 "      var btxt = (allBtns[j].innerText || allBtns[j].textContent || '').trim();\n" +
-                "      if (btxt === '" + targetText + "' || btxt === '" + fallbackText + "') {\n" +
+                "      if (matches(btxt)) {\n" +
                 "        allBtns[j].click();\n" +
                 "        clicked = true;\n" +
                 "        break;\n" +

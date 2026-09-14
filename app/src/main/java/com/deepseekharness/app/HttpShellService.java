@@ -7,6 +7,7 @@ import com.deepseekharness.app.core.HarnessController;
 import com.deepseekharness.app.runtime.TarGzipExtractor;
 import com.deepseekharness.app.ui.MainActivity;
 import com.deepseekharness.app.ui.QuickChatSheetActivity;
+import com.deepseekharness.app.ui.WebPreviewActivity;
 import com.deepseekharness.app.util.SensitiveData;
 
 import android.app.Notification;
@@ -486,6 +487,9 @@ public final class HttpShellService {
             String result;
             if (!authed) {
                 result = "[UNAUTHORIZED]";
+            } else if (path.startsWith("/app/task/confirm/cancel")) {
+                dismissAllApprovalUi();
+                return "OK";
             } else if (path.startsWith("/app/task/confirm")) {
                 result = appTaskConfirm(path);
             } else if (path.startsWith("/app/task/ask")) {
@@ -686,6 +690,51 @@ public final class HttpShellService {
     private static volatile long uiGrantUntil = 0L;
     private static final long UI_GRANT_MS = 10 * 60 * 1000L;
 
+    public static final java.io.File ROOTFS_AUTH_LEASE = new java.io.File("/data/adb/dsha/rootfs/root/.dsh/.auth_lease");
+    public static final java.io.File SDCARD_AUTH_LEASE = new java.io.File("/sdcard/Download/DSHA/.auth_lease");
+    public static final java.io.File GUEST_AUTH_LEASE = new java.io.File("/root/.dsh/.auth_lease");
+
+    /** 授予并持久化 10 分钟免打扰操作租约（写入容器与共享目录，双通道对齐） */
+    public static void grantAuthLease(long durationMs) {
+        long now = System.currentTimeMillis();
+        uiGrantUntil = now + durationMs;
+        long expireSec = (now + durationMs) / 1000L;
+        new Thread(() -> {
+            try {
+                String cmd = "mkdir -p /data/adb/dsha/rootfs/root/.dsh /sdcard/Download/DSHA 2>/dev/null; "
+                        + "echo " + expireSec + " > /data/adb/dsha/rootfs/root/.dsh/.auth_lease 2>/dev/null; "
+                        + "echo " + expireSec + " > /sdcard/Download/DSHA/.auth_lease 2>/dev/null; "
+                        + "echo " + expireSec + " > /root/.dsh/.auth_lease 2>/dev/null; "
+                        + "chmod 666 /data/adb/dsha/rootfs/root/.dsh/.auth_lease /sdcard/Download/DSHA/.auth_lease /root/.dsh/.auth_lease 2>/dev/null || true";
+                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+                p.waitFor();
+            } catch (Throwable ignored) {}
+        }, "auth-lease-writer").start();
+    }
+
+    /** 检查租约是否仍然有效（内存优先，容器文件兜底） */
+    public static boolean isLeaseActive() {
+        long now = System.currentTimeMillis();
+        if (now < uiGrantUntil) return true;
+        java.io.File[] candidates = new java.io.File[]{ ROOTFS_AUTH_LEASE, SDCARD_AUTH_LEASE, GUEST_AUTH_LEASE };
+        for (java.io.File f : candidates) {
+            if (f != null && f.isFile()) {
+                try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(f))) {
+                    String line = reader.readLine();
+                    if (line != null && !line.trim().isEmpty()) {
+                        long ts = Long.parseLong(line.trim());
+                        long leaseUntil = ts < 10000000000L ? ts * 1000L : ts;
+                        if (now < leaseUntil) {
+                            uiGrantUntil = leaseUntil;
+                            return true;
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+        }
+        return false;
+    }
+
     /** 涉钱、涉密的应用：宁可多问一次。取不到包名也按敏感处理。 */
     private static boolean isSensitiveApp(String pkg) {
         if (pkg == null || pkg.isEmpty()) return true;
@@ -708,17 +757,17 @@ public final class HttpShellService {
     private boolean uiAuthorized(String action) {
         String pkg = DshaAccessibilityService.currentPackage();
         boolean sensitive = isSensitiveApp(pkg);
-        if (!sensitive && System.currentTimeMillis() < uiGrantUntil) {
+        if (!sensitive && isLeaseActive()) {
             return true;
         }
         String where = pkg.isEmpty() ? "当前界面" : pkg;
         String why = sensitive
                 ? "在【" + where + "】里：" + action
                 + "  # 这类应用涉及支付或隐私，每次都需要你确认"
-                : action + "  # 允许后 10 分钟内的屏幕操作不再询问";
+                : action + "  # 允许后 10 分钟内的屏幕与设备操作不再询问";
         boolean ok = requestUserConfirm(why);
         if (ok && !sensitive) {
-            uiGrantUntil = System.currentTimeMillis() + UI_GRANT_MS;
+            grantAuthLease(UI_GRANT_MS);
         }
         return ok;
     }
@@ -1731,6 +1780,33 @@ public final class HttpShellService {
         }
     }
 
+    /** 全通道瞬时销毁：保证通知、灵动岛、前台弹窗、桌面悬浮条、WebUI 弹窗同时关闭 */
+    public void dismissAllApprovalUi() {
+        isApprovalWaiting = false;
+        // 1. 关闭前台 AlertDialog
+        dismissConfirmDialog();
+        // 2. 取消通知栏卡片并收起灵动岛大胶囊
+        cancelConfirmNotification();
+        // 3. 关闭桌面悬浮条批准卡片
+        try {
+            OverlayController.dismissConfirm(ctx);
+        } catch (Throwable ignored) {}
+        // 4. 同步给活动的 WebView 消除 Web 上的审批弹窗
+        dismissWebApprovalDialogs();
+    }
+
+    private void dismissWebApprovalDialogs() {
+        mainHandler.post(() -> {
+            try {
+                QuickChatSheetActivity.syncApprovalDecision(true);
+                WebPreviewActivity prev = WebPreviewActivity.currentInstance;
+                if (prev != null && prev.getWebView() != null) {
+                    QuickChatSheetActivity.executeApprovalDecisionScript(prev.getWebView(), true);
+                }
+            } catch (Throwable ignored) {}
+        });
+    }
+
     /** 通知按钮（ConfirmReceiver）、前台弹窗按钮与悬浮条按钮共用的回调。
      *  epoch 校验 + 原子认领：丢弃迟到的（属于上一个请求的）点击，以及同一轮里后到的那次。 */
     public void resolveConfirm(boolean allow, long epoch) {
@@ -1739,23 +1815,25 @@ public final class HttpShellService {
             return;
         }
 
-        // 无论何种触发来源（同步阻塞命令或异步审批通知），只要用户做出决策，立即撤销通知并收起灵动岛大卡片
-        dismissConfirmDialog();
-        cancelConfirmNotification();
+        // 真正的认领在这里，且必须原子 —— 挡住多条渠道（通知/弹窗/悬浮）同时点
+        if (!confirmResolved.compareAndSet(false, true)) {
+            return;
+        }
+
+        pendingAllow = allow;
+
+        // 无论何种触发来源（同步阻塞命令或异步审批通知），立即全通道级联销毁
+        dismissAllApprovalUi();
 
         if (allow) {
             // 允许操作时自动授予 10 分钟免打扰操作租约
-            uiGrantUntil = System.currentTimeMillis() + UI_GRANT_MS;
+            grantAuthLease(UI_GRANT_MS);
         }
 
-        com.deepseekharness.app.ui.QuickChatSheetActivity.syncApprovalDecision(allow);
-
         CountDownLatch l = pendingLatch;
-        if (l == null || l.getCount() == 0) return; // 异步通知无挂起阻塞线程，直接完成
-        // 真正的认领在这里，且必须原子 —— 上面那个 getCount 检查挡不住两条渠道同时点。
-        if (!confirmResolved.compareAndSet(false, true)) return;
-        pendingAllow = allow;
-        l.countDown();
+        if (l != null) {
+            l.countDown();
+        }
     }
 
     /** 关掉挂起的弹窗：setCancelable(false) 让它自己关不掉，确认完成后必须主动 dismiss，
@@ -2159,6 +2237,8 @@ public final class HttpShellService {
     private void showApprovalWaitingNotification(String title, String reason) {
         try {
             isApprovalWaiting = true;
+            confirmResolved.set(false);
+            pendingAllow = false;
             String rawPrompt = (reason != null && !reason.trim().isEmpty()) ? reason : title;
             AuthPromptInfo info = parseAuthPrompt(rawPrompt, "⚠️ 危险权限授权申请", new String[]{"允许", "拒绝"});
 
@@ -2205,8 +2285,14 @@ public final class HttpShellService {
     private void showRunningNotification(String title, String text) {
         try {
             if (isApprovalWaiting) {
-                // 关键拦截：当前正在等待用户安全审批中，严禁被普通的「正在执行命令」冲刷或切走灵动岛焦点！
-                return;
+                // 如果是转为了真正的运行状态（非审批态），说明审批已通过，解除审批等待
+                if (!"⚠️ 等待审批".equals(title) && !"等待审批".equals(title) && !"安全确认".equals(title) &&
+                    (text == null || (!text.contains("等待审批") && !text.contains("等待安全审批") && !text.contains("等待授权"))) &&
+                    (title == null || (!title.contains("审批") && !title.contains("授权")))) {
+                    dismissAllApprovalUi();
+                } else {
+                    return;
+                }
             }
             isTaskActive = true;
             HarnessService.onTaskStateChanged(ctx, true);

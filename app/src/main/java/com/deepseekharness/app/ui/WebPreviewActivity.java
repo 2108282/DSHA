@@ -36,6 +36,12 @@ import com.deepseekharness.app.util.WebPreviewPolicy;
 
 /** 标准版预览：系统 WebView、异步鉴权、文件选择与可恢复的加载错误。 */
 public class WebPreviewActivity extends AppCompatActivity implements WebFullscreenUi.Host {
+
+    public static volatile WebPreviewActivity currentInstance;
+
+    public WebView getWebView() {
+        return webView;
+    }
     private static final String EXTRA_URL = "url";
     private static final String EXTRA_COOKIE = "cookie";
     // 检查真实页面能力，包括上游 polyfill 的结果，不凭伪装 UA 判断。
@@ -128,6 +134,7 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        currentInstance = this;
         downloads = new WebDownloads(this, savedInstanceState);
         setContentView(R.layout.activity_web_preview);
         WebFullscreenUi.install(this);
@@ -461,6 +468,7 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
     }
 
     @Override protected void onDestroy() {
+        if (currentInstance == this) currentInstance = null;
         if (downloads != null) downloads.dismiss();
         if (blobDownload != null) {
             blobDownload.close();

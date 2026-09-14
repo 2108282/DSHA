@@ -80,12 +80,10 @@ public class ConfirmReceiver extends BroadcastReceiver {
                 triggerVibrate(context, 50);
                 writeApprovalDecision("allowed-once");
                 svc.resolveConfirm(true, epoch);
-                com.deepseekharness.app.ui.QuickChatSheetActivity.syncApprovalDecision(true);
             } else if (ACTION_DENY.equals(act)) {
                 triggerVibrate(context, 50);
                 writeApprovalDecision("rejected");
                 svc.resolveConfirm(false, epoch);
-                com.deepseekharness.app.ui.QuickChatSheetActivity.syncApprovalDecision(false);
             }
         } else {
             NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -116,10 +114,10 @@ public class ConfirmReceiver extends BroadcastReceiver {
         // 2. 写入 Native 容器私有的取消标志文件（隔离独立，绝不影响其他容器或宿主进程）
         new Thread(() -> {
             try {
-                String cmd = "mkdir -p /data/adb/dsha/rootfs/root/.dsh 2>/dev/null && "
+                String cmd = "mkdir -p /data/adb/dsha/rootfs/root/.dsh /sdcard/Download/DSHA 2>/dev/null && "
                         + "touch /data/adb/dsha/rootfs/root/.dsh/.cancel_requested && "
                         + "chmod 666 /data/adb/dsha/rootfs/root/.dsh/.cancel_requested 2>/dev/null; "
-                        + "rm -f /data/adb/dsha/rootfs/root/.dsh/.auth_lease 2>/dev/null";
+                        + "rm -f /data/adb/dsha/rootfs/root/.dsh/.auth_lease /sdcard/Download/DSHA/.auth_lease /root/.dsh/.auth_lease 2>/dev/null";
                 Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
                 p.waitFor();
             } catch (Throwable ignored) {}

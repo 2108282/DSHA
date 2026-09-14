@@ -3,9 +3,10 @@
  *
  * 全生命周期通知与交互控制器：
  * 1. 运行中通知：监听 turn/start 与 tool/call，通过 3090 桥 /app/task/running 实时推送进度，带「🛑 停止任务」紧急制动按钮；
- * 2. 任务完成通知：监听 turn/end，通过 3090 桥 /app/notify 推送完成卡片，带「💬 继续对话」输入框；
+ * 2. 任务完成通知：监听 turn/end（结合 1.5s 停稳防抖与交互态过滤），通过 3090 桥 /app/notify 推送完成卡片，带「💬 继续对话」输入框；
  * 3. 任务紧急制动：监听 /root/.dsh/.cancel_requested，通过 ctx.inject(['agents']) 调用 agent.cancel() 真正中止工作；
- * 4. 通知栏回复注入：监听 /root/.dsh/.pending_prompt，通过 ctx.inject(['agents']) 调用 agent.followup() 开启新一轮对话。
+ * 4. 通知栏回复注入：监听 /root/.dsh/.pending_prompt，通过 ctx.inject(['agents']) 调用 agent.followup() 开启新一轮对话；
+ * 5. 双向闭环审批：支持手机通知栏/灵动岛与网页端双向决策，谁先点谁生效，点击后自动撤回通知与浮层。
  */
 import { randomUUID } from 'node:crypto'
 import { readFileSync, existsSync, unlinkSync } from 'node:fs'
@@ -15,12 +16,13 @@ import { readFile, unlink } from 'node:fs/promises'
 export const name = 'dsh-task-notifier'
 export const inject = []
 
-// Instant notification on turn/end without 30s throttling
-const lastNotified = new Map()
-
 const CANCEL_FLAG = '/root/.dsh/.cancel_requested'
 const PENDING_PROMPT = '/root/.dsh/.pending_prompt'
-const DECISION_FLAG = '/root/.dsh/.approval_decision'
+const DECISION_FLAGS = [
+  '/root/.dsh/.approval_decision',
+  '/sdcard/Download/DSHA/.approval_decision',
+  '/root/内部存储/.approval_decision'
+]
 const TOKEN_PATH = '/root/.dsh/.bridge_token'
 
 let cachedToken = ''
@@ -113,6 +115,9 @@ let lastCancelByNotification = 0
 export function apply(ctx) {
   let lastActiveSessionId = null
   let lastAssistantText = ''
+  let isApprovalActive = false
+  let isInInteractivePrompt = false
+  let completionTimer = null
 
   // 灵动岛/三通道状态机与 2s Trailing 节流控制
   const THROTTLE_MS = 2000
@@ -122,6 +127,7 @@ export function apply(ctx) {
   let trailingTimer = null
 
   function flushRunningNotification(title, text) {
+    if (isApprovalActive) return
     if (trailingTimer) {
       clearTimeout(trailingTimer)
       trailingTimer = null
@@ -133,7 +139,7 @@ export function apply(ctx) {
   }
 
   function scheduleRunningNotification(title, text) {
-    // 动作没变，绝对不推，保持完全静态
+    if (isApprovalActive) return
     if (text === lastSentState) {
       if (trailingTimer && pendingState && pendingState.text === text) {
         clearTimeout(trailingTimer)
@@ -146,13 +152,11 @@ export function apply(ctx) {
     const now = Date.now()
     const elapsed = now - lastSentTime
 
-    // 已经超过 2s，且当前没有排队的定时器：立即推送（Leading）
     if (elapsed >= THROTTLE_MS && !trailingTimer) {
       flushRunningNotification(title, text)
       return
     }
 
-    // 处于 2s 冷却期：暂存最新状态（Trailing 保底，绝对不漏）
     pendingState = { title, text }
     if (!trailingTimer) {
       const waitTime = Math.max(50, THROTTLE_MS - elapsed)
@@ -161,7 +165,6 @@ export function apply(ctx) {
         if (pendingState) {
           const next = pendingState
           pendingState = null
-          // 仅当状态依然与上次发送的不同时才补推
           if (next.text !== lastSentState) {
             flushRunningNotification(next.title, next.text)
           }
@@ -170,7 +173,7 @@ export function apply(ctx) {
     }
   }
 
-  // 1. 会话事件监听（实时同步通知栏）
+  // 1. 会话事件监听（实时同步通知栏与灵动岛）
   ctx.on('session/event', (session, event) => {
     try {
       const type = event?.type
@@ -179,6 +182,12 @@ export function apply(ctx) {
       }
 
       if (type === 'turn/start') {
+        isApprovalActive = false
+        isInInteractivePrompt = false
+        if (completionTimer) {
+          clearTimeout(completionTimer)
+          completionTimer = null
+        }
         lastAssistantText = ''
         if (trailingTimer) {
           clearTimeout(trailingTimer)
@@ -212,6 +221,12 @@ export function apply(ctx) {
       }
 
       if (type === 'approval/asked') {
+        isApprovalActive = true
+        isInInteractivePrompt = true
+        if (completionTimer) {
+          clearTimeout(completionTimer)
+          completionTimer = null
+        }
         if (trailingTimer) {
           clearTimeout(trailingTimer)
           trailingTimer = null
@@ -222,13 +237,21 @@ export function apply(ctx) {
         lastSentState = reason
         lastSentTime = Date.now()
         void callBridge('/app/task/confirm', {
-          title: '⚠️ 等待审批',
+          title: '⚠️ 危险权限授权申请',
           text: reason
         })
         return
       }
 
       if (type === 'approval/decided') {
+        isApprovalActive = false
+        isInInteractivePrompt = false
+        if (completionTimer) {
+          clearTimeout(completionTimer)
+          completionTimer = null
+        }
+        // Web 侧审批决断后，立即反向通知手机端撤回审批通知与灵动岛大卡片！
+        void callBridge('/app/task/confirm/cancel')
         lastSentState = '已完成审批，正在继续执行...'
         lastSentTime = Date.now()
         void callBridge('/app/task/running', {
@@ -239,9 +262,14 @@ export function apply(ctx) {
       }
 
       if (type === 'tool/call') {
+        if (completionTimer) {
+          clearTimeout(completionTimer)
+          completionTimer = null
+        }
         const toolName = String(event?.data?.name || '')
-        // 提问工具：立即通知手机切换为「💬 助手提问 / 等待回答」状态，挂载「返回对话」抽屉按钮（穿透节流，立即生效）
+        // 提问工具：立即通知手机切换为「💬 助手提问 / 等待回答」状态，挂载「返回对话」抽屉按钮
         if (toolName.includes('ask_user') || toolName.includes('ask_question')) {
+          isInInteractivePrompt = true
           if (trailingTimer) {
             clearTimeout(trailingTimer)
             trailingTimer = null
@@ -257,13 +285,14 @@ export function apply(ctx) {
           } catch {}
           lastSentState = questionText
           lastSentTime = Date.now()
-          void callBridge('/app/task/confirm', {
+          void callBridge('/app/task/ask', {
             title: '💬 助手提问',
             text: questionText
           })
           return
         }
 
+        isInInteractivePrompt = false
         const text = formatToolDetail(event?.data?.name, event?.data?.arguments) || '智能体正在调用工具...'
         scheduleRunningNotification('正在执行', text)
         return
@@ -275,8 +304,14 @@ export function apply(ctx) {
           trailingTimer = null
         }
         pendingState = null
+
         // 子任务 (Subagent / Workflow) 结束不向手机发任务完成通知
         if (session?.parentSessionId || session?.parent) {
+          return
+        }
+
+        // 若正处于审批或提问交互等待中，本轮 turn/end 只是工具交互切段，任务绝未结束，禁止弹完成！
+        if (isInInteractivePrompt || isApprovalActive) {
           return
         }
 
@@ -284,6 +319,10 @@ export function apply(ctx) {
         const kind = reasonObj?.kind ?? 'completed'
 
         if (kind === 'error') {
+          if (completionTimer) {
+            clearTimeout(completionTimer)
+            completionTimer = null
+          }
           const detail = parseFailureDetail(reasonObj?.error)
           void callBridge('/app/notify', {
             title: '❌ 模型请求失败',
@@ -293,7 +332,10 @@ export function apply(ctx) {
         }
 
         if (kind === 'aborted') {
-          // 彻底废除静音拦截：无论是手机通知栏点击停止，还是外部中止，一律弹出终止通知明确告知
+          if (completionTimer) {
+            clearTimeout(completionTimer)
+            completionTimer = null
+          }
           void callBridge('/app/notify', {
             title: '⚠️ 任务已终止',
             text: '已按指令停止操作，点击查看或继续对话'
@@ -302,6 +344,10 @@ export function apply(ctx) {
         }
 
         if (kind === 'max-tokens') {
+          if (completionTimer) {
+            clearTimeout(completionTimer)
+            completionTimer = null
+          }
           void callBridge('/app/notify', {
             title: '📏 达到最大长度',
             text: '已达单次最大输出限制，可发送“继续”接着生成'
@@ -310,6 +356,10 @@ export function apply(ctx) {
         }
 
         if (kind === 'blocked') {
+          if (completionTimer) {
+            clearTimeout(completionTimer)
+            completionTimer = null
+          }
           void callBridge('/app/notify', {
             title: '🛡️ 任务已挂起',
             text: '等待安全授权或前置条件处理'
@@ -318,6 +368,10 @@ export function apply(ctx) {
         }
 
         if (kind === 'interrupted') {
+          if (completionTimer) {
+            clearTimeout(completionTimer)
+            completionTimer = null
+          }
           void callBridge('/app/notify', {
             title: '⚡ 连接异常中断',
             text: '与容器连接丢失，点击重新进入'
@@ -326,25 +380,32 @@ export function apply(ctx) {
         }
 
         if (kind === 'completed') {
-          // 严防模型偷懒：若未输出任何实质文本或内容全为空白，绝不能判定为成功完成
           if (!lastAssistantText || !lastAssistantText.trim()) {
-            void callBridge('/app/notify', {
-              title: '⚠️ 智能体未完成任务',
-              text: '模型已停下但未输出有效动作，点击返回对话'
-            })
             return
           }
 
           const clean = lastAssistantText.replace(/\s+/g, ' ').trim()
           const endText = clean.length > 60 ? clean.slice(0, 60) + '…' : clean
-          void callBridge('/app/notify', {
-            title: '任务已完成',
-            text: endText
-          })
+
+          // 防抖保护（Quiescence Debounce，1500ms）：
+          // 避免多轮次长任务在每一个中间回合结束时频繁误弹“任务完成”
+          if (completionTimer) {
+            clearTimeout(completionTimer)
+            completionTimer = null
+          }
+          completionTimer = setTimeout(() => {
+            completionTimer = null
+            if (!isInInteractivePrompt && !isApprovalActive) {
+              void callBridge('/app/notify', {
+                title: '任务已完成',
+                text: endText
+              })
+            }
+          }, 1500)
           return
         }
 
-        // 统一终极兜底：所有未明确归类或意外脱轨的中断情况，一律弹中断通知
+        // 统一终极兜底
         const detail = parseFailureDetail(reasonObj?.error) || String(kind || '任务中途脱轨或意外中断')
         void callBridge('/app/notify', {
           title: '⚠️ 任务异常中断',
@@ -354,9 +415,13 @@ export function apply(ctx) {
     } catch {}
   })
 
-  // 2. 监听全局 agent/error 异常广播（捕获脱离会话流的底层致命崩溃）
+  // 2. 监听全局 agent/error 异常广播
   ctx.on('agent/error', ({ agent, error }) => {
     try {
+      if (completionTimer) {
+        clearTimeout(completionTimer)
+        completionTimer = null
+      }
       if (trailingTimer) {
         clearTimeout(trailingTimer)
         trailingTimer = null
@@ -370,7 +435,7 @@ export function apply(ctx) {
     } catch {}
   })
 
-  // 3. 作用域注入 agents 服务，安全、非阻塞地管理 Agent 生命周期（停止与继续对话）
+  // 3. 作用域注入 agents 服务，安全、非阻塞地管理 Agent 生命周期
   ctx.inject(['agents'], (agentScope) => {
     let timer = setInterval(async () => {
       try {
@@ -405,11 +470,9 @@ export function apply(ctx) {
           if (raw) {
             try {
               let targetAgent = null
-              // 优先查找最近活跃的 session 对应的 agent
               if (lastActiveSessionId) {
                 targetAgent = agentScope.agents.get(lastActiveSessionId)
               }
-              // 兜底找根 agent 或最新 live agent
               if (!targetAgent) {
                 const roots = typeof agentScope.agents.roots === 'function' ? agentScope.agents.roots() : []
                 if (roots && roots.length > 0) {
@@ -448,8 +511,22 @@ export function apply(ctx) {
 
   // 4. 双向闭环审批监听：竞速响应手机灵动岛与网页端点击
   ctx.on('approval/request', async (req, next) => {
+    isApprovalActive = true
+    isInInteractivePrompt = true
+    if (completionTimer) {
+      clearTimeout(completionTimer)
+      completionTimer = null
+    }
+    if (trailingTimer) {
+      clearTimeout(trailingTimer)
+      trailingTimer = null
+    }
+    pendingState = null
+
     try {
-      if (existsSync(DECISION_FLAG)) unlinkSync(DECISION_FLAG)
+      for (const flag of DECISION_FLAGS) {
+        if (existsSync(flag)) unlinkSync(flag)
+      }
     } catch {}
 
     const tool = req?.toolName || '敏感操作'
@@ -463,13 +540,16 @@ export function apply(ctx) {
     const phoneDecisionPromise = new Promise((resolve) => {
       phoneTimer = setInterval(() => {
         try {
-          if (existsSync(DECISION_FLAG)) {
-            const decision = readFileSync(DECISION_FLAG, 'utf-8').trim()
-            try { unlinkSync(DECISION_FLAG) } catch {}
-            if (decision === 'allowed-once' || decision === 'rejected') {
-              if (phoneTimer) clearInterval(phoneTimer)
-              phoneTimer = null
-              resolve(decision)
+          for (const flag of DECISION_FLAGS) {
+            if (existsSync(flag)) {
+              const decision = readFileSync(flag, 'utf-8').trim()
+              try { unlinkSync(flag) } catch {}
+              if (decision === 'allowed-once' || decision === 'rejected') {
+                if (phoneTimer) clearInterval(phoneTimer)
+                phoneTimer = null
+                resolve(decision)
+                return
+              }
             }
           }
         } catch {}
@@ -485,11 +565,18 @@ export function apply(ctx) {
     const webDecisionPromise = next ? next() : Promise.resolve('unavailable')
 
     try {
-      return await Promise.race([phoneDecisionPromise, webDecisionPromise])
+      const decision = await Promise.race([phoneDecisionPromise, webDecisionPromise])
+      // 任何一方决断成功，都确保向手机端发送取消审批通知请求
+      void callBridge('/app/task/confirm/cancel')
+      return decision
     } finally {
+      isApprovalActive = false
+      isInInteractivePrompt = false
       if (phoneTimer) clearInterval(phoneTimer)
       try {
-        if (existsSync(DECISION_FLAG)) unlinkSync(DECISION_FLAG)
+        for (const flag of DECISION_FLAGS) {
+          if (existsSync(flag)) unlinkSync(flag)
+        }
       } catch {}
     }
   })
