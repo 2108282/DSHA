@@ -1713,14 +1713,22 @@ public final class HttpShellService {
             android.util.Log.i("DSHA", "忽略过期的确认点击（epoch " + epoch + "）");
             return;
         }
+
+        // 无论何种触发来源（同步阻塞命令或异步审批通知），只要用户做出决策，立即撤销通知并收起灵动岛大卡片
+        dismissConfirmDialog();
+        cancelConfirmNotification();
+
+        if (allow) {
+            // 允许操作时自动授予 10 分钟免打扰操作租约
+            uiGrantUntil = System.currentTimeMillis() + UI_GRANT_MS;
+        }
+
         CountDownLatch l = pendingLatch;
-        if (l == null || l.getCount() == 0) return; // 已决或无挂起（快速路径）
+        if (l == null || l.getCount() == 0) return; // 异步通知无挂起阻塞线程，直接完成
         // 真正的认领在这里，且必须原子 —— 上面那个 getCount 检查挡不住两条渠道同时点。
         if (!confirmResolved.compareAndSet(false, true)) return;
         pendingAllow = allow;
         l.countDown();
-        dismissConfirmDialog();
-        cancelConfirmNotification();
     }
 
     /** 关掉挂起的弹窗：setCancelable(false) 让它自己关不掉，确认完成后必须主动 dismiss，
@@ -2120,8 +2128,10 @@ public final class HttpShellService {
 
             long myEpoch = confirmEpoch.incrementAndGet();
             Intent allowI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_ALLOW)
+                    .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                     .putExtra(ConfirmReceiver.EXTRA_EPOCH, myEpoch);
             Intent denyI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_DENY)
+                    .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                     .putExtra(ConfirmReceiver.EXTRA_EPOCH, myEpoch);
             PendingIntent allowPi = PendingIntent.getBroadcast(ctx, 131, allowI,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -2189,7 +2199,8 @@ public final class HttpShellService {
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
             Intent stopIntent = new Intent(ctx, ConfirmReceiver.class)
-                    .setAction(ConfirmReceiver.ACTION_STOP_TASK);
+                    .setAction(ConfirmReceiver.ACTION_STOP_TASK)
+                    .addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
             PendingIntent stopPi = PendingIntent.getBroadcast(ctx, 121, stopIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
@@ -2243,8 +2254,10 @@ public final class HttpShellService {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         Intent allowI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_ALLOW)
+                .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                 .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
         Intent denyI = new Intent(ctx, ConfirmReceiver.class).setAction(ConfirmReceiver.ACTION_DENY)
+                .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                 .putExtra(ConfirmReceiver.EXTRA_EPOCH, epoch);
         PendingIntent allowPi = PendingIntent.getBroadcast(ctx, 31, allowI,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);

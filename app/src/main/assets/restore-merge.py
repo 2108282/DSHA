@@ -930,6 +930,32 @@ def _force_symlink(target, link_path):
         pass
 
 
+def purge_legacy_symlinks(root):
+    """清除从旧包 (com.dsh.client) 备份恢复带来的失效软链与坏链，让 Native 原生硬链接与标准包接管。"""
+    dsh_dir = os.path.join(root, ".dsh")
+    if not os.path.isdir(dsh_dir):
+        return
+    cleaned = 0
+    for base, dirs, files in os.walk(dsh_dir, followlinks=False):
+        for name in list(dirs) + list(files):
+            entry = os.path.join(base, name)
+            if os.path.islink(entry):
+                try:
+                    target = os.readlink(entry)
+                    if "com.dsh.client" in target or "/data/data/com.dsh.client" in target or "/data/user/0/com.dsh.client" in target:
+                        os.unlink(entry)
+                        cleaned += 1
+                        continue
+                    if not os.path.exists(entry):
+                        os.unlink(entry)
+                        cleaned += 1
+                        continue
+                except Exception:
+                    pass
+    if cleaned > 0:
+        say("· 已清理 %d 处旧版 PRoot (com.dsh.client) 带来的失效软链，由 Native 原生硬链接接管" % cleaned)
+
+
 def ensure_workspace_dirs(root):
     """恢复后按 workspace.json 里的工作区路径补建目录，防止 dsh 剪会话。
 
@@ -1049,6 +1075,7 @@ def main():
     # cwd 校验每个会话，工作目录缺失会把恢复的会话从注册表剪掉（文件还在但
     # 界面里消失）。备份只带 .dsh、不带工作目录，这一步必须在 dsh 启动前做。
     if os.path.isdir(os.path.join(root, ".dsh")):
+        purge_legacy_symlinks(root)
         ensure_workspace_dirs(root)
         heal_plugin_links(root)
     if not retain_stage:

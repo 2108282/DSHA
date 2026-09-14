@@ -77,9 +77,16 @@ public class ConfirmReceiver extends BroadcastReceiver {
             } else if (ACTION_ASK_ANSWER.equals(act)) {
                 svc.resolveAsk(intent.getStringExtra(EXTRA_ANSWER), epoch);
             } else if (ACTION_ALLOW.equals(act)) {
+                triggerVibrate(context, 50);
                 svc.resolveConfirm(true, epoch);
             } else if (ACTION_DENY.equals(act)) {
+                triggerVibrate(context, 50);
                 svc.resolveConfirm(false, epoch);
+            }
+        } else {
+            NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null && (ACTION_ALLOW.equals(act) || ACTION_DENY.equals(act))) {
+                nm.cancel(Constants.NOTIF_SHELL_CONFIRM);
             }
         }
     }
@@ -218,6 +225,22 @@ public class ConfirmReceiver extends BroadcastReceiver {
         try {
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.notify(Constants.NOTIF_TASK, nb.build());
+        } catch (Throwable ignored) {}
+    }
+
+    private static void triggerVibrate(Context ctx, int ms) {
+        try {
+            android.os.Vibrator v;
+            if (Build.VERSION.SDK_INT >= 31) {
+                android.os.VibratorManager vm =
+                        (android.os.VibratorManager) ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                v = vm == null ? null : vm.getDefaultVibrator();
+            } else {
+                v = (android.os.Vibrator) ctx.getSystemService(Context.VIBRATOR_SERVICE);
+            }
+            if (v != null) {
+                v.vibrate(android.os.VibrationEffect.createOneShot(ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+            }
         } catch (Throwable ignored) {}
     }
 }

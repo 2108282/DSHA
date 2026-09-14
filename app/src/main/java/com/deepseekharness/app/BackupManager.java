@@ -394,10 +394,11 @@ public final class BackupManager {
                     + "python3 /root/.dsha-restore-merge.py --stage /root/.dsha-restore-stage --root /root --workdir " + ShellQuote.arg(wd) + " 2>&1";
             String out = c.proot().execChecked(runCmd);
 
-            // 恢复后的原生环境轻量自愈
+            // 恢复后的原生环境轻量自愈（清除旧包残留死软链，重建原生硬链接环境）
             String postHealCmd = "mkdir -p /sdcard/Download/DSHA/工作区 /root/.dsh 2>/dev/null || true; "
                     + "rm -f /root/内部存储 2>/dev/null || true; "
                     + "ln -sf /sdcard/Download/DSHA /root/内部存储 2>/dev/null || true; "
+                    + "find /root/.dsh -xtype l -delete 2>/dev/null || true; "
                     + "chmod 777 /root/.dsh 2>/dev/null || true";
             c.proot().execChecked(postHealCmd);
             com.deepseekharness.app.HttpShellService.syncTokenToRootfsSync();
