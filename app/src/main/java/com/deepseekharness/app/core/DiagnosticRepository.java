@@ -91,9 +91,9 @@ public final class DiagnosticRepository extends AndroidViewModel {
                     + "test -f /root/dsh-bin/npm && echo NPM_BIN_OK || echo NPM_BIN_FAIL; "
                     + "test -f /etc/ssl/certs/ca-certificates.crt && echo CERT_OK || echo CERT_FAIL; "
                     + "test -f /root/.dsh/plugin-manager.py && echo PM_OK || echo PM_FAIL; "
-                    + "printf "Node: "; node -v 2>/dev/null || true; "
-                    + "printf "npm: "; npm -v 2>/dev/null || true; "
-                    + "printf "Python: "; python3 --version 2>/dev/null || true;'";
+                    + "printf 'Node: '; node -v 2>/dev/null || true; "
+                    + "printf 'npm: '; npm -v 2>/dev/null || true; "
+                    + "printf 'Python: '; python3 --version 2>/dev/null || true;'";
             String probeOut = "";
             try {
                 Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", probeCmd});
