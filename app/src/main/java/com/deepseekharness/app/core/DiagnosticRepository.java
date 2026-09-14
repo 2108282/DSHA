@@ -31,14 +31,19 @@ public final class DiagnosticRepository extends AndroidViewModel {
                 try {
                     ProotBootstrap proot = HarnessController.get(getApplication()).proot();
                     if ("ksu_chroot".equals(proot.runtime().id())) {
-                        String cmd = "mkdir -p /data/adb/dsha/rootfs/etc/ssl/certs 2>/dev/null && "
+                        // 根治：同时补齐 Debian/Ubuntu 标准路径 (/etc/ssl/certs) 与 OpenSSL 二进制硬编码路径 (/usr/lib/ssl)
+                        // 并使用绝对路径 /usr/bin/python3 检验，使用 ProcessBuilder 重定向 stderr 确保捕获全部执行信息
+                        String cmd = "mkdir -p /data/adb/dsha/rootfs/etc/ssl/certs /data/adb/dsha/rootfs/usr/lib/ssl 2>/dev/null && "
                                 + "if [ -f /data/adb/dsha/rootfs/usr/local/share/dsha/ca-certificates.crt ]; then "
                                 + "  cp -f /data/adb/dsha/rootfs/usr/local/share/dsha/ca-certificates.crt /data/adb/dsha/rootfs/etc/ssl/certs/ca-certificates.crt; "
+                                + "  cp -f /data/adb/dsha/rootfs/usr/local/share/dsha/ca-certificates.crt /data/adb/dsha/rootfs/usr/lib/ssl/cert.pem; "
                                 + "fi && "
-                                + "chmod 644 /data/adb/dsha/rootfs/etc/ssl/certs/ca-certificates.crt 2>/dev/null && "
-                                + "chroot /data/adb/dsha/rootfs python3 -c 'import ssl; ssl.create_default_context()' && "
+                                + "chmod 644 /data/adb/dsha/rootfs/etc/ssl/certs/ca-certificates.crt /data/adb/dsha/rootfs/usr/lib/ssl/cert.pem 2>/dev/null && "
+                                + "chroot /data/adb/dsha/rootfs /usr/bin/python3 -c 'import ssl; ssl.create_default_context()' && "
                                 + "echo DSHA_NETWORK_REPAIR_OK";
-                        Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+                        ProcessBuilder pb = new ProcessBuilder("su", "-c", cmd);
+                        pb.redirectErrorStream(true);
+                        Process p = pb.start();
                         BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
                         StringBuilder sb = new StringBuilder();
                         String line;
@@ -47,7 +52,7 @@ public final class DiagnosticRepository extends AndroidViewModel {
                         if (!sb.toString().contains("DSHA_NETWORK_REPAIR_OK")) {
                             throw new java.io.IOException("底层修复执行未通过：" + sb);
                         }
-                        repairResult = "✅ 根证书与网络环境已成功修复并导入 /etc/ssl/certs！\n";
+                        repairResult = "✅ 根证书已成功导入系统标准路径 (/etc/ssl 与 /usr/lib/ssl)，Python SSL 与插件安装已彻底恢复！\n";
                     } else {
                         if (!proot.isEnvironmentReady()) throw new java.io.IOException("环境未就绪，请先完成首次解压");
                         proot.ensureRuntimeFiles();
@@ -89,11 +94,11 @@ public final class DiagnosticRepository extends AndroidViewModel {
                     + "test -x /usr/local/bin/node && echo NODE_OK || echo NODE_FAIL; "
                     + "test -f /usr/local/lib/node_modules/npm/bin/npm-cli.js && echo NPM_OK || echo NPM_FAIL; "
                     + "test -f /root/dsh-bin/npm && echo NPM_BIN_OK || echo NPM_BIN_FAIL; "
-                    + "test -f /etc/ssl/certs/ca-certificates.crt && echo CERT_OK || echo CERT_FAIL; "
+                    + "(test -f /etc/ssl/certs/ca-certificates.crt || test -f /usr/lib/ssl/cert.pem) && echo CERT_OK || echo CERT_FAIL; "
                     + "test -f /root/.dsh/plugin-manager.py && echo PM_OK || echo PM_FAIL; "
-                    + "printf 'Node: '; node -v 2>/dev/null || true; "
-                    + "printf 'npm: '; npm -v 2>/dev/null || true; "
-                    + "printf 'Python: '; python3 --version 2>/dev/null || true;'";
+                    + "printf 'Node: '; /usr/local/bin/node -v 2>/dev/null || true; "
+                    + "printf 'npm: '; /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npm-cli.js -v 2>/dev/null || true; "
+                    + "printf 'Python: '; /usr/bin/python3 --version 2>/dev/null || true;'";
             String probeOut = "";
             try {
                 Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", probeCmd});

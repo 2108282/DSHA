@@ -32,10 +32,16 @@ fi
 /system/bin/device_config put activity_manager max_phantom_processes 2147483647 2>/dev/null
 
 # 2.5 自动补齐 CA 根证书与前端首帧防闪白样式
-mkdir -p "$ROOTFS/etc/ssl/certs"
-if [ -f "$ROOTFS/usr/local/share/dsha/ca-certificates.crt" ] && [ ! -f "$ROOTFS/etc/ssl/certs/ca-certificates.crt" ]; then
-    cp -f "$ROOTFS/usr/local/share/dsha/ca-certificates.crt" "$ROOTFS/etc/ssl/certs/ca-certificates.crt" 2>/dev/null || true
-    chmod 644 "$ROOTFS/etc/ssl/certs/ca-certificates.crt" 2>/dev/null || true
+mkdir -p "$ROOTFS/etc/ssl/certs" "$ROOTFS/usr/lib/ssl" 2>/dev/null || true
+if [ -f "$ROOTFS/usr/local/share/dsha/ca-certificates.crt" ]; then
+    if [ ! -f "$ROOTFS/etc/ssl/certs/ca-certificates.crt" ]; then
+        cp -f "$ROOTFS/usr/local/share/dsha/ca-certificates.crt" "$ROOTFS/etc/ssl/certs/ca-certificates.crt" 2>/dev/null || true
+        chmod 644 "$ROOTFS/etc/ssl/certs/ca-certificates.crt" 2>/dev/null || true
+    fi
+    if [ ! -f "$ROOTFS/usr/lib/ssl/cert.pem" ]; then
+        cp -f "$ROOTFS/usr/local/share/dsha/ca-certificates.crt" "$ROOTFS/usr/lib/ssl/cert.pem" 2>/dev/null || true
+        chmod 644 "$ROOTFS/usr/lib/ssl/cert.pem" 2>/dev/null || true
+    fi
 fi
 INDEX_HTML="$ROOTFS/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist/index.html"
 if [ -f "$INDEX_HTML" ] && ! grep -q "dsh-boot-style" "$INDEX_HTML"; then
@@ -210,15 +216,26 @@ chroot "$ROOTFS" /usr/bin/env -i \
     USER=root \
     LOGNAME=root \
     PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    SSL_CERT_FILE=/usr/lib/ssl/cert.pem \
     TERM=xterm-256color \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     DSH_CONFIRM=1 \
-    /usr/local/bin/node /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
+    nice -n 10 /usr/local/bin/node --v8-pool-size=2 /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
 
 NEW_PID=$!
 echo "$NEW_PID" > "$PID_FILE"
 echo -800 > "/proc/$NEW_PID/oom_score_adj" 2>/dev/null || true
+
+# 纳入 Android 系统级 CPU 调度管线 (EAS / cgroups 接管)：
+# 将 Node 守护进程纳入 background cgroup，让系统温控与省电策略直接接管，防止大核心疯狂升频发烫
+if [ -d "/dev/cpuset/background" ]; then
+    echo "$NEW_PID" > /dev/cpuset/background/cgroup.procs 2>/dev/null || true
+fi
+if [ -d "/dev/cpuctl/background" ]; then
+    echo "$NEW_PID" > /dev/cpuctl/background/cgroup.procs 2>/dev/null || true
+fi
+renice -n 10 -p "$NEW_PID" 2>/dev/null || true
 
 # 立即应用 CPU 核心亲和性绑定（保证所有派生子进程天然继承）
 if [ -z "$TASKSET_CPUS" ]; then

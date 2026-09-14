@@ -480,6 +480,9 @@ public class ConfigFragment extends Fragment {
                         + (cpus.isEmpty()
                             ? "chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p 0-7 \"$PID\" 2>/dev/null; "
                             : "chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p -c '" + cpus + "' \"$PID\" 2>/dev/null; ")
+                        + "echo \"$PID\" > /dev/cpuset/background/cgroup.procs 2>/dev/null || true; "
+                        + "echo \"$PID\" > /dev/cpuctl/background/cgroup.procs 2>/dev/null || true; "
+                        + "renice -n 10 -p \"$PID\" 2>/dev/null || true; "
                         + "fi";
                 Runtime.getRuntime().exec(new String[]{"su", "-c", writeCmd + applyCmd}).waitFor();
             } catch (Throwable ignored) {}
