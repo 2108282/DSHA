@@ -56,10 +56,9 @@ if [ -f "$SCRIPTS_DIR/stop.sh" ] && [ -f "$DATA_DIR/run/dsh.pid" ]; then
     sh "$SCRIPTS_DIR/stop.sh" --umount >/dev/null 2>&1 || true
 fi
 
-# 1. 解压模块控制脚本与 WebUI 控制面板
-ui_print "- 正在安装控制脚本与操作界面..."
+# 1. 解压模块控制脚本与操作按钮
+ui_print "- 正在安装控制脚本与操作按钮..."
 mkdir -p "$MODPATH/scripts"
-mkdir -p "$MODPATH/webroot"
 mkdir -p "$SCRIPTS_DIR"
 mkdir -p "$DATA_DIR/run"
 
@@ -68,7 +67,6 @@ unzip -o "$ZIPFILE" 'module.prop' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'service.sh' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'action.sh' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'uninstall.sh' -d "$MODPATH" >&2
-unzip -o "$ZIPFILE" 'webroot/*' -d "$MODPATH" >&2
 
 # 清空旧脚本，确保无废弃遗留脚本，实现 100% 干净覆盖
 rm -f "$SCRIPTS_DIR"/*.sh 2>/dev/null || true
@@ -172,6 +170,6 @@ ln -sf /sdcard/Download/DSHA "$ROOTFS_DIR/root/内部存储" 2>/dev/null || true
 ui_print "-----------------------------------------"
 ui_print "安装成功！本模块开机不自启，0 功耗占用。"
 ui_print "支持通过 KernelSU/APatch 模块「操作」按钮一键启停，"
-ui_print "或通过 DSHA App / WebUI 随时拉起与管理。"
+ui_print "或通过 DSHA App / 浏览器网页 随时拉起与管理。"
 ui_print "终端快速进入命令: su -c /data/adb/dsha/scripts/term.sh"
 ui_print "*****************************************"
