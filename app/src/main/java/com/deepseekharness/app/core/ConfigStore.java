@@ -180,6 +180,15 @@ public class ConfigStore {
         prefs.edit().putString("ui_theme", com.deepseekharness.app.util.UiThemePreference.normalize(v)).apply();
     }
 
+    public int getSheetOpacity() {
+        return prefs.getInt("sheet_opacity_percent", 88);
+    }
+
+    public void setSheetOpacity(int percent) {
+        int p = Math.max(30, Math.min(100, percent));
+        prefs.edit().putInt("sheet_opacity_percent", p).apply();
+    }
+
     public boolean isSheetImmersive() {
         return prefs.getBoolean("sheet_immersive", true);
     }

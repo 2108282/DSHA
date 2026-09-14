@@ -316,10 +316,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         boolean dark = ThemeController.isDark(this);
-        if (dark != isDarkMode) {
-            isDarkMode = dark;
-            updateCardTheme();
-        }
+        isDarkMode = dark;
+        updateCardTheme();
         if (sCachedWebView != null) {
             injectTransparentBackground(sCachedWebView);
             if (sPendingApprovalDecision != null) {
@@ -357,9 +355,16 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         currentHeight = defaultHeight;
     }
 
+    private int getCardBgColor(boolean dark) {
+        int opacity = new com.deepseekharness.app.core.ConfigStore(this).getSheetOpacity();
+        if (opacity < 30 || opacity > 100) opacity = 88;
+        int alpha = (int) Math.round(opacity * 255.0 / 100.0);
+        return dark ? Color.argb(alpha, 0x10, 0x14, 0x1B) : Color.argb(alpha, 0xF5, 0xF8, 0xFC);
+    }
+
     private void updateCardTheme() {
         if (sheetCard != null) {
-            int cardBgColor = isDarkMode ? Color.parseColor("#E010141B") : Color.parseColor("#E0F5F8FC");
+            int cardBgColor = getCardBgColor(isDarkMode);
             int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
             GradientDrawable cardBg = new GradientDrawable();
             cardBg.setShape(GradientDrawable.RECTANGLE);
@@ -376,7 +381,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     private View buildUi() {
         // 毛玻璃半透明底色（浅色：#E0F5F8FC 半透轻白蓝；深色：#E010141B 与 App 深蓝底色完全一致）
-        int cardBgColor = isDarkMode ? Color.parseColor("#E010141B") : Color.parseColor("#E0F5F8FC");
+        int cardBgColor = getCardBgColor(isDarkMode);
         int textColor = isDarkMode ? Color.parseColor("#E8ECF4") : Color.parseColor("#1A2230");
         int lineColor = isDarkMode ? Color.parseColor("#302A3344") : Color.parseColor("#30E2E6EE");
         int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");

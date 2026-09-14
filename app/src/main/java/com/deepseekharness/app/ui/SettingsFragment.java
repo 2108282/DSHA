@@ -13,6 +13,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Button;
+import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -88,6 +90,27 @@ public class SettingsFragment extends Fragment {
                 cfg.setSheetImmersive(next);
                 QuickChatSheetActivity.refreshImmersiveTheme(requireContext().getApplicationContext());
                 Toast.makeText(requireContext(), next ? "已开启抽屉沉浸全透明" : "已关闭抽屉沉浸全透明（使用经典背景）", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        EditText opacityInput = v.findViewById(R.id.settings_sheet_opacity_input);
+        Button opacitySave = v.findViewById(R.id.settings_sheet_opacity_save);
+        ConfigStore finalCfg = new ConfigStore(requireContext());
+        if (opacityInput != null) {
+            opacityInput.setText(String.valueOf(finalCfg.getSheetOpacity()));
+        }
+        if (opacitySave != null) {
+            opacitySave.setOnClickListener(x -> {
+                int val = 88;
+                try {
+                    val = Integer.parseInt(opacityInput.getText().toString().trim());
+                } catch (Exception ignored) {}
+                if (val < 30 || val > 100) {
+                    Toast.makeText(requireContext(), "请输入 30 ~ 100 之间的数值", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                finalCfg.setSheetOpacity(val);
+                Toast.makeText(requireContext(), "已保存抽屉不透明度为 " + val + "%（下次唤起抽屉或重启生效）", Toast.LENGTH_SHORT).show();
             });
         }
 
