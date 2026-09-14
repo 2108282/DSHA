@@ -489,7 +489,7 @@ public final class HttpShellService {
                 result = "[UNAUTHORIZED]";
             } else if (path.startsWith("/app/task/confirm/cancel")) {
                 dismissAllApprovalUi();
-                return "OK";
+                result = "OK";
             } else if (path.startsWith("/app/task/confirm")) {
                 result = appTaskConfirm(path);
             } else if (path.startsWith("/app/task/ask")) {
