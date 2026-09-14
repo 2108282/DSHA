@@ -173,3 +173,32 @@ ui_print "支持通过 KernelSU/APatch 模块「操作」按钮一键启停，"
 ui_print "或通过 DSHA App / 浏览器网页 随时拉起与管理。"
 ui_print "终端快速进入命令: su -c /data/adb/dsha/scripts/term.sh"
 ui_print "*****************************************"
+
+# 3. 部署与自愈 DSHA 原生内置插件 (dsh-device-shell-guide, dsh-status-overlay, dsh-task-notifier, dsh-web-mobile)
+ui_print "- 正在部署与自愈 DSHA 原生内置核心插件..."
+if unzip -l "$ZIPFILE" 2>/dev/null | grep -q "builtin-plugins/"; then
+    mkdir -p "$MODPATH/builtin-plugins"
+    unzip -o "$ZIPFILE" 'builtin-plugins/*' -d "$MODPATH" >&2
+    
+    mkdir -p "$ROOTFS_DIR/root"
+    mkdir -p "$ROOTFS_DIR/root/.dsh/profiles/web/node_modules"
+    mkdir -p "$ROOTFS_DIR/usr/local/lib/node_modules"
+
+    for bdir in "$MODPATH/builtin-plugins"/*; do
+        [ -d "$bdir" ] || continue
+        pname=$(basename "$bdir") # e.g. dsh-web-mobile
+        rname="dsha-${pname#dsh-}" # e.g. dsha-web-mobile
+        
+        # 复制/更新插件实体
+        rm -rf "$ROOTFS_DIR/root/$rname"
+        cp -rf "$bdir" "$ROOTFS_DIR/root/$rname"
+        touch "$ROOTFS_DIR/root/$rname-installed"
+        
+        # 建立 Profile 局部与全局符号链接
+        ln -sfn "/root/$rname" "$ROOTFS_DIR/root/.dsh/profiles/web/node_modules/$pname" 2>/dev/null || true
+        ln -sfn "/root/$rname" "$ROOTFS_DIR/usr/local/lib/node_modules/$pname" 2>/dev/null || true
+    done
+
+    printf 'dsh-device-shell-guide\ndsh-task-notifier\ndsh-status-overlay\ndsh-web-mobile\n' > "$ROOTFS_DIR/root/dsha-builtin.txt" 2>/dev/null || true
+fi
+
