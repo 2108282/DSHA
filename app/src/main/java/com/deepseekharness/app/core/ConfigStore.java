@@ -47,6 +47,15 @@ public class ConfigStore {
         return p == Constants.LAN_BRIDGE_PORT ? Constants.DSH_WEB_PORT : p;
     }
 
+    public String getTaskset() {
+        return prefs.getString("taskset_cpus", "").trim();
+    }
+
+    public void setTaskset(String v) {
+        String clean = (v == null ? "" : v.trim()).replaceAll("[^0-9,-]", "");
+        prefs.edit().putString("taskset_cpus", clean).apply();
+    }
+
     public void setPort(String v) {
         int p = parsePort(v);
         prefs.edit().putString(Constants.KEY_PORT, String.valueOf(p)).apply();

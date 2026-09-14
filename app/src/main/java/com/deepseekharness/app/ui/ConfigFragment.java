@@ -52,6 +52,7 @@ public class ConfigFragment extends Fragment {
 
         EditText apiKey = v.findViewById(R.id.config_api_key);
         EditText port = v.findViewById(R.id.config_port);
+        EditText taskset = v.findViewById(R.id.config_taskset);
         CheckBox confirm = v.findViewById(R.id.config_confirm_shell);
         CheckBox checkUpdate = v.findViewById(R.id.config_check_update);
         CheckBox desktop = v.findViewById(R.id.config_desktop_mode);
@@ -71,6 +72,7 @@ public class ConfigFragment extends Fragment {
         // 回填当前值
         apiKey.setText(c.getApiKey());
         port.setText(c.getPort());
+        if (taskset != null) taskset.setText(c.getTaskset());
         confirm.setChecked(c.isConfirmShell());
         checkUpdate.setChecked(c.isCheckUpdate());
         desktop.setChecked(c.isDesktopMode());
@@ -109,6 +111,9 @@ public class ConfigFragment extends Fragment {
         save.setOnClickListener(x -> {
             c.setApiKey(apiKey.getText().toString());
             c.setPort(port.getText().toString());
+            String tsVal = taskset != null ? taskset.getText().toString().trim().replaceAll("[^0-9,-]", "") : "";
+            c.setTaskset(tsVal);
+            applyTasksetImmediately(tsVal);
             c.setConfirmShell(confirm.isChecked());
             c.setCheckUpdate(checkUpdate.isChecked());
             c.setDesktopMode(desktop.isChecked());
@@ -121,7 +126,7 @@ public class ConfigFragment extends Fragment {
             applyLanMode(c, lan.isChecked());
             if (lan.isChecked() && getActivity() instanceof MainActivity)
                 ((MainActivity) getActivity()).requestLocalNetwork();
-            Toast.makeText(ctx, "已保存（重启 Web 后生效）", Toast.LENGTH_SHORT).show();
+            Toast.makeText(ctx, "已保存！CPU 调度已即时生效（" + (tsVal.isEmpty() ? "全核调度" : tsVal) + "）", Toast.LENGTH_SHORT).show();
         });
 
         return v;
@@ -462,5 +467,22 @@ public class ConfigFragment extends Fragment {
 
     private void toast(String s) {
         Toast.makeText(requireContext(), s, Toast.LENGTH_SHORT).show();
+    }
+
+    private void applyTasksetImmediately(String cpus) {
+        new Thread(() -> {
+            try {
+                String writeCmd = "mkdir -p /data/adb/dsha/run /data/adb/dsha/rootfs/root/.dsh 2>/dev/null; "
+                        + "echo '" + cpus + "' > /data/adb/dsha/run/taskset 2>/dev/null; "
+                        + "echo '" + cpus + "' > /data/adb/dsha/rootfs/root/.dsh/taskset 2>/dev/null; ";
+                String applyCmd = "PID=$(cat /data/adb/dsha/run/dsh.pid 2>/dev/null); "
+                        + "if [ -n \"$PID\" ] && kill -0 \"$PID\" 2>/dev/null; then "
+                        + (cpus.isEmpty()
+                            ? "chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p 0-7 \"$PID\" 2>/dev/null; "
+                            : "chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p -c '" + cpus + "' \"$PID\" 2>/dev/null; ")
+                        + "fi";
+                Runtime.getRuntime().exec(new String[]{"su", "-c", writeCmd + applyCmd}).waitFor();
+            } catch (Throwable ignored) {}
+        }, "apply-taskset").start();
     }
 }

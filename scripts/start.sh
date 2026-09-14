@@ -6,6 +6,7 @@ PORT_FILE="$RUN_DIR/port"
 LOG_FILE="$RUN_DIR/dsh-web.log"
 
 PORT="${1:-3080}"
+TASKSET_CPUS="${2:-}"
 case "$PORT" in
     ''|*[!0-9]*) PORT=3080 ;;
 esac
@@ -206,7 +207,19 @@ chroot "$ROOTFS" /usr/bin/env -i \
 
 NEW_PID=$!
 echo "$NEW_PID" > "$PID_FILE"
-echo -1000 > "/proc/$NEW_PID/oom_score_adj" 2>/dev/null || true
+echo -800 > "/proc/$NEW_PID/oom_score_adj" 2>/dev/null || true
+
+# 立即应用 CPU 核心亲和性绑定（保证所有派生子进程天然继承）
+if [ -z "$TASKSET_CPUS" ]; then
+    if [ -s "$RUN_DIR/taskset" ]; then
+        TASKSET_CPUS=$(cat "$RUN_DIR/taskset" 2>/dev/null | tr -d ' \n\r')
+    elif [ -s "$ROOTFS/root/.dsh/taskset" ]; then
+        TASKSET_CPUS=$(cat "$ROOTFS/root/.dsh/taskset" 2>/dev/null | tr -d ' \n\r')
+    fi
+fi
+if [ -n "$TASKSET_CPUS" ]; then
+    chroot "$ROOTFS" /usr/bin/taskset -a -p -c "$TASKSET_CPUS" "$NEW_PID" 2>/dev/null || true
+fi
 
 # 7. 等待服务启动并提取鉴权 Token 链接（最长等待 15 秒，就绪即刻毫秒级返回）
 AUTH_URL=""

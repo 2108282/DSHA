@@ -312,8 +312,20 @@ public class HarnessController {
 
                 startupDiagnostics.stage(generation, "调用 start.sh 启动守护进程");
                 reportStatus(generation, onStatus, "正在拉起 KernelSU 原生守护进程 → 127.0.0.1:" + config.getPortInt() + "…");
+                
+                // 关键根治：启动前必须执行心跳补丁与补齐技能空目录，彻底消灭上游 100ms 暴力磁盘扫描与 2s WebSocket 心跳
+                ensureHeartbeatPatch();
+
+                String tasksetVal = config.getTaskset();
+                try {
+                    String tsCmd = "mkdir -p /data/adb/dsha/run 2>/dev/null && echo '" + tasksetVal + "' > /data/adb/dsha/run/taskset 2>/dev/null";
+                    Runtime.getRuntime().exec(new String[]{"su", "-c", tsCmd}).waitFor();
+                } catch (Throwable ignored) {}
+
+                String startCmd = "/data/adb/dsha/scripts/start.sh " + config.getPortInt()
+                        + (tasksetVal.isEmpty() ? "" : " " + com.deepseekharness.app.util.ShellQuote.arg(tasksetVal));
                 Process p = Runtime.getRuntime().exec(new String[]{
-                        "su", "-mm", "-c", "/data/adb/dsha/scripts/start.sh " + config.getPortInt()
+                        "su", "-mm", "-c", startCmd
                 });
                 startupDiagnostics.stage(generation, "等待鉴权链接");
                 Thread drainer = new Thread(() -> drainWebOutput(p, generation, onStatus), "dsh-drain");

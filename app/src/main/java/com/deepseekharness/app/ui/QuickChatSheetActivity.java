@@ -359,7 +359,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     private void updateCardTheme() {
         if (sheetCard != null) {
-            int cardBgColor = isDarkMode ? Color.parseColor("#E610141B") : Color.parseColor("#E6F5F8FC");
+            int cardBgColor = isDarkMode ? Color.parseColor("#E010141B") : Color.parseColor("#E0F5F8FC");
             int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
             GradientDrawable cardBg = new GradientDrawable();
             cardBg.setShape(GradientDrawable.RECTANGLE);
@@ -375,8 +375,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     }
 
     private View buildUi() {
-        // 毛玻璃半透明底色（浅色：#E6F5F8FC 半透轻白蓝；深色：#E610141B 与 App 深蓝底色完全一致）
-        int cardBgColor = isDarkMode ? Color.parseColor("#E610141B") : Color.parseColor("#E6F5F8FC");
+        // 毛玻璃半透明底色（浅色：#E0F5F8FC 半透轻白蓝；深色：#E010141B 与 App 深蓝底色完全一致）
+        int cardBgColor = isDarkMode ? Color.parseColor("#E010141B") : Color.parseColor("#E0F5F8FC");
         int textColor = isDarkMode ? Color.parseColor("#E8ECF4") : Color.parseColor("#1A2230");
         int lineColor = isDarkMode ? Color.parseColor("#302A3344") : Color.parseColor("#30E2E6EE");
         int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");
@@ -1289,18 +1289,21 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
                 String js = "(function() {"
                         + "  var style = document.getElementById('dsh-transparent-style');\n"
+                        + "  if (!style) {\n"
+                        + "    style = document.createElement('style');\n"
+                        + "    style.id = 'dsh-transparent-style';\n"
+                        + "    document.head.appendChild(style);\n"
+                        + "  }\n"
                         + (immersive
-                            ? "  if (!style) {\n"
-                            + "    style = document.createElement('style');\n"
-                            + "    style.id = 'dsh-transparent-style';\n"
-                            + "    document.head.appendChild(style);\n"
-                            + "  }\n"
-                            + "  style.innerHTML = " + org.json.JSONObject.quote(cssImmersive) + ";\n"
+                            ? "  style.innerHTML = " + org.json.JSONObject.quote(cssImmersive) + ";\n"
                             + "  if (document.documentElement) document.documentElement.style.backgroundColor = 'transparent';\n"
                             + "  if (document.body) document.body.style.backgroundColor = 'transparent';\n"
-                            : "  if (style) style.remove();\n"
-                            + "  if (document.documentElement) document.documentElement.style.backgroundColor = '';\n"
-                            + "  if (document.body) document.body.style.backgroundColor = '';\n")
+                            : "  var solidBg = " + (dark ? "'#10141B'" : "'#F5F8FC'") + ";\n"
+                            + "  var cssSolid = 'html, body, #root, main, .dsh-layout-root, div[class*=\"pI_x6G_frame\"], div[class*=\"pI_x6G_centerCol\"], div[class*=\"_scrollBody\"], div[class*=\"_viewArea\"], div[class*=\"wSkVaW_root\"], div[class*=\"_composerHero\"], div[class*=\"_dock\"] { background: ' + solidBg + ' !important; background-color: ' + solidBg + ' !important; }\n' "
+                            + "      + ':root, html, body { --dsw-alias-bg-base: ' + solidBg + ' !important; --dsh-boot-bg: ' + solidBg + ' !important; }\n';\n"
+                            + "  style.innerHTML = cssSolid;\n"
+                            + "  if (document.documentElement) document.documentElement.style.backgroundColor = solidBg;\n"
+                            + "  if (document.body) document.body.style.backgroundColor = solidBg;\n")
                         + "  if (document.documentElement) {\n"
                         + "    document.documentElement.style.colorScheme = " + (dark ? "'dark'" : "'light'") + ";\n"
                         + (dark
