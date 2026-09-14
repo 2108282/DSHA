@@ -783,6 +783,9 @@ public final class HttpShellService {
         try {
             if (path.startsWith("/app/ui/dump")) {
                 if (!uiAuthorized("读取当前屏幕上的文字与控件")) return "[ERR] 你拒绝了这次屏幕读取";
+                if (!DshaAccessibilityService.isConnected()) {
+                    DshaAccessibilityService.ensureConnected(ctx);
+                }
                 return DshaAccessibilityService.uiDump();
             }
             if (path.startsWith("/app/ui/tap")) {
@@ -790,13 +793,24 @@ public final class HttpShellService {
                 // 有文字就按文字点：控件位置会随滚动和动画变，文字不会
                 if (!text.isEmpty()) {
                     if (!uiAuthorized("点击「" + shortText(text) + "」")) return "[ERR] 你拒绝了这次点击";
+                    if (!DshaAccessibilityService.isConnected()) {
+                        DshaAccessibilityService.ensureConnected(ctx);
+                    }
                     return DshaAccessibilityService.uiTapText(text);
                 }
                 int x = intParam(q, "x", -1);
                 int y = intParam(q, "y", -1);
                 if (x < 0 || y < 0) return "[ERR] 需要 ?text=要点的文字 或 ?x=&y=坐标";
                 if (!uiAuthorized("点击坐标 (" + x + "," + y + ")")) return "[ERR] 你拒绝了这次点击";
-                return DshaAccessibilityService.uiTap(x, y);
+                if (!DshaAccessibilityService.isConnected()) {
+                    DshaAccessibilityService.ensureConnected(ctx);
+                }
+                String res = DshaAccessibilityService.uiTap(x, y);
+                if (res != null && res.startsWith("[ERR]")) {
+                    execRootCommand("input tap " + x + " " + y);
+                    return "OK 已通过特权点按 (" + x + "," + y + ")";
+                }
+                return res;
             }
             if (path.startsWith("/app/ui/input")) {
                 String text = getParam(q, "text", "");
@@ -804,17 +818,41 @@ public final class HttpShellService {
                 if (!uiAuthorized("在输入框里填入「" + shortText(text) + "」")) {
                     return "[ERR] 你拒绝了这次输入";
                 }
+                if (!DshaAccessibilityService.isConnected()) {
+                    DshaAccessibilityService.ensureConnected(ctx);
+                }
                 return DshaAccessibilityService.uiInput(text);
             }
             if (path.startsWith("/app/ui/key")) {
-                String k = getParam(q, "name", "");
+                String k = getParam(q, "name", getParam(q, "key", ""));
                 if (!uiAuthorized("按下系统按键 " + shortText(k))) return "[ERR] 你拒绝了这次按键";
-                return DshaAccessibilityService.uiKey(k);
+                if (!DshaAccessibilityService.isConnected()) {
+                    DshaAccessibilityService.ensureConnected(ctx);
+                }
+                String res = DshaAccessibilityService.uiKey(k);
+                if (res != null && res.startsWith("[ERR]")) {
+                    int code = 4;
+                    if ("home".equalsIgnoreCase(k)) code = 3;
+                    else if ("recent".equalsIgnoreCase(k) || "recents".equalsIgnoreCase(k)) code = 187;
+                    execRootCommand("input keyevent " + code);
+                    return "OK 已通过特权发送按键 " + k;
+                }
+                return res;
             }
             if (path.startsWith("/app/ui/screenshot") || path.startsWith("/app/ui/shot")) {
                 // 截屏会把当前画面留到磁盘，等于一份可被后续读取的隐私快照
                 if (!uiAuthorized("截取当前屏幕并保存为图片")) return "[ERR] 你拒绝了这次截屏";
-                return DshaAccessibilityService.uiScreenshot();
+                if (!DshaAccessibilityService.isConnected()) {
+                    DshaAccessibilityService.ensureConnected(ctx);
+                }
+                String res = DshaAccessibilityService.uiScreenshot();
+                if (res != null && res.startsWith("[ERR]")) {
+                    String timeStr = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.ROOT).format(new java.util.Date());
+                    String shotPath = "/sdcard/Download/DSHA/screen-" + timeStr + ".png";
+                    execRootCommand("screencap -p " + shotPath + " && chmod 666 " + shotPath);
+                    return "OK 截屏已保存：" + shotPath;
+                }
+                return res;
             }
             if (path.startsWith("/app/ui/swipe")) {
                 int x1 = intParam(q, "x1", -1);
@@ -827,9 +865,17 @@ public final class HttpShellService {
                 if (!uiAuthorized("滑动屏幕 (" + x1 + "," + y1 + ")→(" + x2 + "," + y2 + ")")) {
                     return "[ERR] 你拒绝了这次滑动";
                 }
-                return DshaAccessibilityService.uiSwipe(x1, y1, x2, y2, intParam(q, "ms", 300));
+                if (!DshaAccessibilityService.isConnected()) {
+                    DshaAccessibilityService.ensureConnected(ctx);
+                }
+                String res = DshaAccessibilityService.uiSwipe(x1, y1, x2, y2, intParam(q, "ms", 300));
+                if (res != null && res.startsWith("[ERR]")) {
+                    execRootCommand("input swipe " + x1 + " " + y1 + " " + x2 + " " + y2 + " " + intParam(q, "ms", 300));
+                    return "OK 已通过特权滑动 (" + x1 + "," + y1 + ")→(" + x2 + "," + y2 + ")";
+                }
+                return res;
             }
-            return "[ERR] 未知端点（可用：dump/tap/input/key/swipe）";
+            return "[ERR] 未知端点（可用：dump/tap/input/key/swipe/screenshot）";
         } catch (Throwable t) {
             return "[ERR] " + SensitiveData.redact(String.valueOf(t));
         }
@@ -1197,10 +1243,22 @@ public final class HttpShellService {
             String pkg = getParam(queryOf(path), "pkg", "");
             if (pkg.isEmpty()) return "NO_PKG";
             android.content.Intent i = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
-            if (i == null) return "NOT_FOUND: " + pkg + "（该应用没有启动入口或未安装）";
-            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-            ctx.startActivity(i);
-            return "OK: 已启动 " + pkg;
+            if (i != null) {
+                i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(i);
+                return "OK: 已启动 " + pkg;
+            }
+            // 原生 Intent 启动未命中时，走 Root 强拉兜底（适配特殊无启动入口应用或受限组件）
+            String target = execRootCommand("cmd package resolve-activity --brief " + pkg + " 2>/dev/null | tail -1").trim();
+            if (!target.isEmpty() && target.contains("/") && !target.contains("Error") && !target.contains("No activity")) {
+                execRootCommand("am start -n " + target);
+                return "OK: 已通过特权启动 " + pkg;
+            }
+            String monkeyRes = execRootCommand("monkey -p " + pkg + " -c android.intent.category.LAUNCHER 1 2>/dev/null");
+            if (monkeyRes != null && monkeyRes.contains("Events injected: 1")) {
+                return "OK: 已通过 Launcher 启动 " + pkg;
+            }
+            return "NOT_FOUND: " + pkg + "（该应用没有启动入口或未安装）";
         } catch (Throwable e) {
             return "ERROR: " + safeError(e);
         }

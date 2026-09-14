@@ -184,6 +184,35 @@ public class DshaAccessibilityService extends AccessibilityService {
 
     private static volatile DshaAccessibilityService instance;
 
+    public static boolean isConnected() {
+        return instance != null;
+    }
+
+    /** 自动静默自愈无障碍服务（Root 环境下自动解除 A13~A17 受限设置并挂载服务） */
+    public static boolean ensureConnected(Context ctx) {
+        if (instance != null) return true;
+        if (ctx == null) return false;
+        try {
+            String pkg = ctx.getPackageName();
+            String cls = DshaAccessibilityService.class.getName();
+            String full = pkg + "/" + cls;
+            String cmd = "appops set " + pkg + " ACCESS_RESTRICTED_SETTINGS allow 2>/dev/null; "
+                    + "settings put secure accessibility_enabled 1; "
+                    + "CUR=$(settings get secure enabled_accessibility_services 2>/dev/null); "
+                    + "if [ \"$CUR\" = \"null\" ] || [ -z \"$CUR\" ]; then "
+                    + "  settings put secure enabled_accessibility_services '" + full + "'; "
+                    + "elif ! echo \"$CUR\" | grep -q '" + full + "'; then "
+                    + "  settings put secure enabled_accessibility_services \"$CUR:" + full + "\"; "
+                    + "fi";
+            HttpShellService.execRootCommand(cmd);
+            for (int i = 0; i < 10; i++) {
+                if (instance != null) return true;
+                Thread.sleep(100);
+            }
+        } catch (Throwable ignored) {}
+        return instance != null;
+    }
+
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
