@@ -72,6 +72,8 @@ public final class HttpShellService {
 
     /** 宿主当前是否有后台任务正在活跃运行（供息屏自动休眠判定用） */
     public static volatile boolean isTaskActive = false;
+    /** 当前是否有安全审批/危险权限确认正在挂起等待用户决断 */
+    public static volatile boolean isApprovalWaiting = false;
 
     private final Context ctx;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -486,6 +488,8 @@ public final class HttpShellService {
                 result = "[UNAUTHORIZED]";
             } else if (path.startsWith("/app/task/confirm")) {
                 result = appTaskConfirm(path);
+            } else if (path.startsWith("/app/task/ask")) {
+                result = appTaskAsk(path);
             } else if (path.startsWith("/app/task/running")) {
                 result = appTaskRunning(path);
             } else if (path.startsWith("/app/task/cancel")) {
@@ -1358,28 +1362,43 @@ public final class HttpShellService {
         String btn0 = (opts != null && opts.length > 0 && !opts[0].isEmpty()) ? opts[0] : "允许";
         String btn1 = (opts != null && opts.length > 1 && !opts[1].isEmpty()) ? opts[1] : "拒绝";
 
-        if (s.contains("助手提问") || s.contains("ask_user") || s.contains("ask_question") || s.contains("请选择") || s.contains("多选")) {
-            String cleanText = s.replace("请问", "").trim();
-            if (cleanText.length() > 30) cleanText = cleanText.substring(0, 29) + "…";
-            return new AuthPromptInfo("💬 助手提问", cleanText, "等待回答", "等待回答", "返回对话", "");
+        // 1. DSH 沙箱提权审批（escalate sandbox to ... / danger-full-access / workspace-write）
+        if (s.contains("escalate sandbox") || s.contains("danger-full-access") || s.contains("workspace-write") || s.contains("escalate")) {
+            String detail = s;
+            if (detail.startsWith("escalate sandbox to danger-full-access:")) {
+                detail = detail.substring("escalate sandbox to danger-full-access:".length()).trim();
+            } else if (detail.startsWith("escalate sandbox to workspace-write:")) {
+                detail = detail.substring("escalate sandbox to workspace-write:".length()).trim();
+            } else if (detail.startsWith("escalate sandbox to")) {
+                int colonIdx = detail.indexOf(":");
+                if (colonIdx != -1) {
+                    detail = detail.substring(colonIdx + 1).trim();
+                }
+            }
+            if (detail.length() > 60) detail = detail.substring(0, 59) + "…";
+            if (detail.isEmpty()) detail = "模型申请提升沙箱特权，等待你的审批";
+            return new AuthPromptInfo("⚠️ 危险权限授权申请", detail, "权限申请", "危险授权", btn0, btn1);
         }
 
-        if (s.contains("免打扰") || s.contains("租约") || s.contains("系统高级") || (s.contains("危险命令") && s.contains("权限"))) {
-            return new AuthPromptInfo("危险权限授权申请", "申请 10分钟免打扰租约", "权限申请", "危险授权", btn0, btn1);
-        }
-
-        if (s.contains("reboot") || s.contains("shutdown") || s.contains("mkfs") || s.contains("wipe") || s.contains("dd if=") || s.contains("toybox")) {
+        // 2. 高危系统破坏性指令
+        if (s.contains("reboot") || s.contains("shutdown") || s.contains("mkfs") || s.contains("wipe") || s.contains("dd if=") || s.contains("toybox") || s.contains("fdisk")) {
             String cmd = s.replace("模型试图在设备上执行：", "").replace("模型试图在设备上执行:", "").replace("是否允许？", "").trim();
             if (cmd.startsWith("`") && cmd.endsWith("`") && cmd.length() > 2) cmd = cmd.substring(1, cmd.length() - 1);
-            return new AuthPromptInfo("高危系统指令确认", cmd, "指令确认", "命令确认", btn0, btn1);
+            return new AuthPromptInfo("⚠️ 高危系统指令确认", cmd, "指令确认", "高危确认", btn0, btn1);
         }
 
-        if (s.contains("模型试图在设备上执行") || s.contains("rm ") || s.contains("kill") || s.contains("pm ") || s.contains("cmd ") || s.contains("am ")) {
+        // 3. 模型执行命令确认（支持 rm, node, curl, python, su, pm, am, cmd, chmod, 等全部特权与宿主命令）
+        if (s.contains("模型试图在设备上执行") || s.contains("模型试图执行") ||
+            s.contains("rm ") || s.contains("node ") || s.contains("curl ") || s.contains("python") ||
+            s.contains("kill") || s.contains("pm ") || s.contains("cmd ") || s.contains("am ") ||
+            s.contains("su ") || s.contains("chmod") || s.contains("chown") || s.contains("bash ") || s.contains("sh ")) {
             String cmd = s;
             if (cmd.contains("模型试图在设备上执行：")) {
                 cmd = cmd.substring(cmd.indexOf("模型试图在设备上执行：") + "模型试图在设备上执行：".length());
             } else if (cmd.contains("模型试图在设备上执行:")) {
                 cmd = cmd.substring(cmd.indexOf("模型试图在设备上执行:") + "模型试图在设备上执行:".length());
+            } else if (cmd.contains("模型试图执行：")) {
+                cmd = cmd.substring(cmd.indexOf("模型试图执行：") + "模型试图执行：".length());
             }
             if (cmd.contains("是否允许？")) {
                 cmd = cmd.substring(0, cmd.indexOf("是否允许？"));
@@ -1388,25 +1407,23 @@ public final class HttpShellService {
             if (cmd.startsWith("`") && cmd.endsWith("`") && cmd.length() > 2) {
                 cmd = cmd.substring(1, cmd.length() - 1);
             }
-            return new AuthPromptInfo("特权命令执行确认", cmd, "命令确认", "命令确认", btn0, btn1);
+            return new AuthPromptInfo("⚠️ 特权命令执行确认", cmd, "命令确认", "命令确认", btn0, btn1);
         }
 
+        // 4. 敏感应用与支付环境
         if (s.contains("涉及支付或隐私") || (s.contains("在【") && s.contains("】里："))) {
             String target = s;
-            if (target.contains("#")) {
-                target = target.substring(0, target.indexOf("#")).trim();
-            }
-            if (target.startsWith("在【当前界面】里：")) {
-                target = target.substring("在【当前界面】里：".length()).trim();
-            } else if (target.startsWith("在【") && target.contains("】里：")) {
-                target = target.replace("在【", "").replace("】里：", ": ");
-            }
+            if (target.contains("#")) target = target.substring(0, target.indexOf("#")).trim();
+            if (target.startsWith("在【当前界面】里：")) target = target.substring("在【当前界面】里：".length()).trim();
+            else if (target.startsWith("在【") && target.contains("】里：")) target = target.replace("在【", "").replace("】里：", ": ");
             target = target.replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件").trim();
-            return new AuthPromptInfo("应用敏感操作确认", target, "敏感操作", "敏感确认", btn0, btn1);
+            return new AuthPromptInfo("🔒 敏感操作确认", target, "敏感操作", "敏感确认", btn0, btn1);
         }
 
-        if (s.contains("危险操作") || s.contains("高危操作") || s.contains("高危设备操作") || s.contains("高危权限")
-                || s.contains("等待审批") || s.contains("安全审批") || s.contains("敏感操作") || s.contains("审批")) {
+        // 5. 危险权限、免打扰租约与审批
+        if (s.contains("危险操作") || s.contains("高危操作") || s.contains("高危") || s.contains("危险")
+                || s.contains("等待审批") || s.contains("安全审批") || s.contains("敏感操作") || s.contains("审批")
+                || s.contains("授权") || s.contains("免打扰") || s.contains("租约") || s.contains("权限")) {
             String target = s;
             target = target.replace("【危险操作授权】", "")
                            .replace("【安全确认】", "")
@@ -1415,29 +1432,29 @@ public final class HttpShellService {
                            .replace("DeepSeek-Harness 请求", "请求")
                            .replace("在【当前界面】里：", "")
                            .trim();
-            if (target.contains("#")) {
-                target = target.substring(0, target.indexOf("#")).trim();
-            }
-            if (target.endsWith("，") || target.endsWith(",")) {
-                target = target.substring(0, target.length() - 1).trim();
-            }
+            if (target.contains("#")) target = target.substring(0, target.indexOf("#")).trim();
+            if (target.endsWith("，") || target.endsWith(",")) target = target.substring(0, target.length() - 1).trim();
             target = target.replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件").trim();
-            if (target.isEmpty()) target = "申请 10分钟免打扰租约";
-            return new AuthPromptInfo("危险权限授权申请", target, "权限请求", "危险授权", btn0, btn1);
+            if (target.isEmpty()) target = "模型申请高危执行权限，等待你的审批";
+            return new AuthPromptInfo("⚠️ 危险权限授权申请", target, "权限请求", "危险授权", btn0, btn1);
         }
 
+        // 6. 屏幕操作授权
         if (s.contains("屏幕") || s.contains("文字与控件") || s.contains("读屏") || s.contains("点按")) {
             String target = s;
-            if (target.contains("#")) {
-                target = target.substring(0, target.indexOf("#")).trim();
-            }
-            target = target.replace("【屏幕操作】", "")
-                           .replace("在【当前界面】里：", "")
-                           .replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件")
-                           .trim();
-            return new AuthPromptInfo("屏幕操作授权申请", target, "权限请求", "屏幕授权", btn0, btn1);
+            if (target.contains("#")) target = target.substring(0, target.indexOf("#")).trim();
+            target = target.replace("【屏幕操作】", "").replace("在【当前界面】里：", "").replace("读取当前屏幕上的文字与控件", "读取当前屏幕文字与控件").trim();
+            return new AuthPromptInfo("📱 屏幕操作授权申请", target, "权限请求", "屏幕授权", btn0, btn1);
         }
 
+        // 7. 助手提问场景（明确带有提问/询问特征）
+        if (s.contains("助手提问") || s.contains("ask_user") || s.contains("ask_question") || s.contains("请选择") || s.contains("多选")) {
+            String cleanText = s.replace("请问", "").trim();
+            if (cleanText.length() > 30) cleanText = cleanText.substring(0, 29) + "…";
+            return new AuthPromptInfo("💬 助手提问", cleanText, "等待回答", "等待回答", "返回对话", "");
+        }
+
+        // 8. 文件修改确认
         if (s.contains("文件") || s.contains("覆盖") || s.contains("修改") || s.contains("本地") || s.contains("检测")) {
             String target = s;
             target = target.replace("检测到本地存在修改", "")
@@ -1453,9 +1470,11 @@ public final class HttpShellService {
             return new AuthPromptInfo("确认本地文件修改", target, "文件确认", "等待决策", btn0, btn1);
         }
 
-        String cleanText = s.replace("请问", "").replace("是否", "").trim();
-        if (cleanText.length() > 25) cleanText = cleanText.substring(0, 24) + "…";
-        return new AuthPromptInfo("💬 助手提问与确认", cleanText, "助手提问", "等待回答", btn0, btn1);
+        // 兜底：若是确认/审批流程触发，必须是安全审批！绝不能把未知授权误判为提问！
+        String clean = s.length() > 30 ? s.substring(0, 29) + "…" : s;
+        if (clean.isEmpty()) clean = "模型请求执行敏感操作，等待审批";
+        String def = (defaultTitle != null && !defaultTitle.isEmpty()) ? defaultTitle : "⚠️ 安全确认";
+        return new AuthPromptInfo(def, clean, "安全审批", "安全确认", btn0, btn1);
     }
 
     private void showAskNotification(String q, String[] opts, long epoch) {
@@ -2116,13 +2135,21 @@ public final class HttpShellService {
         try {
             cancelRunningNotification();
             String q = queryOf(path);
-            String title = getParam(q, "title", "⚠️ 安全确认");
+            String title = getParam(q, "title", "⚠️ 危险权限授权申请");
             String text = getParam(q, "text", "模型请求执行敏感操作，请确认是否允许");
-            if (title.contains("提问") || title.contains("ask") || text.contains("ask") || text.contains("提问")) {
-                showAskWaitingNotification(text);
-            } else {
-                showApprovalWaitingNotification(title, text);
-            }
+            showApprovalWaitingNotification(title, text);
+            return "OK";
+        } catch (Throwable e) {
+            return "ERROR: " + safeError(e);
+        }
+    }
+
+    private String appTaskAsk(String path) {
+        try {
+            cancelRunningNotification();
+            String q = queryOf(path);
+            String text = getParam(q, "text", "智能体正在等待你的回答与选择");
+            showAskWaitingNotification(text);
             return "OK";
         } catch (Throwable e) {
             return "ERROR: " + safeError(e);
@@ -2131,12 +2158,9 @@ public final class HttpShellService {
 
     private void showApprovalWaitingNotification(String title, String reason) {
         try {
+            isApprovalWaiting = true;
             String rawPrompt = (reason != null && !reason.trim().isEmpty()) ? reason : title;
             AuthPromptInfo info = parseAuthPrompt(rawPrompt, "⚠️ 危险权限授权申请", new String[]{"允许", "拒绝"});
-            if (info.title.contains("提问") || title.contains("提问") || title.contains("ask")) {
-                showAskWaitingNotification(rawPrompt);
-                return;
-            }
 
             createConfirmChannel();
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -2180,6 +2204,10 @@ public final class HttpShellService {
 
     private void showRunningNotification(String title, String text) {
         try {
+            if (isApprovalWaiting) {
+                // 关键拦截：当前正在等待用户安全审批中，严禁被普通的「正在执行命令」冲刷或切走灵动岛焦点！
+                return;
+            }
             isTaskActive = true;
             HarnessService.onTaskStateChanged(ctx, true);
             if ("⚠️ 等待审批".equals(title) || "等待审批".equals(title) || "安全确认".equals(title) ||
@@ -2261,6 +2289,7 @@ public final class HttpShellService {
     }
 
     private void showConfirmNotification(String cmd, long epoch) {
+        isApprovalWaiting = true;
         createConfirmChannel();
         AuthPromptInfo info = parseAuthPrompt(cmd, "⚠️ 危险命令确认", new String[]{"允许", "拒绝"});
 
@@ -2303,6 +2332,7 @@ public final class HttpShellService {
     }
 
     private void cancelConfirmNotification() {
+        isApprovalWaiting = false;
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) nm.cancel(CONFIRM_NOTIF_ID);
     }

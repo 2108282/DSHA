@@ -117,6 +117,7 @@ let lastCancelByNotification = 0
 export function apply(ctx) {
   let lastActiveSessionId = null
   let lastAssistantText = ''
+  let isApprovalActive = false
 
   // 灵动岛/三通道状态机与 2s Trailing 节流控制
   const THROTTLE_MS = 2000
@@ -126,6 +127,7 @@ export function apply(ctx) {
   let trailingTimer = null
 
   function flushRunningNotification(title, text) {
+    if (isApprovalActive) return
     if (trailingTimer) {
       clearTimeout(trailingTimer)
       trailingTimer = null
@@ -137,6 +139,7 @@ export function apply(ctx) {
   }
 
   function scheduleRunningNotification(title, text) {
+    if (isApprovalActive) return
     // 动作没变，绝对不推，保持完全静态
     if (text === lastSentState) {
       if (trailingTimer && pendingState && pendingState.text === text) {
@@ -183,6 +186,7 @@ export function apply(ctx) {
       }
 
       if (type === 'turn/start') {
+        isApprovalActive = false
         lastAssistantText = ''
         if (trailingTimer) {
           clearTimeout(trailingTimer)
@@ -216,6 +220,7 @@ export function apply(ctx) {
       }
 
       if (type === 'approval/asked') {
+        isApprovalActive = true
         if (trailingTimer) {
           clearTimeout(trailingTimer)
           trailingTimer = null
@@ -226,13 +231,14 @@ export function apply(ctx) {
         lastSentState = reason
         lastSentTime = Date.now()
         void callBridge('/app/task/confirm', {
-          title: '⚠️ 等待审批',
+          title: '⚠️ 危险权限授权申请',
           text: reason
         })
         return
       }
 
       if (type === 'approval/decided') {
+        isApprovalActive = false
         lastSentState = '已完成审批，正在继续执行...'
         lastSentTime = Date.now()
         void callBridge('/app/task/running', {
@@ -261,7 +267,7 @@ export function apply(ctx) {
           } catch {}
           lastSentState = questionText
           lastSentTime = Date.now()
-          void callBridge('/app/task/running', {
+          void callBridge('/app/task/ask', {
             title: '💬 助手提问',
             text: questionText
           })
@@ -452,6 +458,13 @@ export function apply(ctx) {
 
   // 4. 双向闭环审批监听：竞速响应手机灵动岛与网页端点击
   ctx.on('approval/request', async (req, next) => {
+    isApprovalActive = true
+    if (trailingTimer) {
+      clearTimeout(trailingTimer)
+      trailingTimer = null
+    }
+    pendingState = null
+
     try {
       for (const flag of DECISION_FLAGS) {
         if (existsSync(flag)) unlinkSync(flag)
@@ -496,6 +509,7 @@ export function apply(ctx) {
     try {
       return await Promise.race([phoneDecisionPromise, webDecisionPromise])
     } finally {
+      isApprovalActive = false
       if (phoneTimer) clearInterval(phoneTimer)
       try {
         for (const flag of DECISION_FLAGS) {
