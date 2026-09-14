@@ -37,19 +37,17 @@ jobs:
             magisk-module/action.sh
             magisk-module/uninstall.sh
             magisk-module/scripts
-            magisk-module/builtin-plugins
-            magisk-module/plugin-src.tar.gz
 
       - name: Download Verified Local Rootfs Asset from Release
         run: |
           set -euo pipefail
           BASE_TAG="0.1.5rc1-base"
           BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
-          echo "==> 直接下载手机本地验证通过的完整 249MB rootfs.tar.gz 底包..."
+          echo "==> 下载手机本地 100% 验证通过的完整 rootfs.tar.gz 底包..."
           
           curl -L -f -o "$GITHUB_WORKSPACE/magisk-module/rootfs.tar.gz" "${BASE_URL}/rootfs.tar.gz"
           
-          echo "✓ 完整本地底包下载完毕，零二次拼凑："
+          echo "✓ 完整本地底包下载完毕，零修改直接打包："
           ls -lh "$GITHUB_WORKSPACE/magisk-module/rootfs.tar.gz"
 
       - name: Upload Flashable Full Module (With Verified Local Rootfs, Direct Flashable)
@@ -65,6 +63,4 @@ jobs:
             magisk-module/action.sh
             magisk-module/uninstall.sh
             magisk-module/scripts
-            magisk-module/builtin-plugins
-            magisk-module/plugin-src.tar.gz
             magisk-module/rootfs.tar.gz

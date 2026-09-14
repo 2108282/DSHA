@@ -167,68 +167,8 @@ mkdir -p "$ROOTFS_DIR/sdcard/Download/DSHA/工作区" 2>/dev/null || true
 rm -f "$ROOTFS_DIR/root/内部存储" 2>/dev/null || true
 ln -sf /sdcard/Download/DSHA "$ROOTFS_DIR/root/内部存储" 2>/dev/null || true
 
-# 3. 全量部署与自愈 DSHA 7大核心与扩展插件
-ui_print "- 正在全量部署 DSHA 核心内置与扩展插件 (7大插件全量就绪)..."
-mkdir -p "$ROOTFS_DIR/root"
-mkdir -p "$ROOTFS_DIR/root/.dsh/profiles/web/node_modules"
-mkdir -p "$ROOTFS_DIR/root/.dsh/plugin-src"
-mkdir -p "$ROOTFS_DIR/usr/local/lib/node_modules"
-
-# A. 内置 4 大核心插件 (dsh-device-shell-guide, dsh-status-overlay, dsh-task-notifier, dsh-web-mobile)
-if unzip -l "$ZIPFILE" 2>/dev/null | grep -q "builtin-plugins/"; then
-    mkdir -p "$MODPATH/builtin-plugins"
-    unzip -o "$ZIPFILE" 'builtin-plugins/*' -d "$MODPATH" >&2
-
-    for bdir in "$MODPATH/builtin-plugins"/*; do
-        [ -d "$bdir" ] || continue
-        pname=$(basename "$bdir")
-        rname="dsha-${pname#dsh-}"
-        
-        rm -rf "$ROOTFS_DIR/root/$rname"
-        cp -rf "$bdir" "$ROOTFS_DIR/root/$rname"
-        touch "$ROOTFS_DIR/root/$rname-installed"
-        
-        ln -sfn "/root/$rname" "$ROOTFS_DIR/root/.dsh/profiles/web/node_modules/$pname" 2>/dev/null || true
-        ln -sfn "/root/$rname" "$ROOTFS_DIR/usr/local/lib/node_modules/$pname" 2>/dev/null || true
-    done
-    printf 'dsh-device-shell-guide\ndsh-task-notifier\ndsh-status-overlay\ndsh-web-mobile\n' > "$ROOTFS_DIR/root/dsha-builtin.txt" 2>/dev/null || true
-fi
-
-# B. 扩展 3 大插件 (dsh-agy, dsh-api-dashboard, @xmanrui/dsh-im)
-if unzip -l "$ZIPFILE" 2>/dev/null | grep -q "plugin-src.tar.gz"; then
-    unzip -o "$ZIPFILE" 'plugin-src.tar.gz' -d "$MODPATH" >&2
-    if [ -f "$MODPATH/plugin-src.tar.gz" ]; then
-        tar -xzf "$MODPATH/plugin-src.tar.gz" -C "$ROOTFS_DIR/root/.dsh/plugin-src"
-    fi
-elif unzip -l "$ZIPFILE" 2>/dev/null | grep -q "plugin-src/"; then
-    mkdir -p "$MODPATH/plugin-src"
-    unzip -o "$ZIPFILE" 'plugin-src/*' -d "$MODPATH" >&2
-    cp -rf "$MODPATH/plugin-src/"* "$ROOTFS_DIR/root/.dsh/plugin-src/" 2>/dev/null || true
-fi
-
-# 建立扩展插件软链接
-if [ -d "$ROOTFS_DIR/root/.dsh/plugin-src" ]; then
-    for edir in "$ROOTFS_DIR/root/.dsh/plugin-src"/*; do
-        [ -d "$edir" ] || continue
-        bname=$(basename "$edir")
-        if [ "${bname:0:1}" = "@" ]; then
-            mkdir -p "$ROOTFS_DIR/root/.dsh/profiles/web/node_modules/$bname" "$ROOTFS_DIR/usr/local/lib/node_modules/$bname" 2>/dev/null || true
-            for sub in "$edir"/*; do
-                [ -d "$sub" ] || continue
-                subname=$(basename "$sub")
-                ln -sfn "/root/.dsh/plugin-src/$bname/$subname" "$ROOTFS_DIR/root/.dsh/profiles/web/node_modules/$bname/$subname" 2>/dev/null || true
-                ln -sfn "/root/.dsh/plugin-src/$bname/$subname" "$ROOTFS_DIR/usr/local/lib/node_modules/$bname/$subname" 2>/dev/null || true
-            done
-        else
-            ln -sfn "/root/.dsh/plugin-src/$bname" "$ROOTFS_DIR/root/.dsh/profiles/web/node_modules/$bname" 2>/dev/null || true
-            ln -sfn "/root/.dsh/plugin-src/$bname" "$ROOTFS_DIR/usr/local/lib/node_modules/$bname" 2>/dev/null || true
-        fi
-    done
-fi
-
 ui_print "-----------------------------------------"
 ui_print "安装成功！本模块开机不自启，0 功耗占用。"
-ui_print "已全量预置全部 7 大核心与扩展插件，开箱即用。"
 ui_print "支持通过 KernelSU/APatch 模块「操作」按钮一键启停，"
 ui_print "或通过 DSHA App / 浏览器网页 随时拉起与管理。"
 ui_print "终端快速进入命令: su -c /data/adb/dsha/scripts/term.sh"
