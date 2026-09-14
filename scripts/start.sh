@@ -258,13 +258,18 @@ chroot "$ROOTFS" /usr/bin/env -i \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     DSH_CONFIRM=1 \
-    /usr/local/bin/node /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
+    nice -n 10 /usr/local/bin/node --v8-pool-size=2 /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
 
 NEW_PID=$!
 echo "$NEW_PID" > "$PID_FILE"
 echo -800 > "/proc/$NEW_PID/oom_score_adj" 2>/dev/null || true
 
-# 应用用户在 APK 设置中指定的 CPU 核心绑定 (仅在用户显式配置时生效，留空则完全由系统调度，绝不越权强制绑核)
+# 纳入系统后台 cpuctl 组（仅限制频率上限与能耗调度，绝对不覆盖/干预核心亲和性）
+if [ -d "/dev/cpuctl/background" ]; then
+    echo "$NEW_PID" > /dev/cpuctl/background/cgroup.procs 2>/dev/null || true
+fi
+
+# 核心亲和性：100% 严格遵循用户在 APK 设置中配置的 Taskset（留空则不干预，由系统全核自由调度）
 if [ -z "$TASKSET_CPUS" ]; then
     if [ -s "$RUN_DIR/taskset" ]; then
         TASKSET_CPUS=$(cat "$RUN_DIR/taskset" 2>/dev/null | tr -d ' \n\r')
