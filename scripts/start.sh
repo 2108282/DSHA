@@ -258,23 +258,13 @@ chroot "$ROOTFS" /usr/bin/env -i \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     DSH_CONFIRM=1 \
-    nice -n 10 /usr/local/bin/node --v8-pool-size=2 /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
+    /usr/local/bin/node /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
 
 NEW_PID=$!
 echo "$NEW_PID" > "$PID_FILE"
 echo -800 > "/proc/$NEW_PID/oom_score_adj" 2>/dev/null || true
 
-# 纳入 Android 系统级 CPU 调度管线 (EAS / cgroups 接管)：
-# 将 Node 守护进程纳入 background cgroup，让系统温控与省电策略直接接管，防止大核心疯狂升频发烫
-if [ -d "/dev/cpuset/background" ]; then
-    echo "$NEW_PID" > /dev/cpuset/background/cgroup.procs 2>/dev/null || true
-fi
-if [ -d "/dev/cpuctl/background" ]; then
-    echo "$NEW_PID" > /dev/cpuctl/background/cgroup.procs 2>/dev/null || true
-fi
-renice -n 10 -p "$NEW_PID" 2>/dev/null || true
-
-# 立即应用 CPU 核心亲和性绑定（保证所有派生子进程天然继承）
+# 应用用户在 APK 设置中指定的 CPU 核心绑定 (仅在用户显式配置时生效，留空则完全由系统调度，绝不越权强制绑核)
 if [ -z "$TASKSET_CPUS" ]; then
     if [ -s "$RUN_DIR/taskset" ]; then
         TASKSET_CPUS=$(cat "$RUN_DIR/taskset" 2>/dev/null | tr -d ' \n\r')
@@ -283,7 +273,7 @@ if [ -z "$TASKSET_CPUS" ]; then
     fi
 fi
 if [ -n "$TASKSET_CPUS" ]; then
-    chroot "$ROOTFS" /usr/bin/taskset -a -p -c "$TASKSET_CPUS" "$NEW_PID" 2>/dev/null || true
+    chroot "$ROOTFS" /usr/bin/taskset -a -p -c "$TASKSET_CPUS" "$NEW_PID" >/dev/null 2>&1 || true
 fi
 
 # 7. 等待服务启动并提取鉴权 Token 链接（150ms 浮点微步轮询，就绪即刻返回）
