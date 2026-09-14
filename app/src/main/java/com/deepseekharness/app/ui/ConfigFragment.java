@@ -478,11 +478,8 @@ public class ConfigFragment extends Fragment {
                 String applyCmd = "PID=$(cat /data/adb/dsha/run/dsh.pid 2>/dev/null); "
                         + "if [ -n \"$PID\" ] && kill -0 \"$PID\" 2>/dev/null; then "
                         + (cpus.isEmpty()
-                            ? "chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p 0-7 \"$PID\" 2>/dev/null; "
-                            : "chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p -c '" + cpus + "' \"$PID\" 2>/dev/null; ")
-                        + "echo \"$PID\" > /dev/cpuset/background/cgroup.procs 2>/dev/null || true; "
-                        + "echo \"$PID\" > /dev/cpuctl/background/cgroup.procs 2>/dev/null || true; "
-                        + "renice -n 10 -p \"$PID\" 2>/dev/null || true; "
+                            ? "chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p -c 0-7 \"$PID\" >/dev/null 2>&1 || true; "
+                            : "chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p -c '" + cpus + "' \"$PID\" >/dev/null 2>&1 || true; ")
                         + "fi";
                 Runtime.getRuntime().exec(new String[]{"su", "-c", writeCmd + applyCmd}).waitFor();
             } catch (Throwable ignored) {}
