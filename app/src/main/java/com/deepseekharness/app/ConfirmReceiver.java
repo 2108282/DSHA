@@ -95,27 +95,17 @@ public class ConfirmReceiver extends BroadcastReceiver {
             nm.cancel(Constants.NOTIF_TASK_STOPPED);
         }
 
-        // 2. 立即注入取消标志文件并杀掉阻塞命令（多通道保底机制）
-        try {
-            // A. 直接写物理存储目录（应用直接可写，毫秒级生效，无需等待 root）
-            File extDir = new File("/sdcard/Download/DSHA");
-            if (!extDir.exists()) extDir.mkdirs();
-            File cancelFlagExt = new File(extDir, ".cancel_requested");
-            cancelFlagExt.createNewFile();
-
-            // B. 通过 root 权限写入 rootfs 并强制终止长耗时外部子进程
-            new Thread(() -> {
-                try {
-                    String cmd = "mkdir -p /data/adb/dsha/rootfs/root/.dsh 2>/dev/null && "
-                            + "touch /data/adb/dsha/rootfs/root/.dsh/.cancel_requested && "
-                            + "chmod 666 /data/adb/dsha/rootfs/root/.dsh/.cancel_requested 2>/dev/null; "
-                            + "rm -f /data/adb/dsha/rootfs/root/.dsh/.auth_lease 2>/dev/null; "
-                            + "killall -9 bash python3 2>/dev/null || true";
-                    Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
-                    p.waitFor();
-                } catch (Throwable ignored) {}
-            }, "stop-task-kill").start();
-        } catch (Throwable ignored) {}
+        // 2. 写入 Native 容器私有的取消标志文件（隔离独立，绝不影响其他容器或宿主进程）
+        new Thread(() -> {
+            try {
+                String cmd = "mkdir -p /data/adb/dsha/rootfs/root/.dsh 2>/dev/null && "
+                        + "touch /data/adb/dsha/rootfs/root/.dsh/.cancel_requested && "
+                        + "chmod 666 /data/adb/dsha/rootfs/root/.dsh/.cancel_requested 2>/dev/null; "
+                        + "rm -f /data/adb/dsha/rootfs/root/.dsh/.auth_lease 2>/dev/null";
+                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+                p.waitFor();
+            } catch (Throwable ignored) {}
+        }, "stop-task-cancel").start();
 
         // 3. 震动反馈 150ms
         try {

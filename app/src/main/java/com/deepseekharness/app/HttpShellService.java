@@ -2161,7 +2161,7 @@ public final class HttpShellService {
                 (text != null && (text.contains("等待审批") || text.contains("等待安全审批") || text.contains("等待授权"))) ||
                 (title != null && (title.contains("审批") || title.contains("授权")))) {
                 cancelRunningNotification();
-                showApprovalWaitingNotification(text);
+                showApprovalWaitingNotification(title, text);
                 return;
             }
             if ("💬 助手提问".equals(title) || "等待回答".equals(title) ||

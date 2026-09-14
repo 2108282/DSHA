@@ -4,6 +4,7 @@ import android.app.Application;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.os.Build;
+import com.deepseekharness.app.util.Constants;
 
 /**
  * 应用入口：全局初始化。

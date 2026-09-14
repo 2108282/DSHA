@@ -18,11 +18,7 @@ export const inject = []
 // Instant notification on turn/end without 30s throttling
 const lastNotified = new Map()
 
-const CANCEL_FLAGS = [
-  '/root/.dsh/.cancel_requested',
-  '/sdcard/Download/DSHA/.cancel_requested',
-  '/root/内部存储/.cancel_requested'
-]
+const CANCEL_FLAG = '/root/.dsh/.cancel_requested'
 const PENDING_PROMPT = '/root/.dsh/.pending_prompt'
 const TOKEN_PATH = '/root/.dsh/.bridge_token'
 
@@ -377,16 +373,10 @@ export function apply(ctx) {
   ctx.inject(['agents'], (agentScope) => {
     let timer = setInterval(async () => {
       try {
-        // A. 处理用户点击通知栏「🛑 停止任务」紧急制动（多路径检测）
-        let cancelHit = false
-        for (const flag of CANCEL_FLAGS) {
-          if (existsSync(flag)) {
-            cancelHit = true
-            try { unlinkSync(flag) } catch {}
-          }
-        }
-        if (cancelHit) {
+        // A. 处理用户点击通知栏「🛑 停止任务」紧急制动
+        if (existsSync(CANCEL_FLAG)) {
           lastCancelByNotification = Date.now()
+          try { unlinkSync(CANCEL_FLAG) } catch {}
           try {
             const list = agentScope.agents.list()
             for (const ag of list) {
