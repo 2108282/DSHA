@@ -119,8 +119,8 @@ export function apply(ctx) {
   let isInInteractivePrompt = false
   let completionTimer = null
 
-  // 灵动岛/三通道状态机与 2s Trailing 节流控制
-  const THROTTLE_MS = 2000
+  // 灵动岛/三通道状态机与 3.5s Trailing 节流控制（避免频繁刷新唤醒 SystemUI / AOD）
+  const THROTTLE_MS = 3500
   let lastSentTime = 0
   let lastSentState = ''
   let pendingState = null
@@ -380,12 +380,8 @@ export function apply(ctx) {
         }
 
         if (kind === 'completed') {
-          if (!lastAssistantText || !lastAssistantText.trim()) {
-            return
-          }
-
-          const clean = lastAssistantText.replace(/\s+/g, ' ').trim()
-          const endText = clean.length > 60 ? clean.slice(0, 60) + '…' : clean
+          const clean = (lastAssistantText || '').replace(/\s+/g, ' ').trim()
+          const endText = clean ? (clean.length > 60 ? clean.slice(0, 60) + '…' : clean) : '任务已执行完成'
 
           // 防抖保护（Quiescence Debounce，1500ms）：
           // 避免多轮次长任务在每一个中间回合结束时频繁误弹“任务完成”
@@ -498,7 +494,7 @@ export function apply(ctx) {
           }
         }
       } catch {}
-    }, 400)
+    }, 1500)
 
     if (timer && typeof timer.unref === 'function') {
       timer.unref()
