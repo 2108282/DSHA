@@ -75,7 +75,7 @@ public class CtsModuleMain extends XposedModule {
 
     private final class GetCSPackageNameHooker implements Hooker {
         @Override
-        public Object intercept(Chain chain) {
+        public Object intercept(Chain chain) throws Throwable {
             if (isEnabled()) {
                 return TARGET_PACKAGE;
             }
