@@ -1,0 +1,7 @@
+id=dscts
+name=DSHA CTS Redirect
+version=1.0
+versionCode=1
+description=把圈定即搜处理者重定向到 DSHA 快捷抽屉
+minApiVersion=101
+targetApiVersion=101

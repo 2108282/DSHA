@@ -12,10 +12,12 @@ import com.deepseekharness.app.util.Constants;
  */
 public class ConfigStore {
 
+    private final Context ctx;
     private final SharedPreferences prefs;
     private final KeyVault vault;
 
     public ConfigStore(Context ctx) {
+        this.ctx = ctx.getApplicationContext();
         this.prefs = ctx.getSharedPreferences(Constants.PREFS, Context.MODE_PRIVATE);
         this.vault = new KeyVault(ctx);
     }
@@ -212,5 +214,24 @@ public class ConfigStore {
 
     public void setSheetImmersive(boolean v) {
         prefs.edit().putBoolean("sheet_immersive", v).apply();
+    }
+
+    // ================= 圈定即搜重定向 =================
+
+    /**
+     * 圈定即搜重定向开关。读自独立配置文件 cts_redirect_config，
+     * 与 Xposed 模块侧 {@code CtsModuleMain} 的 getRemotePreferences 同名同键，
+     * LSPosed 负责跨进程同步，开关改动即时生效、无需重启。
+     */
+    private SharedPreferences ctsPrefs() {
+        return ctx.getSharedPreferences("cts_redirect_config", Context.MODE_PRIVATE);
+    }
+
+    public boolean isCtsRedirectEnabled() {
+        return ctsPrefs().getBoolean("enabled", true);
+    }
+
+    public void setCtsRedirectEnabled(boolean v) {
+        ctsPrefs().edit().putBoolean("enabled", v).apply();
     }
 }

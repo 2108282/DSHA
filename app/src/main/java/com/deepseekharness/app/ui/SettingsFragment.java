@@ -93,6 +93,21 @@ public class SettingsFragment extends Fragment {
             });
         }
 
+        // 圈定即搜重定向开关：开关状态写入 cts_redirect_config，Xposed 模块侧实时读取，改完即时生效
+        androidx.appcompat.widget.SwitchCompat ctsSwitch = v.findViewById(R.id.settings_cts_redirect_switch);
+        if (ctsSwitch != null) {
+            ConfigStore ctsCfg = new ConfigStore(requireContext());
+            ctsSwitch.setChecked(ctsCfg.isCtsRedirectEnabled());
+            v.findViewById(R.id.settings_cts_redirect_row).setOnClickListener(x -> {
+                boolean next = !ctsSwitch.isChecked();
+                ctsSwitch.setChecked(next);
+                ctsCfg.setCtsRedirectEnabled(next);
+                Toast.makeText(requireContext(),
+                        next ? "圈定即搜重定向已开启（手势唤起抽屉）" : "圈定即搜已回退系统默认（Google）",
+                        Toast.LENGTH_SHORT).show();
+            });
+        }
+
         EditText opacityDayInput = v.findViewById(R.id.settings_sheet_opacity_day_input);
         Button opacityDaySave = v.findViewById(R.id.settings_sheet_opacity_day_save);
         EditText opacityNightInput = v.findViewById(R.id.settings_sheet_opacity_night_input);

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">DSHA-FR</string>
+    <string name="cts_module_description">把圈定即搜处理者重定向到 DSHA 快捷抽屉</string>
     <string name="nav_launch">启动</string>
     <string name="nav_plugins">插件</string>
     <string name="nav_settings">设置</string>

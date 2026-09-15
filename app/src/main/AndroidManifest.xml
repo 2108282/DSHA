@@ -46,8 +46,8 @@
         android:supportsRtl="true"
         android:enableOnBackInvokedCallback="true"
         android:usesCleartextTraffic="true"
+        android:description="@string/cts_module_description"
         android:theme="@style/Theme.DeepseekHarness">
-
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
