@@ -97,6 +97,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private static boolean sWebLoaded = false;
     private static long sLoadedGeneration = -1;
     private static int sLoadedPort = 0;
+    /** + 号触发：token 失效重载后自动补发新建对话动作 */
+    private static volatile boolean sPendingNewChat = false;
     public static volatile String sPendingApprovalDecision = null;
 
     public static void syncApprovalDecision(boolean allow) {
@@ -528,6 +530,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             // 立即通过新 Token 重新加载主页并换新 Cookie，确保新对话与附件上传在最新有效凭证下进行
             if (serviceRestarted || detached || !sWebLoaded || sLoadedPort != port) {
                 sLoadedPort = port;
+                sPendingNewChat = true;
                 reloadWithLatestToken();
                 return;
             }
@@ -1428,6 +1431,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 authRetried = false;
                 if (progressBar != null) progressBar.setVisibility(View.GONE);
                 injectTransparentBackground(view);
+                // 若 + 号因 Token 失效触发了先重载再新建的流程，加载完成后 300ms 自动补发
+                if (sPendingNewChat) {
+                    sPendingNewChat = false;
+                    new Handler(Looper.getMainLooper()).postDelayed(() -> triggerNewChatJs(), 300);
+                }
             }
 
             @Override

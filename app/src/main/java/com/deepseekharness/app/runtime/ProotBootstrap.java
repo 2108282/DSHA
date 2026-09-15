@@ -1116,73 +1116,26 @@ public class ProotBootstrap {
         return pb.start();
     }
 
-    /** PTY 会话的 argv：与 execRootfs 共用同一份 proot 构造逻辑（见 AGENTS.md 单源约束）。 */
+    /**
+     * PTY 终端 argv：直接通过 su -mm 以 Magisk/KernelSU root namespace 调用 term.sh，
+     * term.sh 负责所有 bind-mount 与 chroot 准备工作，与手动在 MT 管理器执行完全等价。
+     */
     public String[] ptyArgv(String... guestCmd) {
-        ContainerRuntime rt = runtime();
-        if ("ksu_chroot".equals(rt.id())) {
-            String su = ContainerRuntime.KsuChroot.findSuBinary();
-            if (guestCmd != null && guestCmd.length > 0) {
-                StringBuilder sb = new StringBuilder("/data/adb/dsha/scripts/term.sh");
-                for (String arg : guestCmd) {
-                    sb.append(" ").append(ShellQuote.arg(arg));
-                }
-                return new String[]{su, "-c", sb.toString()};
-            }
-            return new String[]{su, "-c", "/data/adb/dsha/scripts/term.sh"};
+        String termScript = "/data/adb/dsha/scripts/term.sh";
+        if (guestCmd != null && guestCmd.length > 0) {
+            StringBuilder sb = new StringBuilder(termScript);
+            for (String arg : guestCmd) sb.append(" ").append(arg);
+            return new String[]{"su", "-mm", "-c", sb.toString()};
         }
-        java.util.List<String> argv = baseProotArgv();
-        if (guestCmd == null || guestCmd.length == 0) {
-            // 部分 Android/容器运行时组合创建的 PTY 会保留 -echo（输入看不到、回车却执行）。
-            // 先在同一个 PTY 上恢复标准模式再 exec 登录 shell，这条准备命令不留中间进程。
-            argv.add("/bin/bash");
-            argv.add("-c");
-            argv.add("stty sane 2>/dev/null || stty echo icanon 2>/dev/null || true; "
-                    + "exec /bin/bash -l");
-        } else {
-            java.util.Collections.addAll(argv, guestCmd);
-        }
-        return argv.toArray(new String[0]);
+        return new String[]{"su", "-mm", "-c", termScript};
     }
 
-    /** PTY 会话的环境变量（KEY=VALUE）。借临时 ProcessBuilder 复用 applyProotEnv，避免重抄漏项。 */
+    /**
+     * PTY 终端环境变量：环境由 term.sh 与 su -mm 负责完整设置，
+     * 此处只补充终端类型与 locale，避免与 chroot 内设置冲突。
+     */
     public String[] ptyEnv() {
-        ContainerRuntime rt = runtime();
-        if ("ksu_chroot".equals(rt.id())) {
-            List<String> list = new ArrayList<>();
-            java.util.Map<String, String> envMap = System.getenv();
-            if (envMap != null) {
-                for (java.util.Map.Entry<String, String> entry : envMap.entrySet()) {
-                    if ("PATH".equalsIgnoreCase(entry.getKey())) continue;
-                    if (entry.getKey() != null && entry.getValue() != null) {
-                        list.add(entry.getKey() + "=" + entry.getValue());
-                    }
-                }
-            }
-            String sysPath = System.getenv("PATH");
-            String fullPath = (sysPath != null && !sysPath.isEmpty() ? sysPath + ":" : "")
-                    + "/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk:/sbin:/system/sbin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin";
-            list.add("PATH=" + fullPath);
-            list.add("TERM=xterm-256color");
-            list.add("LANG=C.UTF-8");
-            list.add("LC_ALL=C.UTF-8");
-            list.add("HOME=/root");
-            return list.toArray(new String[0]);
-        }
-        ensureRuntimeFiles();
-        ensureBundledPython();
-        ensureBundledPnpm();
-        ProcessBuilder probe = new ProcessBuilder("/system/bin/true");
-        applyProotEnv(probe);
-        java.util.Map<String, String> m = probe.environment();
-        // UTF-8 locale：不设的话 bash 用 C locale，中文输入/显示会乱码（中文字节被当单字节处理）
-        m.put("LANG", "C.UTF-8");
-        m.put("LC_ALL", "C.UTF-8");
-        java.util.List<String> out = new ArrayList<>(m.size());
-        for (java.util.Map.Entry<String, String> e : m.entrySet()) {
-            if (e.getKey() == null || e.getValue() == null) continue;
-            out.add(e.getKey() + "=" + e.getValue());
-        }
-        return out.toArray(new String[0]);
+        return new String[]{"TERM=xterm-256color", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"};
     }
 
     private String readStream(InputStream in) throws IOException {
