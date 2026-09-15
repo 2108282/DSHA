@@ -50,14 +50,16 @@ public class CtsModuleMain extends XposedModule {
     public void onSystemServerStarting(SystemServerStartingParam param) {
         super.onSystemServerStarting(param);
         // 设备已确认存在 contextual_search 服务（cmd contextual_search 可用），
-        // 只需主路径。反射探测 + runCatching 兜底，避免厂商改类名导致 system_server 崩溃。
-        runCatching(() -> {
+        // 只需主路径。反射探测 + try/catch 兜底，避免厂商改类名导致 system_server 崩溃。
+        try {
             Class<?> csms = param.getClassLoader().loadClass(
                     "com.android.server.contextualsearch.ContextualSearchManagerService");
             hook(csms.getDeclaredMethod("getContextualSearchPackageName"))
                     .intercept(new GetCSPackageNameHooker());
             log(Log.INFO, TAG, "hook getContextualSearchPackageName installed");
-        }).onFailure(e -> log(Log.ERROR, TAG, "hook CSMS fail", e));
+        } catch (Throwable e) {
+            log(Log.ERROR, TAG, "hook CSMS fail", e);
+        }
     }
 
     /** 开关开 → 返回本包；关 → 透传系统原逻辑（Google）。每次手势都实时读取，改开关即时生效。 */
