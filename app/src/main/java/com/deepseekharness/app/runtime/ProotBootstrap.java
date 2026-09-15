@@ -1095,7 +1095,6 @@ public class ProotBootstrap {
         if ("ksu_chroot".equals(rt.id())) {
             List<String> argv = new ArrayList<>();
             argv.add(ContainerRuntime.KsuChroot.findSuBinary());
-            argv.add("-mm");
             argv.add("-c");
             argv.add("/data/adb/dsha/scripts/term.sh");
             ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
@@ -1127,9 +1126,9 @@ public class ProotBootstrap {
                 for (String arg : guestCmd) {
                     sb.append(" ").append(ShellQuote.arg(arg));
                 }
-                return new String[]{su, "-mm", "-c", sb.toString()};
+                return new String[]{su, "-c", sb.toString()};
             }
-            return new String[]{su, "-mm", "-c", "/data/adb/dsha/scripts/term.sh"};
+            return new String[]{su, "-c", "/data/adb/dsha/scripts/term.sh"};
         }
         java.util.List<String> argv = baseProotArgv();
         if (guestCmd == null || guestCmd.length == 0) {

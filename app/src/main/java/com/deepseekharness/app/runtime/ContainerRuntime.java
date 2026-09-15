@@ -272,7 +272,6 @@ public interface ContainerRuntime {
         @Override public List<String> baseArgv(File rootfsDir, boolean hardlinkSupported) {
             List<String> argv = new ArrayList<>();
             argv.add(findSuBinary());
-            argv.add("-mm");
             argv.add("-c");
             argv.add("/data/adb/dsha/scripts/term.sh");
             return argv;
