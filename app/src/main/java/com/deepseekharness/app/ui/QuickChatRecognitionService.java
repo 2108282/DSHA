@@ -1,6 +1,7 @@
 package com.deepseekharness.app.ui;
 
 import android.content.Intent;
+import android.os.RemoteException;
 import android.speech.RecognitionService;
 
 /**
@@ -12,12 +13,17 @@ import android.speech.RecognitionService;
  * 本类仅为满足候选资格存在；唤醒后的实际输入由 {@link QuickChatSheetActivity} 自行处理，
  * 不走系统 RecognitionService 通路，因此所有回调直接返回错误（未使用）。
  * RecognitionService 是 abstract，必须实现 onStartListening/onStopListening/onCancel。
+ * Callback.error() 抛 RemoteException（受检异常），须显式捕获。
  */
 public class QuickChatRecognitionService extends RecognitionService {
     @Override
     protected void onStartListening(Intent recognizerIntent, Callback listener) {
         if (listener != null) {
-            listener.error(1); // ERROR_NETWORK_TIMEOUT：表示不走此通路
+            try {
+                listener.error(1); // ERROR_NETWORK_TIMEOUT：表示不走此通路
+            } catch (RemoteException ignored) {
+                // 回调已失效，无需处理
+            }
         }
     }
 
