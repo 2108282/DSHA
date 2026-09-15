@@ -1498,6 +1498,24 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     }
 
     /**
+     * 通过 JS 在 WebView 内触发"新建会话"动作：
+     * 优先点击页面内的"新会话"按钮；若找不到则回退到跳转首页。
+     */
+    private void triggerNewChatJs() {
+        if (sCachedWebView == null) return;
+        String js = "(function() {" +
+                "  var btn = document.querySelector('[class*=\"newSession\"], [aria-label*=\"新会话\"], [aria-label*=\"新建\"], button[title*=\"新会话\"], button[title*=\"New session\"], button[title*=\"New Chat\"]');" +
+                "  if (btn) {" +
+                "    btn.click();" +
+                "  } else {" +
+                "    window.location.hash = '';" +
+                "    window.location.href = '/';" +
+                "  }" +
+                "})();";
+        sCachedWebView.evaluateJavascript(js, null);
+    }
+
+    /**
      * 智能刷新 Token 与鉴权 Cookie：
      * 1. 重新从 Controller 换取最新的 dsh-auth-* Cookie 并写入 CookieManager（保证附件上传畅通）
      * 2. 携带最新 launchtoken 重新 loadUrl（保证主框架鉴权成功）
