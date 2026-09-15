@@ -1,26 +1,30 @@
 package com.deepseekharness.app;
 
+import android.content.Intent;
+import android.app.Activity;
 import android.util.Log;
 
 import io.github.libxposed.api.XposedInterface.Chain;
 import io.github.libxposed.api.XposedInterface.Hooker;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam;
+import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam;
 import io.github.libxposed.api.XposedModuleInterface.SystemServerStartingParam;
 
 /**
- * 圈定即搜（Contextual Search）重定向模块入口（Java 版，DSHA 为纯 Java 工程）。
+ * 斜拉唤醒语音助手重定向模块（Java 版，DSHA 为纯 Java 工程）。
  *
- * 作用域：仅 system（hook 运行在 system_server 的 ContextualSearchManagerService）。
- * 原理：HyperOS 的圈定即搜手势最终汇聚到
- *   {@code ContextualSearchManagerService.getContextualSearchPackageName()}
- * 该方法返回处理者包名（默认 framework-res 写死为 Google）。
- * hook 它返回本包 {@code com.dsha.fr}，系统即在本包内用
- * ACTION_LAUNCH_CONTEXTUAL_SEARCH 解析到 QuickChatSheetActivity 并拉起。
+ * 【背景】小米 SystemUI 的 onFsgestureEntered 硬编码 com.google.android.googlequicksearchbox，
+ * 斜拉手势只唤醒 Google Gemini，不查询 ASSISTANT 角色是谁（实测：小爱同学也无法触发）。
+ * 因此无论把默认助理设成哪个 App，斜拉手势都只会启动 Google 的 FloatyActivity。
  *
- * 相比 MiCTS 的 5 个 hook，本机已原生支持 CTS 服务，只需这 1 个核心 hook。
- * deviceHasConfigString / enforcePermission / VIMS 借道等均不需要：
- * 手势触发方是 SystemUI，自带 ACCESS_CONTEXTUAL_SEARCH 权限。
+ * 【方案】保持 Google 为默认助理（保证手势可触发），在 Google 进程内 hook
+ * com.google.android.apps.search.assistant.surfaces.voice.robin.ui.floaty.activity.FloatyActivity
+ * 的 onCreate，转而拉起本包 AssistGatewayActivity（exported），由其接管交互。
+ * AssistGatewayActivity 立即转拉 QuickChatSheetActivity 并自我关闭。
+ *
+ * 【作用域】system（CSMS 兜底，本机 CSMS 服务未启动，实际不生效）
+ *         + com.google.android.googlequicksearchbox（主路径，FloatyActivity 拦截）
  */
 public class CtsModuleMain extends XposedModule {
 
@@ -34,6 +38,10 @@ public class CtsModuleMain extends XposedModule {
     /** 重定向目标包名 = 本应用 applicationId */
     private static final String TARGET_PACKAGE = "com.dsha.fr";
 
+    /** Google Gemini 悬浮界面（斜拉手势的最终落地 Activity） */
+    private static final String GOOGLE_FLOATY_ACTIVITY =
+            "com.google.android.apps.search.assistant.surfaces.voice.robin.ui.floaty.activity.FloatyActivity";
+
     private static volatile CtsModuleMain instance;
 
     public CtsModuleMain() {
@@ -43,14 +51,13 @@ public class CtsModuleMain extends XposedModule {
     @Override
     public void onModuleLoaded(ModuleLoadedParam param) {
         instance = this;
-        log(Log.INFO, TAG, "CTS redirect module loaded");
+        log(Log.INFO, TAG, "Voice assist redirect module loaded");
     }
 
     @Override
     public void onSystemServerStarting(SystemServerStartingParam param) {
         super.onSystemServerStarting(param);
-        // 设备已确认存在 contextual_search 服务（cmd contextual_search 可用），
-        // 只需主路径。反射探测 + try/catch 兜底，避免厂商改类名导致 system_server 崩溃。
+        // CSMS 兜底路径（圈定即搜）。本机 CSMS 服务未启动，此 hook 不会被调用，保留以防厂商差异。
         try {
             Class<?> csms = param.getClassLoader().loadClass(
                     "com.android.server.contextualsearch.ContextualSearchManagerService");
@@ -62,7 +69,25 @@ public class CtsModuleMain extends XposedModule {
         }
     }
 
-    /** 开关开 → 返回本包；关 → 透传系统原逻辑（Google）。每次手势都实时读取，改开关即时生效。 */
+    @Override
+    public void onPackageReady(PackageReadyParam param) {
+        super.onPackageReady(param);
+        if (!param.isFirstPackage) return;
+
+        if ("com.google.android.googlequicksearchbox".equals(param.packageName)) {
+            // 主路径：拦截 Gemini 的 FloatyActivity，重定向到本应用
+            try {
+                Class<?> floaty = param.getClassLoader().loadClass(GOOGLE_FLOATY_ACTIVITY);
+                hook(floaty.getDeclaredMethod("onCreate", android.os.Bundle.class))
+                        .intercept(new FloatyRedirectHooker());
+                log(Log.INFO, TAG, "hook FloatyActivity.onCreate installed");
+            } catch (Throwable e) {
+                log(Log.ERROR, TAG, "hook FloatyActivity fail", e);
+            }
+        }
+    }
+
+    /** 开关开 → 重定向；关 → 透传系统原逻辑（Google）。每次手势都实时读取，改开关即时生效。 */
     private boolean isEnabled() {
         try {
             return instance != null
@@ -73,6 +98,7 @@ public class CtsModuleMain extends XposedModule {
         }
     }
 
+    /** CSMS 兜底：圈定即搜处理者重定向。 */
     private final class GetCSPackageNameHooker implements Hooker {
         @Override
         public Object intercept(Chain chain) throws Throwable {
@@ -80,6 +106,37 @@ public class CtsModuleMain extends XposedModule {
                 return TARGET_PACKAGE;
             }
             return chain.proceed();
+        }
+    }
+
+    /**
+     * 主路径：FloatyActivity.onCreate 执行后，拉起本包 AssistGatewayActivity 并关闭 Gemini 界面。
+     * onCreate 在主线程执行，Activity 已完成初始化，可直接 startActivity。
+     */
+    private final class FloatyRedirectHooker implements Hooker {
+        @Override
+        public Object intercept(Chain chain) throws Throwable {
+            Object result = chain.proceed();
+            if (!isEnabled()) {
+                return result;
+            }
+            Object thisObject = chain.thisObject;
+            if (!(thisObject instanceof Activity)) {
+                return result;
+            }
+            Activity activity = (Activity) thisObject;
+            try {
+                Intent intent = new Intent();
+                intent.setClassName(TARGET_PACKAGE,
+                        "com.deepseekharness.app.ui.AssistGatewayActivity");
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                activity.startActivity(intent);
+                activity.finish();
+                log(Log.INFO, TAG, "FloatyActivity redirected to DSHA");
+            } catch (Throwable e) {
+                log(Log.ERROR, TAG, "redirect FloatyActivity fail", e);
+            }
+            return result;
         }
     }
 }
