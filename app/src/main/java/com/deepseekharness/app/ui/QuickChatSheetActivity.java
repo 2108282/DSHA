@@ -1,4 +1,4 @@
-﻿package com.deepseekharness.app.ui;
+package com.deepseekharness.app.ui;
 
 import com.deepseekharness.app.HttpShellService;
 import com.deepseekharness.app.core.HarnessController;
