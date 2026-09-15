@@ -159,7 +159,25 @@
             <intent-filter>
                 <action android:name="android.service.voice.VoiceInteractionService" />
             </intent-filter>
+            <!-- 系统候选资格必需：VoiceInteractionServiceInfo 强制解析此元数据，
+                 要求根标签 voice-interaction-service + sessionService + recognitionService。 -->
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction_service" />
         </service>
+
+        <!-- 语音交互会话服务（VoiceInteractionServiceInfo 必填项）：管理助手 UI 生命周期。 -->
+        <service
+            android:name=".ui.QuickChatVoiceInteractionSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+
+        <!-- 语音识别服务（VoiceInteractionServiceInfo 必填项）：仅用于满足候选资格，
+             唤醒后输入仍由 QuickChatSheetActivity 自行处理。 -->
+        <service
+            android:name=".ui.QuickChatRecognitionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_RECOGNITION_SERVICE" />
 
         <receiver
             android:name=".ConfirmReceiver"

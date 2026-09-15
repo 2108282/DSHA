@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VoiceInteractionService 元数据（系统候选资格必需）。
+  VoiceInteractionServiceInfo 解析本文件，要求：
+    - 根标签必须是 voice-interaction-service
+    - sessionService 必填：语音交互会话服务（管理 Assistant UI 生命周期）
+    - recognitionService 必填：语音识别服务（用于唤醒后的语音输入）
+  缺任一项 → getParseError() 非空 → mValid=false → 系统设置助理候选列表不显示本应用。
+-->
+<voice-interaction-service
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="com.deepseekharness.app.ui.QuickChatVoiceInteractionSessionService"
+    android:recognitionService="com.deepseekharness.app.ui.QuickChatRecognitionService"
+    android:supportsAssist="true" />
