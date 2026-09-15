@@ -72,9 +72,9 @@ public class CtsModuleMain extends XposedModule {
     @Override
     public void onPackageReady(PackageReadyParam param) {
         super.onPackageReady(param);
-        if (!param.isFirstPackage) return;
+        if (!param.isFirstPackage()) return;
 
-        if ("com.google.android.googlequicksearchbox".equals(param.packageName)) {
+        if ("com.google.android.googlequicksearchbox".equals(param.getPackageName())) {
             // 主路径：拦截 Gemini 的 FloatyActivity，重定向到本应用
             try {
                 Class<?> floaty = param.getClassLoader().loadClass(GOOGLE_FLOATY_ACTIVITY);
@@ -120,7 +120,7 @@ public class CtsModuleMain extends XposedModule {
             if (!isEnabled()) {
                 return result;
             }
-            Object thisObject = chain.thisObject;
+            Object thisObject = chain.getThisObject();
             if (!(thisObject instanceof Activity)) {
                 return result;
             }
