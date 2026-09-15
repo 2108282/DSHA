@@ -11,8 +11,9 @@ import android.service.voice.VoiceInteractionSessionService;
  * 系统 ASSISTANT 候选资格要求 VoiceInteractionService 的元数据中必须声明 sessionService，
  * 否则 getParseError() 返回 "No sessionService specified"，候选列表不显示本应用。
  *
- * 唤醒时系统创建会话并回调 {@link #onNewSession(Bundle)}，在此直接拉起
- * {@link QuickChatSheetActivity}（底部快捷对话抽屉），由其接管全部交互。
+ * 唤醒时系统创建会话并回调 {@link #onNewSession(Bundle)}，必须返回一个非空
+ * VoiceInteractionSession 实例（不能 super 返回 null）。在此返回空会话，
+ * 并直接拉起 {@link QuickChatSheetActivity}（底部快捷对话抽屉）接管全部交互。
  */
 public class QuickChatVoiceInteractionSessionService extends VoiceInteractionSessionService {
     @Override
@@ -20,6 +21,6 @@ public class QuickChatVoiceInteractionSessionService extends VoiceInteractionSes
         Intent intent = new Intent(this, QuickChatSheetActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(intent);
-        return super.onNewSession(args);
+        return new VoiceInteractionSession(this);
     }
 }

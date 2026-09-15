@@ -11,7 +11,8 @@ import android.speech.RecognitionService;
  * getParseError() 返回 "No recognitionService specified"，候选列表不显示本应用。
  *
  * 本类仅为满足候选资格存在；唤醒后的实际输入由 {@link QuickChatSheetActivity} 自行处理，
- * 不走系统 RecognitionService 通路，因此回调内直接返回错误（未使用）。
+ * 不走系统 RecognitionService 通路，因此所有回调直接返回错误（未使用）。
+ * RecognitionService 是 abstract，必须实现全部抽象方法，否则编译失败。
  */
 public class QuickChatRecognitionService extends RecognitionService {
     @Override
@@ -22,7 +23,22 @@ public class QuickChatRecognitionService extends RecognitionService {
     }
 
     @Override
+    protected void onStopListening(Callback listener) {
+        // 无操作
+    }
+
+    @Override
     protected void onCancel(Callback listener) {
+        // 无操作
+    }
+
+    @Override
+    protected void onDetectIntent(Intent intent, Bundle params, Callback listener) {
+        // 无操作
+    }
+
+    @Override
+    protected void onSearch(Intent recognizerIntent, Bundle extras, Callback listener) {
         // 无操作
     }
 }
