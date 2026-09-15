@@ -1,4 +1,4 @@
-package com.deepseekharness.app.ui;
+﻿package com.deepseekharness.app.ui;
 
 import com.deepseekharness.app.HttpShellService;
 import com.deepseekharness.app.core.HarnessController;
@@ -1434,7 +1434,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 // 若 + 号因 Token 失效触发了先重载再新建的流程，加载完成后 300ms 自动补发
                 if (sPendingNewChat) {
                     sPendingNewChat = false;
-                    new Handler(Looper.getMainLooper()).postDelayed(() -> triggerNewChatJs(), 300);
+                    new Handler(Looper.getMainLooper()).postDelayed(() -> QuickChatSheetActivity.this.triggerNewChatJs(), 300);
                 }
             }
 
