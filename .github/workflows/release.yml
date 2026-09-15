@@ -1,20 +1,22 @@
-name: Release
+name: Joint Release (APK + Magisk Module)
 
 on:
   push:
     tags:
       - 'v*'
       - '1.*'
+      - '0.1.5rc2*'
+      - 'dsha-for-root*'
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的 tag（如 1.2.0-rc1.3-update2.1 或 v1.2.0-rc1.3-update2.1）'
+        description: 'Release Tag（例如 0.1.5rc2-u1 或 dsha-for-root-1.0）'
         required: false
-        default: '1.2.0-rc1.3-update2.1'
+        default: '0.1.5rc2-u1'
       prerelease:
         description: '标记为预发布'
         type: boolean
-        default: true
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -23,16 +25,25 @@ concurrency:
 permissions:
   contents: write
   id-token: write
-  attestations: write
 
 jobs:
   release:
-    name: Build APK & publish Release
+    name: Build Joint Release (magisk-apk + dsh-magisk)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Checkout repository
+      # 1. 严格从 magisk-apk 分支检出 APK 源码
+      - name: Checkout APK Source (magisk-apk)
         uses: actions/checkout@v4
+        with:
+          ref: magisk-apk
+
+      # 2. 从 dsh-magisk 分支检出 Magisk 模块源码到子目录
+      - name: Checkout Magisk Module Source (dsh-magisk)
+        uses: actions/checkout@v4
+        with:
+          ref: dsh-magisk
+          path: magisk_src
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -42,7 +53,10 @@ jobs:
           cache: 'gradle'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> $GITHUB_ENV
+          echo "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "${ANDROID_HOME:-/usr/local/lib/android/sdk}/platform-tools" >> $GITHUB_PATH
 
       - name: Accept Android SDK Licenses
         run: |
@@ -53,32 +67,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Fetch prebuilt offline rootfs from own release
-        run: |
-          set -euo pipefail
-          mkdir -p app/src/main/assets
-          BASE_TAG="0.1.5rc1-base"
-          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
-
-          if [ ! -f "app/src/main/assets/offline-rootfs.bin" ]; then
-            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 offline-rootfs.bin..."
-            curl -L -f -o app/src/main/assets/offline-rootfs.bin "${BASE_URL}/offline-rootfs.bin"
-          fi
-
-          if [ ! -f "app/src/main/assets/dsh-runtime.bin" ]; then
-            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 dsh-runtime.bin..."
-            curl -L -f -o app/src/main/assets/dsh-runtime.bin "${BASE_URL}/dsh-runtime.bin"
-          fi
-
-          if [ ! -f "app/src/main/assets/offline-rootfs.layout" ]; then
-            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 offline-rootfs.layout..."
-            curl -L -f -o app/src/main/assets/offline-rootfs.layout "${BASE_URL}/offline-rootfs.layout"
-          fi
-
-          ls -lh app/src/main/assets/offline-rootfs.bin
-          ls -lh app/src/main/assets/dsh-runtime.bin
-          cat app/src/main/assets/offline-rootfs.layout
-
+      # 3. 准备 APK 签名密钥（如有）
       - name: Prepare release signing key
         env:
           KS_B64: ${{ secrets.DSHA_KEYSTORE_B64 }}
@@ -101,17 +90,53 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Standard APK
+      # 4. 严格按照 debug 编译流程构建 APK
+      - name: Build Standard Debug APK from magisk-apk
         run: ./gradlew :app:assembleStandardDebug --stacktrace
 
-      - name: Verify APK size and contents
+      # 5. 准备发布资产输出目录与 APK 产物
+      - name: Prepare APK Asset
         run: |
           set -euo pipefail
-          APK_FILE=$(ls app/build/outputs/apk/standard/debug/*.apk | head -1)
-          ls -lh "$APK_FILE"
-          unzip -l "$APK_FILE" | grep "offline-rootfs" || true
+          mkdir -p dist
+          ORIG_APK=$(ls app/build/outputs/apk/standard/debug/*.apk | head -1)
+          cp "$ORIG_APK" "dist/dsha-for-root-1.0.apk"
+          ls -lh dist/dsha-for-root-1.0.apk
 
-      - name: Resolve tag and version
+      # 6. 打包 Magisk Lite 模块（严格遵守 dsh-magisk 脚本与结构）
+      - name: Package Magisk Lite Module
+        run: |
+          set -euo pipefail
+          cd magisk_src/magisk-module
+          chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
+          zip -r -9 "$GITHUB_WORKSPACE/dist/dsha_ksu_native_lite.zip" META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts
+          ls -lh "$GITHUB_WORKSPACE/dist/dsha_ksu_native_lite.zip"
+
+      # 7. 下载本地验证底包并打包 Magisk Full 模块
+      - name: Download Verified Rootfs & Package Full Module
+        run: |
+          set -euo pipefail
+          BASE_TAG="0.1.5rc1-base"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
+          echo "==> 正在下载 0.1.5rc1-base 的 rootfs.tar.gz..."
+          curl -L -f -o "$GITHUB_WORKSPACE/magisk_src/magisk-module/rootfs.tar.gz" "${BASE_URL}/rootfs.tar.gz"
+
+          cd "$GITHUB_WORKSPACE/magisk_src/magisk-module"
+          zip -r -0 "$GITHUB_WORKSPACE/dist/dsha_ksu_native_full.zip" META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts rootfs.tar.gz
+          ls -lh "$GITHUB_WORKSPACE/dist/dsha_ksu_native_full.zip"
+
+      # 8. 生成 SHA-256 校验和
+      - name: Generate Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum dsha-for-root-1.0.apk | tee dsha-for-root-1.0.apk.sha256
+          sha256sum dsha_ksu_native_lite.zip | tee dsha_ksu_native_lite.zip.sha256
+          sha256sum dsha_ksu_native_full.zip | tee dsha_ksu_native_full.zip.sha256
+          ls -lh
+
+      # 9. 解析发布 Tag
+      - name: Resolve Release Tag
         id: tag
         run: |
           set -euo pipefail
@@ -120,63 +145,36 @@ jobs:
           elif [ -n "${{ inputs.tag }}" ]; then
             TAG_VAL="${{ inputs.tag }}"
           else
-            TAG_VAL="1.2.0-rc1.3-update2.1"
+            TAG_VAL="0.1.5rc2-u1"
           fi
-          echo "value=$TAG_VAL" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG_VAL" >> "$GITHUB_OUTPUT"
 
-          VN=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle | head -1 || echo "1.2.0-rc1.3-update2.1")
-          VC=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle | head -1 || echo "115")
-          echo "versionName=$VN" >> "$GITHUB_OUTPUT"
-          echo "versionCode=$VC" >> "$GITHUB_OUTPUT"
-
-      - name: Package APK for Release
-        id: apk
-        run: |
-          set -euo pipefail
-          ORIG_APK=$(ls app/build/outputs/apk/standard/debug/*.apk | head -1)
-          REL_NAME="dsha-standard-${{ steps.tag.outputs.value }}.apk"
-          cp "$ORIG_APK" "$REL_NAME"
-          sha256sum "$REL_NAME" | tee "$REL_NAME.sha256"
-          echo "file=$REL_NAME" >> "$GITHUB_OUTPUT"
-          echo "sha=$(sha256sum "$REL_NAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
-      - name: Create Release
+      # 10. 发布联合 Release
+      - name: Publish Joint Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.value }}
-          target_commitish: ${{ github.sha }}
-          name: DSHA ${{ steps.tag.outputs.value }}
-          prerelease: ${{ inputs.prerelease || true }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: DSHA ${{ steps.tag.outputs.tag }} (Native Root & Core)
+          prerelease: ${{ inputs.prerelease || false }}
           generate_release_notes: true
           body: |
-            **仅支持 arm64 / Android 11+**，APK 已内置完整 Linux rootfs 离线环境与自主底包。
+            ## DSHA Native (APK + Magisk 核心) 联合发布包
 
-            ```
-            versionName  ${{ steps.tag.outputs.versionName }}
-            versionCode  ${{ steps.tag.outputs.versionCode }}
-            sha256       ${{ steps.apk.outputs.sha }}
-            ```
+            本版本为前端控制客户端（`magisk-apk`）与原生 Root 核心模块（`dsh-magisk`）的联合交付版本。
 
-            ### 核心更新与修复说明 (1.2.0-rc1.3-update2.1)
-            - **内置自主掌控 0.1.5-rc.2 离线底包**：开箱即用，全面摆脱外部依赖，内置核心运行与自愈补丁；
-            - **QuickChat 快捷对话抽屉 100% 全景全透明与智能隐身**：
-              - 消除顶部状态栏空白条，全屏顶格沉浸；
-              - 恢复文件列表与代码/文档预览抽屉 100% 全景全透明，通透透出手机桌面壁纸；
-              - 智能全景下层自动隐身（展开右侧文件栏、文档预览、左侧栏或设置弹窗时，底层主会话流与输入框自动隐藏 `visibility: hidden`，彻底杜绝字体重影与穿透）；
-              - 修复深浅色模式与容器 App 状态动态同步，完美解决 `dsh-api-dashboard` 等插件白天模式异常；
-              - 解除抽屉包含块（containing block）束缚，彻底修复移动端设置面板偏左截断问题；
-              - 继承 AppCompatActivity 完美联动日夜间模式，日间视口彻底透明透光、黑夜代码块与输入框半透明微光；
-              - 输入框底座全透明，采用视口二段物理截断（margin-bottom 联动），长对话滚动至输入框上方自然消失；
-              - 设置页新增【快捷抽屉沉浸全透明】独立开关，输入框底座自适应微透光；
-            - **pnpm 包管理器全局部署与离线自愈**：安装与修复时同步部署到 `/usr/local/bin/pnpm` 系统全局路径，彻底根治插件管理器找不到 pnpm 报错；
-            - **局域网访问与 Token 永久固定**：局域网访问 Token 永久持久化，重启不重置；
-            - **Web 预览与下载能力增强**：支持网页文件及 Blob 链接原生下载与安全校验，恢复 `resumeTimers` 杜绝卡白屏；
-            - **插件架构与自愈强化**：规范第三方插件真实目录，自动建立 `@deepseek-ai` 软链自愈，植入 3 秒极速启动缓存；
-            - **备份恢复全量覆盖**：图片与文件附件库（attachments）正式纳入全量备份，修复对话索引与工作区丢失；
-            - **功耗与心跳彻底优化**：熄屏无任务自动释放 WakeLock 与 Wi-Fi 锁，深度休眠不发热不偷跑电，后台有长任务时自动稳固持锁。
-
-            面向开发者的完整修改清单与白皮书见仓库 `test修补/` 目录。
+            ### 产物与版本清单：
+            1. **`dsha-for-root-1.0.apk`**：
+               - 源码分支：`magisk-apk`
+               - 版本号：`dsha-for-root 1.0` (versionCode 124)
+               - 说明：原生 Root 专用前端外壳（体积 ~17MB，无底包负担，提供 3095 硬件桥与 Web 容器）。
+            2. **`dsha_ksu_native_lite.zip`**：
+               - 源码分支：`dsh-magisk`
+               - 模块版本号：`0.1.5rc2-u1` (versionCode 120)
+               - 说明：轻量控制脚本更新包（~27KB），用于已有底包用户的热更新。
+            3. **`dsha_ksu_native_full.zip`**：
+               - 源码分支：`dsh-magisk`
+               - 模块版本号：`0.1.5rc2-u1` (versionCode 120)
+               - 说明：完整刷机包（~247MB），内置 Ubuntu ARM64 生产闭包与 7 大插件，开箱即刷。
           files: |
-            ${{ steps.apk.outputs.file }}
-            ${{ steps.apk.outputs.file }}.sha256
+            dist/*
           fail_on_unmatched_files: true

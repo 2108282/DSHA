@@ -47,7 +47,7 @@ jobs:
           python-version: '3.11'
 
       - name: Fetch prebuilt offline rootfs from own release
-        if: github.ref != 'refs/heads/magisk-apk'
+        if: github.ref != 'refs/heads/magisk-apk' && github.ref != 'refs/heads/main'
         run: |
           set -euo pipefail
           mkdir -p app/src/main/assets
