@@ -1,4 +1,11 @@
 #!/bin/bash
+# ============================================================
+# DSHA 纯净公开发布版 RootFS 底包与模块打包工具
+# 规则说明：
+# 1. 原始自带插件位于 /root/dsha-*，完整保留在底包中；
+# 2. 用户自己装的插件位于 /root/.dsh/plugin-src/，严格排除脱敏！
+# 3. 会话、Cookie、Token、API Key、私人账号等严格排除！
+# ============================================================
 set -e
 
 PROJECT_DIR="/sdcard/Download/DSHA/dsha-ksu-project"
@@ -12,7 +19,7 @@ mkdir -p "$RELEASE_DIR" "$MODULE_DIR"
 
 echo "=========================================================="
 echo "      DSHA 纯净公开发布版 RootFS 底包与模块打包工具       "
-echo "   (严格脱敏：自动剔除对话记录、API Key、账号、历史指令)  "
+echo "  (仅保留 4 大原生内置插件，自动剔除全部用户后装的插件与数据) "
 echo "=========================================================="
 
 echo "[1/4] 清理 apt 缓存与临时垃圾..."
@@ -32,6 +39,7 @@ tar --numeric-owner -c \
     --exclude='./tmp/*' \
     --exclude='./root/dsha-repo' \
     --exclude='./root/手机存储' \
+    --exclude='./root/内部存储' \
     --exclude='./root/.cache/*' \
     --exclude='./root/*.log' \
     --exclude='./root/.*.pid' \
@@ -49,11 +57,20 @@ tar --numeric-owner -c \
     --exclude='./root/.dsh/.launch_token' \
     --exclude='./root/.dsh/.anonymous-user-id' \
     --exclude='./root/.dsh/dsh-api-dashboard.json' \
+    --exclude='./root/.dsh/plugin-src/*' \
+    --exclude='./root/.dsh/plugin-previews/*' \
+    --exclude='./root/.dsh/plugin-history/*' \
+    --exclude='./root/.dsh/plugin-sources.json' \
     --exclude='./.l2s' \
     --exclude='./.proroot-meta' \
     --exclude='./root/.dsh/flatten-l2s.*' \
     --exclude='./root/.dsh/repair-builtin.log' \
     --exclude='./root/.dsh/__pycache__' \
+    --exclude='./var/lib/apt/lists/*' \
+    --exclude='./var/cache/apt/archives/*' \
+    --exclude='./usr/share/doc/*' \
+    --exclude='./usr/share/man/*' \
+    --exclude='./usr/local/include/node*' \
     --exclude='./sdcard' \
     --exclude='./storage' \
     . | pigz -1 > "$ROOTFS_TAR_GZ"
@@ -71,12 +88,17 @@ echo "[4/4] 正在重新打包纯净 KernelSU / Magisk 刷机包..."
 cd "$MODULE_DIR"
 rm -f "$MODULE_ZIP"
 cp "$ROOTFS_TAR_GZ" "$MODULE_DIR/rootfs.tar.gz"
-zip -r9 "$MODULE_ZIP" META-INF module.prop customize.sh service.sh scripts rootfs.tar.gz >/dev/null
+zip -r9 "$MODULE_ZIP" META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts rootfs.tar.gz >/dev/null
 rm -f "$MODULE_DIR/rootfs.tar.gz"
 
+# 同步输出到手机 Download/DSHA 常用位置
+cp -f "$MODULE_ZIP" "/sdcard/Download/DSHA/dsha_ksu_native_v1.2.0.zip"
+zip -r9 "/sdcard/Download/DSHA/dsha_ksu_native_lite.zip" META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts >/dev/null
+
 echo "=========================================================="
-echo " 打包成功！此版本已彻底脱敏，位于 $RELEASE_DIR :"
+echo " 打包成功！此版本已脱敏且仅保留系统与4大原生插件，位于 :"
 echo " 1. 刷机包: $MODULE_ZIP"
-echo " 2. Gzip底包: $ROOTFS_TAR_GZ"
-echo " 3. Xz底包:   $ROOTFS_TAR_XZ"
+echo " 2. 根目录全量包: /sdcard/Download/DSHA/dsha_ksu_native_v1.2.0.zip"
+echo " 3. 根目录轻量包: /sdcard/Download/DSHA/dsha_ksu_native_lite.zip"
+echo " 4. Gzip底包: $ROOTFS_TAR_GZ"
 echo "=========================================================="
