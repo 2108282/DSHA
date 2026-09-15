@@ -18,7 +18,7 @@ mount_if_needed() {
 # 确保必要的挂载点存在
 mount_if_needed "$ROOTFS/dev" -o bind /dev
 
-# 确保 $ROOTFS/dev/pts 与宿主 /dev/pts 共享一致的 bind 挂载，消除独立 devpts 导致的 ioctl 报错
+# 确保 $ROOTFS/dev/pts 与宿主 /dev/pts 共享一致的 bind 挂载
 if grep -q " $ROOTFS/dev/pts devpts " /proc/mounts 2>/dev/null; then
     umount -l "$ROOTFS/dev/pts" 2>/dev/null || true
 fi
@@ -46,25 +46,36 @@ ln -sf /sdcard/Download/DSHA "$ROOTFS/root/内部存储" 2>/dev/null || true
 # 恢复标准终端设置
 stty sane 2>/dev/null || true
 
-# 直接以原生 root 身份进入 bash，通过 setsid -c 强制绑定 PTY 控制终端，彻底根除 Inappropriate ioctl 与 job control 报错
-if [ $# -eq 0 ]; then
-    exec chroot "$ROOTFS" /usr/bin/env -i \
-        HOME=/root \
-        USER=root \
-        LOGNAME=root \
-        PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-        TERM="${TERM:-xterm-256color}" \
-        LANG=C.UTF-8 \
-        LC_ALL=C.UTF-8 \
-        /usr/bin/setsid -c /bin/bash -c "cd /root && exec /bin/bash -l"
+# 智能终端调度：
+# 1. 只有在标准输入为字符终端 ([ -t 0 ]) 时才调用 setsid -c；
+# 2. 在管道/简易终端 (如 ProcessBuilder / Pipe) 中直接以 bash 运行，绝不执行 setsid 避免 ioctl 退出！
+if [ -t 0 ] && [ -x "$ROOTFS/usr/bin/setsid" ]; then
+    if [ $# -eq 0 ]; then
+        exec chroot "$ROOTFS" /usr/bin/env -i \
+            HOME=/root USER=root LOGNAME=root \
+            PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            TERM="${TERM:-xterm-256color}" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            /usr/bin/setsid -c /bin/bash -c "cd /root && exec /bin/bash +m -l"
+    else
+        exec chroot "$ROOTFS" /usr/bin/env -i \
+            HOME=/root USER=root LOGNAME=root \
+            PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            TERM="${TERM:-xterm-256color}" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            /usr/bin/setsid -c /bin/bash "$@"
+    fi
 else
-    exec chroot "$ROOTFS" /usr/bin/env -i \
-        HOME=/root \
-        USER=root \
-        LOGNAME=root \
-        PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-        TERM="${TERM:-xterm-256color}" \
-        LANG=C.UTF-8 \
-        LC_ALL=C.UTF-8 \
-        /usr/bin/setsid -c /bin/bash -c "cd /root && exec /bin/bash \"\$@\""
+    # 简易终端或非 tty 环境：直接进入交互/执行模式，完全规避 setsid 的 ioctl 致命报错
+    if [ $# -eq 0 ]; then
+        exec chroot "$ROOTFS" /usr/bin/env -i \
+            HOME=/root USER=root LOGNAME=root \
+            PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            TERM="${TERM:-xterm-256color}" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            /bin/bash +m -l
+    else
+        exec chroot "$ROOTFS" /usr/bin/env -i \
+            HOME=/root USER=root LOGNAME=root \
+            PATH=/root/dsh-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            TERM="${TERM:-xterm-256color}" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            /bin/bash "$@"
+    fi
 fi
