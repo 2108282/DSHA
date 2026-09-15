@@ -6,7 +6,7 @@
 
 > **💡 是否需要编译？**
 > * **本分支（`dsh-magisk`）完全不需要任何编译！**
-> * 本分支由纯 Shell 控制脚本、模块元数据与预置好的 Ubuntu RootFS 组成，直接输出为**单一完整模块刷机包**（`dsha_ksu_native_v1.2.0.zip`），开箱即用，无需 Gradle、NDK 或任何编译器。
+> * 本分支由纯 Shell 控制脚本、模块元数据与预置好的 Ubuntu RootFS 组成，直接输出为**单一完整模块刷机包**（`dsha_ksu_native_full.zip`），开箱即用，无需 Gradle、NDK 或任何编译器。
 > * （编译仅适用于 Android 前端客户端分支 `magisk-apk`）。
 
 ---
@@ -19,7 +19,7 @@
 │   ├── bin/ -> usr/bin
 │   ├── usr/local/bin/node          # Node.js 运行时 (v24.19.0)
 │   ├── usr/local/bin/dsh           # DSH 核心命令行程序
-│   └── root/.dsh/.bridge_token     # 3090 设备硬件能力鉴权 Token
+│   └── root/.dsh/.bridge_token     # 3095 设备硬件能力鉴权 Token
 │
 ├── scripts/                        # 核心生命周期控制脚本 (可执行权限 755)
 │   ├── start.sh                    # 启动服务：安全挂载、配置网络、后台拉起 Node.js DSH
@@ -36,17 +36,17 @@
 
 ## 二、 模块安装使用与免 Magisk 解压部署说明
 
-模块打包产物为单一完整文件：`dsha_ksu_native_v1.2.0.zip`（内含控制脚本与完整 Ubuntu 底包）。
+模块打包产物为单一完整文件：`dsha_ksu_native_full.zip`（内含控制脚本与完整 Ubuntu 底包）。
 
 你可以根据当前设备环境，从以下两种方式中二选一：
 
 ### 2.1 方式一：使用 KernelSU / APatch / Magisk 管理器安装（标准卡刷）
 适合手机已安装 root 管理器 App 的常规用户：
-1. **下载或获取模块包**：将 `dsha_ksu_native_v1.2.0.zip` 复制到手机存储（如 `/sdcard/Download/`）。
+1. **下载或获取模块包**：将 `dsha_ksu_native_full.zip` 复制到手机存储（如 `/sdcard/Download/`）。
 2. **刷入模块**：
    * 打开 KernelSU / APatch / Magisk 管理器；
    * 进入「模块」页面，点击「从本地安装」；
-   * 选择 `dsha_ksu_native_v1.2.0.zip`，刷入脚本（`customize.sh`）会自动就地将底包解压到 `/data/adb/dsha/rootfs` 并配置好所有控制脚本。
+   * 选择 `dsha_ksu_native_full.zip`，刷入脚本（`customize.sh`）会自动就地将底包解压到 `/data/adb/dsha/rootfs` 并配置好所有控制脚本。
 3. **完成状态**：
    * **刷入成功后，完全不需要重启手机！**（直接看第三节免重启使用与验证）。
 
@@ -64,11 +64,11 @@ su
 mkdir -p /data/adb/dsha/rootfs /data/adb/dsha/scripts /data/adb/dsha/run
 
 # 步骤 2：直接从模块 zip 包中提取并解压 rootfs（流式管道，无需占用多余临时空间）
-# 假设模块文件位于 /sdcard/Download/dsha_ksu_native_v1.2.0.zip
-unzip -p /sdcard/Download/dsha_ksu_native_v1.2.0.zip rootfs.tar.gz | tar -xz -C /data/adb/dsha/rootfs
+# 假设模块文件位于 /sdcard/Download/dsha_ksu_native_full.zip
+unzip -p /sdcard/Download/dsha_ksu_native_full.zip rootfs.tar.gz | tar -xz -C /data/adb/dsha/rootfs
 
 # 步骤 3：从模块包提取控制脚本并赋予可执行权限 (755)
-unzip -o /sdcard/Download/dsha_ksu_native_v1.2.0.zip "scripts/*" -d /tmp/dsha_tmp/
+unzip -o /sdcard/Download/dsha_ksu_native_full.zip "scripts/*" -d /tmp/dsha_tmp/
 cp -rf /tmp/dsha_tmp/scripts/* /data/adb/dsha/scripts/
 chmod 755 /data/adb/dsha/scripts/*.sh
 rm -rf /tmp/dsha_tmp
@@ -198,7 +198,7 @@ su -c "grep '/data/adb/dsha/rootfs' /proc/mounts"
 # 直接生成单一完整刷机包 (包含 rootfs 底包与全部控制脚本)
 ./scripts/build-module.sh --full
 ```
-产物位于 `dist/dsha_ksu_native_full.zip`（或 `/sdcard/Download/DSHA/dsha_ksu_native_v1.2.0.zip`），体积约 310MB，分发给其他用户无需单独下载底包，直接刷入或解压即可使用。
+产物位于 `dist/dsha_ksu_native_full.zip`（或 `/sdcard/Download/DSHA/dsha_ksu_native_full.zip`），体积约 310MB，分发给其他用户无需单独下载底包，直接刷入或解压即可使用。
 
 ### 4.2 云端自动打包（GitHub Actions CI/CD）
 本分支已配置 `.github/workflows/magisk-module-build.yml` 自动化工作流：
