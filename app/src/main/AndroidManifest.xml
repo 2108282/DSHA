@@ -179,6 +179,22 @@
             android:exported="true"
             android:permission="android.permission.BIND_RECOGNITION_SERVICE" />
 
+        <!-- ACTION_ASSIST 网关：小米斜拉/小白条手势触发时发送 android.intent.action.ASSIST，
+             系统在当前 ASSISTANT 角色持有者包内查找声明该 action 的组件。缺此声明则手势广播
+             无人接收，表现为"换成非 Google 助理后手势失效"。 -->
+        <activity
+            android:name=".ui.AssistGatewayActivity"
+            android:exported="true"
+            android:taskAffinity="${applicationId}.assist_gateway"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <receiver
             android:name=".ConfirmReceiver"
             android:exported="false" />
