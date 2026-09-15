@@ -61,15 +61,23 @@
         <activity android:name=".ui.UpdateActivity" android:exported="false" />
         <activity android:name=".ui.DiagnosticActivity" android:exported="false" />
 
-        <!-- 快捷对话底部抽屉弹层（点击常驻通知或任务完成通知直达，独立任务栈物理隔离） -->
+        <!-- 快捷对话底部抽屉弹层（点击常驻通知或任务完成通知直达，独立任务栈物理隔离）
+             同时作为「圈定即搜」(Contextual Search) 的处理者：系统以
+             ACTION_LAUNCH_CONTEXTUAL_SEARCH + setPackage(本包) 解析到此 Activity。
+             源码注释明确要求 This activity must not be exported（system_server 有权启动非导出 Activity），
+             且现有所有启动方（通知 PendingIntent / Service）均为同应用显式 Intent，不受 exported=false 影响。 -->
         <activity
             android:name=".ui.QuickChatSheetActivity"
-            android:exported="true"
+            android:exported="false"
             android:taskAffinity="${applicationId}.quick_sheet"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustNothing"
-            android:theme="@style/Theme.DeepseekHarness.SheetTransparent" />
+            android:theme="@style/Theme.DeepseekHarness.SheetTransparent">
+            <intent-filter>
+                <action android:name="android.app.contextualsearch.action.LAUNCH_CONTEXTUAL_SEARCH" />
+            </intent-filter>
+        </activity>
         <activity android:name=".ui.PluginInstallActivity" android:exported="true">
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
