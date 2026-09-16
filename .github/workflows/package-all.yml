@@ -120,7 +120,7 @@ jobs:
           set -euo pipefail
           APK_SRC=$(ls apk_source/app/build/outputs/apk/standard/debug/*.apk | head -1)
           cp -f "$APK_SRC" "dist/DSHA-FR 0.1.5rc.2-u2.apk"
-          echo "✓ 产物 1 已就绪 (前端 APK): dist/DSHA-FR 0.1.5rc.2-u2.apk ($(ls -lh dist/DSHA-FR 0.1.5rc.2-u2.apk | awk \x27{print $5}\x27))"
+          echo "✓ 产物 1 已就绪 (前端 APK): dist/DSHA-FR 0.1.5rc.2-u2.apk ($(ls -lh dist/DSHA-FR 0.1.5rc.2-u2.apk | awk '{print $5}'))"
 
       # ============================================================
       # 4. 严格按照 dsh-magisk 分支逻辑构建核心完整包与 Lite 包
@@ -144,8 +144,8 @@ jobs:
       - name: 收集产物 2 与 3：核心完整包与 Lite 包
         run: |
           set -euo pipefail
-          echo "✓ 产物 2 已就绪 (核心完整包): dist/dsha_ksu_native_full.zip ($(ls -lh dist/dsha_ksu_native_full.zip | awk \x27{print $5}\x27))"
-          echo "✓ 产物 3 已就绪 (核心 Lite 包): dist/dsha_ksu_native_lite.zip ($(ls -lh dist/dsha_ksu_native_lite.zip | awk \x27{print $5}\x27))"
+          echo "✓ 产物 2 已就绪 (核心完整包): dist/dsha_ksu_native_full.zip ($(ls -lh dist/dsha_ksu_native_full.zip | awk '{print $5}'))"
+          echo "✓ 产物 3 已就绪 (核心 Lite 包): dist/dsha_ksu_native_lite.zip ($(ls -lh dist/dsha_ksu_native_lite.zip | awk '{print $5}'))"
 
       # ============================================================
       # 5. 生成 3 大交付物 SHA-256 校验和清单
@@ -154,7 +154,7 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          sha256sum "DSHA-FR 0.1.5rc.2-u2.apk" | tee DSHA-FR 0.1.5rc.2-u2.apk.sha256
+          sha256sum "DSHA-FR 0.1.5rc.2-u2.apk" | tee "DSHA-FR 0.1.5rc.2-u2.apk.sha256"
           sha256sum dsha_ksu_native_full.zip | tee dsha_ksu_native_full.zip.sha256
           sha256sum dsha_ksu_native_lite.zip | tee dsha_ksu_native_lite.zip.sha256
           echo "=========================================================="
@@ -178,7 +178,7 @@ jobs:
       # ============================================================
       - name: 计算发布版本 Tag
         id: release_tag
-        if: ${{ github.event_name == push && startsWith(github.ref, refs/tags/) || inputs.publish_release }}
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
@@ -191,7 +191,7 @@ jobs:
           echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
 
       - name: 发布至 GitHub Releases
-        if: ${{ steps.release_tag.outputs.tag !=  }}
+        if: steps.release_tag.outputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_tag.outputs.tag }}
