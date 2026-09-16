@@ -5757,6 +5757,24 @@ function apply(ctx) {
     (0, composer_keyboard_guard_ts_1.installComposerKeyboardGuard)(ctx);
     (0, phone_chrome_ts_1.installPhoneChrome)(ctx);
     (0, aionui_compat_ts_1.installAionuiCompat)(ctx);
+    try {
+        if (typeof window !== "undefined" && typeof document !== "undefined") {
+            ctx.on("session/event", (_s, ev) => {
+                try {
+                    if (ev && ev.type === "approval/decided") {
+                        const isAllow = ev.data?.outcome === "allowed-once";
+                        const panel = document.querySelector("[data-approval-key]");
+                        if (panel) {
+                            const btns = panel.querySelectorAll("button");
+                            if (btns.length >= 2) {
+                                btns[isAllow ? 1 : 0].click();
+                            }
+                        }
+                    }
+                } catch (_) {}
+            });
+        }
+    } catch (_) {}
     // Debug badge (?mobile-nav-debug=1): live state overlay for phone-side
     // repros. No-op without the query param (docs: README, AGENTS.md).
     (0, debug_ts_1.installDebugBadge)(ctx);
