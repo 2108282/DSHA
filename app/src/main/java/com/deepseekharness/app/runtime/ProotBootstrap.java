@@ -558,17 +558,8 @@ public class ProotBootstrap {
         File rootfs = getRootfsDir();
         if (rootfs == null || !rootfs.isDirectory()) return;
         try {
-            // 优先从 builtin-plugins/ 目录完整递归同步四个内置插件全部源码与补丁
-            extractAssetDir("builtin-plugins/dsh-device-shell-guide", new File(rootfs, "root/dsha-device-shell-guide"));
-            extractAssetDir("builtin-plugins/dsh-status-overlay", new File(rootfs, "root/dsha-status-overlay"));
-            extractAssetDir("builtin-plugins/dsh-task-notifier", new File(rootfs, "root/dsha-task-notifier"));
-            extractAssetDir("builtin-plugins/dsh-web-mobile", new File(rootfs, "root/dsha-web-mobile"));
-
-            // 兼顾独立平级目录的旧资产覆盖
-            extractAssetDir("task-notifier", new File(rootfs, "root/dsha-task-notifier"));
-            extractAssetDir("status-overlay", new File(rootfs, "root/dsha-status-overlay"));
-
-            // 为四个内置插件建立通往 DSH 共享依赖池的 node_modules 符号链接，彻底解决 Cannot find package 依赖缺失
+            // 模块 Native 架构下：内置插件实体由 Magisk 模块和 rootfs 底包原生管理，APK 不再执行暴力覆写。
+            // 仅按需补齐通往 DSH 共享依赖池的 node_modules 符号链接，保证依赖可用。
             String targetNm = "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules";
             for (String p : new String[]{"dsha-device-shell-guide", "dsha-status-overlay", "dsha-task-notifier", "dsha-web-mobile"}) {
                 File link = new File(rootfs, "root/" + p + "/node_modules");
@@ -1283,140 +1274,20 @@ public class ProotBootstrap {
                 Log.w("DSHA", "解压独立 dsh-runtime 失败或不存在: " + e.getMessage());
             }
         }
-        installBundledPython(rootfsDir);
-        installBundledPnpm(rootfsDir);
+        // 模块 Native 架构下：系统级 Python 3.12 与 pnpm 10.34 原生内置于 rootfs 底包中，APK 纯前端不再内置与解压。
         RuntimeTools.prepare(ctx, rootfsDir);
         markOfflineExtracted();
     }
 
-    private static final Object PYTHON_LOCK = new Object();
-
-    /** 标准版统一用 glibc Python；不再把另一套 Termux Python 重复写入 rootfs。 */
-    private void installBundledPython(File stage) throws IOException {
-        synchronized (PYTHON_LOCK) {
-            File py = new File(stage, "usr/bin/python3.12");
-            File enc = new File(stage, "usr/lib/python3.12/encodings/__init__.py");
-            if (!py.isFile() || py.length() == 0 || !enc.isFile()) {
-                try (InputStream input = openPythonAsset()) {
-                    TarGzipExtractor.extractAuto(input, stage, 0);
-                }
-            }
-            if (!py.isFile() || !enc.isFile()) throw new IOException("Ubuntu Python 运行环境不完整");
-            // 标准库的 C 扩展还依赖 SQLite/readline；仅有 Python 主程序并不代表它们可用。
-            File sqlite = new File(stage, "usr/lib/aarch64-linux-gnu/libsqlite3.so.0");
-            File readline = new File(stage, "usr/lib/aarch64-linux-gnu/libreadline.so.8");
-            if (!sqlite.isFile() || sqlite.length() == 0 || !readline.isFile() || readline.length() == 0) {
-                try (InputStream input = ctx.getAssets().open("python-support.bin")) {
-                    TarGzipExtractor.extractAuto(input, stage, 0);
-                }
-            }
-            if (!sqlite.isFile() || !readline.isFile()) throw new IOException("Python 动态库不完整");
-            py.setExecutable(true, false);
-            File command = new File(stage, "usr/bin/python3");
-            if (!command.getCanonicalFile().equals(py.getCanonicalFile())) {
-                if ((command.exists() || Compat.isSymbolicLink(command)) && !command.delete())
-                    throw new IOException("无法更新 Python 命令入口");
-                try {
-                    Compat.symlink("python3.12", command);
-                } catch (Exception error) {
-                    Compat.copy(py, command, true);
-                    command.setExecutable(true, false);
-                }
-            }
-            Compat.write(new File(stage, "root/.dsha-python-version"),
-                    "3.12-glibc-arm64\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        }
-    }
-
-    /** 老用户覆盖安装时按需补齐 Python，不重解压或删除其 rootfs。 */
     public boolean ensureBundledPython() {
-        if ("ksu_chroot".equals(runtime().id())) {
-            return isEnvironmentReady();
-        }
-        return ensureGlibcPython();
+        return isEnvironmentReady();
     }
 
     public boolean ensureGlibcPython() {
-        if (!rootfsDir.isDirectory()) return false;
-        try {
-            installBundledPython(rootfsDir);
-            return true;
-        } catch (Exception error) {
-            Log.w("DSHA", "Ubuntu Python 安装失败: " + SensitiveData.redact(String.valueOf(error)));
-            return false;
-        }
-    }
-
-    private static final Object PNPM_LOCK = new Object();
-
-    /** 放在独立目录，不覆盖用户通过 npm 安装或升级的全局包管理器。 */
-    private void installBundledPnpm(File stage) throws IOException {
-        synchronized (PNPM_LOCK) {
-            File entry = new File(stage, "usr/local/lib/dsha-pnpm/bin/pnpm.cjs");
-            File marker = new File(stage, "root/.dsha-pnpm-version");
-            if (!entry.isFile() || !marker.isFile()
-                    || !"10.34.5".equals(new String(Compat.readAllBytes(marker),
-                    java.nio.charset.StandardCharsets.UTF_8).trim())) {
-                try (InputStream input = ctx.getAssets().open("pnpm-runtime.bin")) {
-                    TarGzipExtractor.extractAuto(input, stage, 0);
-                }
-                if (!entry.isFile()) throw new IOException("离线 pnpm 入口缺失");
-                Compat.write(marker, "10.34.5\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            }
-            byte[] pnpmWrapperScript = ("#!/bin/sh\n"
-                    + "exec /usr/local/bin/node /usr/local/lib/dsha-pnpm/bin/pnpm.cjs \"$@\"\n")
-                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
-
-            // 1. 保留 /root/dsh-bin/pnpm 兼容入口
-            File wrapper = new File(stage, "root/dsh-bin/pnpm");
-            if (!wrapper.isFile() || wrapper.length() == 0 || Compat.isSymbolicLink(wrapper)) {
-                File directory = wrapper.getParentFile();
-                if (!directory.isDirectory() && !directory.mkdirs())
-                    throw new IOException("无法创建 pnpm 命令目录");
-                if ((wrapper.exists() || Compat.isSymbolicLink(wrapper)) && !wrapper.delete())
-                    throw new IOException("无法更新 pnpm 命令入口");
-                Compat.write(wrapper, pnpmWrapperScript);
-                wrapper.setExecutable(true, false);
-            }
-
-            // 2. 关键修复：同步将执行入口部署至全局标准路径 /usr/local/bin/pnpm！
-            // 彻底解决终端、插件管理器 (plugin-manager.py / shutil.which) 在默认系统 PATH 找不到 pnpm 的问题
-            File usrBinPnpm = new File(stage, "usr/local/bin/pnpm");
-            if (!usrBinPnpm.isFile() || usrBinPnpm.length() == 0 || Compat.isSymbolicLink(usrBinPnpm)) {
-                File directory = usrBinPnpm.getParentFile();
-                if (!directory.isDirectory() && !directory.mkdirs())
-                    throw new IOException("无法创建 /usr/local/bin 目录");
-                if ((usrBinPnpm.exists() || Compat.isSymbolicLink(usrBinPnpm)) && !usrBinPnpm.delete())
-                    throw new IOException("无法更新 /usr/local/bin/pnpm 命令入口");
-                Compat.write(usrBinPnpm, pnpmWrapperScript);
-                usrBinPnpm.setExecutable(true, false);
-            }
-        }
+        return isEnvironmentReady();
     }
 
     public boolean ensureBundledPnpm() {
-        if ("ksu_chroot".equals(runtime().id())) {
-            return true;
-        }
-        try {
-            installBundledPnpm(rootfsDir);
-            return true;
-        } catch (Exception error) {
-            Log.w("DSHA", "离线 pnpm 安装失败: " + SensitiveData.redact(String.valueOf(error)));
-            return false;
-        }
-    }
-
-    private InputStream openPythonAsset() throws IOException {
-        try {
-            return ctx.getAssets().open("glibc-python.bin");
-        } catch (IOException ignored) {
-            // 兼容旧资产构建入口，新的标准版只打包 bin。
-            try {
-                return ctx.getAssets().open("glibc-python.tar.gz");
-            } catch (IOException missing) {
-                return ctx.getAssets().open("glibc-python.tar");
-            }
-        }
+        return true;
     }
 }
