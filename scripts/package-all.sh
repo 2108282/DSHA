@@ -2,7 +2,7 @@
 # ============================================================
 # package-all.sh — DSHA 三大产物一键本地/CI打包总装脚本
 # 最终产物 (一共 3 个):
-#   1. dist/dsha-for-root-1.0.apk    (前端 APK, 来自 magisk-apk)
+#   1. dist/DSHA-FR 0.1.5rc.2-u2.apk    (前端 APK, 来自 magisk-apk)
 #   2. dist/dsha_ksu_native_full.zip (核心完整包, 来自 dsh-magisk)
 #   3. dist/dsha_ksu_native_lite.zip (核心 Lite 包, 来自 dsh-magisk)
 # ============================================================
@@ -32,8 +32,8 @@ cd "$STAGE_DIR/apk_src"
 chmod +x gradlew
 ./gradlew :app:assembleStandardDebug --stacktrace
 ORIG_APK=$(ls app/build/outputs/apk/standard/debug/*.apk | head -1)
-cp -f "$ORIG_APK" "$DIST_DIR/dsha-for-root-1.0.apk"
-echo "✓ 产物 1 完成: $DIST_DIR/dsha-for-root-1.0.apk"
+cp -f "$ORIG_APK" "$DIST_DIR/DSHA-FR 0.1.5rc.2-u2.apk"
+echo "✓ 产物 1 完成: $DIST_DIR/DSHA-FR 0.1.5rc.2-u2.apk"
 cd "$ROOT_DIR"
 
 # 2. 检出或准备核心模块源码 (dsh-magisk 分支)
@@ -56,7 +56,7 @@ cd "$ROOT_DIR"
 # 3. 产物汇总与校验和计算
 echo "==> [3/3] 计算 3 大交付物 SHA-256 校验和..."
 cd "$DIST_DIR"
-sha256sum dsha-for-root-1.0.apk | tee dsha-for-root-1.0.apk.sha256
+sha256sum "DSHA-FR 0.1.5rc.2-u2.apk" | tee DSHA-FR 0.1.5rc.2-u2.apk.sha256
 sha256sum dsha_ksu_native_full.zip | tee dsha_ksu_native_full.zip.sha256
 sha256sum dsha_ksu_native_lite.zip | tee dsha_ksu_native_lite.zip.sha256
 

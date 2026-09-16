@@ -17,7 +17,7 @@ on:
       release_tag:
         description: "自定义发布 Release Tag (例如 1.0.0 或 dsha-for-root-v1)"
         required: false
-        default: "dsha-for-root-latest"
+        default: "0.1.5rc.2-u2"
       prerelease:
         description: "是否标记为预发布 (Pre-release)"
         type: boolean
@@ -118,8 +118,8 @@ jobs:
         run: |
           set -euo pipefail
           APK_SRC=$(ls apk_source/app/build/outputs/apk/standard/debug/*.apk | head -1)
-          cp -f "$APK_SRC" "dist/dsha-for-root-1.0.apk"
-          echo "✓ 产物 1 已就绪 (前端 APK): dist/dsha-for-root-1.0.apk ($(ls -lh dist/dsha-for-root-1.0.apk | awk \x27{print $5}\x27))"
+          cp -f "$APK_SRC" "dist/DSHA-FR 0.1.5rc.2-u2.apk"
+          echo "✓ 产物 1 已就绪 (前端 APK): dist/DSHA-FR 0.1.5rc.2-u2.apk ($(ls -lh dist/DSHA-FR 0.1.5rc.2-u2.apk | awk \x27{print $5}\x27))"
 
       # ============================================================
       # 4. 严格按照 dsh-magisk 分支逻辑构建核心完整包与 Lite 包
@@ -153,7 +153,7 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          sha256sum dsha-for-root-1.0.apk | tee dsha-for-root-1.0.apk.sha256
+          sha256sum "DSHA-FR 0.1.5rc.2-u2.apk" | tee DSHA-FR 0.1.5rc.2-u2.apk.sha256
           sha256sum dsha_ksu_native_full.zip | tee dsha_ksu_native_full.zip.sha256
           sha256sum dsha_ksu_native_lite.zip | tee dsha_ksu_native_lite.zip.sha256
           echo "=========================================================="
@@ -185,7 +185,7 @@ jobs:
           elif [ -n "${{ inputs.release_tag }}" ]; then
             TAG_NAME="${{ inputs.release_tag }}"
           else
-            TAG_NAME="dsha-for-root-$(date +%Y%m%d%H%M)"
+            TAG_NAME="0.1.5rc.2-u2"
           fi
           echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
 
@@ -203,7 +203,7 @@ jobs:
             本产物由 `dsha-for-root.x` 打包流水线严格按照分支原生规范编译合成。
 
             ### 产物清单：
-            1. **`dsha-for-root-1.0.apk`** (前端 APK)
+            1. **`DSHA-FR 0.1.5rc.2-u2.apk`** (前端 APK)
                - **构建源分支**：`magisk-apk`
                - **说明**：原生 Root 控制前端外壳，内置 3095 硬件通道桥、无障碍操作守护与沉浸 Web 容器。
             2. **`dsha_ksu_native_full.zip`** (核心完整包)

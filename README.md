@@ -14,7 +14,7 @@
 
 | 序号 | 交付产物文件名 | 产物类型 | 源码分支源头 | 作用与使用场景 |
 | :---: | :--- | :---: | :---: | :--- |
-| **1** | **`dsha-for-root-1.0.apk`** | Android 前端应用 | `magisk-apk` | 原生 Root 前端客户端。体积轻盈（~5.5MB），内置 3095 硬件通道桥、无障碍 UI 自动化控制守护与全沉浸 Web 容器。 |
+| **1** | **`DSHA-FR 0.1.5rc.2-u2.apk`** | Android 前端应用 | `magisk-apk` | 原生 Root 前端客户端。体积轻盈（~5.5MB），内置 3095 硬件通道桥、无障碍 UI 自动化控制守护与全沉浸 Web 容器。 |
 | **2** | **`dsha_ksu_native_full.zip`** | 模块完整刷机包 | `dsh-magisk` | **全内置完整刷机包**（~218MB）。内置纯净 Ubuntu ARM64 生产闭包与经由 `rootfs-overlay/` 反射熔铸的四大核心插件，新机开箱即刷即用。 |
 | **3** | **`dsha_ksu_native_lite.zip`** | 模块极速热更新包 | `dsh-magisk` | **增量热更新补丁包**（几十 KB）。包含两步音量键交互安装器与 `scripts/` 下的现场热修脚本，已有环境老用户无需下载 200MB 大包，无痛秒级热修。 |
 
@@ -28,7 +28,7 @@
 * **环境**：Ubuntu Latest + JDK 17 (Temurin) + Android SDK
 * **编译命令**：`./gradlew :app:assembleStandardDebug --stacktrace`
 * **签名策略**：优先识别 `secrets.DSHA_KEYSTORE_B64` 生产签名，未配置时严格按分支逻辑使用 Gradle debug 签名；
-* **产物提纯**：提取构建产物并重命名为 `dist/dsha-for-root-1.0.apk`。
+* **产物提纯**：提取构建产物并重命名为 `dist/DSHA-FR 0.1.5rc.2-u2.apk`。
 
 ### 2. 核心模块双打包规范 (`dsh-magisk`)
 * **统一调度**：调用 `dsh-magisk` 官方收口打包脚本 `./scripts/build-module.sh`；
