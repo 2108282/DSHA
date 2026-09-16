@@ -1,0 +1,9 @@
+dist/
+*.apk
+*.zip
+*.tar.gz
+*.sha256
+.gradle/
+build/
+apk_source/
+module_source/

@@ -1,0 +1,217 @@
+name: Build & Package All (APK + Full Module + Lite Module)
+
+on:
+  push:
+    branches:
+      - "dsha-for-root.x"
+    tags:
+      - "v*"
+      - "dsha-for-root*"
+      - "1.*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "是否自动创建或更新 GitHub Release 发布"
+        type: boolean
+        default: false
+      release_tag:
+        description: "自定义发布 Release Tag (例如 1.0.0 或 dsha-for-root-v1)"
+        required: false
+        default: "dsha-for-root-latest"
+      prerelease:
+        description: "是否标记为预发布 (Pre-release)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: pkg-all-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build-and-package:
+    name: Package 3 Deliverables (APK + Full + Lite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # ============================================================
+      # 1. 检出两端源码仓库（严格按照各自指定分支，本分支不存任何业务代码）
+      # ============================================================
+      - name: 检出前端 APK 源码 (magisk-apk 分支)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: magisk-apk
+          path: apk_source
+
+      - name: 检出核心模块源码 (dsh-magisk 分支)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: dsh-magisk
+          path: module_source
+
+      # ============================================================
+      # 2. 准备统一构建环境 (JDK 17 + Android SDK + Python 3.11)
+      # ============================================================
+      - name: 配置 JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+          cache: "gradle"
+          cache-dependency-path: "apk_source/**/*.gradle*"
+
+      - name: 配置 Android SDK 命令行工具
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> $GITHUB_ENV
+          echo "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "${ANDROID_HOME:-/usr/local/lib/android/sdk}/platform-tools" >> $GITHUB_PATH
+
+      - name: 接受 Android SDK 许可证书
+        run: |
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+      - name: 配置 Python 3.11 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 准备最终产物交付目录
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+
+      # ============================================================
+      # 3. 严格按照 magisk-apk 分支逻辑构建前端 APK
+      # ============================================================
+      - name: 配置 APK 签名密钥（如有 Secret 则加载，无则使用 debug 签名）
+        env:
+          KS_B64: ${{ secrets.DSHA_KEYSTORE_B64 }}
+          KS_PWD: ${{ secrets.DSHA_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.DSHA_KEY_ALIAS }}
+          KEY_PWD: ${{ secrets.DSHA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KS_B64:-}" ]; then
+            printf "%s" "$KS_B64" | base64 -d > "$RUNNER_TEMP/dsha.keystore"
+            echo "DSHA_KEYSTORE=$RUNNER_TEMP/dsha.keystore" >> "$GITHUB_ENV"
+            echo "DSHA_KEYSTORE_PASSWORD=${KS_PWD:-android}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_ALIAS=${KS_ALIAS:-androiddebugkey}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_PASSWORD=${KEY_PWD:-android}" >> "$GITHUB_ENV"
+            echo "已成功加载生产签名密钥"
+          else
+            echo "未检测到 DSHA_KEYSTORE_B64，将严格按原分支使用 Gradle 默认 debug 签名"
+          fi
+
+      - name: 执行 APK 编译打包 (:app:assembleStandardDebug)
+        run: |
+          set -euo pipefail
+          cd apk_source
+          chmod +x gradlew
+          ./gradlew :app:assembleStandardDebug --stacktrace
+          cd "$GITHUB_WORKSPACE"
+
+      - name: 收集产物 1：前端 APK
+        run: |
+          set -euo pipefail
+          APK_SRC=$(ls apk_source/app/build/outputs/apk/standard/debug/*.apk | head -1)
+          cp -f "$APK_SRC" "dist/dsha-for-root-1.0.apk"
+          echo "✓ 产物 1 已就绪 (前端 APK): dist/dsha-for-root-1.0.apk ($(ls -lh dist/dsha-for-root-1.0.apk | awk \x27{print $5}\x27))"
+
+      # ============================================================
+      # 4. 严格按照 dsh-magisk 分支逻辑构建核心完整包与 Lite 包
+      # ============================================================
+      - name: 执行核心模块打包 (build-module.sh --lite 与 full)
+        run: |
+          set -euo pipefail
+          cd module_source
+          chmod +x scripts/*.sh tools/*.sh magisk-module/*.sh magisk-module/scripts/*.sh 2>/dev/null || true
+          
+          echo "==> [核心打包 1/2] 按照 dsh-magisk 分支规范打包极速热更新 Lite 包..."
+          ./scripts/build-module.sh --lite
+          
+          echo "==> [核心打包 2/2] 按照 dsh-magisk 分支规范动态层叠熔铸底包并打包全内置 Full 包..."
+          ./scripts/build-module.sh full
+          
+          cp -f dist/dsha_ksu_native_lite.zip "$GITHUB_WORKSPACE/dist/dsha_ksu_native_lite.zip"
+          cp -f dist/dsha_ksu_native_full.zip "$GITHUB_WORKSPACE/dist/dsha_ksu_native_full.zip"
+          cd "$GITHUB_WORKSPACE"
+
+      - name: 收集产物 2 与 3：核心完整包与 Lite 包
+        run: |
+          set -euo pipefail
+          echo "✓ 产物 2 已就绪 (核心完整包): dist/dsha_ksu_native_full.zip ($(ls -lh dist/dsha_ksu_native_full.zip | awk \x27{print $5}\x27))"
+          echo "✓ 产物 3 已就绪 (核心 Lite 包): dist/dsha_ksu_native_lite.zip ($(ls -lh dist/dsha_ksu_native_lite.zip | awk \x27{print $5}\x27))"
+
+      # ============================================================
+      # 5. 生成 3 大交付物 SHA-256 校验和清单
+      # ============================================================
+      - name: 生成 SHA-256 校验和
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum dsha-for-root-1.0.apk | tee dsha-for-root-1.0.apk.sha256
+          sha256sum dsha_ksu_native_full.zip | tee dsha_ksu_native_full.zip.sha256
+          sha256sum dsha_ksu_native_lite.zip | tee dsha_ksu_native_lite.zip.sha256
+          echo "=========================================================="
+          echo "               三大核心产物打包汇总清单                   "
+          echo "=========================================================="
+          ls -lh
+          echo "=========================================================="
+
+      # ============================================================
+      # 6. 上传 Actions 构建产物 Artifacts (全部 3 个产物 + 校验和)
+      # ============================================================
+      - name: 上传 3 大核心交付物至 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsha-for-root-deliverables
+          path: dist/*
+          if-no-files-found: error
+
+      # ============================================================
+      # 7. 可选发布步骤：一键发布至 GitHub Releases
+      # ============================================================
+      - name: 计算发布版本 Tag
+        id: release_tag
+        if: ${{ github.event_name == push && startsWith(github.ref, refs/tags/) || inputs.publish_release }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          elif [ -n "${{ inputs.release_tag }}" ]; then
+            TAG_NAME="${{ inputs.release_tag }}"
+          else
+            TAG_NAME="dsha-for-root-$(date +%Y%m%d%H%M)"
+          fi
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: 发布至 GitHub Releases
+        if: ${{ steps.release_tag.outputs.tag !=  }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: DSHA Native Root Deliverables (${{ steps.release_tag.outputs.tag }})
+          prerelease: ${{ inputs.prerelease || false }}
+          generate_release_notes: true
+          body: |
+            ## DSHA Native for Root 三大核心交付物联合发布
+
+            本产物由 `dsha-for-root.x` 打包流水线严格按照分支原生规范编译合成。
+
+            ### 产物清单：
+            1. **`dsha-for-root-1.0.apk`** (前端 APK)
+               - **构建源分支**：`magisk-apk`
+               - **说明**：原生 Root 控制前端外壳，内置 3095 硬件通道桥、无障碍操作守护与沉浸 Web 容器。
+            2. **`dsha_ksu_native_full.zip`** (核心完整包)
+               - **构建源分支**：`dsh-magisk`
+               - **说明**：全内置完整刷机包（~218MB），内含反射式动态层叠熔铸的全新纯净底包 `rootfs.tar.gz`。
+            3. **`dsha_ksu_native_lite.zip`** (极速热更新包)
+               - **构建源分支**：`dsh-magisk`
+               - **说明**：增量热更新补丁包（几十 KB），带两步音量键交互，老用户无需重装底包现场打补丁。
+          files: |
+            dist/*
+          fail_on_unmatched_files: true
