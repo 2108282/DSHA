@@ -3,7 +3,7 @@
 # 本地一键打包 Magisk / KernelSU 刷机包
 # 用法:
 #   ./scripts/build-module.sh          # 默认打包全内置完整版 (~218MB)
-#   ./scripts/build-module.sh --lite   # 单独打包极速热更新包 (Lite, ~几KB~1MB)
+#   ./scripts/build-module.sh --lite   # 单独打包极速热更新包 (Lite, ~27KB)
 # ============================================================
 set -euo pipefail
 
@@ -15,7 +15,7 @@ mkdir -p "$OUTPUT_DIR"
 MODE="${1:-full}"
 
 if [ "$MODE" = "--lite" ] || [ "$MODE" = "lite" ]; then
-    echo "==> 正在准备打包【DSHA 极速热更新补丁包】(Lite)..."
+    echo "==> 正在准备打包【DSHA 极速热更新补丁包】(Lite, 仅脚本)..."
     STAGE_LITE="/tmp/dsha_build_lite_$$"
     mkdir -p "$STAGE_LITE"
     cleanup_lite() {
@@ -32,15 +32,9 @@ if [ "$MODE" = "--lite" ] || [ "$MODE" = "lite" ]; then
     # 使用专用的两步音量键交互安装器
     cp -f "$MODULE_DIR/customize.lite.sh" "$STAGE_LITE/customize.sh"
 
-    # 仅打包四大基础控制脚本
+    # 打包 scripts/ 下的全部脚本 (包含四大基础脚本 + 任意增量补丁脚本)
     mkdir -p "$STAGE_LITE/scripts"
     cp -rf "$MODULE_DIR/scripts/"* "$STAGE_LITE/scripts/"
-
-    # 注入增量业务补丁
-    if [ -d "$ROOT_DIR/rootfs-overlay" ]; then
-        mkdir -p "$STAGE_LITE/overlay"
-        cp -rf "$ROOT_DIR/rootfs-overlay/"* "$STAGE_LITE/overlay/"
-    fi
 
     cd "$STAGE_LITE"
     chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
@@ -51,7 +45,7 @@ if [ "$MODE" = "--lite" ] || [ "$MODE" = "lite" ]; then
     exit 0
 fi
 
-# 完整包编译流程（步骤保持不变）
+# 完整包编译流程（步骤完全保持不变）
 echo "==> 正在准备打包【DSHA 全内置完整刷机包】(含纯净 rootfs.tar.gz)..."
 TAR_SRC=""
 for p in "$ROOT_DIR/magisk-module/rootfs.tar.gz" \

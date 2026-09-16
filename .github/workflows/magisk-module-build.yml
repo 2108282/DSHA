@@ -36,27 +36,18 @@ jobs:
           python3 -c "import shutil; shutil.rmtree('$STAGE_LITE', ignore_errors=True)" 2>/dev/null || rm -rf "$STAGE_LITE" 2>/dev/null || true
           mkdir -p "$STAGE_LITE"
 
-          echo "==> [1/3] 准备模块控制文件与四大核心脚本..."
+          echo "==> [1/2] 准备模块控制文件与两步安装器..."
           cp -rf magisk-module/META-INF "$STAGE_LITE/"
           cp -f magisk-module/module.prop "$STAGE_LITE/"
           cp -f magisk-module/service.sh "$STAGE_LITE/"
           cp -f magisk-module/action.sh "$STAGE_LITE/"
           cp -f magisk-module/uninstall.sh "$STAGE_LITE/"
-          
-          # 使用专用的两步音量键交互安装器
           cp -f magisk-module/customize.lite.sh "$STAGE_LITE/customize.sh"
           
-          # 仅打包四大基础脚本
+          echo "==> [2/2] 打包 scripts/ 下的全部脚本 (四大基础脚本 + 任意增量补丁脚本)..."
           mkdir -p "$STAGE_LITE/scripts"
           cp -rf magisk-module/scripts/* "$STAGE_LITE/scripts/"
 
-          echo "==> [2/3] 注入增量业务补丁 (除四大脚本外的所有代码/前端/插件)..."
-          if [ -d "rootfs-overlay" ]; then
-            mkdir -p "$STAGE_LITE/overlay"
-            cp -rf rootfs-overlay/* "$STAGE_LITE/overlay/"
-          fi
-
-          echo "==> [3/3] 压制 Lite 独立热更新包..."
           cd "$STAGE_LITE"
           chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
           mkdir -p "$GITHUB_WORKSPACE/dist"
