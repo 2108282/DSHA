@@ -118,6 +118,7 @@ export function apply(ctx) {
   let isApprovalActive = false
   let isInInteractivePrompt = false
   let justApproved = false
+  let lastApprovedAt = 0
   let completionTimer = null
 
   // 灵动岛/三通道状态机与 2s Trailing 节流控制
@@ -185,7 +186,9 @@ export function apply(ctx) {
       if (type === 'turn/start') {
         isApprovalActive = false
         isInInteractivePrompt = false
-        justApproved = false
+        if (Date.now() - lastApprovedAt >= 8000) {
+          justApproved = false
+        }
         if (completionTimer) {
           clearTimeout(completionTimer)
           completionTimer = null
@@ -209,7 +212,9 @@ export function apply(ctx) {
         const chunk = event?.data?.chunk
         if (chunk?.type === 'text-delta' && chunk.text) {
           lastAssistantText = (lastAssistantText + chunk.text).trim()
-          justApproved = false
+          if (Date.now() - lastApprovedAt >= 8000) {
+            justApproved = false
+          }
         }
         return
       }
@@ -219,7 +224,9 @@ export function apply(ctx) {
         const texts = (msg?.content || []).filter(c => c.type === 'text').map(c => c.text)
         if (texts.length > 0) {
           lastAssistantText = texts.join('').trim()
-          justApproved = false
+          if (Date.now() - lastApprovedAt >= 8000) {
+            justApproved = false
+          }
         }
         return
       }
@@ -251,6 +258,7 @@ export function apply(ctx) {
         isApprovalActive = false
         isInInteractivePrompt = false
         justApproved = true
+        lastApprovedAt = Date.now()
         lastAssistantText = ''
         if (completionTimer) {
           clearTimeout(completionTimer)
@@ -258,7 +266,8 @@ export function apply(ctx) {
         }
         // Web 侧审批决断后，立即反向通知手机端撤回审批通知与灵动岛大卡片！
         void callBridge('/app/task/confirm/cancel')
-        lastSentState = '已完成审批，正在继续执行...'
+        // 关键：文案不含“完成”，彻底杜绝 Android 宿主 compactCapsuleText 误将灵动岛设为“任务已完成”
+        lastSentState = '安全授权已通过，正在继续执行...'
         lastSentTime = Date.now()
         void callBridge('/app/task/running', {
           title: '正在执行',
@@ -386,8 +395,9 @@ export function apply(ctx) {
         }
 
         if (kind === 'completed') {
-          // 严密防误弹：若刚通过审批，或助手未输出文本，绝对禁止弹任务完成！
-          if (justApproved || !lastAssistantText || !lastAssistantText.trim()) {
+          // 严密防误弹：处于 8 秒审批冷却期内、或标志位为真、或助手未输出有效文本，绝对禁止弹任务完成！
+          const inApprovalCooldown = (Date.now() - lastApprovedAt) < 8000
+          if (justApproved || inApprovalCooldown || !lastAssistantText || !lastAssistantText.trim()) {
             return
           }
 
@@ -402,7 +412,8 @@ export function apply(ctx) {
           }
           completionTimer = setTimeout(() => {
             completionTimer = null
-            if (!isInInteractivePrompt && !isApprovalActive && !justApproved) {
+            const inCooldown = (Date.now() - lastApprovedAt) < 8000
+            if (!isInInteractivePrompt && !isApprovalActive && !justApproved && !inCooldown) {
               void callBridge('/app/notify', {
                 title: '任务已完成',
                 text: endText
@@ -543,6 +554,13 @@ export function apply(ctx) {
       text: reason
     })
 
+    // 写入活跃审批状态文件，供 Web 前端极速轮询自愈
+    const APPROVAL_STATUS_FILE = '/root/.dsh/.approval_status.json'
+    try {
+      const fs = await import('node:fs/promises')
+      await fs.writeFile(APPROVAL_STATUS_FILE, JSON.stringify({ active: true, time: Date.now(), tool, reason }))
+    } catch {}
+
     let phoneTimer = null
     const phoneDecisionPromise = new Promise((resolve) => {
       phoneTimer = setInterval(() => {
@@ -554,31 +572,58 @@ export function apply(ctx) {
               if (decision === 'allowed-once' || decision === 'rejected') {
                 if (phoneTimer) clearInterval(phoneTimer)
                 phoneTimer = null
+                lastApprovedAt = Date.now()
+                justApproved = true
                 resolve(decision)
                 return
               }
             }
           }
         } catch {}
-      }, 100)
+      }, 80)
     })
 
+    const webAbortController = new AbortController()
     if (req?.signal) {
       req.signal.addEventListener('abort', () => {
         if (phoneTimer) clearInterval(phoneTimer)
+        try { webAbortController.abort(req.signal.reason) } catch {}
       }, { once: true })
     }
 
-    const webDecisionPromise = next ? next() : Promise.resolve('unavailable')
+    let combinedSignal = webAbortController.signal
+    if (req?.signal) {
+      if (typeof AbortSignal.any === 'function') {
+        combinedSignal = AbortSignal.any([req.signal, webAbortController.signal])
+      } else {
+        const combinedCtrl = new AbortController()
+        const onAb = () => combinedCtrl.abort()
+        req.signal.addEventListener('abort', onAb, { once: true })
+        webAbortController.signal.addEventListener('abort', onAb, { once: true })
+        combinedSignal = combinedCtrl.signal
+      }
+    }
+    const forwardedReq = Object.assign({}, req, { signal: combinedSignal })
+    const webDecisionPromise = next ? next(forwardedReq) : Promise.resolve('unavailable')
 
     try {
       const decision = await Promise.race([phoneDecisionPromise, webDecisionPromise])
+      lastApprovedAt = Date.now()
+      justApproved = true
+      try {
+        const fs = await import('node:fs/promises')
+        await fs.writeFile(APPROVAL_STATUS_FILE, JSON.stringify({ active: false, time: Date.now(), decision }))
+      } catch {}
       // 任何一方决断成功，都确保向手机端发送取消审批通知请求
       void callBridge('/app/task/confirm/cancel')
       return decision
     } finally {
       isApprovalActive = false
       isInInteractivePrompt = false
+      lastApprovedAt = Date.now()
+      justApproved = true
+      // 关键修复：决断结束后立即终止 Web 侧挂起的请求，促使前端 PendingApproval 释放并销毁黄色卡片！
+      try { webAbortController.abort('approval settled') } catch {}
       if (phoneTimer) clearInterval(phoneTimer)
       try {
         for (const flag of DECISION_FLAGS) {
