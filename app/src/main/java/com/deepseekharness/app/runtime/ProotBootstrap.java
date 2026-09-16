@@ -553,66 +553,9 @@ public class ProotBootstrap {
         } catch (Throwable ignored) {}
     }
 
-    /** 确保四个官方内置插件实体与 APK assets 保持最新同步释放 */
+    /** 纯前端架构：内置插件实体与软链接由 Magisk 模块原生管理，APK 纯前端不再插手容器文件系统。 */
     public void ensureBuiltinPluginEntities() {
-        File rootfs = getRootfsDir();
-        if (rootfs == null || !rootfs.isDirectory()) return;
-        try {
-            // 模块 Native 架构下：内置插件实体由 Magisk 模块和 rootfs 底包原生管理，APK 不再执行暴力覆写。
-            // 仅按需补齐通往 DSH 共享依赖池的 node_modules 符号链接，保证依赖可用。
-            String targetNm = "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules";
-            for (String p : new String[]{"dsha-device-shell-guide", "dsha-status-overlay", "dsha-task-notifier", "dsha-web-mobile"}) {
-                File link = new File(rootfs, "root/" + p + "/node_modules");
-                if (!link.exists()) {
-                    try { Compat.symlink(targetNm, link); } catch (Throwable ignored) {}
-                }
-            }
-            File globalNm = new File(rootfs, "usr/local/lib/node_modules");
-            if (globalNm.isDirectory()) {
-                for (String p : new String[]{"dsh-device-shell-guide", "dsh-status-overlay", "dsh-task-notifier", "dsh-web-mobile"}) {
-                    String orig = "/root/" + (p.startsWith("dsh-") ? "dsha-" + p.substring(4) : p);
-                    File gLink = new File(globalNm, p);
-                    if (!gLink.exists()) {
-                        try { Compat.symlink(orig, gLink); } catch (Throwable ignored) {}
-                    }
-                }
-                // 扫描用户导入的所有第三方插件（如 dsh-agy），建立全局与局部 node_modules 软链接，根除 ERR_MODULE_NOT_FOUND
-                File pluginSrcDir = new File(rootfs, "root/.dsh/plugin-src");
-                File profNm = new File(rootfs, "root/.dsh/profiles/web/node_modules");
-                if (pluginSrcDir.isDirectory()) {
-                    File[] userPlugins = pluginSrcDir.listFiles();
-                    if (userPlugins != null) {
-                        for (File up : userPlugins) {
-                            if (!up.isDirectory()) continue;
-                            String pname = up.getName();
-                            String vPath = "/root/.dsh/plugin-src/" + pname;
-                            // 1. 全局软链：/usr/local/lib/node_modules/<pname> -> /root/.dsh/plugin-src/<pname>
-                            File gLink = new File(globalNm, pname);
-                            if (!gLink.exists()) {
-                                try { Compat.symlink(vPath, gLink); } catch (Throwable ignored) {}
-                            }
-                            // 2. profile 局部软链：/root/.dsh/profiles/web/node_modules/<pname>
-                            if (profNm.isDirectory()) {
-                                File pLink = new File(profNm, pname);
-                                if (!pLink.exists()) {
-                                    try { Compat.symlink(vPath, pLink); } catch (Throwable ignored) {}
-                                }
-                            }
-                            // 3. 确保第三方插件的 node_modules 是真实目录，并精准建立 @deepseek-ai 子软链
-                            File pNm = new File(up, "node_modules");
-                            if (Compat.isSymbolicLink(pNm)) {
-                                pNm.delete(); // 若之前误做成了整体软链，纠正删除
-                            }
-                            if (!pNm.exists()) pNm.mkdirs();
-                            File deepseekLink = new File(pNm, "@deepseek-ai");
-                            if (!deepseekLink.exists()) {
-                                try { Compat.symlink(targetNm + "/@deepseek-ai", deepseekLink); } catch (Throwable ignored) {}
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
+        // no-op: 模块端全权自治，纯前端绝不越界操作 rootfs 符号链接与文件
     }
 
     /** 注入注册脚本（幂等覆盖）并按需带参数运行。 */
@@ -620,10 +563,6 @@ public class ProotBootstrap {
         synchronized (PLUGIN_SCRIPT_LOCK) {
         if (!isEnvironmentReady()) return "ENV_NOT_READY";
         if (!ensureBundledPython()) return "ERROR: Ubuntu Python 环境未就绪";
-        if (!"ksu_chroot".equals(runtime().id())) {
-            ensureBundledPnpm(); // 包管理器异常不能阻断列表、开关和删除；缺依赖的安装会单独报错。
-            ensureBuiltinPluginEntities(); // 同步 assets 内核插件实体到 rootfs
-        }
         try {
             String script = readAssetString(BUILTIN_REGISTER_SCRIPT);
             if (script.isEmpty()) return "ASSET_MISSING:" + BUILTIN_REGISTER_SCRIPT;
@@ -659,9 +598,6 @@ public class ProotBootstrap {
         synchronized (PLUGIN_SCRIPT_LOCK) {
         if (!isEnvironmentReady()) return "ENV_NOT_READY";
         if (!ensureBundledPython()) return "ERROR: Ubuntu Python 环境未就绪";
-        if (!"ksu_chroot".equals(runtime().id())) {
-            ensureBundledPnpm();
-        }
         try {
             String script = readAssetString(PLUGIN_MANAGER_SCRIPT);
             if (script.isEmpty()) return "ASSET_MISSING:" + PLUGIN_MANAGER_SCRIPT;
