@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>DeepSeek Harness (DSH) 原生 Root 极速运行时与 Android 控制客户端</b><br>
-  为 Android 12+ Root 设备打造 —— 0 虚拟化损耗，原生 glibc 性能，按需启停 0 待机偷跑
+  为 Android 12+ Root 设备打造 —— 0 虚拟化损耗，原生 glibc 性能，按需启停
 </p>
 
 <p align="center">
