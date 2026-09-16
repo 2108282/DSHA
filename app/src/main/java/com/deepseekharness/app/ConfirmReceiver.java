@@ -253,7 +253,7 @@ public class ConfirmReceiver extends BroadcastReceiver {
         } catch (Throwable ignored) {}
     }
 
-    private static void writeApprovalDecision(String decision) {
+    public static void writeApprovalDecision(String decision) {
         new Thread(() -> {
             try {
                 String cmd = "mkdir -p /data/adb/dsha/rootfs/root/.dsh /sdcard/Download/DSHA /data/user/0/com.dsh.client/files/linux/ubuntu/root/.dsh 2>/dev/null; "

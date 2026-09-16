@@ -273,38 +273,6 @@ exports.createPreviewCloseTask = createPreviewCloseTask;
 exports.createSheetRiseTask = createSheetRiseTask;
 const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
 /** dsh-web-ui 兼容：explorer / preview 列的显隐标记与升起动画（同域同机制，合并一处）。 */
-function installApprovalSync(ctx) {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    try {
-        ctx.on('session/event', (session, event) => {
-            try {
-                if (event && event.type === 'approval/decided') {
-                    const outcome = event.data?.outcome;
-                    const isAllow = outcome === 'allowed-once';
-                    const targetText = isAllow ? '允许一次' : '拒绝';
-                    const fallbackText = isAllow ? 'Allow once' : 'Reject';
-                    const panel = document.querySelector('[data-approval-key]');
-                    if (panel) {
-                        const btns = panel.querySelectorAll('button');
-                        let clicked = false;
-                        for (let i = 0; i < btns.length; i++) {
-                            const txt = (btns[i].innerText || btns[i].textContent || '').trim();
-                            if (txt.includes(targetText) || txt.includes(fallbackText)) {
-                                btns[i].click();
-                                clicked = true;
-                                break;
-                            }
-                        }
-                        if (!clicked && btns.length >= 2) {
-                            btns[isAllow ? btns.length - 1 : 0].click();
-                        }
-                    }
-                }
-            } catch {}
-        });
-    } catch {}
-}
-exports.installApprovalSync = installApprovalSync;
 function installAionuiCompat(ctx) {
     (0, phone_chrome_ts_1.installMobileEffect)(ctx, 'dsh-web-mobile: aionui explorer close marker', () => {
         const onChevronClick = (event) => {
@@ -1719,7 +1687,11 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     transform: translateX(-110%);
     transition: transform .28s var(--ds-ease-in-out, ease-in-out);
     background: var(--dsw-alias-bg-base, #ffffff);
-    /* Keep the drawer flush with top: drawer spans full frame height */
+    /* Keep the drawer's own content below the status bar / notch: the drawer
+       spans the full frame height (its absolute containing block is the
+       frame's padding box, so the frame's own safe-area padding does NOT
+       reach it). The drawer background paints the status-bar strip, which
+       the client's theme-color meta matches, so the strip reads seamless. */
     padding-top: 0px !important;
     /* Kill the official sidebarCol right border: with the backdrop the edge
        reads cleanly, and the settings dialog (width:100% of this box) stays
@@ -2683,7 +2655,7 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
     height: 100dvh !important;
     max-height: none !important;
     box-sizing: border-box !important;
-    padding-top: 0px !important;
+    padding-top: env(safe-area-inset-top, 0px) !important;
     border-radius: 0 !important;
     box-shadow: none !important;
     z-index: 57 !important;
@@ -2692,7 +2664,7 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   /* Fullscreen: the column fills the viewport, so the button follows the
      titlebar row down below the notch. */
   [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] {
-    top: 8px !important;
+    top: calc(env(safe-area-inset-top, 0px) + 8px) !important;
   }
   @media (prefers-reduced-motion: reduce) {
     [data-aionui-preview-col],
@@ -5636,7 +5608,7 @@ function apply(ctx) {
   }
   [data-mobile-nav="frame"] [data-sidebar-right-panel] {
     width: 100% !important; max-width: 100vw !important;
-    box-sizing: border-box; padding-top: 0px;
+    box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   [data-sidebar-right-panel][data-sidebar-right-open] { pointer-events: auto; }
@@ -5789,7 +5761,6 @@ function apply(ctx) {
     (0, composer_keyboard_guard_ts_1.installComposerKeyboardGuard)(ctx);
     (0, phone_chrome_ts_1.installPhoneChrome)(ctx);
     (0, aionui_compat_ts_1.installAionuiCompat)(ctx);
-    installApprovalSync(ctx);
     // Debug badge (?mobile-nav-debug=1): live state overlay for phone-side
     // repros. No-op without the query param (docs: README, AGENTS.md).
     (0, debug_ts_1.installDebugBadge)(ctx);

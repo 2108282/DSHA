@@ -1773,37 +1773,12 @@ public final class HttpShellService {
             confirmResolved.set(false);  // 必须早于发布 latch：latch 一露面就可能有点击进来
             pendingLatch = latch;
 
-            // 通知是权威渠道（前后台都在），前台再叠一个弹窗当快捷方式
+            // 双通道联动：通知栏/灵动岛 + 桌面悬浮条就地批准（共用同一个 epoch + latch，谁先点谁生效）
             showConfirmNotification(cmd, myEpoch);
-            // 第三条渠道：悬浮条上就地批准。agent 干活时用户往往并不在 App 里 ——
-            // 拉下通知栏找那条通知、或者切回 App，都比点一下已经浮在最上层的按钮慢。
-            // 三条渠道共用同一个 epoch + latch，谁先点谁生效。
             OverlayController.askConfirm(ctx, safeDisplay(cmd),
                     () -> resolveConfirm(true, myEpoch),
                     () -> resolveConfirm(false, myEpoch));
-            final MainActivity act = MainActivity.current;
-            if (act != null) {
-                final String prompt = "模型试图在设备上执行：\n" + safeDisplay(cmd) + "\n\n是否允许？";
-                act.runOnUiThread(() -> {
-                    // 正在 finishing 的 Activity 上 show() 会抛 BadTokenException，
-                    // 而这里是主线程，异常不在 handle() 的 catch 范围内 → 会崩 App
-                    try {
-                        if (act.isFinishing() || act.isDestroyed()) return;
-                        pendingDialog = new androidx.appcompat.app.AlertDialog.Builder(act)
-                                .setTitle("DSHA 安全确认")
-                                .setMessage(prompt)
-                                // 必须明确选一个：误触关闭不再被当作拒绝。也不要在
-                                // OnDismiss/OnCancel 里 countDown —— Activity 被 pause
-                                // 导致的 dismiss 会误判成「用户拒绝」，而用户还能从通知里点。
-                                .setCancelable(false)
-                                .setPositiveButton("允许", (d, w) -> resolveConfirm(true, myEpoch))
-                                .setNegativeButton("拒绝", (d, w) -> resolveConfirm(false, myEpoch))
-                                .show();
-                    } catch (Throwable t) {
-                        android.util.Log.w("DSHA", "确认弹窗弹出失败，仍可从通知确认：" + safeError(t));
-                    }
-                });
-            } else if (!notificationsEnabled()) {
+            if (!notificationsEnabled()) {
                 // 后台 + 通知被拒 = 用户看不到任何提示，只能干等 60s 超时被拒。
                 // 至少留下日志，别让这变成无从排查的「命令莫名被拒」。
                 android.util.Log.w("DSHA", "无前台界面且通知权限被拒，确认必然超时拒绝："
@@ -2331,6 +2306,19 @@ public final class HttpShellService {
                     .setPriority(NotificationCompat.PRIORITY_HIGH);
 
             attachFocusCapsule(ctx, nb, info.title, info.detail, info.statusLabel, info.primaryBtn, info.capsuleText, allowPi, info.secondaryBtn, denyPi, true);
+
+            // 桌面悬浮条同步就地展开审批按钮，并绑定同一 myEpoch（与通知栏、Web 端小黄窗构成三级联动）
+            OverlayController.askConfirm(ctx, safeDisplay(info.detail),
+                    () -> {
+                        triggerVibrate(ctx, 50);
+                        ConfirmReceiver.writeApprovalDecision("allowed-once");
+                        resolveConfirm(true, myEpoch);
+                    },
+                    () -> {
+                        triggerVibrate(ctx, 50);
+                        ConfirmReceiver.writeApprovalDecision("rejected");
+                        resolveConfirm(false, myEpoch);
+                    });
 
             if (nm != null) {
                 nm.cancel(Constants.NOTIF_TASK_RUNNING);
