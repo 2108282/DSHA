@@ -10,6 +10,9 @@ concurrency:
   group: build-magisk-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Package Magisk/KernelSU Native Module
@@ -117,11 +120,98 @@ jobs:
           
           echo "✓ 纯净底包已生成，大小: $(ls -lh magisk-module/rootfs.tar.gz | awk '{print $5}')"
 
-      - name: 上传独立纯净底包产物 (Clean RootFS Tarball)
-        uses: actions/upload-artifact@v4
-        with:
-          name: dsha_clean_rootfs_tar
-          path: magisk-module/rootfs.tar.gz
+      - name: 发布全新纯净底包至 Release (0.1.5rc.2-base)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TARGET_TAG="0.1.5rc.2-base"
+          echo "==> 检查 Release $TARGET_TAG..."
+          if ! gh release view "$TARGET_TAG" >/dev/null 2>&1; then
+            echo "创建 Release $TARGET_TAG..."
+            gh release create "$TARGET_TAG" --title "DSHA 1.2.0（内置 dsh 0.1.5-rc.2 基础底包预发布）" --notes "全新纯净底包" --prerelease
+          fi
+          echo "==> 上传纯净底包 rootfs.tar.gz 至 Release $TARGET_TAG..."
+          gh release upload "$TARGET_TAG" magisk-module/rootfs.tar.gz --clobber
+          echo "✓ Release 上传完毕: https://github.com/${{ github.repository }}/releases/download/${TARGET_TAG}/rootfs.tar.gz"
+
+      - name: 同步底包分卷与直链索引至「0.1.5rc.2底包」分支
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH_NAME="0.1.5rc.2底包"
+          TARGET_TAG="0.1.5rc.2-base"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${TARGET_TAG}/rootfs.tar.gz"
+          
+          echo "==> [1/3] 计算校验和并切分分卷 (适配 GitHub 100MB 单文件限制)..."
+          SHA256=$(sha256sum magisk-module/rootfs.tar.gz | awk '{print $1}')
+          SIZE=$(ls -lh magisk-module/rootfs.tar.gz | awk '{print $5}')
+          
+          mkdir -p /tmp/split_stage
+          split -b 50M -d magisk-module/rootfs.tar.gz /tmp/split_stage/rootfs.tar.gz.part-
+          
+          cat > /tmp/split_stage/merge.sh <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo "==> 正在合并底包分卷..."
+cat "$DIR"/rootfs.tar.gz.part-* > "$DIR/rootfs.tar.gz"
+echo "✓ 合并完成: $DIR/rootfs.tar.gz"
+sha256sum "$DIR/rootfs.tar.gz"
+SH
+          chmod +x /tmp/split_stage/merge.sh
+
+          cat > /tmp/split_stage/README.md <<EOF
+# DSHA 0.1.5-rc.2 纯净原生 Linux 底包资产
+
+本目录为 GitHub Actions 自动熔铸生成的 **100% 纯净全新底包**。
+已彻底物理清除旧 PRoot 时代残留，并集成消除空白行与通知防误弹等最新修复。
+
+---
+
+## 方式一：完整单文件直链下载（最推荐）
+- **直链下载**: [rootfs.tar.gz](${DOWNLOAD_URL})
+- **文件大小**: ${SIZE}
+- **SHA-256 校验和**: \`${SHA256}\`
+
+---
+
+## 方式二：本分支直接本地合并还原
+因 GitHub 单文件不能超过 100MB，本目录下提供 50MB 分卷文件（\`rootfs.tar.gz.part-*\`）。
+克隆本分支后，直接在当前目录执行：
+\`\`\`bash
+./merge.sh
+\`\`\`
+即可还原为完整的 \`rootfs.tar.gz\`。
+EOF
+
+          echo "==> [2/3] 检出目标分支 $BRANCH_NAME..."
+          git clone --depth=1 --branch "$BRANCH_NAME" "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" /tmp/target_branch
+          
+          echo "==> [3/3] 写入 rootfs 资产目录、更新主页 README 并提交推送..."
+          mkdir -p /tmp/target_branch/rootfs
+          cp -rf /tmp/split_stage/* /tmp/target_branch/rootfs/
+          
+          cd /tmp/target_branch
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
+          if [ -f README.md ]; then
+            if ! grep -q "0.1.5-rc.2 纯净官方底包资产" README.md; then
+              printf '\n> **📦 [最新纯净底包]**: 单文件直链：[rootfs.tar.gz](%s)（%s，SHA-256: `%s`），或查看 [`rootfs/ 目录`](./rootfs/) 内的分卷实体与合并脚本。\n\n' "$DOWNLOAD_URL" "$SIZE" "$SHA256" | cat - README.md > README.md.tmp && mv README.md.tmp README.md
+            fi
+          fi
+
+          git add rootfs README.md
+          if git diff --staged --quiet; then
+            echo "底包资产无变动，无需重复提交。"
+          else
+            git commit -m "feat(rootfs): 持久化全新纯净 0.1.5-rc.2 底包资产 (永久直链 + 50M分卷实体)"
+            git push origin "$BRANCH_NAME"
+            echo "✓ 成功推送到 $BRANCH_NAME 分支！"
+          fi
 
       - name: 上传全内置完整刷机包 (Direct Flashable Full Module)
         uses: actions/upload-artifact@v4
