@@ -117,6 +117,7 @@ export function apply(ctx) {
   let lastAssistantText = ''
   let isApprovalActive = false
   let isInInteractivePrompt = false
+  let justApproved = false
   let completionTimer = null
 
   // 灵动岛/三通道状态机与 2s Trailing 节流控制
@@ -184,6 +185,7 @@ export function apply(ctx) {
       if (type === 'turn/start') {
         isApprovalActive = false
         isInInteractivePrompt = false
+        justApproved = false
         if (completionTimer) {
           clearTimeout(completionTimer)
           completionTimer = null
@@ -207,6 +209,7 @@ export function apply(ctx) {
         const chunk = event?.data?.chunk
         if (chunk?.type === 'text-delta' && chunk.text) {
           lastAssistantText = (lastAssistantText + chunk.text).trim()
+          justApproved = false
         }
         return
       }
@@ -216,6 +219,7 @@ export function apply(ctx) {
         const texts = (msg?.content || []).filter(c => c.type === 'text').map(c => c.text)
         if (texts.length > 0) {
           lastAssistantText = texts.join('').trim()
+          justApproved = false
         }
         return
       }
@@ -246,6 +250,8 @@ export function apply(ctx) {
       if (type === 'approval/decided') {
         isApprovalActive = false
         isInInteractivePrompt = false
+        justApproved = true
+        lastAssistantText = ''
         if (completionTimer) {
           clearTimeout(completionTimer)
           completionTimer = null
@@ -380,22 +386,21 @@ export function apply(ctx) {
         }
 
         if (kind === 'completed') {
-          if (!lastAssistantText || !lastAssistantText.trim()) {
+          // 严密防误弹：若刚通过审批，或助手未输出文本，绝对禁止弹任务完成！
+          if (justApproved || !lastAssistantText || !lastAssistantText.trim()) {
             return
           }
 
           const clean = lastAssistantText.replace(/\s+/g, ' ').trim()
           const endText = clean.length > 60 ? clean.slice(0, 60) + '…' : clean
 
-          // 防抖保护（Quiescence Debounce，1500ms）：
-          // 避免多轮次长任务在每一个中间回合结束时频繁误弹“任务完成”
           if (completionTimer) {
             clearTimeout(completionTimer)
             completionTimer = null
           }
           completionTimer = setTimeout(() => {
             completionTimer = null
-            if (!isInInteractivePrompt && !isApprovalActive) {
+            if (!isInInteractivePrompt && !isApprovalActive && !justApproved) {
               void callBridge('/app/notify', {
                 title: '任务已完成',
                 text: endText
