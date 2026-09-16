@@ -84,6 +84,7 @@ fi
 
 cd "$MODULE_DIR"
 chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
+cp -f rootfs.tar.gz "$OUTPUT_DIR/rootfs.tar.gz"
 zip -r -0 "$OUTPUT_DIR/dsha_ksu_native_full.zip" META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts rootfs.tar.gz >/dev/null
 rm -f "$MODULE_DIR/rootfs.tar.gz"
 echo "✓ 全内置刷机包已生成: $OUTPUT_DIR/dsha_ksu_native_full.zip"

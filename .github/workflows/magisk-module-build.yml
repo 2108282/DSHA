@@ -3,12 +3,12 @@ name: Build KernelSU / Magisk Module
 on:
   push:
     branches:
-      - 'dsh-magisk'
+      - "dsh-magisk"
   workflow_dispatch:
 
 concurrency:
   group: build-magisk-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -21,39 +21,15 @@ jobs:
       - name: 检出仓库最新源码
         uses: actions/checkout@v4
 
-      - name: 准备模块控制脚本与执行权限
+      - name: 准备脚本执行权限
         run: |
           set -euo pipefail
-          cd magisk-module
-          chmod +x customize.sh customize.lite.sh service.sh action.sh uninstall.sh scripts/*.sh
-          cd ..
-          chmod +x scripts/*.sh tools/*.sh
+          chmod +x scripts/*.sh tools/*.sh magisk-module/*.sh magisk-module/scripts/*.sh 2>/dev/null || true
 
-      - name: 编译与打包极速热更新包 (Lite Updater Module)
+      - name: 统一编译与打包极速热更新包 (Lite Module)
         run: |
           set -euo pipefail
-          STAGE_LITE="/tmp/dsha_lite_stage"
-          python3 -c "import shutil; shutil.rmtree('$STAGE_LITE', ignore_errors=True)" 2>/dev/null || rm -rf "$STAGE_LITE" 2>/dev/null || true
-          mkdir -p "$STAGE_LITE"
-
-          echo "==> [1/2] 准备模块控制文件与两步安装器..."
-          cp -rf magisk-module/META-INF "$STAGE_LITE/"
-          cp -f magisk-module/module.prop "$STAGE_LITE/"
-          cp -f magisk-module/service.sh "$STAGE_LITE/"
-          cp -f magisk-module/action.sh "$STAGE_LITE/"
-          cp -f magisk-module/uninstall.sh "$STAGE_LITE/"
-          cp -f magisk-module/customize.lite.sh "$STAGE_LITE/customize.sh"
-          
-          echo "==> [2/2] 打包 scripts/ 下的全部脚本 (四大基础脚本 + 任意增量补丁脚本)..."
-          mkdir -p "$STAGE_LITE/scripts"
-          cp -rf magisk-module/scripts/* "$STAGE_LITE/scripts/"
-
-          cd "$STAGE_LITE"
-          chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          zip -r -9 "$GITHUB_WORKSPACE/dist/dsha_ksu_native_lite.zip" .
-          cd "$GITHUB_WORKSPACE"
-          ls -lh dist/dsha_ksu_native_lite.zip
+          ./scripts/build-module.sh --lite
 
       - name: 上传极速热更新包产物 (Lite Module)
         uses: actions/upload-artifact@v4
@@ -61,40 +37,22 @@ jobs:
           name: dsha_ksu_native_lite
           path: dist/dsha_ksu_native_lite.zip
 
-      # ============================================================
-      # 完整包编译流程（步骤完全保持不变）
-      # ============================================================
-      - name: 下载纯净基准原料底座
+      - name: 统一运行动态层叠引擎合成底包并打包全内置刷机包 (Full Module)
         run: |
           set -euo pipefail
-          BASE_TAG="0.1.5rc.2-base"
-          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
-          echo "==> 从云端 Release 下载纯净底包原料 (0.1.5rc.2-base)..."
-          curl -L -f -o /tmp/raw_rootfs.tar.gz "${BASE_URL}/rootfs.tar.gz"
-          ls -lh /tmp/raw_rootfs.tar.gz
-
-      - name: 运行反射式动态层叠引擎合成最新底包
-        run: |
-          set -euo pipefail
-          bash tools/dynamic-rootfs-merge.sh /tmp/raw_rootfs.tar.gz rootfs-overlay "$GITHUB_WORKSPACE/magisk-module/rootfs.tar.gz"
+          ./scripts/build-module.sh full
 
       - name: 发布全新纯净底包至 Release 与持久化同步分支
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          bash scripts/publish-rootfs-asset.sh "$GITHUB_WORKSPACE/magisk-module/rootfs.tar.gz" 0.1.5rc.2-base 0.1.5rc.2底包
+          if [ -f "dist/rootfs.tar.gz" ]; then
+            bash scripts/publish-rootfs-asset.sh dist/rootfs.tar.gz 0.1.5rc.2-base 0.1.5rc.2底包 || true
+          fi
 
       - name: 上传全内置完整刷机包 (Direct Flashable Full Module)
         uses: actions/upload-artifact@v4
         with:
           name: dsha_ksu_native_full
-          path: |
-            magisk-module/META-INF
-            magisk-module/module.prop
-            magisk-module/customize.sh
-            magisk-module/service.sh
-            magisk-module/action.sh
-            magisk-module/uninstall.sh
-            magisk-module/scripts
-            magisk-module/rootfs.tar.gz
+          path: dist/dsha_ksu_native_full.zip
