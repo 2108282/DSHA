@@ -2651,7 +2651,7 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
     height: 100dvh !important;
     max-height: none !important;
     box-sizing: border-box !important;
-    padding-top: env(safe-area-inset-top, 0px) !important;
+    padding-top: 0px !important;
     border-radius: 0 !important;
     box-shadow: none !important;
     z-index: 57 !important;
@@ -2660,7 +2660,7 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   /* Fullscreen: the column fills the viewport, so the button follows the
      titlebar row down below the notch. */
   [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] {
-    top: calc(env(safe-area-inset-top, 0px) + 8px) !important;
+    top: 8px !important;
   }
   @media (prefers-reduced-motion: reduce) {
     [data-aionui-preview-col],
@@ -5604,7 +5604,7 @@ function apply(ctx) {
   }
   [data-mobile-nav="frame"] [data-sidebar-right-panel] {
     width: 100% !important; max-width: 100vw !important;
-    box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px);
+    box-sizing: border-box; padding-top: 0px;
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   [data-sidebar-right-panel][data-sidebar-right-open] { pointer-events: auto; }
@@ -5757,6 +5757,24 @@ function apply(ctx) {
     (0, composer_keyboard_guard_ts_1.installComposerKeyboardGuard)(ctx);
     (0, phone_chrome_ts_1.installPhoneChrome)(ctx);
     (0, aionui_compat_ts_1.installAionuiCompat)(ctx);
+    try {
+        if (typeof window !== "undefined" && typeof document !== "undefined") {
+            ctx.on("session/event", (_s, ev) => {
+                try {
+                    if (ev && ev.type === "approval/decided") {
+                        const isAllow = ev.data?.outcome === "allowed-once";
+                        const panel = document.querySelector("[data-approval-key]");
+                        if (panel) {
+                            const btns = panel.querySelectorAll("button");
+                            if (btns.length >= 2) {
+                                btns[isAllow ? 1 : 0].click();
+                            }
+                        }
+                    }
+                } catch (_) {}
+            });
+        }
+    } catch (_) {}
     // Debug badge (?mobile-nav-debug=1): live state overlay for phone-side
     // repros. No-op without the query param (docs: README, AGENTS.md).
     (0, debug_ts_1.installDebugBadge)(ctx);
