@@ -29,19 +29,6 @@ jobs:
           cd ..
           chmod +x scripts/*.sh tools/*.sh
 
-      - name: 上传轻量版刷机包 (Direct Flashable Lite Module)
-        uses: actions/upload-artifact@v4
-        with:
-          name: dsha_ksu_native_lite
-          path: |
-            magisk-module/META-INF
-            magisk-module/module.prop
-            magisk-module/customize.sh
-            magisk-module/service.sh
-            magisk-module/action.sh
-            magisk-module/uninstall.sh
-            magisk-module/scripts
-
       - name: 下载纯净基准原料底座
         run: |
           set -euo pipefail

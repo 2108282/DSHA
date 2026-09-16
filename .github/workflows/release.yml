@@ -103,39 +103,35 @@ jobs:
           cp "$ORIG_APK" "dist/dsha-for-root-1.0.apk"
           ls -lh dist/dsha-for-root-1.0.apk
 
-      # 6. 打包 Magisk Lite 模块（严格遵守 dsh-magisk 脚本与结构）
-      - name: Package Magisk Lite Module
+      # 6. 下载纯净底座并动态合成最新 Magisk Full 模块
+      - name: Download Pure Base Rootfs & Build Full Module
         run: |
           set -euo pipefail
-          cd magisk_src/magisk-module
-          chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
-          zip -r -9 "$GITHUB_WORKSPACE/dist/dsha_ksu_native_lite.zip" META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts
-          ls -lh "$GITHUB_WORKSPACE/dist/dsha_ksu_native_lite.zip"
-
-      # 7. 下载本地验证底包并打包 Magisk Full 模块
-      - name: Download Verified Rootfs & Package Full Module
-        run: |
-          set -euo pipefail
-          BASE_TAG="0.1.5rc1-base"
+          BASE_TAG="0.1.5rc.2-base"
           BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
-          echo "==> 正在下载 0.1.5rc1-base 的 rootfs.tar.gz..."
-          curl -L -f -o "$GITHUB_WORKSPACE/magisk_src/magisk-module/rootfs.tar.gz" "${BASE_URL}/rootfs.tar.gz"
+          echo "==> 正在下载纯净基准原料底包 (${BASE_TAG})..."
+          curl -L -f -o /tmp/raw_rootfs.tar.gz "${BASE_URL}/rootfs.tar.gz"
+
+          echo "==> 运行动态反射合成引擎..."
+          bash "$GITHUB_WORKSPACE/magisk_src/tools/dynamic-rootfs-merge.sh" \
+            /tmp/raw_rootfs.tar.gz \
+            "$GITHUB_WORKSPACE/magisk_src/rootfs-overlay" \
+            "$GITHUB_WORKSPACE/magisk_src/magisk-module/rootfs.tar.gz"
 
           cd "$GITHUB_WORKSPACE/magisk_src/magisk-module"
           zip -r -0 "$GITHUB_WORKSPACE/dist/dsha_ksu_native_full.zip" META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts rootfs.tar.gz
           ls -lh "$GITHUB_WORKSPACE/dist/dsha_ksu_native_full.zip"
 
-      # 8. 生成 SHA-256 校验和
+      # 7. 生成 SHA-256 校验和
       - name: Generate Checksums
         run: |
           set -euo pipefail
           cd dist
           sha256sum dsha-for-root-1.0.apk | tee dsha-for-root-1.0.apk.sha256
-          sha256sum dsha_ksu_native_lite.zip | tee dsha_ksu_native_lite.zip.sha256
           sha256sum dsha_ksu_native_full.zip | tee dsha_ksu_native_full.zip.sha256
           ls -lh
 
-      # 9. 解析发布 Tag
+      # 8. 解析发布 Tag
       - name: Resolve Release Tag
         id: tag
         run: |
@@ -149,7 +145,7 @@ jobs:
           fi
           echo "tag=$TAG_VAL" >> "$GITHUB_OUTPUT"
 
-      # 10. 发布联合 Release
+      # 9. 发布联合 Release
       - name: Publish Joint Release
         uses: softprops/action-gh-release@v2
         with:
@@ -167,14 +163,10 @@ jobs:
                - 源码分支：`magisk-apk`
                - 版本号：`dsha-for-root 1.0` (versionCode 124)
                - 说明：原生 Root 专用前端外壳（体积 ~17MB，无底包负担，提供 3095 硬件桥与 Web 容器）。
-            2. **`dsha_ksu_native_lite.zip`**：
+            2. **`dsha_ksu_native_full.zip`**：
                - 源码分支：`dsh-magisk`
                - 模块版本号：`0.1.5rc2-u1` (versionCode 120)
-               - 说明：轻量控制脚本更新包（~27KB），用于已有底包用户的热更新。
-            3. **`dsha_ksu_native_full.zip`**：
-               - 源码分支：`dsh-magisk`
-               - 模块版本号：`0.1.5rc2-u1` (versionCode 120)
-               - 说明：完整刷机包（~247MB），内置 Ubuntu ARM64 生产闭包与 7 大插件，开箱即刷。
+               - 说明：完整刷机包（~218MB），内置 Ubuntu ARM64 纯净运行时与四大核心插件，开箱即刷。
           files: |
             dist/*
           fail_on_unmatched_files: true

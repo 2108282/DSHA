@@ -74,16 +74,11 @@ dsh-magisk 分支仓库根目录
 4. `git push` 后，引擎自动扫描到该插件，自动创建 `-installed` 标记、软链接与语法校验，直接生效。
 
 ### 场景 3：本地一键打包与测试
-本工程支持在宿主或本地容器直接打包：
-- 打包轻量版（外置底包模式）：
-  ```bash
-  bash scripts/build-module.sh
-  ```
-- 本地完整版合成（需本地有基准底包）：
-  ```bash
-  bash tools/dynamic-rootfs-merge.sh /path/to/base_rootfs.tar.gz rootfs-overlay magisk-module/rootfs.tar.gz
-  bash scripts/build-module.sh --full
-  ```
+本工程支持在宿主或本地容器直接执行打包：
+```bash
+bash scripts/build-module.sh
+```
+若本地无底包，脚本会自动从官方 Release `0.1.5rc.2-base` 拉取纯净原料，并自动调用 `dynamic-rootfs-merge.sh` 将 `rootfs-overlay/` 的最新代码熔铸进去，输出 `dist/dsha_ksu_native_full.zip`。
 
 ---
 
@@ -92,8 +87,7 @@ dsh-magisk 分支仓库根目录
 每次推送到 `dsh-magisk` 分支，`.github/workflows/magisk-module-build.yml` 会自动执行：
 
 1. **构建与产物上传（Artifacts）**：
-   - 生成轻量版刷机包：`dsha_ksu_native_lite` (~27KB)；
-   - 生成全新纯净全内置刷机包：`dsha_ksu_native_full` (~218MB)；
+   - 生成全新纯净全内置刷机包：`dsha_ksu_native_full` (~218MB，开箱即刷)；
 2. **底包 Release 自动挂载**：
    - 自动将纯净底包 `rootfs.tar.gz` 发布/覆盖更新到 GitHub Release [Tag: `0.1.5rc.2-base`](https://github.com/2108282/DSHA/releases/tag/0.1.5rc.2-base)；
    - 提供永久直链：`https://github.com/2108282/DSHA/releases/download/0.1.5rc.2-base/rootfs.tar.gz`；
