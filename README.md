@@ -4,14 +4,40 @@
 
 彻底弃用 PRoot / Proroot 等用户态 ptrace / LD_PRELOAD 虚拟化方案，将 Ubuntu ARM64 运行时直接部署于手机真实的 `ext4` 分区，实现 **0 虚拟化损耗、原生 glibc 性能、按需启停 0 待机功耗**。
 
-> **💡 是否需要编译？**
-> * **本分支（`dsh-magisk`）完全不需要任何编译！**
-> * 本分支由纯 Shell 控制脚本、模块元数据与预置好的 Ubuntu RootFS 组成，直接输出为**单一完整模块刷机包**（`dsha_ksu_native_full.zip`），开箱即用，无需 Gradle、NDK 或任何编译器。
-> * （编译仅适用于 Android 前端客户端分支 `magisk-apk`）。
+> **💡 架构演进与开发维护指引（核心必读）**：
+> * 本分支已全面重构升级为**「反射式动态镜像层架构（`rootfs-overlay/`）」**，新增或修改任何补丁/插件均**无需修改构建脚本**；
+> * 详细设计原理与打包上传指南请参阅：👉 **[ARCHITECTURE_AND_PACKAGING.md](./ARCHITECTURE_AND_PACKAGING.md)**；
+> * 纯净底包已永久持久化发布至 Release [Tag: `0.1.5rc.2-base`](https://github.com/2108282/DSHA/releases/tag/0.1.5rc.2-base) 与 [0.1.5rc.2底包 分支](https://github.com/2108282/DSHA/tree/0.1.5rc.2底包)。
 
 ---
 
 ## 一、 系统架构与关键路径
+
+```text
+dsh-magisk 分支仓库根目录
+├── .github/workflows/
+│   └── magisk-module-build.yml       # 通用 CI/CD 构建流水线
+├── magisk-module/                    # 模块本体与安装器
+│   ├── customize.sh                  # 安装入口 (含防变砖安全检查、音量键交互)
+│   ├── service.sh                    # 开机守护 (幽灵进程解除限制)
+│   └── scripts/                      # start.sh / stop.sh / term.sh 运行时脚本
+├── rootfs-overlay/                   # 👈 【核心】：1:1 反射式动态镜像层
+│   └── root/
+│       ├── dsha-web-mobile/          # 消除手机顶部空白行 + 支持通知审批自动关卡
+│       ├── dsha-task-notifier/       # 具备 justApproved 状态机锁，杜绝误弹完成通知
+│       ├── dsha-status-overlay/      # 顶部灵动悬浮条插件
+│       └── dsha-device-shell-guide/  # 设备 Shell 原生指令提示插件
+│       # 【未来无论新增何种插件/补丁，直接丢在这里即可，无需在 CI 声明】
+├── scripts/
+│   ├── build-module.sh               # 本地一键打包脚本
+│   └── publish-rootfs-asset.sh       # 底包发布与持久化分支同步脚本
+└── tools/
+    └── dynamic-rootfs-merge.sh       # 👈 通用反射式底包合成引擎
+```
+
+---
+
+## 二、 手机真实运行路径 (`/data/adb/dsha/`)
 
 ```text
 /data/adb/dsha/
@@ -34,13 +60,13 @@
 
 ---
 
-## 二、 模块安装使用与免 Magisk 解压部署说明
+## 三、 模块安装使用与免 Magisk 解压部署说明
 
 模块打包产物为单一完整文件：`dsha_ksu_native_full.zip`（内含控制脚本与完整 Ubuntu 底包）。
 
 你可以根据当前设备环境，从以下两种方式中二选一：
 
-### 2.1 方式一：使用 KernelSU / APatch / Magisk 管理器安装（标准卡刷）
+### 3.1 方式一：使用 KernelSU / APatch / Magisk 管理器安装（标准卡刷）
 适合手机已安装 root 管理器 App 的常规用户：
 1. **下载或获取模块包**：将 `dsha_ksu_native_full.zip` 复制到手机存储（如 `/sdcard/Download/`）。
 2. **刷入模块**：
@@ -48,11 +74,11 @@
    * 进入「模块」页面，点击「从本地安装」；
    * 选择 `dsha_ksu_native_full.zip`，刷入脚本（`customize.sh`）会自动就地将底包解压到 `/data/adb/dsha/rootfs` 并配置好所有控制脚本。
 3. **完成状态**：
-   * **刷入成功后，完全不需要重启手机！**（直接看第三节免重启使用与验证）。
+   * **刷入成功后，完全不需要重启手机！**（直接看第四节免重启使用与验证）。
 
 ---
 
-### 2.2 方式二：不用 Magisk / KernelSU 管理器，纯命令行手动解压部署
+### 3.2 方式二：不用 Magisk / KernelSU 管理器，纯命令行手动解压部署
 如果你不想打开管理器刷入，或者运行在自定义 Root 环境、电脑 `adb shell` 中，只需通过命令行从模块 zip 包中直接管道解压：
 
 在终端中切换为 root 权限（电脑执行 `adb shell su` 或手机 Termux 执行 `tsu`）：
@@ -78,7 +104,7 @@ rm -rf /tmp/dsha_tmp
 
 ---
 
-### 2.3 如何停止使用或彻底卸载删除？
+### 3.3 如何停止使用或彻底卸载删除？
 
 * **临时不使用 / 彻底释放后台开销**：
   ```bash
@@ -97,7 +123,7 @@ rm -rf /tmp/dsha_tmp
 
 ---
 
-## 三、 免重启手机直接使用与功能测试指南
+## 四、 免重启手机直接使用与功能测试指南
 
 由于本模块遵循按需拉起（On-demand）原则，不修改 Android 系统只读分区（Systemless），所有挂载与服务均由控制脚本独立按需接管，因此**安装完成后不需要重启手机**，即可直接在终端中验证全部功能：
 
@@ -187,5 +213,3 @@ su -mm -c "/data/adb/dsha/scripts/status.sh"
 su -c "grep '/data/adb/dsha/rootfs' /proc/mounts"
 ```
 **结果应无任何输出**。证明 `/dev`, `/proc`, `/sys`, `/sdcard`, `/dev/shm`, `/dev/block` 等所有挂载点已被 `stop.sh` 循环卸载干净，后台 0 进程、0 内存开销、0 耗电。
-
----
