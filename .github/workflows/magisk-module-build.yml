@@ -16,16 +16,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Checkout repository
+      - name: 检出仓库最新源码
         uses: actions/checkout@v4
 
-      - name: Prepare Module Files & Permissions
+      - name: 准备模块控制脚本与权限
         run: |
           set -euo pipefail
           cd magisk-module
           chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
 
-      - name: Upload Flashable Lite Module (Direct Flashable)
+      - name: 上传轻量版刷机包 (Direct Flashable Lite Module)
         uses: actions/upload-artifact@v4
         with:
           name: dsha_ksu_native_lite
@@ -38,20 +38,92 @@ jobs:
             magisk-module/uninstall.sh
             magisk-module/scripts
 
-      - name: Download Verified Local Rootfs Asset from Release
+      - name: 云端下载原料底座、深度净化并动态熔铸最新修复
         run: |
           set -euo pipefail
           BASE_TAG="0.1.5rc1-base"
           BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
-          echo "==> 下载手机本地 100% 验证通过的完整 rootfs.tar.gz 底包..."
           
-          curl -L -f -o "$GITHUB_WORKSPACE/magisk-module/rootfs.tar.gz" "${BASE_URL}/rootfs.tar.gz"
+          echo "==> [1/5] 从云端 Release 下载基础底包原料..."
+          curl -L -f -o /tmp/raw_rootfs.tar.gz "${BASE_URL}/rootfs.tar.gz"
           
-          echo "✓ 完整本地底包下载完毕，零修改直接打包："
-          ls -lh "$GITHUB_WORKSPACE/magisk-module/rootfs.tar.gz"
+          echo "==> [2/5] 在云端原生 Linux 环境解压底包..."
+          mkdir -p /tmp/target_rootfs
+          tar -xzf /tmp/raw_rootfs.tar.gz -C /tmp/target_rootfs --no-same-owner
+          
+          echo "==> [3/5] 【物理净化】彻底铲除历史 PRoot 遗留污垢与标记..."
+          # 物理清除旧 PRoot 时代的垃圾文件与补丁脚本
+          rm -f /tmp/target_rootfs/root/.dsh/fs-write-patch.sh
+          rm -f /tmp/target_rootfs/root/.dsh/dsha-plugin-heal.sh
+          rm -f /tmp/target_rootfs/root/.dsh/dsh-token-patch.sh
+          rm -f /tmp/target_rootfs/root/.dsh/lan-bind-patch.sh
+          rm -f /tmp/target_rootfs/root/.dsh/webserver-auth-patch.sh
+          rm -f /tmp/target_rootfs/root/.dsh/.l2s_flatten_done
+          rm -rf /tmp/target_rootfs/.l2s
+          rm -rf /tmp/target_rootfs/.proroot-meta
+          rm -rf /tmp/target_rootfs/tmp/*
+          rm -rf /tmp/target_rootfs/root/.cache/*
+          
+          echo "==> [4/5] 【核心熔铸】将仓库中全部已验证修复的插件与代码覆盖进底包..."
+          # 1. 覆盖注入已修复空白行与支持通知代理点击的 dsh-web-mobile
+          if [ -d "app/src/main/assets/builtin-plugins/dsh-web-mobile" ]; then
+            echo "  -> 注入最新 dsh-web-mobile (消除空白行 + 自动关闭卡片)"
+            mkdir -p /tmp/target_rootfs/root/dsha-web-mobile
+            cp -rf app/src/main/assets/builtin-plugins/dsh-web-mobile/* /tmp/target_rootfs/root/dsha-web-mobile/
+            touch /tmp/target_rootfs/root/dsha-web-mobile-installed
+          fi
 
-      - name: Upload Flashable Full Module (With Verified Local Rootfs, Direct Flashable)
-        if: success()
+          # 2. 覆盖注入已具备 justApproved 状态锁的 dsh-task-notifier
+          if [ -d "app/src/main/assets/builtin-plugins/dsh-task-notifier" ]; then
+            echo "  -> 注入最新 dsh-task-notifier (防误弹任务完成)"
+            mkdir -p /tmp/target_rootfs/root/dsha-task-notifier
+            cp -rf app/src/main/assets/builtin-plugins/dsh-task-notifier/* /tmp/target_rootfs/root/dsha-task-notifier/
+            touch /tmp/target_rootfs/root/dsha-task-notifier-installed
+          fi
+
+          # 3. 补齐其余两大核心插件 (status-overlay 与 device-shell-guide)
+          for p in dsh-status-overlay dsh-device-shell-guide; do
+            if [ -d "app/src/main/assets/builtin-plugins/$p" ]; then
+              rname="dsha-${p#dsh-}"
+              mkdir -p "/tmp/target_rootfs/root/$rname"
+              cp -rf "app/src/main/assets/builtin-plugins/$p/"* "/tmp/target_rootfs/root/$rname/"
+              touch "/tmp/target_rootfs/root/$rname-installed"
+            fi
+          done
+
+          # 4. 补建 profile 与全局软链接
+          PROFILE_NM="/tmp/target_rootfs/root/.dsh/profiles/web/node_modules"
+          GLOBAL_NM="/tmp/target_rootfs/usr/local/lib/node_modules"
+          mkdir -p "$PROFILE_NM" "$GLOBAL_NM"
+          for p in dsha-device-shell-guide dsha-task-notifier dsha-status-overlay dsha-web-mobile; do
+            pkg_name="dsh-${p#dsha-}"
+            if [ -d "/tmp/target_rootfs/root/$p" ]; then
+              ln -sfn "/root/$p" "$PROFILE_NM/$pkg_name"
+              ln -sfn "/root/$p" "$GLOBAL_NM/$pkg_name"
+            fi
+          done
+
+          # 5. 执行插件语法严格自检 (防止带毒打包)
+          for js in /tmp/target_rootfs/root/dsha-*/lib/*.js; do
+            [ -f "$js" ] || continue
+            node --check "$js" || { echo "❌ 语法错误: $js"; exit 1; }
+          done
+          echo "  ✓ 全部插件语法校验 100% 通过！"
+
+          echo "==> [5/5] 云端多线程压缩生成全新的纯净底包 rootfs.tar.gz..."
+          cd /tmp/target_rootfs
+          tar --numeric-owner -czf "$GITHUB_WORKSPACE/magisk-module/rootfs.tar.gz" .
+          cd "$GITHUB_WORKSPACE"
+          
+          echo "✓ 纯净底包已生成，大小: $(ls -lh magisk-module/rootfs.tar.gz | awk '{print $5}')"
+
+      - name: 上传独立纯净底包产物 (Clean RootFS Tarball)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsha_clean_rootfs_tar
+          path: magisk-module/rootfs.tar.gz
+
+      - name: 上传全内置完整刷机包 (Direct Flashable Full Module)
         uses: actions/upload-artifact@v4
         with:
           name: dsha_ksu_native_full
