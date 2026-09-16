@@ -304,7 +304,7 @@ echo "STATUS:STARTED PID:$NEW_PID PORT:$PORT"
 for p_mod in "/data/adb/modules/dsha_native/module.prop" \
              "/data/adb/modules_update/dsha_native/module.prop"; do
     if [ -f "$p_mod" ]; then
-        sed -i "s|^description=.*|description=[🟢 运行中 :${PORT}] DSHA 原生 Linux chroot 极速运行时，按需启停，0 虚拟化损耗，0 待机偷跑。|" "$p_mod" 2>/dev/null || true
+        sed -i "s|^description=.*|description=[🟢 运行中 :${PORT}] DSHA 原生 Linux chroot 极速运行时，按需启停。|" "$p_mod" 2>/dev/null || true
     fi
 done
 

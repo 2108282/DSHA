@@ -8,7 +8,7 @@ DATA_DIR="/data/adb/dsha"
 ROOTFS_DIR="$DATA_DIR/rootfs"
 SCRIPTS_DIR="$DATA_DIR/scripts"
 
-# 音量键交互选择函数：按音量+ 覆盖，按音量- 保留，不执行备份
+# 音量键交互选择函数：按音量+ 确认覆盖，按音量- 取消安装
 choose_overwrite() {
     local timeout=15
     local start_time=$(date +%s)
@@ -18,10 +18,10 @@ choose_overwrite() {
     ui_print "    检测到已存在现成的 DSH 运行环境"
     ui_print "-----------------------------------------"
     ui_print " 请在 15 秒内按手机物理音量键进行选择："
-    ui_print " 【音量 +】: 彻底覆盖全新安装（清空旧环境，不备份）"
-    ui_print " 【音量 -】: 保留现有数据与配置（跳过覆盖）"
+    ui_print " 【音量 +】: 已备份，确认覆盖"
+    ui_print " 【音量 -】: 尚未备份，取消安装"
     ui_print "-----------------------------------------"
-    ui_print " 超时（15秒）默认: 自动选择【音量 -】(保留数据)"
+    ui_print " 超时（15秒）默认: 自动选择【音量 -】(尚未备份，取消安装)"
     ui_print "*****************************************"
     ui_print ""
 
@@ -32,18 +32,18 @@ choose_overwrite() {
         local now=$(date +%s)
         local elapsed=$((now - start_time))
         if [ $elapsed -ge $timeout ]; then
-            ui_print "⏱ 超时未按键，默认选择: 保留现有数据（不覆盖）"
+            ui_print "⏱ 超时未按键，默认选择: 尚未备份，取消安装"
             return 1
         fi
 
         local events=$(timeout 1 getevent -l 2>/dev/null || true)
         case "$events" in
             *KEY_VOLUMEUP*|*"0001 0073"*|*"0001 0073 00000001"*|*key_volumeup*)
-                ui_print "👉 已按下【音量 +】: 选择「彻底覆盖全新安装（不备份）」"
+                ui_print "👉 已按下【音量 +】: 选择「已备份，确认覆盖」"
                 return 0
                 ;;
             *KEY_VOLUMEDOWN*|*"0001 0072"*|*"0001 0072 00000001"*|*key_volumedown*)
-                ui_print "👉 已按下【音量 -】: 选择「保留现有数据（不覆盖）」"
+                ui_print "👉 已按下【音量 -】: 选择「尚未备份，取消安装」"
                 return 1
                 ;;
         esac
@@ -97,7 +97,7 @@ if [ -f "$ROOTFS_DIR/usr/local/bin/node" ]; then
         if choose_overwrite; then
             FORCE_CLEAN=1
         else
-            FORCE_CLEAN=0
+            abort "❌ 已取消安装：尚未完成环境备份，未做任何修改。"
         fi
     fi
 else

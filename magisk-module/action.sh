@@ -34,7 +34,7 @@ run_root_mm() {
 update_prop_status() {
     local status_tag="$1"
     if [ -f "$PROP_FILE" ]; then
-        sed -i "s|^description=.*|description=[${status_tag}] DSHA 原生 Linux chroot 极速运行时，按需启停，0 虚拟化损耗，0 待机偷跑。|" "$PROP_FILE" 2>/dev/null || true
+        sed -i "s|^description=.*|description=[${status_tag}] DSHA 原生 Linux chroot 极速运行时，按需启停。|" "$PROP_FILE" 2>/dev/null || true
     fi
 }
 
