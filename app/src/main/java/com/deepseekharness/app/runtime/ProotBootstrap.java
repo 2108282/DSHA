@@ -1121,21 +1121,31 @@ public class ProotBootstrap {
      * term.sh 负责所有 bind-mount 与 chroot 准备工作，与手动在 MT 管理器执行完全等价。
      */
     public String[] ptyArgv(String... guestCmd) {
+        String su = ContainerRuntime.KsuChroot.findSuBinary();
         String termScript = "/data/adb/dsha/scripts/term.sh";
         if (guestCmd != null && guestCmd.length > 0) {
             StringBuilder sb = new StringBuilder(termScript);
             for (String arg : guestCmd) sb.append(" ").append(arg);
-            return new String[]{"su", "-mm", "-c", sb.toString()};
+            return new String[]{su, "-mm", "-c", sb.toString()};
         }
-        return new String[]{"su", "-mm", "-c", termScript};
+        return new String[]{su, "-mm", "-c", termScript};
     }
 
     /**
-     * PTY 终端环境变量：环境由 term.sh 与 su -mm 负责完整设置，
-     * 此处只补充终端类型与 locale，避免与 chroot 内设置冲突。
+     * PTY 终端环境变量：补充终端类型、locale 与宿主系统 PATH，
+     * 确保 JNI clearenv 后子进程仍持有完整的 PATH 变量。
      */
     public String[] ptyEnv() {
-        return new String[]{"TERM=xterm-256color", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"};
+        String path = System.getenv("PATH");
+        if (path == null || path.isEmpty()) {
+            path = "/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin";
+        }
+        return new String[]{
+                "TERM=xterm-256color",
+                "LANG=C.UTF-8",
+                "LC_ALL=C.UTF-8",
+                "PATH=" + path
+        };
     }
 
     private String readStream(InputStream in) throws IOException {

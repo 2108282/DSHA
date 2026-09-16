@@ -225,6 +225,7 @@ public interface ContainerRuntime {
                 }
             }
             String[] candidates = {
+                    "/product/bin/su",
                     "/data/adb/ksu/bin/su",
                     "/data/adb/ap/bin/su",
                     "/data/adb/magisk/su",
