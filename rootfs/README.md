@@ -8,7 +8,7 @@
 ## 方式一：完整单文件直链下载（推荐）
 - **直链下载**: [rootfs.tar.gz](https://github.com/2108282/DSHA/releases/download/0.1.5rc.2-base/rootfs.tar.gz)
 - **文件大小**: 218M
-- **SHA-256 校验和**: `4858eb5126045f258de0d0f4e973be8c1069238b6a4a029b7efbb40bf5b64ca6`
+- **SHA-256 校验和**: `5b3ccb29a76c7b49611eee6edc027c4150fcd557edf9cc758a1f03a35f7f1237`
 
 ---
 
