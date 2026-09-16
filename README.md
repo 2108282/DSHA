@@ -1,3 +1,6 @@
+
+> **📦 [最新纯净底包]**: 单文件直链：[rootfs.tar.gz](https://github.com/2108282/DSHA/releases/download/0.1.5rc.2-base/rootfs.tar.gz)（218M，SHA-256: `11905bcb3aa9c31d7c08f728d7e32c3856e0970004c75639a8415ac9c3f05961`），或查看 [`rootfs/ 目录`](./rootfs/) 内的分卷实体与合并脚本。
+
 # DSHA
 
 <p align="center">
