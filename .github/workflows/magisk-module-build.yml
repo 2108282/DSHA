@@ -25,10 +25,54 @@ jobs:
         run: |
           set -euo pipefail
           cd magisk-module
-          chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
+          chmod +x customize.sh customize.lite.sh service.sh action.sh uninstall.sh scripts/*.sh
           cd ..
           chmod +x scripts/*.sh tools/*.sh
 
+      - name: 编译与打包极速热更新包 (Lite Updater Module)
+        run: |
+          set -euo pipefail
+          STAGE_LITE="/tmp/dsha_lite_stage"
+          python3 -c "import shutil; shutil.rmtree('$STAGE_LITE', ignore_errors=True)" 2>/dev/null || rm -rf "$STAGE_LITE" 2>/dev/null || true
+          mkdir -p "$STAGE_LITE"
+
+          echo "==> [1/3] 准备模块控制文件与四大核心脚本..."
+          cp -rf magisk-module/META-INF "$STAGE_LITE/"
+          cp -f magisk-module/module.prop "$STAGE_LITE/"
+          cp -f magisk-module/service.sh "$STAGE_LITE/"
+          cp -f magisk-module/action.sh "$STAGE_LITE/"
+          cp -f magisk-module/uninstall.sh "$STAGE_LITE/"
+          
+          # 使用专用的两步音量键交互安装器
+          cp -f magisk-module/customize.lite.sh "$STAGE_LITE/customize.sh"
+          
+          # 仅打包四大基础脚本
+          mkdir -p "$STAGE_LITE/scripts"
+          cp -rf magisk-module/scripts/* "$STAGE_LITE/scripts/"
+
+          echo "==> [2/3] 注入增量业务补丁 (除四大脚本外的所有代码/前端/插件)..."
+          if [ -d "rootfs-overlay" ]; then
+            mkdir -p "$STAGE_LITE/overlay"
+            cp -rf rootfs-overlay/* "$STAGE_LITE/overlay/"
+          fi
+
+          echo "==> [3/3] 压制 Lite 独立热更新包..."
+          cd "$STAGE_LITE"
+          chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          zip -r -9 "$GITHUB_WORKSPACE/dist/dsha_patch_updater_lite.zip" .
+          cd "$GITHUB_WORKSPACE"
+          ls -lh dist/dsha_patch_updater_lite.zip
+
+      - name: 上传极速热更新包产物 (Lite Patch Updater)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsha_patch_updater_lite
+          path: dist/dsha_patch_updater_lite.zip
+
+      # ============================================================
+      # 完整包编译流程（步骤完全保持不变）
+      # ============================================================
       - name: 下载纯净基准原料底座
         run: |
           set -euo pipefail
