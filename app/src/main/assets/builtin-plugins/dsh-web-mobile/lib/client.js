@@ -1029,7 +1029,7 @@ const IOS_MARKER = 'data-mobile-nav-ios';
  * zoom away from Android/DSHA; the iOS focus-zoom fix is the >=16px field
  * floor (data-mobile-nav-ios), not a zoom ban (#45).
  */
-const VIEWPORT_CONTENT = 'width=device-width, initial-scale=1, viewport-fit=cover';
+const VIEWPORT_CONTENT = 'width=device-width, initial-scale=1';
 const findViewportMeta = () => document.querySelector('meta[name="viewport"]');
 /**
  * Phone chrome: KEEP the system status bar (no fullscreen) and make it
@@ -1665,7 +1665,7 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     box-sizing: border-box !important;
     position: relative !important;
     grid-template-columns: minmax(0, 1fr) 0 0 !important;
-    padding-top: env(safe-area-inset-top, 0px) !important;
+    padding-top: 0px !important;
   }
 
   /* The sidebar column (first grid child) becomes a left drawer. The drawer
@@ -1687,12 +1687,8 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     transform: translateX(-110%);
     transition: transform .28s var(--ds-ease-in-out, ease-in-out);
     background: var(--dsw-alias-bg-base, #ffffff);
-    /* Keep the drawer's own content below the status bar / notch: the drawer
-       spans the full frame height (its absolute containing block is the
-       frame's padding box, so the frame's own safe-area padding does NOT
-       reach it). The drawer background paints the status-bar strip, which
-       the client's theme-color meta matches, so the strip reads seamless. */
-    padding-top: env(safe-area-inset-top, 0px) !important;
+    /* Keep the drawer flush with top: drawer spans full frame height */
+    padding-top: 0px !important;
     /* Kill the official sidebarCol right border: with the backdrop the edge
        reads cleanly, and the settings dialog (width:100% of this box) stays
        pixel-flush with the drawer. */
