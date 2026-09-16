@@ -1,8 +1,8 @@
 # DSHA Magisk 原生模块工程架构与打包发布完全手册
 
-> **致未来的维护者 / AI 协同 Agent**：  
+> **致未来的维护者 / AI 协同 Agent（核心必读）**：  
 > 本工程是 **DSHA 原生 Linux (KernelSU / Magisk) 核心运行环境**。  
-> 请务必完整阅读本手册，它详细记录了本项目的目录结构、动态补丁引擎工作原理、日常开发修改规范以及云端打包与发布流程。
+> 请务必完整阅读本手册！特别注意第三部分的**【核心开发铁律：双轨修补原则】**。今后无论新增、修改任何代码或功能，必须严格遵守该规范！
 
 ---
 
@@ -15,95 +15,144 @@
 ```text
 dsh-magisk 分支仓库根目录
 ├── .github/workflows/
-│   └── magisk-module-build.yml       # 通用持续集成流水线 (CI/CD)
+│   └── magisk-module-build.yml       # 通用持续集成流水线 (CI/CD: 同时产出 Full 包与 Lite 包)
 ├── magisk-module/                    # Magisk / KernelSU 模块本体
 │   ├── META-INF/                     # 刷机脚本入口
 │   ├── module.prop                   # 模块元数据 (版本号、名称、描述)
-│   ├── customize.sh                  # 安装入口 (含防变砖安全检查、音量键交互)
+│   ├── customize.sh                  # Full 包完整安装器 (含底包解压与音量键覆盖确认)
+│   ├── customize.lite.sh             # Lite 包两步更新安装器 (音量键控制：第1步执行补丁，第2步覆盖脚本)
 │   ├── service.sh                    # 开机守护 (幽灵进程解除限制)
 │   ├── action.sh / uninstall.sh      # 操作按钮与卸载清理
-│   └── scripts/                      # start.sh / stop.sh / term.sh 运行时控制
-├── rootfs-overlay/                   # 👈 【核心】：1:1 反射式动态镜像层
+│   └── scripts/                      # 运行时控制脚本与增量补丁脚本
+│       ├── start.sh                  # 【基础脚本】服务启动与挂载
+│       ├── stop.sh                   # 【基础脚本】服务停止与卸载
+│       ├── status.sh                 # 【基础脚本】状态与 Token 探针
+│       ├── term.sh                   # 【基础脚本】进入纯 Root 终端
+│       └── [你的增量补丁.sh]          # 👈 【Lite增量补丁】：任意非基础脚本，Lite刷入时现场执行！
+├── rootfs-overlay/                   # 👈 【Full底包直接装入层】：1:1 反射式动态镜像层
 │   └── root/
-│       ├── dsha-web-mobile/          # 消除手机顶部空白行 + 支持通知审批自动关卡
-│       ├── dsha-task-notifier/       # 具备 justApproved 状态机锁，杜绝误弹完成通知
+│       ├── dsha-web-mobile/          # 手机端前端源码（消除空白行 + 通知审批关卡）
+│       ├── dsha-task-notifier/       # 通知插件（含 justApproved 状态机锁）
 │       ├── dsha-status-overlay/      # 顶部灵动悬浮条插件
 │       └── dsha-device-shell-guide/  # 设备 Shell 原生指令提示插件
-│       # 【未来无论新增何种插件/补丁，直接丢在这里即可，无需声明】
 ├── scripts/
-│   ├── build-module.sh               # 本地一键快速打包脚本
+│   ├── build-module.sh               # 本地打包脚本 (支持默认 Full 与 --lite 独立打包)
 │   └── publish-rootfs-asset.sh       # 底包 Release 发布与分支同步脚本
 └── tools/
-    └── dynamic-rootfs-merge.sh       # 👈 【核心】：通用动态镜像层叠合成引擎
+    └── dynamic-rootfs-merge.sh       # 👈 通用动态镜像层叠合成引擎
 ```
 
 ---
 
 ## 二、 动态合成引擎的工作原理 (`tools/dynamic-rootfs-merge.sh`)
 
-无论是本地打包还是 GitHub Actions 云端流水线，均由该引擎统一驱动，分为 4 个原子阶段：
+引擎只做通用的 1:1 递归镜像映射与语法安全断言，**内部零硬编码业务文件名**：
 
 1. **原料解压**：下载并解压基准底包（`0.1.5rc.2-base/rootfs.tar.gz`）；
-2. **通用物理净化**：自动清理历史 PRoot 遗留文件、临时缓存与旧补丁脚本；
+2. **通用物理净化**：自动清理旧系统遗留标记、缓存与失效补丁；
 3. **动态反射镜像叠加**：
-   - 遍历 `rootfs-overlay/` 下的所有文件与目录，**1:1 精准覆盖**到目标系统的对应路径（含隐藏文件）；
-   - **自动注册立牌**：自动检测 `/root/dsha-*` 实体，为其生成 `/root/dsha-*-installed` 凭证；
-   - **软链自动对齐**：自动在 Web Profile (`/root/.dsh/profiles/web/node_modules/`) 和全局 (`/usr/local/lib/node_modules/`) 创建软链接；
-   - **语法安全断言**：自动递归扫描所有插件的 `lib/*.js` 并执行 `node --check`，一旦存在语法错误立即中断并告警，绝不打包带毒代码；
-4. **生成产物**：压缩输出全新纯净的 `rootfs.tar.gz`。
+   - 遍历 `rootfs-overlay/` 下的所有文件与目录，**1:1 精准覆盖**到目标系统同名路径；
+   - **自动注册立牌**：检测到 `/root/dsha-*` 实体，自动创建 `/root/dsha-*-installed` 凭证；
+   - **软链自动对齐**：自动在 Web Profile 和全局 `node_modules` 下补齐软链接；
+   - **语法安全卫士**：自动对所有插件的 `lib/*.js` 执行 `node --check` 语法断言，带毒代码立即中断并掐断打包；
+4. **生成产物**：重新压制输出全新的纯净 `rootfs.tar.gz`。
 
 ---
 
-## 三、 日常开发与维护场景操作指南
+## 三、 【核心开发铁律】：双轨修补原则（重要！必须严格遵守）
 
-### 场景 1：我要修改前端样式或修复某个插件的逻辑
-1. 直接在 `rootfs-overlay/root/对应插件/`（例如 `rootfs-overlay/root/dsha-web-mobile/lib/client.js`）修改代码；
-2. 本地执行语法检查：`node --check rootfs-overlay/root/dsha-web-mobile/lib/client.js`；
-3. 提交并推送到 GitHub：
-   ```bash
-   git add rootfs-overlay/
-   git commit -m "fix(web): 优化手机端样式"
-   git push origin dsh-magisk
-   ```
-4. **完全无需修改任何构建脚本**，云端 Actions 会自动识别、自动校验、自动熔铸打包出最新刷机包！
+无论是修复 Bug、修改前端页面，还是新增系统配置，**今后开发者 / AI 必须同时写两套修补逻辑**：
 
-### 场景 2：我要新增一个全新插件或系统配置文件
-1. 新建插件目录，比如 `rootfs-overlay/root/dsha-my-new-plugin/`；
-2. 放入 `package.json`、`cordis.patch.yml` 以及 `lib/index.js`；
-3. 如果需要注入系统配置文件，直接建立对应路径即可（例如 `rootfs-overlay/etc/my-config.conf`）；
-4. `git push` 后，引擎自动扫描到该插件，自动创建 `-installed` 标记、软链接与语法校验，直接生效。
+### 🎯 为什么要双轨？
+* **新用户 / 完整刷机用户（Full 包）**：直接刷 200MB 的完整底包，代码必须**在打包编译时直接装入底包**，解压即生效；
+* **老用户 / 已有环境热更新用户（Lite 包）**：不想重新刷 200MB 大包，代码必须**作为一个可执行的 `.sh` 脚本放进 `magisk-module/scripts/`**，刷 Lite 小包时现场执行，对已有系统增量打补丁！
 
-### 场景 3：本地一键打包与测试
-本工程支持在宿主或本地容器直接执行打包：
-```bash
-bash scripts/build-module.sh
+---
+
+### 📝 双轨编写标准操作指引：
+
+#### 轨道 1：写能够“在打包时直接装进去”的代码（面向 Full 包）
+- **存放位置**：`rootfs-overlay/`
+- **规则**：保持与系统真实路径 1:1 对应。
+  - 例如修改前端样式：直接修改 `rootfs-overlay/root/dsha-web-mobile/lib/client.js`；
+  - 例如修改系统 hosts：直接放入 `rootfs-overlay/etc/hosts`；
+- **效果**：云端流水线编译 Full 包时，引擎会自动把这些文件熔铸到底包原位置中，全新刷机者开箱即带。
+
+#### 轨道 2：写一个“单独用来 Lite 现场执行”的脚本（面向 Lite 包）
+- **存放位置**：`magisk-module/scripts/`
+- **命名规范**：任意合法的 `.sh` 文件名（**绝对不能叫** `start.sh`、`stop.sh`、`status.sh`、`term.sh`），例如 `patch-fix-web.sh` 或 `update-custom-env.sh`；
+- **编写规范**：必须写成标准的 Shell 执行脚本，安装器会给它传入 `$ROOTFS_DIR`（宿主下的 chroot 根目录路径，即 `/data/adb/dsha/rootfs`）和 `$DATA_DIR`（`/data/adb/dsha`）：
+  ```bash
+  #!/system/bin/sh
+  # 示例增量补丁脚本：magisk-module/scripts/patch-update-something.sh
+  set -euo pipefail
+  ROOTFS="${1:-/data/adb/dsha/rootfs}"
+
+  echo "==> 正在对已有环境执行增量热更新..."
+  # 在这里写你需要在手机现场执行的操作，例如修改文件、追加配置、修权限等：
+  # sed -i 's/old/new/g' "$ROOTFS/etc/some.conf"
+  # chmod 644 "$ROOTFS/..."
+  echo "✓ 增量热更新执行完成！"
+  ```
+- **效果**：刷入 Lite 包时，用户在【第 1 步】按【音量 +】，安装器就会**自动现场调用 `sh` 执行这个脚本**，老用户无需刷底包瞬间热修完毕！
+
+---
+
+## 四、 Lite 热更新包刷入时的两步交互机制
+
+用户在 KernelSU / APatch / Magisk 刷入 `dsha_ksu_native_lite.zip`（仅几十 KB）时，`customize.lite.sh` 按照以下两步执行物理音量键选择：
+
+```text
+=========================================
+      DSHA Native 极速热更新补丁包
+=========================================
+
+【第 1 步】：是否执行增量补丁？
+-----------------------------------------
+请在 15 秒内按手机物理音量键选择：
+【音量 +】: 是 (执行增量补丁)
+【音量 -】: 否 (跳过，不执行)
+-----------------------------------------
+👉 若按【音量 +】：
+   安装器自动扫描 scripts/ 下除 4 大脚本外的所有 *.sh 增量补丁，
+   赋予执行权限并现场逐个运行：sh "$patch" "$ROOTFS_DIR" "$DATA_DIR"
+   现场把你的补丁脚本跑一遍！
+👉 若按【音量 -】：跳过，不执行任何补丁。
+
+
+【第 2 步】：是否覆盖四大基础控制脚本？(start/stop/status/term)
+-----------------------------------------
+请在 15 秒内按手机物理音量键选择：
+【音量 +】: 是 (覆盖基础脚本)
+【音量 -】: 否 (保留当前已有脚本)
+-----------------------------------------
+👉 若按【音量 +】：
+   把最新的 start.sh / stop.sh / status.sh / term.sh
+   覆盖写入手机的 /data/adb/dsha/scripts/ 并 chmod 755。
+👉 若按【音量 -】：跳过，完全不动用户手机原有的这 4 个脚本。
+
+=========================================
+✓ DSHA 极速热更新全部处理完成！
+=========================================
 ```
-若本地无底包，脚本会自动从官方 Release `0.1.5rc.2-base` 拉取纯净原料，并自动调用 `dynamic-rootfs-merge.sh` 将 `rootfs-overlay/` 的最新代码熔铸进去，输出 `dist/dsha_ksu_native_full.zip`。
 
 ---
 
-## 四、 云端 CI/CD 自动化流水线（打包与上传逻辑）
+## 五、 本地与云端编译打包指令
 
-每次推送到 `dsh-magisk` 分支，`.github/workflows/magisk-module-build.yml` 会自动执行：
+### 1. 本地一键打包（执行 `scripts/build-module.sh`）
+- **打包 Full 完整包**（含底包，开箱即刷，~218MB）：
+  ```bash
+  bash scripts/build-module.sh
+  ```
+  *(若本地无底包，会自动从 Release `0.1.5rc.2-base` 下载纯净原料并自动动态熔铸)*
+- **打包 Lite 热更新包**（仅脚本与补丁，~15KB）：
+  ```bash
+  bash scripts/build-module.sh --lite
+  ```
 
-1. **构建与产物上传（Artifacts）**：
-   - 生成全新纯净全内置刷机包：`dsha_ksu_native_full` (~218MB，开箱即刷)；
-2. **底包 Release 自动挂载**：
-   - 自动将纯净底包 `rootfs.tar.gz` 发布/覆盖更新到 GitHub Release [Tag: `0.1.5rc.2-base`](https://github.com/2108282/DSHA/releases/tag/0.1.5rc.2-base)；
-   - 提供永久直链：`https://github.com/2108282/DSHA/releases/download/0.1.5rc.2-base/rootfs.tar.gz`；
-3. **底包持久化同步到「0.1.5rc.2底包」分支**：
-   - 自动按 50MB 分卷切片（`part-00` ~ `part-04`，适配 GitHub 100MB 单文件限制）；
-   - 生成合并脚本 `merge.sh` 与说明文档；
-   - 自动提交推送到 [0.1.5rc.2底包 分支](https://github.com/2108282/DSHA/tree/0.1.5rc.2底包)，并在其首页更新直链下载索引。
-
----
-
-## 五、 三大分支职责与关系一览
-
-| 分支名 | 职责定位 | 主要产物与形态 |
-| :--- | :--- | :--- |
-| **`magisk-apk`** | Android 前端外壳 App (纯 Java/Android SDK) | `dsha-for-root-1.0.apk` (提供 3095 硬件桥与 Web 容器) |
-| **`dsh-magisk`** | 原生 Root 模块与运行时管理 (纯 Shell + 动态补丁) | `dsha_ksu_native_full.zip` (开箱即刷模块) |
-| **`0.1.5rc.2底包`** | 纯净底包资产持久化仓库 | 50MB 底包分卷实体、合并脚本与 Release 直链 |
-
-*以上规范由 DSHA 架构演进确立，后续所有迭代请严格遵循此模型。*
+### 2. 云端自动化构建
+每次 push 到 `dsh-magisk` 分支，GitHub Actions（`.github/workflows/magisk-module-build.yml`）会自动并发产出：
+1. **`dsha_patch_updater_lite` (即 `dsha_ksu_native_lite.zip`)**：纯脚本增量热更新包；
+2. **`dsha_ksu_native_full` (`dsha_ksu_native_full.zip`)**：全内置完整刷机包；
+3. **底包 Release 与分支持久化**：自动同步更新 Release 直链与「0.1.5rc.2底包」分支分卷。

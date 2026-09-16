@@ -38,10 +38,10 @@ if [ "$MODE" = "--lite" ] || [ "$MODE" = "lite" ]; then
 
     cd "$STAGE_LITE"
     chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
-    zip -r -9 "$OUTPUT_DIR/dsha_patch_updater_lite.zip" . >/dev/null
+    zip -r -9 "$OUTPUT_DIR/dsha_ksu_native_lite.zip" . >/dev/null
     cd "$ROOT_DIR"
-    echo "✓ 极速热更新包已生成: $OUTPUT_DIR/dsha_patch_updater_lite.zip"
-    ls -lh "$OUTPUT_DIR/dsha_patch_updater_lite.zip"
+    echo "✓ 极速热更新包已生成: $OUTPUT_DIR/dsha_ksu_native_lite.zip"
+    ls -lh "$OUTPUT_DIR/dsha_ksu_native_lite.zip"
     exit 0
 fi
 

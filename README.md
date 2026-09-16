@@ -5,8 +5,10 @@
 彻底弃用 PRoot / Proroot 等用户态 ptrace / LD_PRELOAD 虚拟化方案，将 Ubuntu ARM64 运行时直接部署于手机真实的 `ext4` 分区，实现 **0 虚拟化损耗、原生 glibc 性能、按需启停 0 待机功耗**。
 
 > **💡 架构演进与开发维护指引（核心必读）**：
-> * 本分支已全面重构升级为**「反射式动态镜像层架构（`rootfs-overlay/`）」**，新增或修改任何补丁/插件均**无需修改构建脚本**；
-> * 详细设计原理与打包上传指南请参阅：👉 **[ARCHITECTURE_AND_PACKAGING.md](./ARCHITECTURE_AND_PACKAGING.md)**；
+> * **核心开发铁律（双轨修补原则）**：今后写代码修改时，必须**同时写两套**：
+>   1. **面向 Full 完整包**：按 1:1 目录放入 `rootfs-overlay/`，编译底包时直接装进去；
+>   2. **面向 Lite 热更新包**：在 `magisk-module/scripts/` 下写一个现场执行的增量 `.sh` 脚本，用户刷 Lite 包时音量键选择现场执行！
+> * 详细设计原理与两步音量键交互机制请参阅：👉 **[ARCHITECTURE_AND_PACKAGING.md](./ARCHITECTURE_AND_PACKAGING.md)**；
 > * 纯净底包已永久持久化发布至 Release [Tag: `0.1.5rc.2-base`](https://github.com/2108282/DSHA/releases/tag/0.1.5rc.2-base) 与 [0.1.5rc.2底包 分支](https://github.com/2108282/DSHA/tree/0.1.5rc.2底包)。
 
 ---

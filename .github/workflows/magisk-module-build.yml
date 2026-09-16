@@ -51,15 +51,15 @@ jobs:
           cd "$STAGE_LITE"
           chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          zip -r -9 "$GITHUB_WORKSPACE/dist/dsha_patch_updater_lite.zip" .
+          zip -r -9 "$GITHUB_WORKSPACE/dist/dsha_ksu_native_lite.zip" .
           cd "$GITHUB_WORKSPACE"
-          ls -lh dist/dsha_patch_updater_lite.zip
+          ls -lh dist/dsha_ksu_native_lite.zip
 
-      - name: 上传极速热更新包产物 (Lite Patch Updater)
+      - name: 上传极速热更新包产物 (Lite Module)
         uses: actions/upload-artifact@v4
         with:
-          name: dsha_patch_updater_lite
-          path: dist/dsha_patch_updater_lite.zip
+          name: dsha_ksu_native_lite
+          path: dist/dsha_ksu_native_lite.zip
 
       # ============================================================
       # 完整包编译流程（步骤完全保持不变）
