@@ -12,6 +12,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 public final class AboutDialog {
 
     public static final String GITHUB_URL = "https://github.com/qiannianhuanxiang/DSHA";
+    public static final String GITHUB_ROOT_URL = "https://github.com/2108282/DSHA";
     public static final String QQ_GROUP = "975836806";
 
     private AboutDialog() {
@@ -26,10 +27,11 @@ public final class AboutDialog {
         new MaterialAlertDialogBuilder(ctx)
                 .setTitle("DSHA v" + version)
                 .setMessage("DeepSeek Harness 安卓启动器\n" + ctx.getString(com.deepseekharness.app.R.string.edition_description) + "\n\n"
-                        + "🌟 GitHub：" + GITHUB_URL + "\n"
+                        + "⚡ GitHub (Root 原生)：" + GITHUB_ROOT_URL + "\n"
+                        + "🌟 GitHub (原版)：" + GITHUB_URL + "\n"
                         + "🐧 QQ 交流群：" + QQ_GROUP)
-                .setPositiveButton("GitHub", (d, w) -> openBrowser(ctx, GITHUB_URL))
-                .setNeutralButton("QQ 群", (d, w) -> openQQGroup(ctx))
+                .setPositiveButton("Root 仓库", (d, w) -> openBrowser(ctx, GITHUB_ROOT_URL))
+                .setNeutralButton("原版仓库", (d, w) -> openBrowser(ctx, GITHUB_URL))
                 .setNegativeButton("关闭", null)
                 .show();
     }
