@@ -86,6 +86,19 @@ export function apply(ctx) {
                 respond(res, result.status, { error: result.error });
             },
         }), 'dsh-web-mobile: session-delete route');
+        webCtx.effect(() => webCtx.webServer.register({
+            kind: 'exact',
+            path: '/api/dsha-approval-status',
+            handler: async (req, res) => {
+                let status = { active: false, decision: null, time: 0 };
+                try {
+                    const fs = await import('node:fs/promises');
+                    const raw = await fs.readFile('/root/.dsh/.approval_status.json', 'utf-8');
+                    status = JSON.parse(raw);
+                } catch {}
+                respond(res, 200, status);
+            },
+        }), 'dsh-web-mobile: approval-status route');
     });
 }
 //# sourceMappingURL=index.js.map

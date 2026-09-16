@@ -5759,20 +5759,59 @@ function apply(ctx) {
     (0, aionui_compat_ts_1.installAionuiCompat)(ctx);
     try {
         if (typeof window !== "undefined" && typeof document !== "undefined") {
-            ctx.on("session/event", (_s, ev) => {
+            let activePollTimer = null;
+            let lastPollTime = 0;
+            const checkAndDismissApproval = async () => {
+                const panel = document.querySelector("[data-approval-key]");
+                if (!panel) {
+                    if (activePollTimer) {
+                        clearInterval(activePollTimer);
+                        activePollTimer = null;
+                    }
+                    return;
+                }
+                const now = Date.now();
+                if (now - lastPollTime < 150) return;
+                lastPollTime = now;
                 try {
-                    if (ev && ev.type === "approval/decided") {
-                        const isAllow = ev.data?.outcome === "allowed-once";
-                        const panel = document.querySelector("[data-approval-key]");
-                        if (panel) {
+                    const resp = await fetch("/api/dsha-approval-status", { cache: "no-store" });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        if (data && data.active === false && data.decision) {
                             const btns = panel.querySelectorAll("button");
                             if (btns.length >= 2) {
+                                const isAllow = data.decision !== "rejected";
                                 btns[isAllow ? 1 : 0].click();
+                                if (activePollTimer) {
+                                    clearInterval(activePollTimer);
+                                    activePollTimer = null;
+                                }
                             }
                         }
                     }
                 } catch (_) {}
+            };
+
+            const observer = new MutationObserver(() => {
+                const panel = document.querySelector("[data-approval-key]");
+                if (panel) {
+                    if (!activePollTimer) {
+                        checkAndDismissApproval();
+                        activePollTimer = setInterval(checkAndDismissApproval, 200);
+                    }
+                } else if (activePollTimer) {
+                    clearInterval(activePollTimer);
+                    activePollTimer = null;
+                }
             });
+
+            if (document.body) {
+                observer.observe(document.body, { childList: true, subtree: true });
+            } else {
+                document.addEventListener("DOMContentLoaded", () => {
+                    observer.observe(document.body, { childList: true, subtree: true });
+                }, { once: true });
+            }
         }
     } catch (_) {}
     // Debug badge (?mobile-nav-debug=1): live state overlay for phone-side
