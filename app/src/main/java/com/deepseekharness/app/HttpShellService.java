@@ -2310,12 +2310,12 @@ public final class HttpShellService {
             // 桌面悬浮条同步就地展开审批按钮，并绑定同一 myEpoch（与通知栏、Web 端小黄窗构成三级联动）
             OverlayController.askConfirm(ctx, safeDisplay(info.detail),
                     () -> {
-                        triggerVibrate(ctx, 50);
+                        ConfirmReceiver.triggerVibrate(ctx, 50);
                         ConfirmReceiver.writeApprovalDecision("allowed-once");
                         resolveConfirm(true, myEpoch);
                     },
                     () -> {
-                        triggerVibrate(ctx, 50);
+                        ConfirmReceiver.triggerVibrate(ctx, 50);
                         ConfirmReceiver.writeApprovalDecision("rejected");
                         resolveConfirm(false, myEpoch);
                     });

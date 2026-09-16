@@ -237,7 +237,7 @@ public class ConfirmReceiver extends BroadcastReceiver {
         } catch (Throwable ignored) {}
     }
 
-    private static void triggerVibrate(Context ctx, int ms) {
+    public static void triggerVibrate(Context ctx, int ms) {
         try {
             android.os.Vibrator v;
             if (Build.VERSION.SDK_INT >= 31) {
