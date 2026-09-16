@@ -8,7 +8,7 @@
 > * **核心开发铁律（双轨修补原则）**：今后写代码修改时，必须**同时写两套**：
 >   1. **面向 Full 完整包**：按 1:1 目录放入 `rootfs-overlay/`，编译底包时直接装进去；
 >   2. **面向 Lite 热更新包**：在 `magisk-module/scripts/` 下写一个现场执行的增量 `.sh` 脚本，用户刷 Lite 包时音量键选择现场执行！
-> * 详细设计原理与两步音量键交互机制请参阅：👉 **[ARCHITECTURE_AND_PACKAGING.md](./ARCHITECTURE_AND_PACKAGING.md)**；
+> * 打包机制请参阅：👉 **[ARCHITECTURE_AND_PACKAGING.md](./ARCHITECTURE_AND_PACKAGING.md)**；
 > * 纯净底包已永久持久化发布至 Release [Tag: `0.1.5rc.2-base`](https://github.com/2108282/DSHA/releases/tag/0.1.5rc.2-base) 与 [0.1.5rc.2底包 分支](https://github.com/2108282/DSHA/tree/0.1.5rc.2底包)。
 
 ---
