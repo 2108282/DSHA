@@ -41,7 +41,7 @@ DSHA 采用清晰的职责隔离架构，杜绝在单个分支内混合不同平
 * **定位**：**专属于 Lite 极速热更新包，Full 完整包绝对不打包！**
 * **场景**：若某次更新需要为老用户已有环境执行现场修补（例如初始化解耦的 `.lan_token`、调用 sed 调整配置、释放自愈实体等）；
 * **规则**：
-  - 必须独立存放在 `magisk-module/patches/` 目录下（例如 `patch-lan-proxy.sh`、`patch-fix-approval-notify.sh`），与基础控制脚本在物理路径上彻底隔离；
+  - 必须独立存放在 `magisk-module/patches/` 目录下（例如 `patch-lan-proxy.sh`），与基础控制脚本在物理路径上彻底隔离；
   - 脚本必须自包含、具备容错与幂等性（多次执行不产生副作用）；
   - **打包行为**：`build-module.sh --lite` 自动将其打包至 Lite 模块；`build-module.sh full` 严禁将其打入 Full 包，保证全新刷机底座 100% 纯净；
   - **刷入行为**：Lite 模块安装器在【第 1 步】统筹执行容器增量更新：用户选择【音量 +】后，先执行 `rootfs-overlay` 镜像层叠覆盖，再逐个执行 `patches/*.sh` 补丁脚本；用户若选择【音量 -】则完全跳过，绝不修改老用户的容器环境。

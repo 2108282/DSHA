@@ -64,20 +64,29 @@ mount_if_needed() {
     if ! is_mounted "$target"; then
         mkdir -p "$target" 2>/dev/null
         mount "$@" "$target"
+        # 若为 bind 挂载，追加 remount noatime,nodiratime 消除闪存元数据写入放大
+        case "$*" in
+            *bind*)
+                mount -o remount,bind,noatime,nodiratime "$target" 2>/dev/null || true
+                ;;
+        esac
     fi
 }
+
+# 优化 rootfs 宿主挂载参数，消除访问时间写回损耗
+mount -o remount,noatime,nodiratime "$ROOTFS" 2>/dev/null || true
 
 mount_if_needed "$ROOTFS/dev" -o bind /dev
 mount_if_needed "$ROOTFS/dev/pts" -o bind /dev/pts
 mkdir -p "$ROOTFS/dev/shm"
-mount_if_needed "$ROOTFS/dev/shm" -t tmpfs tmpfs -o mode=1777
+mount_if_needed "$ROOTFS/dev/shm" -t tmpfs tmpfs -o mode=1777,noatime,nodiratime
 # 屏蔽物理块设备：只读且mode 000空tmpfs，从内核层彻底杜绝误写分区物理变砖
 mkdir -p "$ROOTFS/dev/block"
 mount_if_needed "$ROOTFS/dev/block" -t tmpfs tmpfs -o ro,mode=000
 mount_if_needed "$ROOTFS/proc" -t proc proc
 mount_if_needed "$ROOTFS/sys" -t sysfs sysfs
 
-# 挂载存储卡
+# 挂载存储卡 (启用 noatime,nodiratime)
 if [ -d "/storage/emulated/0" ]; then
     mount_if_needed "$ROOTFS/sdcard" -o bind /storage/emulated/0
     mount_if_needed "$ROOTFS/storage/emulated/0" -o bind /storage/emulated/0
@@ -265,6 +274,12 @@ if [ -f "$ROOTFS/root/.dsh/heartbeat-patch.yml" ]; then
     PATCH_ARG="--patch /root/.dsh/heartbeat-patch.yml"
 fi
 
+# 内存防碎片治理：自适应检测 jemalloc，存在则定向注入 Node 主进程压制长时间挂机内存碎片
+PRELOAD_OPT=""
+if [ -f "$ROOTFS/usr/lib/aarch64-linux-gnu/libjemalloc.so.2" ]; then
+    PRELOAD_OPT="LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2"
+fi
+
 # 6. 原生拉起 Node.js DSH Web 服务
 chroot "$ROOTFS" /usr/bin/env -i \
     HOME=/root \
@@ -276,6 +291,7 @@ chroot "$ROOTFS" /usr/bin/env -i \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     DSH_CONFIRM=1 \
+    $PRELOAD_OPT \
     nice -n 10 /usr/local/bin/node --v8-pool-size=2 /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
 
 NEW_PID=$!

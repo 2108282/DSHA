@@ -1,4 +1,8 @@
 /** DSHA 设备能力引导：使用 dsh 0.1.5 的消息工厂与已提交事件判重。 */
+// 消除 LD_PRELOAD 环境变量泄漏至子进程与宿主 Android nsenter 命令
+if (process.env.LD_PRELOAD) {
+  delete process.env.LD_PRELOAD;
+}
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 export const name = 'dsh-device-shell-guide';
 
