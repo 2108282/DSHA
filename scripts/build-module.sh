@@ -32,9 +32,20 @@ if [ "$MODE" = "--lite" ] || [ "$MODE" = "lite" ]; then
     # 使用专用的两步音量键交互安装器
     cp -f "$MODULE_DIR/customize.lite.sh" "$STAGE_LITE/customize.sh"
 
-    # 打包 scripts/ 下的全部脚本 (包含四大基础脚本 + 任意增量补丁脚本)
+    # 打包 scripts/ 下的全部脚本 (包含五大基础脚本: start/stop/status/term/lan-proxy + 增量补丁脚本)
     mkdir -p "$STAGE_LITE/scripts"
     cp -rf "$MODULE_DIR/scripts/"* "$STAGE_LITE/scripts/"
+
+    # 打包核心局域网代理守护实体 dsha-lan-proxy.js 至 Lite 模块
+    if [ -f "$ROOT_DIR/rootfs-overlay/root/.dsh/dsha-lan-proxy.js" ]; then
+        mkdir -p "$STAGE_LITE/root/.dsh"
+        cp -f "$ROOT_DIR/rootfs-overlay/root/.dsh/dsha-lan-proxy.js" "$STAGE_LITE/root/.dsh/dsha-lan-proxy.js"
+        chmod 755 "$STAGE_LITE/root/.dsh/dsha-lan-proxy.js"
+    elif [ -f "/root/.dsh/dsha-lan-proxy.js" ]; then
+        mkdir -p "$STAGE_LITE/root/.dsh"
+        cp -f "/root/.dsh/dsha-lan-proxy.js" "$STAGE_LITE/root/.dsh/dsha-lan-proxy.js"
+        chmod 755 "$STAGE_LITE/root/.dsh/dsha-lan-proxy.js"
+    fi
 
     cd "$STAGE_LITE"
     chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh

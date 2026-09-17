@@ -80,9 +80,9 @@ if choose_step "【第 1 步】：是否执行增量补丁？" "执行增量补�
     for patch in "$TMP_SCRIPTS/scripts/"*.sh; do
         [ -f "$patch" ] || continue
         fname=$(basename "$patch")
-        # 严格排除四大基础脚本，只执行增量补丁
+        # 严格排除五大基础控制脚本，只执行增量补丁
         case "$fname" in
-            start.sh|stop.sh|status.sh|term.sh)
+            start.sh|stop.sh|status.sh|term.sh|lan-proxy.sh)
                 continue
                 ;;
             *)
@@ -107,12 +107,12 @@ else
 fi
 
 # -------------------------------------------------------------
-# 【第 2 步】：是否覆盖四大基础脚本？(start/stop/status/term)
+# 【第 2 步】：是否覆盖五大基础控制脚本？(start/stop/status/term/lan-proxy)
 # -------------------------------------------------------------
-if choose_step "【第 2 步】：是否覆盖四大基础控制脚本？(start/stop/status/term)" "覆盖基础脚本" "保留当前已有脚本"; then
-    ui_print "- 正在覆盖四大基础控制脚本至 $SCRIPTS_DIR ..."
+if choose_step "【第 2 步】：是否覆盖五大基础控制脚本？(start/stop/status/term/lan-proxy)" "覆盖基础脚本" "保留当前已有脚本"; then
+    ui_print "- 正在覆盖五大基础控制脚本至 $SCRIPTS_DIR ..."
     mkdir -p "$SCRIPTS_DIR" "$MODPATH/scripts"
-    for base_script in start.sh stop.sh status.sh term.sh; do
+    for base_script in start.sh stop.sh status.sh term.sh lan-proxy.sh; do
         if [ -f "$TMP_SCRIPTS/scripts/$base_script" ]; then
             cp -f "$TMP_SCRIPTS/scripts/$base_script" "$SCRIPTS_DIR/$base_script"
             cp -f "$TMP_SCRIPTS/scripts/$base_script" "$MODPATH/scripts/$base_script"
@@ -120,7 +120,21 @@ if choose_step "【第 2 步】：是否覆盖四大基础控制脚本？(start/
             ui_print "  ✓ 已覆盖: $base_script"
         fi
     done
-    ui_print "✓ 四大基础控制脚本覆盖完毕！"
+
+    # 基础组件同步：若包内包含 dsha-lan-proxy.js，直接同步至 rootfs
+    if [ -f "$TMP_SCRIPTS/root/.dsh/dsha-lan-proxy.js" ]; then
+        mkdir -p "$ROOTFS_DIR/root/.dsh"
+        cp -f "$TMP_SCRIPTS/root/.dsh/dsha-lan-proxy.js" "$ROOTFS_DIR/root/.dsh/dsha-lan-proxy.js"
+        chmod 755 "$ROOTFS_DIR/root/.dsh/dsha-lan-proxy.js"
+        ui_print "  ✓ 已同步核心组件: dsha-lan-proxy.js"
+    elif [ -f "$TMP_SCRIPTS/dsha-lan-proxy.js" ]; then
+        mkdir -p "$ROOTFS_DIR/root/.dsh"
+        cp -f "$TMP_SCRIPTS/dsha-lan-proxy.js" "$ROOTFS_DIR/root/.dsh/dsha-lan-proxy.js"
+        chmod 755 "$ROOTFS_DIR/root/.dsh/dsha-lan-proxy.js"
+        ui_print "  ✓ 已同步核心组件: dsha-lan-proxy.js"
+    fi
+
+    ui_print "✓ 五大基础控制脚本与核心组件覆盖完毕！"
 else
     ui_print "- 已跳过基础脚本覆盖，当前脚本保持原样。"
 fi
