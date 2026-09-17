@@ -22,6 +22,10 @@ if [ -f "$PID_FILE" ]; then
         echo "STATUS:ALREADY_RUNNING PID:$OLD_PID PORT:$PORT"
         TOKEN_FILE="$ROOTFS/root/.dsh/.bridge_token"
         [ -s "$TOKEN_FILE" ] && echo "BRIDGE_TOKEN:$(cat "$TOKEN_FILE" 2>/dev/null)"
+        if [ -f "$RUN_DIR/lan_enabled" ]; then
+            [ -f "/data/adb/dsha/scripts/lan-proxy.sh" ] && sh "/data/adb/dsha/scripts/lan-proxy.sh" start >/dev/null 2>&1 || true
+            [ -f "$RUN_DIR/lan-proxy.pid" ] && kill -0 "$(cat "$RUN_DIR/lan-proxy.pid" 2>/dev/null)" 2>/dev/null && echo "LAN_STATUS:RUNNING PORT:3081"
+        fi
         grep -o "http://127\.0\.0\.1:[0-9]*/?token=[^ ]*" "$LOG_FILE" 2>/dev/null | tail -n 1
         exit 0
     fi
@@ -317,6 +321,12 @@ done
 
 echo "STATUS:STARTED PID:$NEW_PID PORT:$PORT"
 [ -n "$CURRENT_TOKEN" ] && echo "BRIDGE_TOKEN:$CURRENT_TOKEN"
+if [ -f "$RUN_DIR/lan_enabled" ]; then
+    if [ -f "/data/adb/dsha/scripts/lan-proxy.sh" ]; then
+        sh "/data/adb/dsha/scripts/lan-proxy.sh" start >/dev/null 2>&1 || true
+    fi
+    [ -f "$RUN_DIR/lan-proxy.pid" ] && kill -0 "$(cat "$RUN_DIR/lan-proxy.pid" 2>/dev/null)" 2>/dev/null && echo "LAN_STATUS:RUNNING PORT:3081"
+fi
 
 # 动态同步 KernelSU / Magisk 模块描述状态
 for p_mod in "/data/adb/modules/dsha_native/module.prop" \

@@ -15,7 +15,15 @@ clean_umount() {
     done
 }
 
-# 1. 优先按 PID 精准终止主进程与属于该容器的直接子进程（毫秒级完成，杜绝遍历 /proc 的巨大卡死开销）
+# 1. 终止局域网反向代理守护进程（若存在）
+if [ -f "/data/adb/dsha/scripts/lan-proxy.sh" ]; then
+    sh "/data/adb/dsha/scripts/lan-proxy.sh" stop >/dev/null 2>&1 || true
+else
+    pkill -9 -f "dsha-lan-proxy.js" >/dev/null 2>&1 || true
+    rm -f "$RUN_DIR/lan-proxy.pid" 2>/dev/null || true
+fi
+
+# 2. 优先按 PID 精准终止主进程与属于该容器的直接子进程（毫秒级完成，杜绝遍历 /proc 的巨大卡死开销）
 if [ -f "$PID_FILE" ]; then
     MAIN_PID=$(cat "$PID_FILE" 2>/dev/null)
     if [ -n "$MAIN_PID" ] && kill -0 "$MAIN_PID" 2>/dev/null; then
@@ -32,7 +40,7 @@ if [ -f "$PID_FILE" ]; then
 fi
 rm -f "$RUN_DIR/port" 2>/dev/null || true
 
-# 2. 仅在显式传入 --umount 时卸载内核挂载点（普通停止服务绝不卸载挂载，保证其他操作与环境稳定）
+# 3. 仅在显式传入 --umount 时卸载内核挂载点（普通停止服务绝不卸载挂载，保证其他操作与环境稳定）
 if [ "$1" = "--umount" ]; then
     clean_umount "$ROOTFS/storage/emulated/0"
     clean_umount "$ROOTFS/sdcard"

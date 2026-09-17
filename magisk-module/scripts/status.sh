@@ -10,8 +10,11 @@ if [ -f "$PID_FILE" ]; then
         echo "STATUS:RUNNING PID:$PID"
         TOKEN_FILE="$ROOTFS/root/.dsh/.bridge_token"
         [ -s "$TOKEN_FILE" ] && echo "BRIDGE_TOKEN:$(cat "$TOKEN_FILE" 2>/dev/null)"
-        AUTH_URL=$(grep -o 'http://127\.0\.0\.1:[0-9]*/?token=[^ ]*' "$LOG_FILE" 2>/dev/null | tail -n 1)
+        AUTH_URL=$(grep -o "http://127\.0\.0\.1:[0-9]*/?token=[^ ]*" "$LOG_FILE" 2>/dev/null | tail -n 1)
         [ -n "$AUTH_URL" ] && echo "URL:$AUTH_URL"
+        if [ -f "$RUN_DIR/lan-proxy.pid" ] && kill -0 "$(cat "$RUN_DIR/lan-proxy.pid" 2>/dev/null)" 2>/dev/null; then
+            echo "LAN_STATUS:RUNNING PORT:3081"
+        fi
         exit 0
     fi
 fi
