@@ -99,6 +99,8 @@ do_token() {
         # 专职写入局域网独立 Token 文件，绝不篡改系统设备桥 bridge_token，确保通知与审批 100% 稳定
         echo -n "$NEW_TOK" > "$LAN_TOKEN_FILE" 2>/dev/null || true
         chmod 666 "$LAN_TOKEN_FILE" 2>/dev/null || true
+        # 发送 SIGUSR1 信号通知正在运行的代理服务即刻断开存量旧连接（纯事件驱动，绝不后台轮询耗电）
+        pkill -USR1 -f "dsha-lan-proxy.js" >/dev/null 2>&1 || true
         echo "TOKEN:$NEW_TOK"
         exit 0
     else

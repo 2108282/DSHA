@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+// 注册 Linux SIGUSR1 信号监听：仅在用户主动更换 Token 时由操作系统中断唤醒并掐断旧连接
+process.on("SIGUSR1", () => {
+  console.log("[DSHA LAN Proxy] 收到 SIGUSR1 信号，立即热更 Token 并切断旧长连接");
+  checkTokenChange();
+});
+
+
 /**
  * DSHA 局域网反向代理守护服务 (DSHA LAN Proxy Daemon)
  * 监听 0.0.0.0:3081 -> 转发至 127.0.0.1:3080
@@ -329,7 +336,7 @@ server.on('upgrade', (req, clientSocket, head) => {
 });
 
 // 定时 1 秒检测 Token 是否被外部修改，若修改立刻断开旧连接
-setInterval(checkTokenChange, 1000);
+// [极致低功耗] 彻底移除 setInterval 定时唤醒，杜绝后台 CPU 唤醒耗电，改为 Linux 信号事件驱动
 
 server.listen(LAN_PORT, '0.0.0.0', () => {
   lastKnownToken = getCurrentToken();
