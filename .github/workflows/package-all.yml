@@ -9,6 +9,7 @@ on:
       - "dsha-for-root*"
       - "1.*"
       - "0.*"
+      - "!*lite*"
   workflow_dispatch:
     inputs:
       publish_release:

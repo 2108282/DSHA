@@ -5,11 +5,8 @@ on:
     branches:
       - "dsha-for-root.x"
     tags:
-      - "v*"
-      - "dsha-for-root*"
-      - "1.*"
-      - "0.*"
       - "*lite*"
+      - "*Lite*"
   workflow_dispatch:
     inputs:
       publish_release:
