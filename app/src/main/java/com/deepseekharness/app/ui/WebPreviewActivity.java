@@ -404,7 +404,6 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
     @Override protected void onPause() {
         if (webView != null) {
             webView.onPause();
-            webView.pauseTimers();
         }
         super.onPause();
     }
@@ -473,9 +472,6 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
         if (blobDownload != null) {
             blobDownload.close();
             blobDownload = null;
-        }
-        if (webView != null) {
-            webView.pauseTimers();
         }
         destroyWebView();
         super.onDestroy();

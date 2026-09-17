@@ -1330,10 +1330,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                     .setListener(new AnimatorListenerAdapter() {
                         @Override
                         public void onAnimationEnd(Animator animation) {
-                            // 动画完全滑出屏幕后，再立即冻结 JS 与渲染管线，待机 0 空转
+                            // 动画完全滑出屏幕后暂停渲染管线释放 GPU，保留 JS 定时器避免 WebSocket 探活重连卡死
                             if (sCachedWebView != null) {
                                 sCachedWebView.onPause();
-                                sCachedWebView.pauseTimers();
                             }
                             moveTaskToBack(true);
                             overridePendingTransition(0, 0);
@@ -1344,7 +1343,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         } else {
             if (sCachedWebView != null) {
                 sCachedWebView.onPause();
-                sCachedWebView.pauseTimers();
             }
             moveTaskToBack(true);
             overridePendingTransition(0, 0);
@@ -1589,6 +1587,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             // 1. 唤醒 WebView 渲染管线与 JS 定时器
             sCachedWebView.onResume();
             sCachedWebView.resumeTimers();
+            // 唤醒时主动派发 online 事件，促使前端 ConnectionController 与 WebSocket 立即自愈探活与重连
+            sCachedWebView.evaluateJavascript("(function(){ try { if (window.dispatchEvent) window.dispatchEvent(new Event('online')); } catch(e){} })();", null);
 
             // 2. 检查底层服务是否发生过重启或端口已切换
             long currentGen = controller != null ? controller.getWebGeneration() : -1;
@@ -1609,20 +1609,17 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        // 关键：抽屉退入后台/锁屏时，彻底冻结 JS 引擎与渲染管线，后台每秒心跳瞬间降为 0
+        // 抽屉退入后台时仅暂停单个 WebView 渲染合成释放 GPU，保留全局 JS 定时器与网络心跳存活
         if (sCachedWebView != null) {
             sCachedWebView.onPause();
-            sCachedWebView.pauseTimers();
         }
     }
 
     @Override
     protected void onStop() {
         super.onStop();
-        // 兜底保障：退至后台或系统熄屏时，彻底冻结 JS 引擎与渲染管线
         if (sCachedWebView != null) {
             sCachedWebView.onPause();
-            sCachedWebView.pauseTimers();
         }
     }
 
