@@ -66,6 +66,14 @@ unzip -o "$ZIPFILE" 'action.sh' -d "$MODPATH" >&2 2>/dev/null || true
 unzip -o "$ZIPFILE" 'uninstall.sh' -d "$MODPATH" >&2 2>/dev/null || true
 chmod 755 "$MODPATH/service.sh" "$MODPATH/action.sh" "$MODPATH/uninstall.sh" 2>/dev/null || true
 
+# 免重启即时刷新：若 Magisk 暂存在 modules_update，直接热同步至当前激活目录
+ACTIVE_MOD="/data/adb/modules/dsha_native"
+if [ -d "$ACTIVE_MOD" ] && [ "$MODPATH" != "$ACTIVE_MOD" ]; then
+    cp -f "$MODPATH/module.prop" "$ACTIVE_MOD/module.prop" 2>/dev/null || true
+    cp -f "$MODPATH/action.sh" "$ACTIVE_MOD/action.sh" 2>/dev/null || true
+    chmod 755 "$ACTIVE_MOD/action.sh" 2>/dev/null || true
+fi
+
 # 解压包内所有控制脚本、现场补丁与通用 rootfs-overlay 增量资产到临时运行目录
 TMP_STAGE="/tmp/dsha_lite_stage_$$"
 mkdir -p "$TMP_STAGE"
