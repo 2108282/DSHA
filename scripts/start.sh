@@ -269,6 +269,11 @@ if [ -d "/dev/cpuctl/background" ]; then
     echo "$NEW_PID" > /dev/cpuctl/background/cgroup.procs 2>/dev/null || true
 fi
 
+# 确保进程进入根 cpuset，解除受限核心屏蔽，使后续 taskset 可以自由绑定任意 0-7 核心
+if [ -f "/dev/cpuset/cgroup.procs" ]; then
+    echo "$NEW_PID" > /dev/cpuset/cgroup.procs 2>/dev/null || true
+fi
+
 # 核心亲和性：100% 严格遵循用户在 APK 设置中配置的 Taskset（留空则不干预，由系统全核自由调度）
 if [ -z "$TASKSET_CPUS" ]; then
     if [ -s "$RUN_DIR/taskset" ]; then
