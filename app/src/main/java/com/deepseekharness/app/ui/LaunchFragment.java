@@ -336,7 +336,7 @@ public class LaunchFragment extends Fragment {
                     lanAddrText.setText("🌐 局域网服务已开启（等待连接 WiFi）\n▸ 点击查看 Bridge Token 与本机访问凭据");
                 }
             } else {
-                lanAddrText.setText("🌐 局域网代理正在等待本轮认证\n▸ 点击查看 Bridge Token 与本机访问凭据");
+                lanAddrText.setText("🌐 局域网核心代理启动中…\n▸ 点击查看 Bridge Token 与本机访问凭据");
             }
         } else {
             lanAddrText.setText("▸ 点击查看/复制 Bridge Token 与本机访问凭据");

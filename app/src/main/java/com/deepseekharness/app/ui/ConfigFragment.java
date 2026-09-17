@@ -132,22 +132,14 @@ public class ConfigFragment extends Fragment {
         return v;
     }
 
-    /** LAN 开关真正生效：开启时若 dsh 已鉴权则启动 3081 代理，关闭时停掉监听。 */
+    /** LAN 开关真正生效：开启时通知核心模块启动 3081 代理，关闭时停掉监听。 */
     private void applyLanMode(ConfigStore c, boolean on) {
         try {
-            if (!on) {
+            if (on) {
+                com.deepseekharness.app.LanProxyService.start(requireContext());
+            } else {
                 com.deepseekharness.app.LanProxyService.stopLanListener();
-                return;
             }
-            HarnessController hc = new HarnessController(requireContext());
-            long gen = hc.getWebGeneration();
-            if (gen <= 0 || !com.deepseekharness.app.LanProxyService.hasDshAuth(gen)) {
-                // dsh 还没起来/还没交换 cookie：等下次进入对话时 HarnessController 自动启动
-                return;
-            }
-            com.deepseekharness.app.LanProxyService.start(
-                    hc.proot().getRootfsDir().getAbsolutePath(),
-                    requireContext(), c.getPortInt(), gen);
         } catch (Throwable t) {
             android.util.Log.w("DSHA", "LAN 开关生效失败: " + t.getMessage());
         }

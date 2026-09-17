@@ -453,39 +453,10 @@ public class HarnessController {
                     }
                 }
                 if (url != null) {
-                    // LAN 模式：拿到鉴权链接后自动交换 cookie 并启动 3081 代理。
-                    // 否则代理要等用户手动点「进入」才绑定 —— 其它设备在手机上没点过
-                    // 「进入」时就连不上（连接被拒），正是「局域网连不上」的头号原因。
-                    // dsh 打印 URL 时 HTTP 服务可能还没就绪，交换失败就短等重试几次。
+                    // LAN 模式：核心模块守护 3081 转发至 3080，APK 无需控制握手
                     if (config.isLanMode()) {
-                        for (int attempt = 0; attempt < 3 && lifecycle.isCurrent(generation); attempt++) {
-                            try {
-                                if (exchangeDshAuthCookie(generation) != null) break;
-                            } catch (Throwable ignored) {
-                            }
-                            try {
-                                Thread.sleep(1200);
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                                break;
-                            }
-                        }
-                        // LanProxyService.start 的绑定在独立 accept 线程里异步完成，
-                        // 刚返回时 isBound() 可能还是 false —— 轮询等它绑定完再刷新 UI。
-                        for (int i = 0; i < 12 && lifecycle.isCurrent(generation)
-                                && !com.deepseekharness.app.LanProxyService.isBound(); i++) {
-                            try {
-                                Thread.sleep(200);
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                                break;
-                            }
-                        }
-                        // 代理是在上面 onStatus.accept 之后才绑定的，启动页那次刷新
-                        // 会停在「等待本轮认证」；这里再触发一次 UI 刷新，让地址可点。
-                        if (com.deepseekharness.app.LanProxyService.isBound()) {
-                            reportStatus(generation, onStatus, "局域网代理已就绪：同网段设备可访问，启动页可复制地址");
-                        }
+                        com.deepseekharness.app.LanProxyService.start(ctx);
+                        reportStatus(generation, onStatus, "局域网服务已就绪：同网段设备可访问，启动页可复制地址");
                     }
                 }
             }
@@ -553,12 +524,7 @@ public class HarnessController {
                             reportStatus(generation, onStatus, "鉴权链接已就绪，点「进入对话」即可进入 dsh");
                         }
                         if (config.isLanMode()) {
-                            for (int attempt = 0; attempt < 3 && lifecycle.isCurrent(generation); attempt++) {
-                                try {
-                                    if (exchangeDshAuthCookie(generation) != null) break;
-                                } catch (Throwable ignored) {}
-                                try { Thread.sleep(1200); } catch (InterruptedException ie) { break; }
-                            }
+                            com.deepseekharness.app.LanProxyService.start(ctx);
                         }
                         return;
                     }
@@ -620,17 +586,7 @@ public class HarnessController {
             String cookie = extractDshAuthCookie(conn.getHeaderFields());
             synchronized (lifecycle) {
                 if (!lifecycle.isCurrent(generation) || !url.equals(webAuthUrl)) return null;
-                if (cookie != null) {
-                    try {
-                        com.deepseekharness.app.LanProxyService.setDshAuthCookie(cookie, generation);
-                        if (config.isLanMode()) {
-                            com.deepseekharness.app.LanProxyService.start(
-                                    proot.getRootfsDir().getAbsolutePath(), ctx,
-                                    config.getPortInt(), generation);
-                        }
-                    } catch (Throwable ignored) {
-                    }
-                }
+                // 纯净返回 cookie 供本地 WebView 注入，无需干预局域网代理
                 return cookie;
             }
         } catch (Throwable ignored) {

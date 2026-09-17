@@ -19,11 +19,7 @@ public final class LocalNetworkAccess {
         Context app = context.getApplicationContext();
         com.deepseekharness.app.core.ConfigStore config = new com.deepseekharness.app.core.ConfigStore(app);
         if (config.isLanMode()) {
-            com.deepseekharness.app.core.HarnessController controller =
-                    com.deepseekharness.app.core.HarnessController.get(app);
-            com.deepseekharness.app.LanProxyService.start(
-                    controller.proot().getRootfsDir().getAbsolutePath(), app,
-                    config.getPortInt(), controller.getWebGeneration());
+            com.deepseekharness.app.LanProxyService.start(app);
         }
     }
 }
