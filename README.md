@@ -77,7 +77,7 @@
   - 仅存放宿主机日常管理所需的 5 大基础控制脚本（`start.sh / stop.sh / status.sh / term.sh / lan-proxy.sh`）；
   - Full 包与 Lite 包均会打包；Full 包中**绝对不包含任何增量补丁**，确保宿主机目录极致纯净。
 * **`patches/`（现场增量补丁目录）**：
-  - 专职存放现场修复脚本（如 `patch-lan-proxy.sh`、`patch-fix-approval-notify.sh`）；
+  - 专职存放现场修复脚本（如 `patch-lan-proxy.sh`）；
   - **专属于 Lite 增量包，Full 完整包绝对不打包**；脚本具备自愈能力（如直接运行也能自动补齐宿主脚本与 Token）。
 * **`rootfs-overlay/`（容器通用增量镜像层叠）**：
   - 零硬编码：任何需要在容器内新增或修改的文件（如移动端样式、插件代码、`dsha-lan-proxy.js`），一律放入此目录；
