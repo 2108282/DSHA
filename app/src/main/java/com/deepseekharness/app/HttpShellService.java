@@ -434,7 +434,20 @@ public final class HttpShellService {
 
     private static boolean tokenMatch(String presented) {
         String token = authToken.isEmpty() ? ensureToken() : authToken;
-        return token != null && !token.isEmpty() && LanAuth.constantTimeEquals(token, presented);
+        if (token != null && !token.isEmpty() && LanAuth.constantTimeEquals(token, presented)) {
+            return true;
+        }
+        // 自动自愈：若内存 token 比对未命中，尝试从底层 bridge_token 文件重新核验一次，彻底防止通知/审批通道失效
+        try {
+            java.io.File tf = tokenFileIfPossible();
+            String fromFile = readTokenFromFile(tf);
+            if (fromFile != null && !fromFile.isEmpty() && LanAuth.constantTimeEquals(fromFile, presented)) {
+                authToken = fromFile;
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     private void handle(Socket client) {
