@@ -96,12 +96,9 @@ do_stop() {
 do_token() {
     NEW_TOK="${2:-}"
     if [ -n "$NEW_TOK" ]; then
-        # 写入新 Token
+        # 专职写入局域网独立 Token 文件，绝不篡改系统设备桥 bridge_token，确保通知与审批 100% 稳定
         echo -n "$NEW_TOK" > "$LAN_TOKEN_FILE" 2>/dev/null || true
         chmod 666 "$LAN_TOKEN_FILE" 2>/dev/null || true
-        # 保持与 bridge_token 同步，确保 3080 内部校验 100% 通过
-        echo -n "$NEW_TOK" > "$TOKEN_FILE" 2>/dev/null || true
-        chmod 666 "$TOKEN_FILE" 2>/dev/null || true
         echo "TOKEN:$NEW_TOK"
         exit 0
     else
