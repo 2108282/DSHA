@@ -52,8 +52,15 @@ fi
 chmod 666 "$LAN_TOKEN_FILE" 2>/dev/null || true
 [ -f "$BRIDGE_TOKEN_FILE" ] && chmod 666 "$BRIDGE_TOKEN_FILE" 2>/dev/null || true
 
-# 3. 确保宿主控制脚本具备执行权限
-[ -f "$DATA_DIR/scripts/lan-proxy.sh" ] && chmod 755 "$DATA_DIR/scripts/lan-proxy.sh" 2>/dev/null || true
+# 3. 确保宿主控制脚本同步就绪并具备执行权限
+SCRIPTS_DIR="$DATA_DIR/scripts"
+mkdir -p "$SCRIPTS_DIR"
+SRC_LAN_SH="$(dirname "$0")/../scripts/lan-proxy.sh"
+if [ -f "$SRC_LAN_SH" ]; then
+    cp -f "$SRC_LAN_SH" "$SCRIPTS_DIR/lan-proxy.sh"
+    echo "  ✓ 同步最新宿主控制脚本: lan-proxy.sh"
+fi
+[ -f "$SCRIPTS_DIR/lan-proxy.sh" ] && chmod 755 "$SCRIPTS_DIR/lan-proxy.sh" 2>/dev/null || true
 
 echo "✓ 局域网反向代理增量补丁部署成功！(监听 0.0.0.0:3081 -> 127.0.0.1:3080)"
 exit 0

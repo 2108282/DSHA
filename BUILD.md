@@ -27,22 +27,24 @@ DSHA 采用清晰的职责隔离架构，杜绝在单个分支内混合不同平
   - 例如修改系统解析或 hosts：放入 `rootfs-overlay/etc/resolv.conf`。
 * **通用复用机制**：
   - **Full 完整包**：打包引擎（`tools/dynamic-rootfs-merge.sh`）会自动将 `rootfs-overlay/` 动态镜像熔铸入 `rootfs.tar.gz` 底包中；
-  - **Lite 增量包**：打包引擎（`scripts/build-module.sh --lite`）会自动将 `rootfs-overlay/` 整体打入 zip；刷入 Lite 模块时，安装器（`customize.lite.sh`）会**零硬编码、通用镜像递归覆盖至老用户容器**并赋予执行权限。
+  - **Lite 增量包**：打包引擎（`scripts/build-module.sh --lite`）会自动将 `rootfs-overlay/` 整体打入 zip；刷入 Lite 模块时，在【第 1 步】经用户按【音量 +】确认后，安装器（`customize.lite.sh`）会**零硬编码、通用镜像递归覆盖至老用户容器**并赋予执行权限。
   - **红线约束**：**严禁在安装脚本中针对具体业务文件名进行硬编码！** Lite 包是通用可复用框架，任何容器文件变更均直接走 `rootfs-overlay/` 通用镜像通道。
 
 ### 2. 五大基础控制脚本维护（面向 `scripts/` 与 `magisk-module/scripts/`）
 * **范围**：`start.sh`、`stop.sh`、`status.sh`、`term.sh`、`lan-proxy.sh`。
 * **规则**：
-  - 这五大脚本由宿主机 Magisk/KernelSU 直接调度，统一维护在 `scripts/` 与 `magisk-module/scripts/` 中；
+  - 这五大脚本由宿主机 Magisk/KernelSU 直接调度，专职负责进程生命周期管理；
+  - 严禁在此目录混入任何增量补丁；Full 包与 Lite 包均会打包此目录；
   - 刷入 Lite 增量包时，安装器在【第 2 步】通过物理音量键提示用户是否覆盖这五大脚本。
 
-### 3. 现场执行增量补丁（面向 `magisk-module/scripts/patch-*.sh`）
-* **场景**：若某次更新需要执行现场初始化或修补（例如初始化解耦的 `.lan_token`、调用 sed 调整配置、重建特殊软链接等）；
+### 3. 现场执行增量补丁维护（物理隔离：面向 `patches/` 与 `magisk-module/patches/`）
+* **定位**：**专属于 Lite 极速热更新包，Full 完整包绝对不打包！**
+* **场景**：若某次更新需要为老用户已有环境执行现场修补（例如初始化解耦的 `.lan_token`、调用 sed 调整配置、释放自愈实体等）；
 * **规则**：
-  - 编写独立的 Shell 补丁脚本，存放在 `magisk-module/scripts/` 下，命名为 `patch-<功能>.sh`（例如现有的 `patch-lan-proxy.sh`、`patch-fix-approval-notify.sh`）；
+  - 必须独立存放在 `magisk-module/patches/` 目录下（例如 `patch-lan-proxy.sh`、`patch-fix-approval-notify.sh`），与基础控制脚本在物理路径上彻底隔离；
   - 脚本必须自包含、具备容错与幂等性（多次执行不产生副作用）；
-  - 必须严格排除五大基础脚本名称；
-  - 刷入 Lite 增量包时，安装器在【第 1 步】通过物理音量键提示用户是否现场执行该补丁。
+  - **打包行为**：`build-module.sh --lite` 自动将其打包至 Lite 模块；`build-module.sh full` 严禁将其打入 Full 包，保证全新刷机底座 100% 纯净；
+  - **刷入行为**：Lite 模块安装器在【第 1 步】统筹执行容器增量更新：用户选择【音量 +】后，先执行 `rootfs-overlay` 镜像层叠覆盖，再逐个执行 `patches/*.sh` 补丁脚本；用户若选择【音量 -】则完全跳过，绝不修改老用户的容器环境。
 
 ---
 
