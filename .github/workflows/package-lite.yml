@@ -1,0 +1,218 @@
+name: Build & Package Lite (APK + Lite Module Only)
+
+on:
+  push:
+    branches:
+      - "dsha-for-root.x"
+    tags:
+      - "v*"
+      - "dsha-for-root*"
+      - "1.*"
+      - "0.*"
+      - "*lite*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "是否自动创建或更新 GitHub Release 发布"
+        type: boolean
+        default: true
+      release_tag:
+        description: "自定义发布 Release Tag (例如 0.1.5rc.2-u2.1-lite)"
+        required: false
+        default: "0.1.5rc.2-u2.1-lite"
+      prerelease:
+        description: "是否标记为预发布 (Pre-release)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: pkg-lite-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build-and-package:
+    name: Package Lite Deliverables (APK + Lite Module)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      # ============================================================
+      # 1. 检出两端源码仓库（严格按照各自指定分支，本分支不存任何业务代码）
+      # ============================================================
+      - name: 检出前端 APK 源码 (magisk-apk 分支)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: magisk-apk
+          path: apk_source
+
+      - name: 检出核心模块源码 (dsh-magisk 分支)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: dsh-magisk
+          path: module_source
+
+      # ============================================================
+      # 2. 准备统一构建环境 (JDK 17 + Android SDK + Python 3.11)
+      # ============================================================
+      - name: 配置 JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+          cache: "gradle"
+          cache-dependency-path: "apk_source/**/*.gradle*"
+
+      - name: 配置 Android SDK 命令行工具
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> $GITHUB_ENV
+          echo "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "${ANDROID_HOME:-/usr/local/lib/android/sdk}/platform-tools" >> $GITHUB_PATH
+
+      - name: 接受 Android SDK 许可证书
+        run: |
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+      - name: 配置 Python 3.11 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 准备最终产物交付目录
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+
+      # ============================================================
+      # 3. 严格按照 magisk-apk 分支逻辑构建前端 APK
+      # ============================================================
+      - name: 配置 APK 签名密钥（如有 Secret 则加载，无则使用 debug 签名）
+        env:
+          KS_B64: ${{ secrets.DSHA_KEYSTORE_B64 }}
+          KS_PWD: ${{ secrets.DSHA_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.DSHA_KEY_ALIAS }}
+          KEY_PWD: ${{ secrets.DSHA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KS_B64:-}" ]; then
+            printf "%s" "$KS_B64" | base64 -d > "$RUNNER_TEMP/dsha.keystore"
+            echo "DSHA_KEYSTORE=$RUNNER_TEMP/dsha.keystore" >> "$GITHUB_ENV"
+            echo "DSHA_KEYSTORE_PASSWORD=${KS_PWD:-android}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_ALIAS=${KS_ALIAS:-androiddebugkey}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_PASSWORD=${KEY_PWD:-android}" >> "$GITHUB_ENV"
+            echo "已成功加载生产签名密钥"
+          else
+            echo "未检测到 DSHA_KEYSTORE_B64，将严格按原分支使用 Gradle 默认 debug 签名"
+          fi
+
+      - name: 执行 APK 编译打包 (:app:assembleStandardDebug)
+        run: |
+          set -euo pipefail
+          cd apk_source
+          chmod +x gradlew
+          ./gradlew :app:assembleStandardDebug --stacktrace
+          cd "$GITHUB_WORKSPACE"
+
+      - name: 收集产物 1：前端 APK
+        run: |
+          set -euo pipefail
+          APK_SRC=$(ls apk_source/app/build/outputs/apk/standard/debug/*.apk | head -1)
+          cp -f "$APK_SRC" "dist/DSHA-FR 0.1.5rc.2-u2.1-lite.apk"
+          echo "✓ 产物 1 已就绪 (前端 APK): dist/DSHA-FR 0.1.5rc.2-u2.1-lite.apk ($(ls -lh "dist/DSHA-FR 0.1.5rc.2-u2.1-lite.apk" | awk '{print $5}'))"
+
+      # ============================================================
+      # 4. 严格按照 dsh-magisk 分支规范仅构建核心 Lite 极速热更新模块
+      # ============================================================
+      - name: 执行核心模块打包 (build-module.sh --lite 专职通道)
+        run: |
+          set -euo pipefail
+          cd module_source
+          chmod +x scripts/*.sh tools/*.sh magisk-module/*.sh magisk-module/scripts/*.sh 2>/dev/null || true
+          
+          echo "==> 按照 dsh-magisk 分支规范打包极速热更新 Lite 包 (含五大基础控制脚本与代理实体)..."
+          ./scripts/build-module.sh --lite
+          
+          cp -f dist/dsha_ksu_native_lite.zip "$GITHUB_WORKSPACE/dist/dsha_ksu_native_lite.zip"
+          cd "$GITHUB_WORKSPACE"
+
+      - name: 收集产物 2：核心 Lite 包
+        run: |
+          set -euo pipefail
+          echo "✓ 产物 2 已就绪 (核心 Lite 包): dist/dsha_ksu_native_lite.zip ($(ls -lh dist/dsha_ksu_native_lite.zip | awk '{print $5}'))"
+
+      # ============================================================
+      # 5. 生成 2 大交付物 SHA-256 校验和清单
+      # ============================================================
+      - name: 生成 SHA-256 校验和
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum "DSHA-FR 0.1.5rc.2-u2.1-lite.apk" | tee "DSHA-FR 0.1.5rc.2-u2.1-lite.apk.sha256"
+          sha256sum dsha_ksu_native_lite.zip | tee dsha_ksu_native_lite.zip.sha256
+          echo "=========================================================="
+          echo "              轻量级核心产物打包汇总清单 (APK + Lite)     "
+          echo "=========================================================="
+          ls -lh
+          echo "=========================================================="
+
+      # ============================================================
+      # 6. 上传 Actions 构建产物 Artifacts (APK + Lite 模块 + 校验和)
+      # ============================================================
+      - name: 上传 Lite 核心交付物至 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsha-lite-deliverables
+          path: dist/*
+          if-no-files-found: error
+
+      # ============================================================
+      # 7. 可选发布步骤：一键发布至 GitHub Releases
+      # ============================================================
+      - name: 计算发布版本 Tag
+        id: release_tag
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          elif [ -n "${{ inputs.release_tag }}" ]; then
+            TAG_NAME="${{ inputs.release_tag }}"
+          else
+            TAG_NAME="0.1.5rc.2-u2.1-lite"
+          fi
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: 发布至 GitHub Releases
+        if: steps.release_tag.outputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: DSHA Native Root (Lite Release) (${{ steps.release_tag.outputs.tag }})
+          prerelease: ${{ inputs.prerelease || false }}
+          generate_release_notes: true
+          body: |
+            ## DSHA Native for Root 轻量级联合更新发布 (Lite Release)
+
+            本版本为前端控制客户端（`magisk-apk`）与原生 Root 极速热更新模块（`dsh-magisk`）的轻量化协同交付版本。
+            **专为已有基础环境的用户打造，无需下载 200MB+ 完整底包，极速更新！**
+
+            ### 产物清单：
+            1. **`DSHA-FR 0.1.5rc.2-u2.1-lite.apk`** (前端 APK)
+               - **构建源分支**：`magisk-apk`
+               - **更新说明**：
+                 - 局域网访问控制器重构，彻底剥离 Java 层复杂握手与内置代理；
+                 - 局域网 3081 开关确定性即时下发底层核心模块；
+                 - 支持毫秒级热更 Token 与独立设备桥自愈核验，保护通知与审批通道 100% 稳定。
+            2. **`dsha_ksu_native_lite.zip`** (核心 Lite 极速热更新模块)
+               - **构建源分支**：`dsh-magisk`
+               - **更新说明**：
+                 - 正式收口 `lan-proxy.sh` 为五大基础控制脚本之一；
+                 - 核心模块常驻/按需拉起 3081 局域网反向代理，支持 HTTP & WebSocket 全双工流；
+                 - 实施强凭据绑定与失效 Cookie 强制清空机制，彻底修复换 Token 失效漏洞；
+                 - 彻底移除后台周期定时器，基于 Linux 内核信号驱动，实现待机 0% CPU 与 0 功耗。
+          files: |
+            dist/*
+          fail_on_unmatched_files: true
