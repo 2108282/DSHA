@@ -36,19 +36,17 @@ if [ "$MODE" = "--lite" ] || [ "$MODE" = "lite" ]; then
     mkdir -p "$STAGE_LITE/scripts"
     cp -rf "$MODULE_DIR/scripts/"* "$STAGE_LITE/scripts/"
 
-    # 打包核心局域网代理守护实体 dsha-lan-proxy.js 至 Lite 模块
-    if [ -f "$ROOT_DIR/rootfs-overlay/root/.dsh/dsha-lan-proxy.js" ]; then
-        mkdir -p "$STAGE_LITE/root/.dsh"
-        cp -f "$ROOT_DIR/rootfs-overlay/root/.dsh/dsha-lan-proxy.js" "$STAGE_LITE/root/.dsh/dsha-lan-proxy.js"
-        chmod 755 "$STAGE_LITE/root/.dsh/dsha-lan-proxy.js"
-    elif [ -f "/root/.dsh/dsha-lan-proxy.js" ]; then
-        mkdir -p "$STAGE_LITE/root/.dsh"
-        cp -f "/root/.dsh/dsha-lan-proxy.js" "$STAGE_LITE/root/.dsh/dsha-lan-proxy.js"
-        chmod 755 "$STAGE_LITE/root/.dsh/dsha-lan-proxy.js"
+    # 通用增量层叠：若存在 rootfs-overlay 增量资产，整体打包至 Lite 模块
+    # 零硬编码：任何放入 rootfs-overlay 的增量文件均自动纳入 Lite 热更新包
+    if [ -d "$ROOT_DIR/rootfs-overlay" ] && [ -n "$(ls -A "$ROOT_DIR/rootfs-overlay" 2>/dev/null)" ]; then
+        mkdir -p "$STAGE_LITE/rootfs-overlay"
+        cp -af "$ROOT_DIR/rootfs-overlay/." "$STAGE_LITE/rootfs-overlay/"
+        echo "  -> 已打包通用 rootfs-overlay 增量层叠资产至 Lite 模块"
     fi
 
     cd "$STAGE_LITE"
     chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
+    python3 -c "import os; p='$OUTPUT_DIR/dsha_ksu_native_lite.zip'; os.path.exists(p) and os.remove(p)" 2>/dev/null || true
     zip -r -9 "$OUTPUT_DIR/dsha_ksu_native_lite.zip" . >/dev/null
     cd "$ROOT_DIR"
     echo "✓ 极速热更新包已生成: $OUTPUT_DIR/dsha_ksu_native_lite.zip"

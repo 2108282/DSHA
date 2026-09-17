@@ -66,18 +66,34 @@ unzip -o "$ZIPFILE" 'action.sh' -d "$MODPATH" >&2 2>/dev/null || true
 unzip -o "$ZIPFILE" 'uninstall.sh' -d "$MODPATH" >&2 2>/dev/null || true
 chmod 755 "$MODPATH/service.sh" "$MODPATH/action.sh" "$MODPATH/uninstall.sh" 2>/dev/null || true
 
-# 解压包内所有脚本到临时运行目录
-TMP_SCRIPTS="/tmp/dsha_lite_scripts_$$"
-mkdir -p "$TMP_SCRIPTS"
-unzip -o "$ZIPFILE" 'scripts/*' -d "$TMP_SCRIPTS" >&2
+# 解压包内所有控制脚本与通用 rootfs-overlay 增量资产到临时运行目录
+TMP_STAGE="/tmp/dsha_lite_stage_$$"
+mkdir -p "$TMP_STAGE"
+unzip -o "$ZIPFILE" 'scripts/*' 'rootfs-overlay/*' -d "$TMP_STAGE" >&2 2>/dev/null || true
 
 # -------------------------------------------------------------
-# 【第 1 步】：是否执行增量补丁？(除了四大脚本外的所有 .sh 补丁脚本)
+# 【通用增量层叠】：自动镜像覆盖 rootfs-overlay 增量资产至容器系统
+# 零硬编码：任何放入 rootfs-overlay 的增量文件均自动递归覆盖至目标系统
+# -------------------------------------------------------------
+if [ -d "$TMP_STAGE/rootfs-overlay" ] && [ -n "$(ls -A "$TMP_STAGE/rootfs-overlay" 2>/dev/null)" ]; then
+    ui_print "- 检测到容器通用增量更新 (rootfs-overlay)，正在递归镜像覆盖至 $ROOTFS_DIR ..."
+    mkdir -p "$ROOTFS_DIR"
+    cp -af "$TMP_STAGE/rootfs-overlay/." "$ROOTFS_DIR/"
+    # 自动保障权限：脚本与可执行组件自动赋予 755
+    find "$TMP_STAGE/rootfs-overlay" -type f \( -name "*.sh" -o -name "*.js" \) 2>/dev/null | while read -r f; do
+        rel_path="${f#$TMP_STAGE/rootfs-overlay/}"
+        [ -f "$ROOTFS_DIR/$rel_path" ] && chmod 755 "$ROOTFS_DIR/$rel_path" 2>/dev/null || true
+    done
+    ui_print "  ✓ 容器通用增量文件覆盖同步完成！"
+fi
+
+# -------------------------------------------------------------
+# 【第 1 步】：是否执行增量补丁？(除了五大基础控制脚本外的所有 .sh 补丁脚本)
 # -------------------------------------------------------------
 if choose_step "【第 1 步】：是否执行增量补丁？" "执行增量补丁" "跳过，不执行"; then
     ui_print "- 正在扫描并执行增量补丁..."
     PATCH_FOUND=0
-    for patch in "$TMP_SCRIPTS/scripts/"*.sh; do
+    for patch in "$TMP_STAGE/scripts/"*.sh; do
         [ -f "$patch" ] || continue
         fname=$(basename "$patch")
         # 严格排除五大基础控制脚本，只执行增量补丁
@@ -113,33 +129,20 @@ if choose_step "【第 2 步】：是否覆盖五大基础控制脚本？(start/
     ui_print "- 正在覆盖五大基础控制脚本至 $SCRIPTS_DIR ..."
     mkdir -p "$SCRIPTS_DIR" "$MODPATH/scripts"
     for base_script in start.sh stop.sh status.sh term.sh lan-proxy.sh; do
-        if [ -f "$TMP_SCRIPTS/scripts/$base_script" ]; then
-            cp -f "$TMP_SCRIPTS/scripts/$base_script" "$SCRIPTS_DIR/$base_script"
-            cp -f "$TMP_SCRIPTS/scripts/$base_script" "$MODPATH/scripts/$base_script"
+        if [ -f "$TMP_STAGE/scripts/$base_script" ]; then
+            cp -f "$TMP_STAGE/scripts/$base_script" "$SCRIPTS_DIR/$base_script"
+            cp -f "$TMP_STAGE/scripts/$base_script" "$MODPATH/scripts/$base_script"
             chmod 755 "$SCRIPTS_DIR/$base_script" "$MODPATH/scripts/$base_script"
             ui_print "  ✓ 已覆盖: $base_script"
         fi
     done
 
-    # 基础组件同步：若包内包含 dsha-lan-proxy.js，直接同步至 rootfs
-    if [ -f "$TMP_SCRIPTS/root/.dsh/dsha-lan-proxy.js" ]; then
-        mkdir -p "$ROOTFS_DIR/root/.dsh"
-        cp -f "$TMP_SCRIPTS/root/.dsh/dsha-lan-proxy.js" "$ROOTFS_DIR/root/.dsh/dsha-lan-proxy.js"
-        chmod 755 "$ROOTFS_DIR/root/.dsh/dsha-lan-proxy.js"
-        ui_print "  ✓ 已同步核心组件: dsha-lan-proxy.js"
-    elif [ -f "$TMP_SCRIPTS/dsha-lan-proxy.js" ]; then
-        mkdir -p "$ROOTFS_DIR/root/.dsh"
-        cp -f "$TMP_SCRIPTS/dsha-lan-proxy.js" "$ROOTFS_DIR/root/.dsh/dsha-lan-proxy.js"
-        chmod 755 "$ROOTFS_DIR/root/.dsh/dsha-lan-proxy.js"
-        ui_print "  ✓ 已同步核心组件: dsha-lan-proxy.js"
-    fi
-
-    ui_print "✓ 五大基础控制脚本与核心组件覆盖完毕！"
+    ui_print "✓ 五大基础控制脚本覆盖完毕！"
 else
     ui_print "- 已跳过基础脚本覆盖，当前脚本保持原样。"
 fi
 
-rm -rf "$TMP_SCRIPTS"
+rm -rf "$TMP_STAGE"
 ui_print "-----------------------------------------"
 ui_print "✓ DSHA 极速热更新全部处理完成！"
 ui_print "*****************************************"
