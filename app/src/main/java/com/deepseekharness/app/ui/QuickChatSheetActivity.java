@@ -259,8 +259,24 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 }, "sheet-file-import").start();
             });
 
+    private void enforceExcludeFromRecents() {
+        try {
+            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            if (am != null) {
+                for (android.app.ActivityManager.AppTask task : am.getAppTasks()) {
+                    if (task != null && task.getTaskInfo() != null && task.getTaskInfo().taskId == getTaskId()) {
+                        task.setExcludeFromRecents(true);
+                        break;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        overridePendingTransition(0, 0);
+        enforceExcludeFromRecents();
         super.onCreate(savedInstanceState);
 
         // 窗口基础配置：全屏铺满、底部对齐（彻底锁死底部）、半透明遮罩、点击外部退出
@@ -316,6 +332,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     @Override
     protected void onNewIntent(Intent intent) {
+        overridePendingTransition(0, 0);
+        enforceExcludeFromRecents();
         super.onNewIntent(intent);
         setIntent(intent);
         boolean dark = ThemeController.isDark(this);
@@ -861,26 +879,40 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             heightAnimator.cancel();
         }
 
-        if (sheetCard != null) {
-            sheetCard.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        if (sheetCard == null) {
+            currentHeight = targetH;
+            return;
         }
 
-        heightAnimator = ValueAnimator.ofInt(startH, targetH);
-        heightAnimator.setDuration(180);
-        heightAnimator.setInterpolator(new DecelerateInterpolator());
-        heightAnimator.addUpdateListener(animation -> {
-            currentHeight = (int) animation.getAnimatedValue();
-            updateCardHeight(currentHeight);
-        });
-        heightAnimator.addListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                if (sheetCard != null) {
-                    sheetCard.setLayerType(View.LAYER_TYPE_NONE, null);
-                }
-            }
-        });
-        heightAnimator.start();
+        currentHeight = targetH;
+
+        if (targetH > startH) {
+            int deltaY = targetH - startH;
+            updateCardHeight(targetH);
+            sheetCard.setTranslationY(deltaY);
+            sheetCard.animate()
+                    .translationY(0)
+                    .setDuration(200)
+                    .setInterpolator(new DecelerateInterpolator(1.6f))
+                    .setListener(null)
+                    .start();
+        } else {
+            int deltaY = startH - targetH;
+            sheetCard.animate()
+                    .translationY(deltaY)
+                    .setDuration(180)
+                    .setInterpolator(new DecelerateInterpolator(1.6f))
+                    .setListener(new AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(Animator animation) {
+                            if (sheetCard != null) {
+                                updateCardHeight(targetH);
+                                sheetCard.setTranslationY(0);
+                            }
+                        }
+                    })
+                    .start();
+        }
     }
 
     /** 挂载常驻单例 WebView，实现 100% 零转圈秒开、1:1 原生字体与透明毛玻璃透光 */
@@ -1290,20 +1322,16 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 currentHeight = defaultHeight;
                 updateCardHeight(defaultHeight);
             }
-            sheetCard.setVisibility(View.INVISIBLE);
-            sheetCard.setTranslationY(screenHeight > 0 ? screenHeight : 2500);
-
-            sheetCard.post(() -> {
-                sheetCard.setTranslationY(sheetCard.getHeight() > 0 ? sheetCard.getHeight() : defaultHeight);
-                sheetCard.setVisibility(View.VISIBLE);
-                sheetCard.animate()
-                        .translationY(0)
-                        .setDuration(220)
-                        .setInterpolator(new DecelerateInterpolator())
-                        .withLayer()
-                        .setListener(null)
-                        .start();
-            });
+            int startY = sheetCard.getHeight() > 0 ? sheetCard.getHeight() : defaultHeight;
+            if (startY <= 0) startY = screenHeight > 0 ? screenHeight : 2000;
+            sheetCard.setTranslationY(startY + dpToPx(30));
+            sheetCard.setVisibility(View.VISIBLE);
+            sheetCard.animate()
+                    .translationY(0)
+                    .setDuration(220)
+                    .setInterpolator(new DecelerateInterpolator(1.6f))
+                    .setListener(null)
+                    .start();
         }
     }
 
@@ -1325,8 +1353,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             sheetCard.animate()
                     .translationY(sheetCard.getHeight() + dpToPx(30))
                     .setDuration(180)
-                    .setInterpolator(new DecelerateInterpolator())
-                    .withLayer()
+                    .setInterpolator(new DecelerateInterpolator(1.6f))
                     .setListener(new AnimatorListenerAdapter() {
                         @Override
                         public void onAnimationEnd(Animator animation) {

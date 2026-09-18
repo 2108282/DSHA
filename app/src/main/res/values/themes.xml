@@ -99,8 +99,24 @@
         <item name="cornerSize">@dimen/radius_card</item>
     </style>
 
+    <style name="Animation.DSHA.Sheet" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@null</item>
+        <item name="android:activityOpenExitAnimation">@null</item>
+        <item name="android:activityCloseEnterAnimation">@null</item>
+        <item name="android:activityCloseExitAnimation">@null</item>
+        <item name="android:taskOpenEnterAnimation">@null</item>
+        <item name="android:taskOpenExitAnimation">@null</item>
+        <item name="android:taskCloseEnterAnimation">@null</item>
+        <item name="android:taskCloseExitAnimation">@null</item>
+        <item name="android:taskToFrontEnterAnimation">@null</item>
+        <item name="android:taskToFrontExitAnimation">@null</item>
+        <item name="android:taskToBackEnterAnimation">@null</item>
+        <item name="android:taskToBackExitAnimation">@null</item>
+    </style>
+
     <!-- 快捷抽屉弹层专用全屏透明主题（无黑边、无白状态栏、左右 100% 满屏无留白） -->
     <style name="Theme.DeepseekHarness.SheetTransparent" parent="Theme.DeepseekHarness">
+        <item name="android:windowAnimationStyle">@style/Animation.DSHA.Sheet</item>
         <item name="android:fitsSystemWindows">false</item>
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
         <item name="android:windowIsTranslucent">true</item>

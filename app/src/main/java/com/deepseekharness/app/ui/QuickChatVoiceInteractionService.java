@@ -24,7 +24,7 @@ public class QuickChatVoiceInteractionService extends VoiceInteractionService {
     public void onReady() {
         super.onReady();
         Intent intent = new Intent(this, QuickChatSheetActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
         startActivity(intent);
     }
 }

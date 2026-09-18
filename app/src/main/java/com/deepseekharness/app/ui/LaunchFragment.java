@@ -409,7 +409,7 @@ public class LaunchFragment extends Fragment {
         acts.add(() -> {
             try {
                 Intent intent = new Intent(requireContext(), QuickChatSheetActivity.class)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
                 startActivity(intent);
             } catch (Throwable t) {
                 Toast.makeText(requireContext(), "无法打开抽屉：" + t.getMessage(), Toast.LENGTH_SHORT).show();

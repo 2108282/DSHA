@@ -71,6 +71,7 @@
             android:exported="false"
             android:taskAffinity="${applicationId}.quick_sheet"
             android:excludeFromRecents="true"
+            android:autoRemoveRecents="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustNothing"
             android:theme="@style/Theme.DeepseekHarness.SheetTransparent">

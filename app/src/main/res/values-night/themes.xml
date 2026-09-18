@@ -82,6 +82,7 @@
 
     <!-- 快捷抽屉弹层专用全屏透明主题（深色模式） -->
     <style name="Theme.DeepseekHarness.SheetTransparent" parent="Theme.DeepseekHarness">
+        <item name="android:windowAnimationStyle">@style/Animation.DSHA.Sheet</item>
         <item name="android:fitsSystemWindows">false</item>
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
         <item name="android:windowIsTranslucent">true</item>
