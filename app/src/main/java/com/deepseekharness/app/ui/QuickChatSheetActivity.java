@@ -41,6 +41,7 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
+import android.view.animation.PathInterpolator;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -1338,14 +1339,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 currentHeight = defaultHeight;
                 updateCardHeight(defaultHeight);
             }
-            int startY = sheetCard.getHeight() > 0 ? sheetCard.getHeight() : defaultHeight;
-            if (startY <= 0) startY = screenHeight > 0 ? screenHeight : 2000;
-            sheetCard.setTranslationY(startY + dpToPx(40));
+            int startY = screenHeight > 0 ? screenHeight : (defaultHeight + dpToPx(100));
+            sheetCard.setTranslationY(startY);
             sheetCard.setVisibility(View.VISIBLE);
             sheetCard.animate()
                     .translationY(0)
-                    .setDuration(260)
-                    .setInterpolator(new DecelerateInterpolator(1.8f))
+                    .setDuration(340)
+                    .setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f))
                     .setListener(null)
                     .start();
         }
@@ -1366,12 +1366,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         } catch (Throwable ignored) {}
 
         if (sheetCard != null) {
-            int exitY = sheetCard.getHeight() > 0 ? sheetCard.getHeight() : defaultHeight;
-            if (exitY <= 0) exitY = screenHeight > 0 ? screenHeight : 2000;
+            int exitY = screenHeight > 0 ? screenHeight : (sheetCard.getHeight() + dpToPx(100));
             sheetCard.animate()
-                    .translationY(exitY + dpToPx(40))
-                    .setDuration(220)
-                    .setInterpolator(new DecelerateInterpolator(1.8f))
+                    .translationY(exitY)
+                    .setDuration(300)
+                    .setInterpolator(new PathInterpolator(0.2f, 0f, 0f, 1f))
                     .setListener(new AnimatorListenerAdapter() {
                         @Override
                         public void onAnimationEnd(Animator animation) {
@@ -1646,14 +1645,14 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             // 1. 唤醒 WebView 渲染管线与 JS 定时器
             sCachedWebView.onResume();
             sCachedWebView.resumeTimers();
-            // 唤醒探活与重连延后到入场动画完成（260ms）后执行，杜绝首帧与动画争抢主线程与 GPU
+            // 唤醒探活与重连延后到入场动画完成（350ms）后执行，杜绝首帧与动画争抢主线程与 GPU
             sCachedWebView.postDelayed(() -> {
                 if (sCachedWebView != null && !isFinishing() && !isDestroyed()) {
                     try {
                         sCachedWebView.evaluateJavascript("(function(){ try { if (window.dispatchEvent) window.dispatchEvent(new Event('online')); } catch(e){} })();", null);
                     } catch (Throwable ignored) {}
                 }
-            }, 260);
+            }, 350);
 
             // 2. 检查底层服务是否发生过重启或端口已切换
             long currentGen = controller != null ? controller.getWebGeneration() : -1;
