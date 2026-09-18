@@ -2,7 +2,12 @@ package com.deepseekharness.app;
 
 import android.content.Intent;
 import android.app.Activity;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.util.Log;
+import android.view.WindowManager;
+
+import java.lang.reflect.Field;
 
 import io.github.libxposed.api.XposedInterface.Chain;
 import io.github.libxposed.api.XposedInterface.Hooker;
@@ -110,33 +115,55 @@ public class CtsModuleMain extends XposedModule {
     }
 
     /**
-     * 主路径：FloatyActivity.onCreate 执行后，拉起本包 AssistGatewayActivity 并关闭 Gemini 界面。
-     * onCreate 在主线程执行，Activity 已完成初始化，可直接 startActivity。
+     * 主路径：FloatyActivity.onCreate 拦截。
+     * 当重定向开启时：
+     * 1. 将窗口置为完全透明并抹去动画，消除 Google 悬浮卡片的入场白框与残影；
+     * 2. 立即拉起本包 AssistGatewayActivity 并自我关闭；
+     * 3. 反射设置 Activity.mCalled = true 满足系统生命周期检查，直接阻断 Google 子类
+     *    执行后续的 View 布局膨胀与白框渲染；若反射异常则安全降级到 proceed()。
      */
     private final class FloatyRedirectHooker implements Hooker {
         @Override
         public Object intercept(Chain chain) throws Throwable {
-            Object result = chain.proceed();
             if (!isEnabled()) {
-                return result;
+                return chain.proceed();
             }
             Object thisObject = chain.getThisObject();
             if (!(thisObject instanceof Activity)) {
-                return result;
+                return chain.proceed();
             }
             Activity activity = (Activity) thisObject;
+
             try {
+                // 1. 窗口完全透明并去除暗淡与动画，杜绝任何白框残影
+                if (activity.getWindow() != null) {
+                    activity.getWindow().setBackgroundDrawable(
+                            new ColorDrawable(Color.TRANSPARENT));
+                    activity.getWindow().setDimAmount(0f);
+                    activity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+                }
+                activity.overridePendingTransition(0, 0);
+
+                // 2. 立即启动网关并自我 finish
                 Intent intent = new Intent();
                 intent.setClassName(TARGET_PACKAGE,
                         "com.deepseekharness.app.ui.AssistGatewayActivity");
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
                 activity.startActivity(intent);
                 activity.finish();
-                log(Log.INFO, TAG, "FloatyActivity redirected to DSHA");
+                activity.overridePendingTransition(0, 0);
+                log(Log.INFO, TAG, "FloatyActivity redirected cleanly without white box");
+
+                // 3. 满足系统 super.onCreate 检查，阻断 Google 子类 View 加载
+                Field mCalledField = Activity.class.getDeclaredField("mCalled");
+                mCalledField.setAccessible(true);
+                mCalledField.setBoolean(activity, true);
+                return null;
             } catch (Throwable e) {
-                log(Log.ERROR, TAG, "redirect FloatyActivity fail", e);
+                log(Log.WARN, TAG, "redirect FloatyActivity clean interception fallback", e);
+                // 兜底：若反射受限则保证 Google 不闪退
+                return chain.proceed();
             }
-            return result;
         }
     }
 }
