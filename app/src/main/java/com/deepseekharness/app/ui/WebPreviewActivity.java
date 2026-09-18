@@ -168,7 +168,7 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
         errorPanel.setVisibility(View.GONE);
         progress.setVisibility(View.VISIBLE);
         try {
-            WebView view = new WebView(this);
+            WebView view = new DshaWebView(this);
             webView = view;
             boolean dark = ThemeController.isDark(this);
             int themeBg = dark ? Color.parseColor("#10141B") : Color.parseColor("#F7F8FB");

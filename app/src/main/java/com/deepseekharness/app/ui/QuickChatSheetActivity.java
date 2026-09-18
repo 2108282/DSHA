@@ -935,7 +935,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     /** 挂载常驻单例 WebView，实现 100% 零转圈秒开、1:1 原生字体与透明毛玻璃透光 */
     private void attachChatWeb() {
         if (sCachedWebView == null) {
-            sCachedWebView = new WebView(getApplicationContext());
+            sCachedWebView = new DshaWebView(getApplicationContext());
             WebSettings ws = sCachedWebView.getSettings();
             ws.setJavaScriptEnabled(true);
             ws.setDomStorageEnabled(true);
