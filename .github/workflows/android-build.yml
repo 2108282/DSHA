@@ -76,18 +76,23 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Standard Debug APK
-        run: ./gradlew :app:assembleStandardDebug --stacktrace
+      - name: Build Standard Debug and Release APK
+        run: ./gradlew :app:assembleStandardDebug :app:assembleStandardRelease --stacktrace
 
       - name: Verify APK size and contents
         run: |
           set -euo pipefail
-          APK_FILE=$(ls app/build/outputs/apk/standard/debug/*.apk | head -1)
-          ls -lh "$APK_FILE"
-          unzip -l "$APK_FILE" | grep "offline-rootfs" || true
+          ls -lh app/build/outputs/apk/standard/*/*.apk
+          unzip -l app/build/outputs/apk/standard/release/*.apk | head -20 || true
 
       - name: Upload Standard Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: dsha-standard-debug-full
           path: app/build/outputs/apk/standard/debug/*.apk
+
+      - name: Upload Standard Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsha-standard-release-v0.1.5rc.2-u2.4
+          path: app/build/outputs/apk/standard/release/*.apk
