@@ -94,5 +94,5 @@ jobs:
       - name: Upload Standard Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: dsha-standard-release-v0.1.5rc.2-u2.4
+          name: dsha-standard-release-v0.1.5rc.2-u2.5
           path: app/build/outputs/apk/standard/release/*.apk

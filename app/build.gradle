@@ -15,8 +15,8 @@ android {
         applicationId "com.dsha.fr"
         minSdk 31
         targetSdk 37
-        versionCode 126
-        versionName "0.1.5rc.2-u2.4"
+        versionCode 127
+        versionName "0.1.5rc.2-u2.5"
         testInstrumentationRunner "com.deepseekharness.app.Rc13Instrumentation"
         ndk {
             abiFilters 'arm64-v8a'
