@@ -43,12 +43,40 @@ public class HarnessService extends Service {
     private android.net.wifi.WifiManager.WifiLock wifiLock;
     private static volatile long sLastTaskActiveTime = 0L;
 
+    private final android.os.Handler heartBeatHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable heartBeatRunnable = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                ConfigStore cfg = new ConfigStore(HarnessService.this);
+                if (!cfg.isPersistentNotificationEnabled()) {
+                    stopForeground(true);
+                    stopSelf();
+                    return;
+                }
+                if (c != null && !c.isWebRunning()) {
+                    android.util.Log.i("DSHA", "[常驻通知] 检测到底层核心已停止运转，主动撤销常驻通知");
+                    stopForeground(true);
+                    stopSelf();
+                    return;
+                }
+            } catch (Throwable ignored) {}
+            // 仅在亮屏期间每 30 秒轻量确认一次核心存活
+            heartBeatHandler.postDelayed(this, 30_000L);
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
         currentInstance = this;
         c = HarnessController.get(this);
         createChannel();
+        ConfigStore cfg = new ConfigStore(this);
+        if (!cfg.isPersistentNotificationEnabled()) {
+            stopSelf();
+            return;
+        }
         try {
             showForegroundNotification();
         } catch (RuntimeException error) {
@@ -165,6 +193,7 @@ public class HarnessService extends Service {
                     if (intent == null || intent.getAction() == null) return;
                     String action = intent.getAction();
                     if (Intent.ACTION_SCREEN_OFF.equals(action)) {
+                        heartBeatHandler.removeCallbacks(heartBeatRunnable);
                         // 熄屏：无论是否有任务，本机回环均无须占用物理 Wi-Fi 射频芯片，立即放锁让网卡休眠
                         releaseWifiLock();
                         long idleTime = System.currentTimeMillis() - sLastTaskActiveTime;
@@ -175,6 +204,8 @@ public class HarnessService extends Service {
                             android.util.Log.i("DSHA", "[保活] 屏幕熄灭且无活跃任务，已彻底释放全部锁进入深睡");
                         }
                     } else if (Intent.ACTION_SCREEN_ON.equals(action) || Intent.ACTION_USER_PRESENT.equals(action)) {
+                        heartBeatHandler.removeCallbacks(heartBeatRunnable);
+                        heartBeatHandler.postDelayed(heartBeatRunnable, 30_000L);
                         if (isTaskRunning()) {
                             acquireLocks();
                         }
@@ -227,6 +258,7 @@ public class HarnessService extends Service {
     @Override
     public void onDestroy() {
         if (currentInstance == this) currentInstance = null;
+        heartBeatHandler.removeCallbacks(heartBeatRunnable);
         stopScreenWatcher();
         releaseLocks();
         if (shellHttp != null) {
@@ -245,8 +277,12 @@ public class HarnessService extends Service {
     }
 
     private void showForegroundNotification() {
-        int port = c != null ? c.getPort() : Constants.DSH_WEB_PORT;
-        Notification notification = buildNotification("DSHA 运行中", "Web UI: http://127.0.0.1:" + port);
+        ConfigStore cfg = new ConfigStore(this);
+        if (!cfg.isPersistentNotificationEnabled()) {
+            stopForeground(true);
+            return;
+        }
+        Notification notification = buildNotification("DSHA 运行中", "大肥鱼核心运行中");
         if (Build.VERSION.SDK_INT >= 34)
             startForeground(NOTIF_ID, notification,
                     android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
@@ -255,10 +291,14 @@ public class HarnessService extends Service {
 
     public void refreshNotification() {
         try {
-            int port = c != null ? c.getPort() : Constants.DSH_WEB_PORT;
+            ConfigStore cfg = new ConfigStore(this);
+            if (!cfg.isPersistentNotificationEnabled()) {
+                stopForeground(true);
+                return;
+            }
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) {
-                nm.notify(NOTIF_ID, buildNotification("DSHA 运行中", "Web UI: http://127.0.0.1:" + port));
+                nm.notify(NOTIF_ID, buildNotification("DSHA 运行中", "大肥鱼核心运行中"));
             }
         } catch (Throwable ignored) {}
     }
@@ -274,12 +314,9 @@ public class HarnessService extends Service {
     }
 
     private Notification buildNotification(String title, String text) {
-        Intent intent = new Intent(this, com.deepseekharness.app.ui.MainActivity.class);
-        PendingIntent pi = PendingIntent.getActivity(this, 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
         Intent sheetIntent = new Intent(this, com.deepseekharness.app.ui.QuickChatSheetActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+                .setAction("com.deepseekharness.app.OPEN_SHEET")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
         PendingIntent sheetPi = PendingIntent.getActivity(this, 1, sheetIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
@@ -302,5 +339,58 @@ public class HarnessService extends Service {
         } catch (Throwable ignored) {}
 
         return b.build();
+    }
+
+    // ================= 核心运转与常驻通知联动管理 =================
+
+    /**
+     * 根据底层核心运转状态与用户常驻通知开关，同步服务与通知状态。
+     */
+    public static void checkAndSyncService(Context ctx) {
+        if (ctx == null) return;
+        Context appCtx = ctx.getApplicationContext();
+        ConfigStore cfg = new ConfigStore(appCtx);
+        boolean enabled = cfg.isPersistentNotificationEnabled();
+        HarnessController controller = HarnessController.get(appCtx);
+        boolean running = controller != null && controller.isWebRunning();
+
+        if (enabled && running) {
+            startServiceIfNecessary(appCtx);
+        } else if (!enabled || !running) {
+            stopServiceIfNecessary(appCtx);
+        }
+    }
+
+    public static void startServiceIfNecessary(Context ctx) {
+        try {
+            Intent svc = new Intent(ctx, HarnessService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ctx.startForegroundService(svc);
+            } else {
+                ctx.startService(svc);
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("DSHA", "拉起保活常驻通知服务失败: " + t.getMessage());
+        }
+    }
+
+    public static void stopServiceIfNecessary(Context ctx) {
+        try {
+            if (currentInstance != null) {
+                currentInstance.stopForeground(true);
+                currentInstance.stopSelf();
+            } else {
+                NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) nm.cancel(NOTIF_ID);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    public static void syncPersistentNotificationState(Context ctx, boolean enabled) {
+        if (enabled) {
+            checkAndSyncService(ctx);
+        } else {
+            stopServiceIfNecessary(ctx);
+        }
     }
 }

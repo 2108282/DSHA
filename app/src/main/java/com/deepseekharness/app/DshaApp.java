@@ -53,5 +53,12 @@ public class DshaApp extends Application {
                 nm.createNotificationChannel(chConfirm);
             }
         }
+
+        // 核心运转常驻通知：若核心在运行且常驻通知开关开启，自动同步挂载
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            try {
+                HarnessService.checkAndSyncService(this);
+            } catch (Throwable ignored) {}
+        }, 500);
     }
 }

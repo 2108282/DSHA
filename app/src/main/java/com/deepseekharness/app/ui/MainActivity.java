@@ -141,6 +141,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        com.deepseekharness.app.HarnessService.checkAndSyncService(this);
         if (!isFinishing() && findViewById(R.id.bottom_nav) != null
                 && new ConfigStore(this).isLanMode()
                 && !com.deepseekharness.app.bridge.LocalNetworkAccess.granted(this)

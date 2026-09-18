@@ -95,6 +95,22 @@ public class SettingsFragment extends Fragment {
             });
         }
 
+        // 常驻后台服务通知开关：控制是否随核心运转常驻通知栏
+        androidx.appcompat.widget.SwitchCompat notifSwitch = v.findViewById(R.id.settings_persistent_notification_switch);
+        if (notifSwitch != null) {
+            ConfigStore cfg = new ConfigStore(requireContext());
+            notifSwitch.setChecked(cfg.isPersistentNotificationEnabled());
+            v.findViewById(R.id.settings_persistent_notification_row).setOnClickListener(x -> {
+                boolean next = !notifSwitch.isChecked();
+                notifSwitch.setChecked(next);
+                cfg.setPersistentNotificationEnabled(next);
+                com.deepseekharness.app.HarnessService.syncPersistentNotificationState(requireContext(), next);
+                Toast.makeText(requireContext(),
+                        next ? "已开启常驻通知" : "已关闭常驻通知",
+                        Toast.LENGTH_SHORT).show();
+            });
+        }
+
         EditText opacityDayInput = v.findViewById(R.id.settings_sheet_opacity_day_input);
         Button opacityDaySave = v.findViewById(R.id.settings_sheet_opacity_day_save);
         EditText opacityNightInput = v.findViewById(R.id.settings_sheet_opacity_night_input);

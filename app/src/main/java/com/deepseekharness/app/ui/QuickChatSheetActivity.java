@@ -104,6 +104,16 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private static volatile boolean sPendingNewChat = false;
     public static volatile String sPendingApprovalDecision = null;
 
+    /**
+     * 构建点击通知唤起抽屉的标准 Intent。
+     * 采用标准的单任务栈拉起模式，避免 FLAG_ACTIVITY_REORDER_TO_FRONT 导致的任务栈串台误入主界面。
+     */
+    public static Intent createLaunchIntent(Context ctx) {
+        return new Intent(ctx, QuickChatSheetActivity.class)
+                .setAction("com.deepseekharness.app.OPEN_SHEET")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+    }
+
     public static void syncApprovalDecision(boolean allow) {
         sPendingApprovalDecision = allow ? "allowed-once" : "rejected";
         if (sCachedWebView != null) {
@@ -1662,6 +1672,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        isDismissing = false;
+        if (sheetCard != null) {
+            // 若卡片当前处于屏幕外（平移距离大于 0 或不可见），可靠执行进场动画恢复显示
+            if (sheetCard.getTranslationY() > 0 || sheetCard.getVisibility() != View.VISIBLE) {
+                animateIn();
+            }
+        }
         boolean dark = ThemeController.isDark(this);
         if (dark != isDarkMode) {
             isDarkMode = dark;

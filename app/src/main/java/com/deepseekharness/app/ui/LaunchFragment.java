@@ -107,6 +107,9 @@ public class LaunchFragment extends Fragment {
                     status.setText(msg);
                     refreshRunState();
                     refreshLanAddr();
+                    if (isAdded()) {
+                        com.deepseekharness.app.HarnessService.stopServiceIfNecessary(requireContext());
+                    }
                 });
             });
             webReady = false;
@@ -114,6 +117,7 @@ public class LaunchFragment extends Fragment {
             status.setText("停止中…");
             refreshLanAddr();
             refreshRunState();
+            com.deepseekharness.app.HarnessService.stopServiceIfNecessary(requireContext());
         });
 
         return v;
@@ -187,17 +191,8 @@ public class LaunchFragment extends Fragment {
         boolean accepted = safeMode ? controller.startWebSafely(startStatus) : controller.startWeb(startStatus);
         refreshRunState();
         if (!accepted) return;
-        // 前台保活服务：dsh 后台常驻 + 看门狗自动重启（退到桌面/锁屏不被杀）
-        try {
-            Intent svc = new Intent(requireContext(), com.deepseekharness.app.HarnessService.class);
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                requireContext().startForegroundService(svc);
-            } else {
-                requireContext().startService(svc);
-            }
-        } catch (Throwable t) {
-            android.util.Log.w("DSHA", "拉起保活服务失败: " + t.getMessage());
-        }
+        // 核心运转常驻通知：根据用户设置与核心状态自动挂载
+        com.deepseekharness.app.HarnessService.checkAndSyncService(requireContext());
     }
 
     /** 打开 WebPreviewActivity 进入 dsh WebUI。 */
@@ -408,8 +403,7 @@ public class LaunchFragment extends Fragment {
         items.add("💬 打开快捷对话底部抽屉");
         acts.add(() -> {
             try {
-                Intent intent = new Intent(requireContext(), QuickChatSheetActivity.class)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+                Intent intent = QuickChatSheetActivity.createLaunchIntent(requireContext());
                 startActivity(intent);
             } catch (Throwable t) {
                 Toast.makeText(requireContext(), "无法打开抽屉：" + t.getMessage(), Toast.LENGTH_SHORT).show();

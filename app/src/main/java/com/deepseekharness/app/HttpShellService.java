@@ -626,13 +626,11 @@ public final class HttpShellService {
                 isTaskActive = false;
                 HarnessService.onTaskStateChanged(ctx, false);
 
-                Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+                Intent openAppIntent = QuickChatSheetActivity.createLaunchIntent(ctx);
                 PendingIntent contentPi = PendingIntent.getActivity(ctx, 201, openAppIntent,
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-                Intent actionIntent = new Intent(ctx, QuickChatSheetActivity.class)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+                Intent actionIntent = QuickChatSheetActivity.createLaunchIntent(ctx);
                 PendingIntent actionPi = PendingIntent.getActivity(ctx, 202, actionIntent,
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
@@ -1600,8 +1598,7 @@ public final class HttpShellService {
     private void showAskNotification(String q, String[] opts, long epoch) {
         createConfirmChannel();
         AuthPromptInfo info = parseAuthPrompt(q, "💬 助手提问", opts);
-        Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+        Intent openAppIntent = QuickChatSheetActivity.createLaunchIntent(ctx);
         PendingIntent contentPi = PendingIntent.getActivity(ctx, 39, openAppIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
@@ -2221,8 +2218,7 @@ public final class HttpShellService {
         try {
             createConfirmChannel();
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-            Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+            Intent openAppIntent = QuickChatSheetActivity.createLaunchIntent(ctx);
             PendingIntent contentPi = PendingIntent.getActivity(ctx, 110, openAppIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
@@ -2290,8 +2286,7 @@ public final class HttpShellService {
 
             createConfirmChannel();
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-            Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+            Intent openAppIntent = QuickChatSheetActivity.createLaunchIntent(ctx);
             PendingIntent contentPi = PendingIntent.getActivity(ctx, 115, openAppIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
@@ -2382,8 +2377,7 @@ public final class HttpShellService {
                 nm.createNotificationChannel(ch);
             }
 
-            Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+            Intent openAppIntent = QuickChatSheetActivity.createLaunchIntent(ctx);
             PendingIntent contentPi = PendingIntent.getActivity(ctx, 120, openAppIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
@@ -2438,8 +2432,7 @@ public final class HttpShellService {
         createConfirmChannel();
         AuthPromptInfo info = parseAuthPrompt(cmd, "⚠️ 危险命令确认", new String[]{"允许", "拒绝"});
 
-        Intent openAppIntent = new Intent(ctx, QuickChatSheetActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+        Intent openAppIntent = QuickChatSheetActivity.createLaunchIntent(ctx);
         PendingIntent contentPi = PendingIntent.getActivity(ctx, 30, openAppIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 

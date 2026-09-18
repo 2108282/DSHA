@@ -216,6 +216,16 @@ public class ConfigStore {
         prefs.edit().putBoolean("sheet_immersive", v).apply();
     }
 
+    // ================= 常驻后台服务通知 =================
+
+    public boolean isPersistentNotificationEnabled() {
+        return prefs.getBoolean(Constants.KEY_PERSISTENT_NOTIFICATION, true);
+    }
+
+    public void setPersistentNotificationEnabled(boolean enabled) {
+        prefs.edit().putBoolean(Constants.KEY_PERSISTENT_NOTIFICATION, enabled).apply();
+    }
+
     // ================= 圈定即搜重定向 =================
 
     /**
