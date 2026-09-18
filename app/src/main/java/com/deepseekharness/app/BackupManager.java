@@ -201,7 +201,7 @@ public final class BackupManager {
         } else {
             sb.append("tar -czf .dsha-backup.tar.gz --exclude='.env' --exclude='*/.env' --exclude='*.env' --ignore-failed-read \"$@\" || { echo TAR_FAIL; exit 1; }\n");
         }
-          .append("rm -rf .dsha-workspaces .dsha-backup-manifest.json\n")
+        sb.append("rm -rf .dsha-workspaces .dsha-backup-manifest.json\n")
           .append("test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n")
           .append("CNT=$(tar -tzf .dsha-backup.tar.gz 2>/dev/null | wc -l)\n")
           .append("echo \"VERIFY_ENTRIES=$CNT\"\n")
