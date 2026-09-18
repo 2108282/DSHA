@@ -22,6 +22,10 @@ public class ConfigStore {
         this.vault = new KeyVault(ctx);
     }
 
+    public static ConfigStore get(Context ctx) {
+        return new ConfigStore(ctx);
+    }
+
     public boolean isWelcomed() {
         return prefs.getBoolean(Constants.KEY_WELCOMED, false);
     }
