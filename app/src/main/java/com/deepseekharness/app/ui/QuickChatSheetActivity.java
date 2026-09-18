@@ -198,6 +198,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private boolean authRetried = false;
     private boolean isDismissing = false;
     private boolean isDarkMode = false;
+    private static volatile QuickChatSheetActivity sCurrentInstance;
 
     private float initialTouchY = 0f;
     private int initialHeightOnTouch = 0;
@@ -322,8 +323,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             }
         }
 
+        sCurrentInstance = this;
         controller = HarnessController.get(this);
-        isDarkMode = ThemeController.isDark(this);
+        isDarkMode = new ConfigStore(this).isSheetInvertColor();
 
         calculateDimensions();
         setContentView(buildUi());
@@ -363,7 +365,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         enforceExcludeFromRecents();
         super.onNewIntent(intent);
         setIntent(intent);
-        boolean dark = ThemeController.isDark(this);
+        boolean dark = new ConfigStore(this).isSheetInvertColor();
         isDarkMode = dark;
         updateCardTheme();
         if (sCachedWebView != null) {
@@ -962,8 +964,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             ws.setAllowContentAccess(true);
             ws.setCacheMode(WebSettings.LOAD_DEFAULT);
 
-            // 模式状态跟随容器，同时禁用系统自动算法反色
-            boolean initDark = ThemeController.isDark(getApplicationContext());
+            // 模式状态由「抽屉反色开关」独立控制，同时禁用系统自动算法反色
+            boolean initDark = new ConfigStore(getApplicationContext()).isSheetInvertColor();
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
                     ws.setForceDark(initDark ? WebSettings.FORCE_DARK_ON : WebSettings.FORCE_DARK_OFF);
@@ -1088,12 +1090,26 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
+    /** 设置页「抽屉反色开关」变动时即时刷新活动中的抽屉及缓存的 WebView */
+    public static void refreshThemeFromConfig(Context context) {
+        if (context == null) return;
+        boolean invert = new ConfigStore(context).isSheetInvertColor();
+        QuickChatSheetActivity act = sCurrentInstance;
+        if (act != null && !act.isFinishing() && !act.isDestroyed()) {
+            act.runOnUiThread(() -> {
+                act.isDarkMode = invert;
+                act.updateCardTheme();
+            });
+        }
+        refreshImmersiveTheme(context);
+    }
+
     /** 覆写前端背景与输入框底座保护，确保沉浸透光同时彻底根除输入框塌陷、文字穿透与二层菜单失真 */
     public static void refreshImmersiveTheme(Context context) {
         if (sCachedWebView == null || context == null) return;
         sCachedWebView.post(() -> {
             try {
-                boolean dark = ThemeController.isDark(context);
+                boolean dark = new com.deepseekharness.app.core.ConfigStore(context).isSheetInvertColor();
                 boolean immersive = new com.deepseekharness.app.core.ConfigStore(context).isSheetImmersive();
 
                 // 动态同步 WebView 内核深浅色模式，使 (prefers-color-scheme: dark) 真实跟随容器模式
@@ -1671,6 +1687,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     @Override
     protected void onResume() {
+        sCurrentInstance = this;
         super.onResume();
         isDismissing = false;
         if (sheetCard != null) {
@@ -1679,7 +1696,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 animateIn();
             }
         }
-        boolean dark = ThemeController.isDark(this);
+        boolean dark = new ConfigStore(this).isSheetInvertColor();
         if (dark != isDarkMode) {
             isDarkMode = dark;
             updateCardTheme();
@@ -1738,6 +1755,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (sCurrentInstance == this) {
+            sCurrentInstance = null;
+        }
         cancelFileSelection();
         WebUploads.clean(uploads);
         if (keyboardLayoutListener != null && getWindow() != null && getWindow().getDecorView() != null) {

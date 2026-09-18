@@ -111,6 +111,22 @@ public class SettingsFragment extends Fragment {
             });
         }
 
+        // 抽屉反色开关：独立控制快捷抽屉深色/反色视觉，与主应用黑夜白天按钮完全解耦分离
+        androidx.appcompat.widget.SwitchCompat sheetInvertSwitch = v.findViewById(R.id.settings_sheet_invert_switch);
+        if (sheetInvertSwitch != null) {
+            ConfigStore invertCfg = new ConfigStore(requireContext());
+            sheetInvertSwitch.setChecked(invertCfg.isSheetInvertColor());
+            v.findViewById(R.id.settings_sheet_invert_row).setOnClickListener(x -> {
+                boolean next = !sheetInvertSwitch.isChecked();
+                sheetInvertSwitch.setChecked(next);
+                invertCfg.setSheetInvertColor(next);
+                QuickChatSheetActivity.refreshThemeFromConfig(requireContext());
+                Toast.makeText(requireContext(),
+                        next ? "抽屉反色已开启（深色反色视觉）" : "抽屉反色已关闭（常规浅色视觉）",
+                        Toast.LENGTH_SHORT).show();
+            });
+        }
+
         EditText opacityDayInput = v.findViewById(R.id.settings_sheet_opacity_day_input);
         Button opacityDaySave = v.findViewById(R.id.settings_sheet_opacity_day_save);
         EditText opacityNightInput = v.findViewById(R.id.settings_sheet_opacity_night_input);

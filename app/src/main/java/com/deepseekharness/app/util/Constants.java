@@ -94,6 +94,8 @@ public final class Constants {
     public static final String KEY_AUTO_BACKUP = "auto_backup_launches";
     /** 常驻后台服务通知（检测核心运转）。 */
     public static final String KEY_PERSISTENT_NOTIFICATION = "persistent_notification";
+    /** 快捷抽屉反色开关（独立深色反色，与主应用黑夜白天按钮完全分离）。 */
+    public static final String KEY_SHEET_INVERT_COLOR = "sheet_invert_color";
 
     /** 默认工作目录（容器内路径，直通手机物理存储 Download/DSHA/工作区）。 */
     public static final String DEFAULT_WORKDIR = "/root/内部存储/工作区";

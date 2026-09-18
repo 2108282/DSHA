@@ -82,6 +82,7 @@ public class MainActivity extends AppCompatActivity {
         if (themeBtn != null) {
             boolean dark = ThemeController.isDark(this);
             themeBtn.setText(dark ? "☀️ 白天" : "🌙 黑夜");
+            themeBtn.setContentDescription(dark ? "切换到白天模式" : "切换到黑夜模式");
             themeBtn.setOnClickListener(v -> ThemeController.toggle(this));
         }
         findViewById(R.id.btn_about).setOnClickListener(v -> AboutDialog.show(this));
@@ -123,6 +124,18 @@ public class MainActivity extends AppCompatActivity {
             } else {
                 nav.setSelectedItemId(R.id.nav_launch);
             }
+        } else {
+            // 重建时（如切换主题），根据当前恢复的 tab 状态同步更新标题，避免错乱停留在“启动”
+            int selectedId = nav.getSelectedItemId();
+            if (selectedId == R.id.nav_plugins) {
+                title.setText(R.string.nav_plugins);
+            } else if (selectedId == R.id.nav_settings) {
+                title.setText(R.string.nav_settings);
+            } else if (selectedId == R.id.nav_terminal) {
+                title.setText(R.string.nav_terminal);
+            } else {
+                title.setText(R.string.nav_launch);
+            }
         }
     }
 
@@ -152,14 +165,17 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         if (current == this) current = null;
-        // 收掉 PTY 会话与简易 shell（防在容器里留孤儿 bash）
-        try {
-            PtyTerminalFragment.shutdown();
-        } catch (Throwable ignored) {
-        }
-        try {
-            TerminalFragment.shutdownShell();
-        } catch (Throwable ignored) {
+        if (isFinishing()) {
+            // 仅在 Activity 真正关闭退出时收掉 PTY 会话与简易 shell（防在容器里留孤儿 bash）
+            // 因主题切换或旋转屏幕触发的 recreate 不应杀灭用户正在运行的终端任务！
+            try {
+                PtyTerminalFragment.shutdown();
+            } catch (Throwable ignored) {
+            }
+            try {
+                TerminalFragment.shutdownShell();
+            } catch (Throwable ignored) {
+            }
         }
         super.onDestroy();
     }
