@@ -65,6 +65,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -190,6 +191,15 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private ProgressBar progressBar;
     private TextView errorHint;
     private HarnessController controller;
+
+    // 抽屉顶排操作栏与拖拽/分割线组件引用（用于反色时动态同步颜色）
+    private View dragHandle;
+    private TextView headerTitle;
+    private HeaderIconButton btnClose;
+    private HeaderIconButton btnSettings;
+    private HeaderIconButton btnNewChat;
+    private HeaderIconButton btnFullscreen;
+    private View headerDivider;
 
     private int screenHeight = 0;
     private int defaultHeight = 0;
@@ -330,6 +340,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         calculateDimensions();
         setContentView(buildUi());
+        updateSystemBarsTheme();
         View content = findViewById(android.R.id.content);
         if (content != null) {
             content.setFitsSystemWindows(false);
@@ -415,10 +426,29 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         return dark ? Color.argb(alpha, 0x10, 0x14, 0x1B) : Color.argb(alpha, 0xF5, 0xF8, 0xFC);
     }
 
+    /** 系统状态栏与导航栏根据抽屉反色开关设置文字/图标明暗 */
+    private void updateSystemBarsTheme() {
+        Window window = getWindow();
+        if (window != null && window.getDecorView() != null) {
+            WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
+            if (controller != null) {
+                // 当 isDarkMode 为 true（深色/反色开启）时，状态栏与导航栏文字/图标为浅白色（false）
+                // 当 isDarkMode 为 false（浅色模式）时，状态栏与导航栏文字/图标为深黑色（true）
+                controller.setAppearanceLightStatusBars(!isDarkMode);
+                controller.setAppearanceLightNavigationBars(!isDarkMode);
+            }
+        }
+    }
+
     private void updateCardTheme() {
+        int cardBgColor = getCardBgColor(isDarkMode);
+        int textColor = isDarkMode ? Color.parseColor("#E8ECF4") : Color.parseColor("#1A2230");
+        int lineColor = isDarkMode ? Color.parseColor("#302A3344") : Color.parseColor("#30E2E6EE");
+        int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");
+        int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
+
+        // 1. 卡片圆角背景与描边
         if (sheetCard != null) {
-            int cardBgColor = getCardBgColor(isDarkMode);
-            int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
             GradientDrawable cardBg = new GradientDrawable();
             cardBg.setShape(GradientDrawable.RECTANGLE);
             float r = dpToPx(24);
@@ -427,6 +457,37 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             cardBg.setStroke(dpToPx(1), borderColor);
             sheetCard.setBackground(cardBg);
         }
+
+        // 2. 顶部拖拽横条颜色
+        if (dragHandle != null && dragHandle.getBackground() instanceof GradientDrawable) {
+            ((GradientDrawable) dragHandle.getBackground()).setColor(handleColor);
+        }
+
+        // 3. 顶部操作栏文字颜色
+        if (headerTitle != null) {
+            headerTitle.setTextColor(textColor);
+        }
+
+        // 4. 顶部操作栏 4 个矢量图标按钮（图片）颜色
+        if (btnClose != null) btnClose.setIconColor(textColor);
+        if (btnSettings != null) btnSettings.setIconColor(textColor);
+        if (btnNewChat != null) btnNewChat.setIconColor(textColor);
+        if (btnFullscreen != null) btnFullscreen.setIconColor(textColor);
+
+        // 5. 顶部操作栏底部分割线颜色
+        if (headerDivider != null) {
+            headerDivider.setBackgroundColor(lineColor);
+        }
+
+        // 6. 错误提示文字颜色
+        if (errorHint != null) {
+            errorHint.setTextColor(isDarkMode ? Color.parseColor("#94A3B8") : Color.parseColor("#64748B"));
+        }
+
+        // 7. 手机系统顶部状态栏与导航栏文字/图标颜色
+        updateSystemBarsTheme();
+
+        // 8. 注入 WebView 沉浸样式
         if (sCachedWebView != null) {
             injectTransparentBackground(sCachedWebView);
         }
@@ -493,17 +554,17 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(14)));
         dragArea.setPadding(0, dpToPx(5), 0, dpToPx(2));
 
-        View handle = new View(this);
+        dragHandle = new View(this);
         FrameLayout.LayoutParams handleLp = new FrameLayout.LayoutParams(dpToPx(36), dpToPx(4));
         handleLp.gravity = Gravity.CENTER_HORIZONTAL;
-        handle.setLayoutParams(handleLp);
+        dragHandle.setLayoutParams(handleLp);
 
         GradientDrawable handleBg = new GradientDrawable();
         handleBg.setShape(GradientDrawable.RECTANGLE);
         handleBg.setCornerRadius(dpToPx(2));
         handleBg.setColor(handleColor);
         handle.setBackground(handleBg);
-        dragArea.addView(handle);
+        dragArea.addView(dragHandle);
         sheetCard.addView(dragArea);
 
         // 4. 顶部操作栏（RelativeLayout 保证标题绝对对称居中）
@@ -523,12 +584,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         leftGroup.setGravity(Gravity.CENTER_VERTICAL);
 
         // [① ✕ 关闭按钮]
-        View btnClose = createHeaderIconButton(ICON_CLOSE, textColor, "关闭弹层");
+        btnClose = createHeaderIconButton(ICON_CLOSE, textColor, "关闭弹层");
         btnClose.setOnClickListener(v -> dismissSheet());
         leftGroup.addView(btnClose);
 
         // [② >_ 容器终端按钮]
-        View btnSettings = createHeaderIconButton(ICON_SETTINGS, textColor, "进入终端控制台");
+        btnSettings = createHeaderIconButton(ICON_SETTINGS, textColor, "进入终端控制台");
         LinearLayout.LayoutParams settingsLp = (LinearLayout.LayoutParams) btnSettings.getLayoutParams();
         settingsLp.setMarginStart(dpToPx(4));
         btnSettings.setLayoutParams(settingsLp);
@@ -543,16 +604,16 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         headerBar.addView(leftGroup);
 
         // 中间标题（物理绝对对称居中）
-        TextView title = new TextView(this);
+        headerTitle = new TextView(this);
         RelativeLayout.LayoutParams titleLp = new RelativeLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         titleLp.addRule(RelativeLayout.CENTER_IN_PARENT);
-        title.setLayoutParams(titleLp);
-        title.setText("DSHA 对话");
-        title.setTextColor(textColor);
-        title.setTextSize(16);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        headerBar.addView(title);
+        headerTitle.setLayoutParams(titleLp);
+        headerTitle.setText("DSHA 对话");
+        headerTitle.setTextColor(textColor);
+        headerTitle.setTextSize(16);
+        headerTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        headerBar.addView(headerTitle);
 
         // 右侧按钮组：[③ 💬➕ 新建对话] + [④ ⬒ 全屏进入App]
         LinearLayout rightGroup = new LinearLayout(this);
@@ -565,7 +626,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         rightGroup.setGravity(Gravity.CENTER_VERTICAL);
 
         // [③ 💬➕ 新建对话按钮]
-        View btnNewChat = createHeaderIconButton(ICON_NEW_CHAT, textColor, "开启新对话");
+        btnNewChat = createHeaderIconButton(ICON_NEW_CHAT, textColor, "开启新对话");
         btnNewChat.setOnClickListener(v -> {
             if (sCachedWebView == null) return;
 
@@ -599,7 +660,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         rightGroup.addView(btnNewChat);
 
         // [④ ⬒ 全屏聊天按钮]
-        View btnFullscreen = createHeaderIconButton(ICON_FULLSCREEN, textColor, "全屏打开聊天页面");
+        btnFullscreen = createHeaderIconButton(ICON_FULLSCREEN, textColor, "全屏打开聊天页面");
         LinearLayout.LayoutParams fullscreenLp = (LinearLayout.LayoutParams) btnFullscreen.getLayoutParams();
         fullscreenLp.setMarginStart(dpToPx(4));
         btnFullscreen.setLayoutParams(fullscreenLp);
@@ -631,11 +692,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         sheetCard.addView(headerBar);
 
         // 5. 分割线
-        View divider = new View(this);
-        divider.setLayoutParams(new LinearLayout.LayoutParams(
+        headerDivider = new View(this);
+        headerDivider.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(1)));
-        divider.setBackgroundColor(lineColor);
-        sheetCard.addView(divider);
+        headerDivider.setBackgroundColor(lineColor);
+        sheetCard.addView(headerDivider);
 
         // 6. WebView 主体容器（自适应伸缩，防漏字）
         webContainer = new FrameLayout(this);
@@ -678,7 +739,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         return rootOverlay;
     }
 
-    private View createHeaderIconButton(int iconType, int iconColor, String contentDescription) {
+    private HeaderIconButton createHeaderIconButton(int iconType, int iconColor, String contentDescription) {
         HeaderIconButton btn = new HeaderIconButton(this, iconType, iconColor);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dpToPx(36), dpToPx(36));
         btn.setLayoutParams(lp);
@@ -715,6 +776,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             paint.setStrokeWidth(strokeWidthPx);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
+        }
+
+        public void setIconColor(int color) {
+            if (paint.getColor() != color) {
+                paint.setColor(color);
+                invalidate();
+            }
         }
 
         @Override
