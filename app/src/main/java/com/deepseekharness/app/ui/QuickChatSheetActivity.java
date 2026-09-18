@@ -357,6 +357,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         isDarkMode = dark;
         updateCardTheme();
         if (sCachedWebView != null) {
+            triggerForegroundWakeup();
             injectTransparentBackground(sCachedWebView);
             if (sPendingApprovalDecision != null) {
                 boolean allow = "allowed-once".equals(sPendingApprovalDecision);
@@ -1330,9 +1331,43 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         refreshImmersiveTheme(this);
     }
 
+    /**
+     * 前台闪电唤醒：
+     * 1. 恢复渲染管线与 JS 定时器；
+     * 2. 状态跳变（offline -> online）绕过前端连接守卫，强制激活 WebSocket 重连与增量信息流拉取；
+     * 3. 派发 visibilitychange 与 focus，让页面组件与框架立即感知前台活跃。
+     */
+    private void triggerForegroundWakeup() {
+        if (sCachedWebView == null) return;
+        sCachedWebView.onResume();
+        sCachedWebView.resumeTimers();
+        sCachedWebView.post(() -> {
+            if (sCachedWebView == null || isFinishing() || isDestroyed()) return;
+            try {
+                String js = "(function() {\n"
+                        + "  try {\n"
+                        + "    if (document.hidden) {\n"
+                        + "      try {\n"
+                        + "        Object.defineProperty(document, 'hidden', { value: false, writable: true, configurable: true });\n"
+                        + "        Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: true, configurable: true });\n"
+                        + "      } catch(e) {}\n"
+                        + "    }\n"
+                        + "    document.dispatchEvent(new Event('visibilitychange'));\n"
+                        + "    window.dispatchEvent(new Event('focus'));\n"
+                        + "    // 网络状态翻转：先 offline 再 online，绕过前端 true===true 的早期 return，强制触发网络重连与 session tail 同步\n"
+                        + "    window.dispatchEvent(new Event('offline'));\n"
+                        + "    window.dispatchEvent(new Event('online'));\n"
+                        + "  } catch(e) {}\n"
+                        + "})();";
+                sCachedWebView.evaluateJavascript(js, null);
+            } catch (Throwable ignored) {}
+        });
+    }
+
     /** 从底部顺滑滑入展开（屏幕外静默就绪，绝不闪屏变形） */
     private void animateIn() {
         isDismissing = false;
+        triggerForegroundWakeup();
         if (sheetCard != null) {
             // 如果上次处于低位 (<=50%)，重置为默认高度
             if (currentHeight <= (int) (screenHeight * 0.52f)) {
@@ -1642,15 +1677,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 executeApprovalDecisionScript(sCachedWebView, allow);
             }
 
-            // 1. 唤醒 WebView 渲染管线与 JS 定时器
-            sCachedWebView.onResume();
-            sCachedWebView.resumeTimers();
-            // 唤醒探活与重连延后到入场动画完成（350ms）后执行，杜绝首帧与动画争抢主线程与 GPU
+            // 1. 唤醒 WebView 渲染管线与 JS 定时器，并执行状态跳变触发信息流拉取
+            triggerForegroundWakeup();
+            // 进场动画完成后（350ms）执行二次兜底唤醒，确保动效期间若有卡顿仍能可靠补齐
             sCachedWebView.postDelayed(() -> {
                 if (sCachedWebView != null && !isFinishing() && !isDestroyed()) {
-                    try {
-                        sCachedWebView.evaluateJavascript("(function(){ try { if (window.dispatchEvent) window.dispatchEvent(new Event('online')); } catch(e){} })();", null);
-                    } catch (Throwable ignored) {}
+                    triggerForegroundWakeup();
                 }
             }, 350);
 

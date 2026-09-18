@@ -189,10 +189,6 @@ public class WebPreviewActivity extends AppCompatActivity implements WebFullscre
             settings.setSupportMultipleWindows(false);
             settings.setLoadWithOverviewMode(true);
             settings.setUseWideViewPort(true);
-            if (getSharedPreferences(Constants.PREFS, MODE_PRIVATE)
-                    .getBoolean(Constants.KEY_DESKTOP_MODE, false)) {
-                settings.setUserAgentString(WebPreviewPolicy.desktopUserAgent(settings.getUserAgentString()));
-            }
             view.setWebViewClient(new PreviewClient());
             view.setWebChromeClient(new PreviewChromeClient());
             view.setDownloadListener((url, agent, disposition, mime, length) -> {

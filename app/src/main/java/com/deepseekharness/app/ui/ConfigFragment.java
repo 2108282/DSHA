@@ -54,9 +54,6 @@ public class ConfigFragment extends Fragment {
         EditText port = v.findViewById(R.id.config_port);
         EditText taskset = v.findViewById(R.id.config_taskset);
         CheckBox confirm = v.findViewById(R.id.config_confirm_shell);
-        CheckBox checkUpdate = v.findViewById(R.id.config_check_update);
-        CheckBox desktop = v.findViewById(R.id.config_desktop_mode);
-        CheckBox backupKey = v.findViewById(R.id.config_backup_key);
         CheckBox lan = v.findViewById(R.id.config_lan_mode);
         CheckBox overlay = v.findViewById(R.id.config_overlay_stream);
         CheckBox sensors = v.findViewById(R.id.config_cap_sensors);
@@ -74,9 +71,6 @@ public class ConfigFragment extends Fragment {
         port.setText(c.getPort());
         if (taskset != null) taskset.setText(c.getTaskset());
         confirm.setChecked(c.isConfirmShell());
-        checkUpdate.setChecked(c.isCheckUpdate());
-        desktop.setChecked(c.isDesktopMode());
-        backupKey.setChecked(c.isBackupKey());
         lan.setChecked(c.isLanMode());
         overlay.setChecked(pref(ctx, "overlay_stream", false));
         sensors.setChecked(pref(ctx, "cap_sensors", false));
@@ -115,9 +109,6 @@ public class ConfigFragment extends Fragment {
             c.setTaskset(tsVal);
             applyTasksetImmediately(tsVal);
             c.setConfirmShell(confirm.isChecked());
-            c.setCheckUpdate(checkUpdate.isChecked());
-            c.setDesktopMode(desktop.isChecked());
-            c.setBackupKey(backupKey.isChecked());
             c.setLanMode(lan.isChecked());
             c.setAutoBackupLaunches(parseInt(autoBackup.getText().toString()));
             setPref(ctx, "overlay_stream", overlay.isChecked());

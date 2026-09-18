@@ -42,20 +42,24 @@ public final class BackupManager {
     }
 
     public static String backupToExternal(Context ctx, HarnessController c) {
-        return backup(ctx, c, BackupScope.FULL);
+        return backup(ctx, c, BackupScope.FULL, false);
     }
 
     public static String backupToExternal(Context ctx, HarnessController c, int scope) {
+        return backupToExternal(ctx, c, scope, false);
+    }
+
+    public static String backupToExternal(Context ctx, HarnessController c, int scope, boolean includeApiKey) {
         if (scope != BackupScope.FULL && scope != BackupScope.SESSIONS
                 && scope != BackupScope.SETTINGS && scope != BackupScope.PLUGINS) {
             scope = BackupScope.FULL;
         }
-        return backup(ctx, c, scope);
+        return backup(ctx, c, scope, includeApiKey);
     }
 
     // ==================== 备份 ====================
 
-    private static String backup(Context ctx, HarnessController c, int scope) {
+    private static String backup(Context ctx, HarnessController c, int scope, boolean includeApiKey) {
         synchronized (BACKUP_LOCK) {
             lastError = "";
             try {
@@ -65,7 +69,7 @@ public final class BackupManager {
                 }
                 boolean isKsu = "ksu_chroot".equals(c.proot().runtime().id());
                 // 1. rootfs 内打包 + 验证条目数并直接就地输出
-                String out = c.proot().execChecked(buildTarScript(scope));
+                String out = c.proot().execChecked(buildTarScript(scope, includeApiKey, c.config().getApiKey()));
 
                 int entries = parseEntries(out);
                 if (entries <= 0) {
@@ -109,14 +113,15 @@ public final class BackupManager {
         }
     }
 
-    private static String manifestJson(int scope) {
+    private static String manifestJson(int scope, boolean includeApiKey) {
         return "{\\\"formatVersion\\\":1,\\\"scope\\\":\\\"" + BackupScope.id(scope)
-                + "\\\",\\\"appVersion\\\":\\\"1.2.0-native\\\",\\\"dshVersion\\\":\\\"0.1.5-rc.2\\\","
+                + "\\\",\\\"includeApiKey\\\":" + includeApiKey
+                + ",\\\"appVersion\\\":\\\"1.2.0-native\\\",\\\"dshVersion\\\":\\\"0.1.5-rc.2\\\","
                 + "\\\"createdAt\\\":\\\"" + new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(new Date())
                 + "\\\"}";
     }
 
-    private static String buildTarScript(int scope) {
+    private static String buildTarScript(int scope, boolean includeApiKey, String apiKey) {
         String[] paths = BackupScope.dshPaths(scope);
         String prefix = BackupScope.fileNamePrefix(scope);
         String latestName = prefix + "latest.tar.gz";
@@ -127,7 +132,12 @@ public final class BackupManager {
           .append("[ -d .dsh ] || { echo NO_DSH_DIR; exit 1; }\n");
 
         // 写入 manifest 文件
-        sb.append("printf '%s' '").append(manifestJson(scope)).append("' > /root/.dsha-backup-manifest.json\n");
+        sb.append("printf '%s' '").append(manifestJson(scope, includeApiKey)).append("' > /root/.dsha-backup-manifest.json\n");
+
+        if (includeApiKey && apiKey != null && !apiKey.trim().isEmpty()) {
+            sb.append("mkdir -p /root/.dsh\n")
+              .append("printf 'DEEPSEEK_API_KEY=%s\\n' ").append(ShellQuote.arg(apiKey.trim())).append(" > /root/.dsh/.env\n");
+        }
 
         if (paths.length == 0 || scope == BackupScope.FULL) {
             // 全量备份：动态扫描 workspace.json 以及默认工作区，把用户工作区项目文件收集进 .dsha-workspaces 一同归档
@@ -173,13 +183,24 @@ public final class BackupManager {
               .append("[ -d .dsha-workspaces ] && set -- \"$@\" .dsha-workspaces\n");
         } else {
             for (String p : paths) {
+                if (!includeApiKey && (".dsh/.env".equals(p) || ".env".equals(p))) {
+                    continue;
+                }
                 sb.append("[ -e ").append(ShellQuote.arg(p)).append(" ] && set -- \"$@\" ")
                   .append(ShellQuote.arg(p)).append("\n");
             }
+            if (includeApiKey) {
+                sb.append("[ -f .dsh/.env ] && set -- \"$@\" .dsh/.env\n");
+            }
         }
         sb.append("[ -f .dsha-backup-manifest.json ] && set -- \"$@\" .dsha-backup-manifest.json\n")
-          .append("[ $# -gt 0 ] || { echo NOTHING_TO_PACK; exit 1; }\n")
-          .append("tar -czf .dsha-backup.tar.gz --ignore-failed-read \"$@\" || { echo TAR_FAIL; exit 1; }\n")
+          .append("[ $# -gt 0 ] || { echo NOTHING_TO_PACK; exit 1; }\n");
+
+        if (includeApiKey) {
+            sb.append("tar -czf .dsha-backup.tar.gz --ignore-failed-read \"$@\" || { echo TAR_FAIL; exit 1; }\n");
+        } else {
+            sb.append("tar -czf .dsha-backup.tar.gz --exclude='.env' --exclude='*/.env' --exclude='*.env' --ignore-failed-read \"$@\" || { echo TAR_FAIL; exit 1; }\n");
+        }
           .append("rm -rf .dsha-workspaces .dsha-backup-manifest.json\n")
           .append("test -s .dsha-backup.tar.gz || { echo EMPTY; exit 1; }\n")
           .append("CNT=$(tar -tzf .dsha-backup.tar.gz 2>/dev/null | wc -l)\n")
@@ -407,6 +428,7 @@ public final class BackupManager {
             if (!ok && !committed) {
                 throw new java.io.IOException("恢复未确认成功：\n" + tail(out));
             }
+            trySyncRestoredApiKey(c);
             int sessionCount = countSessions(c);
             return "恢复完成（" + (committed ? "已完整提交" : "部分恢复") + "）"
                     + "\n会话条目数：" + sessionCount
@@ -470,11 +492,39 @@ public final class BackupManager {
         if (!ok && !committed) {
             throw new java.io.IOException("恢复未确认成功（restore-merge.py 未输出 RESTORE_OK/PARTIAL）：\n" + tail(out));
         }
+        trySyncRestoredApiKey(c);
         // 5. 验证 .dsh 里确有内容（不是空壳）
         int sessionCount = countSessions(c);
         return "恢复完成（" + (committed ? "已提交" : "部分恢复") + "）"
                 + "\n会话目录数：" + sessionCount
                 + "\n\n" + tail(out);
+    }
+
+    private static void trySyncRestoredApiKey(HarnessController c) {
+        try {
+            String envContent = c.proot().execChecked("cat /root/.dsh/.env 2>/dev/null || true");
+            if (envContent == null || envContent.trim().isEmpty()) {
+                String wd = c.config().getWorkdir();
+                if (wd == null || wd.isEmpty()) wd = "/root/内部存储/工作区";
+                envContent = c.proot().execChecked("cat " + ShellQuote.arg(wd) + "/.env 2>/dev/null || true");
+            }
+            if (envContent != null && !envContent.trim().isEmpty()) {
+                for (String line : envContent.split("\n")) {
+                    line = line.trim();
+                    if (line.startsWith("DEEPSEEK_API_KEY=") && !line.startsWith("#")) {
+                        String key = line.substring("DEEPSEEK_API_KEY=".length()).trim();
+                        if ((key.startsWith("\"") && key.endsWith("\"")) || (key.startsWith("'") && key.endsWith("'"))) {
+                            key = key.substring(1, key.length() - 1);
+                        }
+                        if (!key.isEmpty()) {
+                            c.config().setApiKey(key);
+                        }
+                        break;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     private static int countSessions(HarnessController c) {

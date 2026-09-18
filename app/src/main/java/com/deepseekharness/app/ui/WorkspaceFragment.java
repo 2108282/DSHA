@@ -1,5 +1,8 @@
 package com.deepseekharness.app.ui;
 
+import android.content.Context;
+import android.widget.CheckBox;
+import android.widget.LinearLayout;
 import androidx.appcompat.app.AlertDialog;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import android.net.Uri;
@@ -170,22 +173,51 @@ public class WorkspaceFragment extends Fragment {
     }
 
     private void confirmBackup(final int scope) {
+        Context ctx = requireContext();
+        float density = getResources().getDisplayMetrics().density;
+        int padH = (int) (20 * density);
+        int padTop = (int) (8 * density);
+
+        LinearLayout layout = new LinearLayout(ctx);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(padH, padTop, padH, 0);
+
+        TextView summaryView = new TextView(ctx);
         String summary = "即将备份：" + BackupScope.label(scope)
                 + "\n" + BackupScope.describe(scope)
-                + "\n\n保存为 DSHA-backup-latest.tar.gz（Download/DSHA）。默认不包含 API Key。";
-        new MaterialAlertDialogBuilder(requireContext())
+                + "\n\n保存位置：Download/DSHA/" + BackupScope.fileNamePrefix(scope) + "latest.tar.gz";
+        summaryView.setText(summary);
+        summaryView.setTextSize(14);
+        summaryView.setTextColor(androidx.core.content.ContextCompat.getColor(ctx, R.color.text_secondary));
+        summaryView.setLineSpacing(0f, 1.25f);
+        layout.addView(summaryView);
+
+        CheckBox cbApiKey = new CheckBox(ctx);
+        cbApiKey.setText("同时备份 API key（关掉更安全，恢复后需重填）");
+        cbApiKey.setTextSize(14);
+        cbApiKey.setTextColor(androidx.core.content.ContextCompat.getColor(ctx, R.color.text));
+        cbApiKey.setChecked(false);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        lp.topMargin = (int) (14 * density);
+        cbApiKey.setLayoutParams(lp);
+        layout.addView(cbApiKey);
+
+        new MaterialAlertDialogBuilder(ctx)
                 .setTitle("确认备份")
-                .setMessage(summary)
-                .setPositiveButton("开始备份", (d, w) -> doBackup(scope))
+                .setView(layout)
+                .setPositiveButton("开始备份", (d, w) -> doBackup(scope, cbApiKey.isChecked()))
                 .setNegativeButton("取消", null)
                 .show();
     }
 
-    private void doBackup(final int scope) {
+    private void doBackup(final int scope, final boolean includeApiKey) {
         toast("开始备份…");
         final android.content.Context app = requireContext().getApplicationContext();
         new Thread(() -> {
-            String path = BackupManager.backupToExternal(app, controller, scope);
+            String path = BackupManager.backupToExternal(app, controller, scope, includeApiKey);
             main.post(() -> {
                 if (path == null) {
                     new MaterialAlertDialogBuilder(requireContext())
@@ -196,7 +228,9 @@ public class WorkspaceFragment extends Fragment {
                 } else {
                     new MaterialAlertDialogBuilder(requireContext())
                             .setTitle("备份成功（已校验）")
-                            .setMessage("已备份 " + BackupScope.label(scope) + "\n\n保存位置：\n" + path
+                            .setMessage("已备份 " + BackupScope.label(scope)
+                                    + (includeApiKey ? "（已包含 API Key）" : "（未包含 API Key）")
+                                    + "\n\n保存位置：\n" + path
                                     + "\n\n归档已通过条目数与大小校验。")
                             .setPositiveButton("关闭", null)
                             .show();

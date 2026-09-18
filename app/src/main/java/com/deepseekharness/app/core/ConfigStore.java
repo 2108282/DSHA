@@ -209,7 +209,7 @@ public class ConfigStore {
     }
 
     public boolean isSheetImmersive() {
-        return prefs.getBoolean("sheet_immersive", true);
+        return true;
     }
 
     public void setSheetImmersive(boolean v) {

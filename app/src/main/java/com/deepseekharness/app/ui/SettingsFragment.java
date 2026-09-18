@@ -80,19 +80,6 @@ public class SettingsFragment extends Fragment {
         v.findViewById(R.id.settings_selftest).setOnClickListener(x -> runSelftest());
         v.findViewById(R.id.settings_apply_patches).setOnClickListener(x -> confirmApplyPatches());
 
-        androidx.appcompat.widget.SwitchCompat immersiveSwitch = v.findViewById(R.id.settings_sheet_immersive_switch);
-        if (immersiveSwitch != null) {
-            ConfigStore cfg = new ConfigStore(requireContext());
-            immersiveSwitch.setChecked(cfg.isSheetImmersive());
-            v.findViewById(R.id.settings_sheet_immersive_row).setOnClickListener(x -> {
-                boolean next = !immersiveSwitch.isChecked();
-                immersiveSwitch.setChecked(next);
-                cfg.setSheetImmersive(next);
-                QuickChatSheetActivity.refreshImmersiveTheme(requireContext().getApplicationContext());
-                Toast.makeText(requireContext(), next ? "已开启抽屉沉浸全透明" : "已关闭抽屉沉浸全透明（使用经典背景）", Toast.LENGTH_SHORT).show();
-            });
-        }
-
         // 圈定即搜重定向开关：开关状态写入 cts_redirect_config，Xposed 模块侧实时读取，改完即时生效
         androidx.appcompat.widget.SwitchCompat ctsSwitch = v.findViewById(R.id.settings_cts_redirect_switch);
         if (ctsSwitch != null) {
