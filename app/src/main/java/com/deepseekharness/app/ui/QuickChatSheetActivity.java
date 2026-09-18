@@ -32,6 +32,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -56,6 +57,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.core.view.ViewCompat;
@@ -326,8 +328,22 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         }
         setupGesture();
         setupKeyboardObserver();
+        setupBackDispatcher();
         attachChatWeb();
         animateIn();
+    }
+
+    private void setupBackDispatcher() {
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (sCachedWebView != null && sCachedWebView.canGoBack()) {
+                    sCachedWebView.goBack();
+                } else {
+                    dismissSheet();
+                }
+            }
+        });
     }
 
     @Override
@@ -1317,19 +1333,19 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private void animateIn() {
         isDismissing = false;
         if (sheetCard != null) {
-            // 如果上次处于低位 (<=50%)，在屏幕外先设为不可见并修改高度
+            // 如果上次处于低位 (<=50%)，重置为默认高度
             if (currentHeight <= (int) (screenHeight * 0.52f)) {
                 currentHeight = defaultHeight;
                 updateCardHeight(defaultHeight);
             }
             int startY = sheetCard.getHeight() > 0 ? sheetCard.getHeight() : defaultHeight;
             if (startY <= 0) startY = screenHeight > 0 ? screenHeight : 2000;
-            sheetCard.setTranslationY(startY + dpToPx(30));
+            sheetCard.setTranslationY(startY + dpToPx(40));
             sheetCard.setVisibility(View.VISIBLE);
             sheetCard.animate()
                     .translationY(0)
-                    .setDuration(220)
-                    .setInterpolator(new DecelerateInterpolator(1.6f))
+                    .setDuration(260)
+                    .setInterpolator(new DecelerateInterpolator(1.8f))
                     .setListener(null)
                     .start();
         }
@@ -1350,10 +1366,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         } catch (Throwable ignored) {}
 
         if (sheetCard != null) {
+            int exitY = sheetCard.getHeight() > 0 ? sheetCard.getHeight() : defaultHeight;
+            if (exitY <= 0) exitY = screenHeight > 0 ? screenHeight : 2000;
             sheetCard.animate()
-                    .translationY(sheetCard.getHeight() + dpToPx(30))
-                    .setDuration(180)
-                    .setInterpolator(new DecelerateInterpolator(1.6f))
+                    .translationY(exitY + dpToPx(40))
+                    .setDuration(220)
+                    .setInterpolator(new DecelerateInterpolator(1.8f))
                     .setListener(new AnimatorListenerAdapter() {
                         @Override
                         public void onAnimationEnd(Animator animation) {
@@ -1388,6 +1406,19 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         } else {
             dismissSheet();
         }
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (sCachedWebView != null && sCachedWebView.canGoBack()) {
+                sCachedWebView.goBack();
+            } else {
+                dismissSheet();
+            }
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
     }
 
     private void openExternal(String url) {
@@ -1601,10 +1632,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         if (dark != isDarkMode) {
             isDarkMode = dark;
             updateCardTheme();
+            if (sCachedWebView != null) {
+                injectTransparentBackground(sCachedWebView);
+            }
         }
         if (sCachedWebView != null) {
-            // 确保每次切回前台时根据最新配置刷新全透明沉浸样式
-            injectTransparentBackground(sCachedWebView);
             if (sPendingApprovalDecision != null) {
                 boolean allow = "allowed-once".equals(sPendingApprovalDecision);
                 sPendingApprovalDecision = null;
@@ -1614,8 +1646,14 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             // 1. 唤醒 WebView 渲染管线与 JS 定时器
             sCachedWebView.onResume();
             sCachedWebView.resumeTimers();
-            // 唤醒时主动派发 online 事件，促使前端 ConnectionController 与 WebSocket 立即自愈探活与重连
-            sCachedWebView.evaluateJavascript("(function(){ try { if (window.dispatchEvent) window.dispatchEvent(new Event('online')); } catch(e){} })();", null);
+            // 唤醒探活与重连延后到入场动画完成（260ms）后执行，杜绝首帧与动画争抢主线程与 GPU
+            sCachedWebView.postDelayed(() -> {
+                if (sCachedWebView != null && !isFinishing() && !isDestroyed()) {
+                    try {
+                        sCachedWebView.evaluateJavascript("(function(){ try { if (window.dispatchEvent) window.dispatchEvent(new Event('online')); } catch(e){} })();", null);
+                    } catch (Throwable ignored) {}
+                }
+            }, 260);
 
             // 2. 检查底层服务是否发生过重启或端口已切换
             long currentGen = controller != null ? controller.getWebGeneration() : -1;
