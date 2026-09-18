@@ -442,7 +442,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     private void updateCardTheme() {
         int cardBgColor = getCardBgColor(isDarkMode);
-        int textColor = isDarkMode ? Color.parseColor("#E8ECF4") : Color.parseColor("#1A2230");
+        int textColor = isDarkMode ? Color.parseColor("#CBD5E1") : Color.parseColor("#1A2230");
         int lineColor = isDarkMode ? Color.parseColor("#302A3344") : Color.parseColor("#30E2E6EE");
         int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");
         int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
@@ -496,7 +496,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private View buildUi() {
         // 毛玻璃半透明底色（浅色：#E0F5F8FC 半透轻白蓝；深色：#E010141B 与 App 深蓝底色完全一致）
         int cardBgColor = getCardBgColor(isDarkMode);
-        int textColor = isDarkMode ? Color.parseColor("#E8ECF4") : Color.parseColor("#1A2230");
+        int textColor = isDarkMode ? Color.parseColor("#CBD5E1") : Color.parseColor("#1A2230");
         int lineColor = isDarkMode ? Color.parseColor("#302A3344") : Color.parseColor("#30E2E6EE");
         int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");
         int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
@@ -1226,25 +1226,25 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "  --dsw-specific-input-major: " + inputBg + " !important;\n";
 
                 String textColorVars = dark
-                        ? "  --dsw-alias-label-primary: #E8ECF4 !important;\n  --dsw-alias-label-secondary: #A6B0C3 !important;\n"
-                        : "  --dsw-alias-label-primary: #1A2230 !important;\n  --dsw-alias-label-secondary: #4A5568 !important;\n";
+                        ? "  --dsw-alias-label-primary: #CBD5E1 !important;\n  --dsw-alias-label-secondary: #94A3B8 !important;\n  --dsw-alias-brand-text: #CBD5E1 !important;\n"
+                        : "  --dsw-alias-label-primary: #1A2230 !important;\n  --dsw-alias-label-secondary: #4A5568 !important;\n  --dsw-alias-brand-text: #1A2230 !important;\n";
 
                 String dashboardDarkCss = dark ? (
                         "/* ===== dsh-api-dashboard 插件深色模式强制覆盖 ===== */\n"
                         + ".dshadb_bar { background: #262a33 !important; border: 1px solid #363c48 !important; color: #9aa1b0 !important; }\n"
-                        + ".dshadb_bar_name, .dshadb_bar_amount { color: #f2f4f8 !important; }\n"
+                        + ".dshadb_bar_name, .dshadb_bar_amount { color: #cbd5e1 !important; }\n"
                         + ".dshadb_bar_cost { border-left: 1px solid #363c48 !important; color: #8b91a0 !important; }\n"
-                        + ".dshadb_field { background: #1e222a !important; border-color: #363c48 !important; color: #f2f4f8 !important; }\n"
+                        + ".dshadb_field { background: #1e222a !important; border-color: #363c48 !important; color: #cbd5e1 !important; }\n"
                         + ".dshadb_field_select { background-image: linear-gradient(45deg,transparent 50%,#8b91a0 50%),linear-gradient(135deg,#8b91a0 50%,transparent 50%) !important; }\n"
                         + ".dshadb_switch { background: #3d434f !important; }\n"
                         + ".dshadb_tab { background: #262a33 !important; color: #9aa1b0 !important; }\n"
                         + ".dshadb_kind, .dshadb_sub, .dshadb_wf_row, .dshadb_wf_row_col { background: #262a33 !important; border-color: #363c48 !important; color: #9aa1b0 !important; }\n"
-                        + ".dshadb_wf_name, .dshadb_sub_name { color: #f2f4f8 !important; }\n"
+                        + ".dshadb_wf_name, .dshadb_sub_name { color: #cbd5e1 !important; }\n"
                         + ".dshadb_whale-bubble { background: #262a33 !important; }\n"
                         + ".dshadb_whale-bubble::after { border-top-color: #262a33 !important; }\n"
-                        + ".dshadb_whale-l-a { color: #d3d7e0 !important; }\n"
-                        + ".dshadb_whale-l-b { color: #f2f4f8 !important; }\n"
-                        + ".dshadb_whale-l-c { color: #9298a6 !important; }\n"
+                        + ".dshadb_whale-l-a { color: #94a3b8 !important; }\n"
+                        + ".dshadb_whale-l-b { color: #cbd5e1 !important; }\n"
+                        + ".dshadb_whale-l-c { color: #64748b !important; }\n"
                 ) : "";
 
                 String cssImmersive = "html, body, #root, main, .dsh-layout-root, "
