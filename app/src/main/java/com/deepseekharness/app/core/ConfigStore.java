@@ -139,6 +139,14 @@ public class ConfigStore {
         prefs.edit().putBoolean(Constants.KEY_LAN_MODE, v).apply();
     }
 
+    public boolean isThirdPartyPluginCompat() {
+        return prefs.getBoolean(Constants.KEY_THIRD_PARTY_PLUGIN_COMPAT, true);
+    }
+
+    public void setThirdPartyPluginCompat(boolean v) {
+        prefs.edit().putBoolean(Constants.KEY_THIRD_PARTY_PLUGIN_COMPAT, v).apply();
+    }
+
     public int getAutoBackupLaunches() {
         try {
             return Integer.parseInt(prefs.getString(Constants.KEY_AUTO_BACKUP, "5"));
