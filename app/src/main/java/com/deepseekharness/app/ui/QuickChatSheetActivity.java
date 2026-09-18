@@ -1,6 +1,7 @@
 package com.deepseekharness.app.ui;
 
 import com.deepseekharness.app.HttpShellService;
+import com.deepseekharness.app.core.ConfigStore;
 import com.deepseekharness.app.core.HarnessController;
 import com.deepseekharness.app.util.Constants;
 
