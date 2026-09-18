@@ -44,6 +44,7 @@ public class SettingsFragment extends Fragment {
     private static final TabOption[] TAB_OPTIONS = {
             new TabOption("配置", "API key · 端口 · 行为", ConfigFragment::new),
             new TabOption("数据与备份", "备份恢复 · 保存位置 · 工作区", WorkspaceFragment::new),
+            new TabOption("抽屉设置", "反色 · 圈定即搜 · 白天黑夜透明度", SheetSettingsFragment::new),
     };
 
     @Nullable
@@ -80,21 +81,6 @@ public class SettingsFragment extends Fragment {
         v.findViewById(R.id.settings_selftest).setOnClickListener(x -> runSelftest());
         v.findViewById(R.id.settings_apply_patches).setOnClickListener(x -> confirmApplyPatches());
 
-        // 圈定即搜重定向开关：开关状态写入 cts_redirect_config，Xposed 模块侧实时读取，改完即时生效
-        androidx.appcompat.widget.SwitchCompat ctsSwitch = v.findViewById(R.id.settings_cts_redirect_switch);
-        if (ctsSwitch != null) {
-            ConfigStore ctsCfg = new ConfigStore(requireContext());
-            ctsSwitch.setChecked(ctsCfg.isCtsRedirectEnabled());
-            v.findViewById(R.id.settings_cts_redirect_row).setOnClickListener(x -> {
-                boolean next = !ctsSwitch.isChecked();
-                ctsSwitch.setChecked(next);
-                ctsCfg.setCtsRedirectEnabled(next);
-                Toast.makeText(requireContext(),
-                        next ? "圈定即搜重定向已开启（手势唤起抽屉）" : "圈定即搜已回退系统默认（Google）",
-                        Toast.LENGTH_SHORT).show();
-            });
-        }
-
         // 常驻后台服务通知开关：控制是否随核心运转常驻通知栏
         androidx.appcompat.widget.SwitchCompat notifSwitch = v.findViewById(R.id.settings_persistent_notification_switch);
         if (notifSwitch != null) {
@@ -108,64 +94,6 @@ public class SettingsFragment extends Fragment {
                 Toast.makeText(requireContext(),
                         next ? "已开启常驻通知" : "已关闭常驻通知",
                         Toast.LENGTH_SHORT).show();
-            });
-        }
-
-        // 抽屉反色开关：独立控制快捷抽屉深色/反色视觉，与主应用黑夜白天按钮完全解耦分离
-        androidx.appcompat.widget.SwitchCompat sheetInvertSwitch = v.findViewById(R.id.settings_sheet_invert_switch);
-        if (sheetInvertSwitch != null) {
-            ConfigStore invertCfg = new ConfigStore(requireContext());
-            sheetInvertSwitch.setChecked(invertCfg.isSheetInvertColor());
-            v.findViewById(R.id.settings_sheet_invert_row).setOnClickListener(x -> {
-                boolean next = !sheetInvertSwitch.isChecked();
-                sheetInvertSwitch.setChecked(next);
-                invertCfg.setSheetInvertColor(next);
-                QuickChatSheetActivity.refreshThemeFromConfig(requireContext());
-                Toast.makeText(requireContext(),
-                        next ? "抽屉反色已开启（深色反色视觉）" : "抽屉反色已关闭（常规浅色视觉）",
-                        Toast.LENGTH_SHORT).show();
-            });
-        }
-
-        EditText opacityDayInput = v.findViewById(R.id.settings_sheet_opacity_day_input);
-        Button opacityDaySave = v.findViewById(R.id.settings_sheet_opacity_day_save);
-        EditText opacityNightInput = v.findViewById(R.id.settings_sheet_opacity_night_input);
-        Button opacityNightSave = v.findViewById(R.id.settings_sheet_opacity_night_save);
-        ConfigStore finalCfg = new ConfigStore(requireContext());
-
-        if (opacityDayInput != null) {
-            opacityDayInput.setText(String.valueOf(finalCfg.getSheetOpacityDay()));
-        }
-        if (opacityDaySave != null) {
-            opacityDaySave.setOnClickListener(x -> {
-                int val = 88;
-                try {
-                    val = Integer.parseInt(opacityDayInput.getText().toString().trim());
-                } catch (Exception ignored) {}
-                if (val < 30 || val > 100) {
-                    Toast.makeText(requireContext(), "请输入 30 ~ 100 之间的数值", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                finalCfg.setSheetOpacityDay(val);
-                Toast.makeText(requireContext(), "已保存白天不透明度为 " + val + "%（下次唤起抽屉生效）", Toast.LENGTH_SHORT).show();
-            });
-        }
-
-        if (opacityNightInput != null) {
-            opacityNightInput.setText(String.valueOf(finalCfg.getSheetOpacityNight()));
-        }
-        if (opacityNightSave != null) {
-            opacityNightSave.setOnClickListener(x -> {
-                int val = 80;
-                try {
-                    val = Integer.parseInt(opacityNightInput.getText().toString().trim());
-                } catch (Exception ignored) {}
-                if (val < 30 || val > 100) {
-                    Toast.makeText(requireContext(), "请输入 30 ~ 100 之间的数值", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                finalCfg.setSheetOpacityNight(val);
-                Toast.makeText(requireContext(), "已保存黑夜不透明度为 " + val + "%（下次唤起抽屉生效）", Toast.LENGTH_SHORT).show();
             });
         }
 

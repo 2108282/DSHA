@@ -3,56 +3,43 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/surface"
-    android:fillViewport="true">
+    android:clipToPadding="false">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:paddingStart="@dimen/page_pad"
+        android:paddingTop="@dimen/gap_control"
         android:paddingEnd="@dimen/page_pad"
-        android:paddingTop="@dimen/gap_tight"
         android:paddingBottom="@dimen/gap_section">
 
         <TextView
-            android:layout_width="match_parent"
+            android:id="@+id/sub_back"
+            style="@style/DshaText.Label"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="@dimen/gap_hair"
-            android:layout_marginBottom="@dimen/gap_control"
-            android:text="模块"
-            android:textAllCaps="true"
-            android:textColor="@color/text_muted"
-            android:textSize="@dimen/text_caption"
-            android:textStyle="bold" />
-
-        <LinearLayout
-            android:id="@+id/settings_tabs"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_card"
-            android:orientation="vertical"
-            android:padding="2dp" />
+            android:paddingBottom="@dimen/gap_tight"
+            android:text="‹ 返回"
+            android:visibility="visible" />
 
         <TextView
+            style="@style/DshaText.Display"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="@dimen/gap_hair"
-            android:layout_marginTop="@dimen/gap_block"
-            android:layout_marginBottom="@dimen/gap_control"
-            android:text="其他"
-            android:textAllCaps="true"
-            android:textColor="@color/text_muted"
-            android:textSize="@dimen/text_caption"
-            android:textStyle="bold" />
+            android:text="抽屉设置" />
 
+        <!-- 快捷抽屉外观与手势交互配置卡片 -->
         <LinearLayout
+            style="@style/DshaCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="@drawable/bg_card"
+            android:layout_marginTop="@dimen/gap_control"
             android:orientation="vertical">
 
+            <!-- 1. 抽屉正反色（抽屉反色开关） -->
             <LinearLayout
-                android:id="@+id/settings_update"
+                android:id="@+id/sheet_settings_invert_row"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:background="?attr/selectableItemBackground"
@@ -67,7 +54,7 @@
                     android:layout_height="36dp"
                     android:background="@drawable/bg_chip"
                     android:gravity="center"
-                    android:text="↻"
+                    android:text="🌗"
                     android:textColor="@color/text_secondary"
                     android:textSize="@dimen/text_title" />
 
@@ -81,65 +68,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="检查更新"
-                        android:textColor="@color/text"
-                        android:textSize="@dimen/text_body"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/settings_update_sub"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="@dimen/gap_hair"
-                        android:text="DSH 稳定版 · 测试版 · 客户端与模块"
-                        android:textColor="@color/text_muted"
-                        android:textSize="@dimen/text_caption" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="›"
-                    android:textColor="@color/text_muted"
-                    android:textSize="@dimen/text_title" />
-            </LinearLayout>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/stroke"
-                android:background="@color/line" />
-
-            <LinearLayout
-                android:id="@+id/settings_selftest"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="?attr/selectableItemBackground"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:padding="@dimen/card_pad">
-
-                <TextView
-                    android:layout_width="36dp"
-                    android:layout_height="36dp"
-                    android:background="@drawable/bg_chip"
-                    android:gravity="center"
-                    android:text="✓"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="@dimen/text_title" />
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="@dimen/gap_control"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="诊断与修复"
+                        android:text="抽屉反色开关"
                         android:textColor="@color/text"
                         android:textSize="@dimen/text_body"
                         android:textStyle="bold" />
@@ -148,128 +77,13 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/gap_hair"
-                        android:text="脱敏反馈 · 导出报告 · 证书 / npm 修复"
-                        android:textColor="@color/text_muted"
-                        android:textSize="@dimen/text_caption" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="›"
-                    android:textColor="@color/text_muted"
-                    android:textSize="@dimen/text_title" />
-            </LinearLayout>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/stroke"
-                android:background="@color/line" />
-
-            <LinearLayout
-                android:id="@+id/settings_apply_patches"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="?attr/selectableItemBackground"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:padding="@dimen/card_pad">
-
-                <TextView
-                    android:layout_width="36dp"
-                    android:layout_height="36dp"
-                    android:background="@drawable/bg_chip"
-                    android:gravity="center"
-                    android:text="🛠"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="@dimen/text_title" />
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="@dimen/gap_control"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="原生环境与存储直通自愈"
-                        android:textColor="@color/text"
-                        android:textSize="@dimen/text_body"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="@dimen/gap_hair"
-                        android:lineSpacingExtra="2dp"
-                        android:text="内部存储直通 · 默认工作区检查 · DNS 修复 · 3095 设备桥 · 插件自愈"
-                        android:textColor="@color/text_muted"
-                        android:textSize="@dimen/text_caption" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="›"
-                    android:textColor="@color/text_muted"
-                    android:textSize="@dimen/text_title" />
-            </LinearLayout>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/stroke"
-                android:background="@color/line" />
-
-            <LinearLayout
-                android:id="@+id/settings_persistent_notification_row"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="?attr/selectableItemBackground"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:padding="@dimen/card_pad">
-
-                <TextView
-                    android:layout_width="36dp"
-                    android:layout_height="36dp"
-                    android:background="@drawable/bg_chip"
-                    android:gravity="center"
-                    android:text="🔔"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="@dimen/text_title" />
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="@dimen/gap_control"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="常驻后台服务通知"
-                        android:textColor="@color/text"
-                        android:textSize="@dimen/text_body"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="@dimen/gap_hair"
-                        android:text="随核心模块运转常驻通知栏，点击恢复抽屉"
+                        android:text="快捷抽屉独立深色反色，与主应用黑夜白天完全分离"
                         android:textColor="@color/text_muted"
                         android:textSize="@dimen/text_caption" />
                 </LinearLayout>
 
                 <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/settings_persistent_notification_switch"
+                    android:id="@+id/sheet_settings_invert_switch"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:clickable="false"
@@ -281,8 +95,9 @@
                 android:layout_height="@dimen/stroke"
                 android:background="@color/line" />
 
+            <!-- 2. 圈定即搜重定向（增加 Google 和语音识别说明） -->
             <LinearLayout
-                android:id="@+id/settings_reextract"
+                android:id="@+id/sheet_settings_cts_redirect_row"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:background="?attr/selectableItemBackground"
@@ -297,7 +112,7 @@
                     android:layout_height="36dp"
                     android:background="@drawable/bg_chip"
                     android:gravity="center"
-                    android:text="⟳"
+                    android:text="◎"
                     android:textColor="@color/text_secondary"
                     android:textSize="@dimen/text_title" />
 
@@ -311,7 +126,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="重新解压内置环境"
+                        android:text="圈定即搜重定向"
                         android:textColor="@color/text"
                         android:textSize="@dimen/text_body"
                         android:textStyle="bold" />
@@ -320,17 +135,18 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/gap_hair"
-                        android:text="dsh / npm 损坏时用；配置与对话记录会保留"
+                        android:lineSpacingExtra="2dp"
+                        android:text="圈选手势直接唤起快捷抽屉（需 LSPosed 激活模块并重启）\n需要安装google和谷歌语音识别，并将语音助理选择为google"
                         android:textColor="@color/text_muted"
                         android:textSize="@dimen/text_caption" />
                 </LinearLayout>
 
-                <TextView
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/sheet_settings_cts_redirect_switch"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="›"
-                    android:textColor="@color/text_muted"
-                    android:textSize="@dimen/text_title" />
+                    android:clickable="false"
+                    android:focusable="false" />
             </LinearLayout>
 
             <View
@@ -338,13 +154,11 @@
                 android:layout_height="@dimen/stroke"
                 android:background="@color/line" />
 
+            <!-- 3. 抽屉白天不透明度 -->
             <LinearLayout
-                android:id="@+id/settings_about"
+                android:id="@+id/sheet_settings_opacity_day_row"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:background="?attr/selectableItemBackground"
-                android:clickable="true"
-                android:focusable="true"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
                 android:padding="@dimen/card_pad">
@@ -354,10 +168,9 @@
                     android:layout_height="36dp"
                     android:background="@drawable/bg_chip"
                     android:gravity="center"
-                    android:text="i"
+                    android:text="☀️"
                     android:textColor="@color/text_secondary"
-                    android:textSize="@dimen/text_title"
-                    android:textStyle="bold" />
+                    android:textSize="@dimen/text_title" />
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -369,7 +182,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="关于 DSHA"
+                        android:text="抽屉白天不透明度"
                         android:textColor="@color/text"
                         android:textSize="@dimen/text_body"
                         android:textStyle="bold" />
@@ -378,29 +191,127 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/gap_hair"
-                        android:text="GitHub 仓库 · QQ 交流群 · 开源协议"
+                        android:text="浅色底板 (30~100%)，默认 88%"
                         android:textColor="@color/text_muted"
                         android:textSize="@dimen/text_caption" />
                 </LinearLayout>
 
+                <EditText
+                    android:id="@+id/sheet_settings_opacity_day_input"
+                    android:layout_width="56dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_input"
+                    android:gravity="center"
+                    android:hint="88"
+                    android:importantForAutofill="no"
+                    android:inputType="number"
+                    android:maxLength="3"
+                    android:textColor="@color/text"
+                    android:textSize="@dimen/text_body" />
+
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="›"
-                    android:textColor="@color/text_muted"
+                    android:layout_marginStart="4dp"
+                    android:text="%"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="@dimen/text_body" />
+
+                <Button
+                    android:id="@+id/sheet_settings_opacity_day_save"
+                    style="@style/Widget.DSHA.Button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_btn_primary"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="保存"
+                    android:textColor="@color/accent_on"
+                    android:textSize="@dimen/text_caption" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/stroke"
+                android:background="@color/line" />
+
+            <!-- 4. 抽屉黑夜不透明度 -->
+            <LinearLayout
+                android:id="@+id/sheet_settings_opacity_night_row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="@dimen/card_pad">
+
+                <TextView
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:background="@drawable/bg_chip"
+                    android:gravity="center"
+                    android:text="🌙"
+                    android:textColor="@color/text_secondary"
                     android:textSize="@dimen/text_title" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/gap_control"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="抽屉黑夜不透明度"
+                        android:textColor="@color/text"
+                        android:textSize="@dimen/text_body"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/gap_hair"
+                        android:text="深色底板 (30~100%)，默认 80%"
+                        android:textColor="@color/text_muted"
+                        android:textSize="@dimen/text_caption" />
+                </LinearLayout>
+
+                <EditText
+                    android:id="@+id/sheet_settings_opacity_night_input"
+                    android:layout_width="56dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_input"
+                    android:gravity="center"
+                    android:hint="80"
+                    android:importantForAutofill="no"
+                    android:inputType="number"
+                    android:maxLength="3"
+                    android:textColor="@color/text"
+                    android:textSize="@dimen/text_body" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:text="%"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="@dimen/text_body" />
+
+                <Button
+                    android:id="@+id/sheet_settings_opacity_night_save"
+                    style="@style/Widget.DSHA.Button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_btn_primary"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="保存"
+                    android:textColor="@color/accent_on"
+                    android:textSize="@dimen/text_caption" />
             </LinearLayout>
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/settings_ver"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_block"
-            android:fontFamily="monospace"
-            android:gravity="center"
-            android:text="DSHA"
-            android:textColor="@color/text_muted"
-            android:textSize="@dimen/text_caption" />
     </LinearLayout>
 </ScrollView>
