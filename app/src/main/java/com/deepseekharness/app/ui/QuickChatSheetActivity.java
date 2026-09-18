@@ -563,7 +563,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         handleBg.setShape(GradientDrawable.RECTANGLE);
         handleBg.setCornerRadius(dpToPx(2));
         handleBg.setColor(handleColor);
-        handle.setBackground(handleBg);
+        dragHandle.setBackground(handleBg);
         dragArea.addView(dragHandle);
         sheetCard.addView(dragArea);
 

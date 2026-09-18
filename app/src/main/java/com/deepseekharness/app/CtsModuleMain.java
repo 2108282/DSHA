@@ -10,6 +10,7 @@ import android.view.WindowManager;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.List;
 
 import io.github.libxposed.api.XposedInterface.Chain;
 import io.github.libxposed.api.XposedInterface.Hooker;
@@ -143,11 +144,11 @@ public class CtsModuleMain extends XposedModule {
                 return chain.proceed();
             }
 
-            Object[] args = chain.getArgs();
+            List<?> args = chain.getArgs();
             if (args != null) {
-                for (int i = 0; i < args.length; i++) {
-                    if (args[i] instanceof Intent) {
-                        Intent intent = (Intent) args[i];
+                for (Object arg : args) {
+                    if (arg instanceof Intent) {
+                        Intent intent = (Intent) arg;
                         ComponentName comp = intent.getComponent();
                         String pkg = comp != null ? comp.getPackageName() : intent.getPackage();
                         String cls = comp != null ? comp.getClassName() : "";
