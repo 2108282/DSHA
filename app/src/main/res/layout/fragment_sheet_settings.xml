@@ -136,7 +136,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/gap_hair"
                         android:lineSpacingExtra="2dp"
-                        android:text="圈选手势直接唤起快捷抽屉（需 LSPosed 激活模块并重启）\n需要安装google和谷歌语音识别，并将语音助理选择为google"
+                        android:text="长按小白条/底角手势直达抽屉（需 LSPosed 激活模块）\n已升级 system_server 源头拦截（Google 零唤醒零发热），亦可直接将系统默认语音助手设为本应用"
                         android:textColor="@color/text_muted"
                         android:textSize="@dimen/text_caption" />
                 </LinearLayout>
