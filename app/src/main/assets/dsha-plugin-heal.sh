@@ -14,12 +14,10 @@ if [ -d "/root/.dsh/plugin-src" ]; then
     # profile 局部软链
     mkdir -p "/root/.dsh/profiles/web/node_modules"
     ln -sfn "$p" "/root/.dsh/profiles/web/node_modules/$name"
-    # 插件自身 node_modules 真实目录与 @deepseek-ai 软链
-    if [ -L "$p/node_modules" ]; then
-      rm -f "$p/node_modules"
+    # 彻底断开对全局 node_modules 的穿透软链，改由全局 NODE_PATH 寻址，防止包管理器逆向穿透破坏宿主
+    if [ -L "$p/node_modules/@deepseek-ai" ]; then
+      unlink "$p/node_modules/@deepseek-ai" 2>/dev/null || true
     fi
-    mkdir -p "$p/node_modules"
-    ln -sfn "$TARGET" "$p/node_modules/@deepseek-ai"
     echo "Fixed third-party plugin: $name"
   done
 fi
@@ -33,13 +31,16 @@ for p in /root/dsha-*; do
   fi
   name="dsh-${bname#dsha-}"
   ln -sfn "$p" "/usr/local/lib/node_modules/$name"
-  if [ -L "$p/node_modules" ]; then
-    rm -f "$p/node_modules"
-  fi
-  mkdir -p "$p/node_modules"
-  ln -sfn "$TARGET" "$p/node_modules/@deepseek-ai"
   mkdir -p "/root/.dsh/profiles/web/node_modules"
   ln -sfn "$p" "/root/.dsh/profiles/web/node_modules/$name"
+  if [ -L "$p/node_modules/@deepseek-ai" ]; then
+    unlink "$p/node_modules/@deepseek-ai" 2>/dev/null || true
+  fi
   echo "Fixed builtin plugin: $name"
 done
+
+# 3. 自动应用第三方插件兼容增强与设置开关补丁（更新后自愈）
+if [ -f "/root/.dsh/dsha-plugin-compat.sh" ]; then
+  /bin/bash /root/.dsh/dsha-plugin-compat.sh
+fi
 echo "HEAL_ALL_PLUGINS_OK"
