@@ -2,6 +2,7 @@ package com.deepseekharness.app.core;
 import com.deepseekharness.app.util.Compat;
 
 import android.content.Context;
+import android.os.Looper;
 import android.util.Log;
 
 import com.deepseekharness.app.runtime.ProotBootstrap;
@@ -94,7 +95,7 @@ public class HarnessController {
             } catch (Throwable ignored) {
             }
             // 主线程调用：绝不在 UI 线程同步等待 su 进程，直接返回快速探活/缓存结果
-            if (Looper.myLooper() == Looper.getMainLooper()) {
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
                 return lastKnownWebRunning;
             }
             // 非主线程：节流限制（最少间隔 3 秒才执行一次 status.sh，消除 su 轰炸与 Magisk 弹窗风暴）
