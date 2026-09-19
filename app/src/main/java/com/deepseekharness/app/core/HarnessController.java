@@ -85,29 +85,72 @@ public class HarnessController {
     private static volatile long lastStatusCheckMs = 0L;
     private static volatile long lastRecoverAttemptMs = 0L;
 
-    /** Web 是否在运行（针对 ksu_chroot 使用 Socket 探活与 status.sh，严禁在主线程执行 su，且后台执行有 3s 节流）。 */
+    /** 异步执行 status.sh 探测并刷新后台状态与鉴权链接。 */
+    public void asyncRefreshStatus() {
+        if (!"ksu_chroot".equals(proot.runtime().id())) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastStatusCheckMs < 2000L) return;
+        lastStatusCheckMs = now;
+        io.execute(() -> {
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/status.sh"});
+                String out = new String(Compat.readAllBytes(p.getInputStream()), StandardCharsets.UTF_8).trim();
+                boolean running = p.waitFor() == 0 || out.contains("STATUS:RUNNING");
+                lastKnownWebRunning = running;
+                if (running && webAuthUrl.isEmpty()) {
+                    String url = extractAuthUrl(out);
+                    if (url != null && !url.isEmpty()) {
+                        synchronized (lifecycle) {
+                            if (webAuthUrl.isEmpty()) {
+                                webAuthUrl = url;
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable e) {
+                // 静默失败，维持原有状态
+            }
+        });
+    }
+
+    /** Web 是否在运行（针对 ksu_chroot 使用 Socket 探活与 status.sh，严禁在主线程执行 su，且后台执行有 2s 节流）。 */
     public boolean isWebRunning() {
         if ("ksu_chroot".equals(proot.runtime().id())) {
+            // 1. 快速 Socket 探活（设为 250ms，稳健避免握手丢包误判）
             try (java.net.Socket s = new java.net.Socket()) {
-                s.connect(new java.net.InetSocketAddress("127.0.0.1", config != null ? config.getPortInt() : 3080), 50);
+                s.connect(new java.net.InetSocketAddress("127.0.0.1", config != null ? config.getPortInt() : 3080), 250);
                 lastKnownWebRunning = true;
                 return true;
             } catch (Throwable ignored) {
             }
-            // 主线程调用：绝不在 UI 线程同步等待 su 进程，直接返回快速探活/缓存结果
+
+            // 2. 主线程调用：绝不在 UI 线程同步等待 su 进程，返回已知状态并异步触发一次核验刷新
             if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                asyncRefreshStatus();
                 return lastKnownWebRunning;
             }
-            // 非主线程：节流限制（最少间隔 3 秒才执行一次 status.sh，消除 su 轰炸与 Magisk 弹窗风暴）
+
+            // 3. 非主线程：有节流地执行 status.sh 探活
             long now = android.os.SystemClock.elapsedRealtime();
-            if (now - lastStatusCheckMs < 3000L) {
+            if (now - lastStatusCheckMs < 2000L) {
                 return lastKnownWebRunning;
             }
             lastStatusCheckMs = now;
             try {
                 Process p = Runtime.getRuntime().exec(new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/status.sh"});
-                boolean running = p.waitFor() == 0;
+                String out = new String(Compat.readAllBytes(p.getInputStream()), StandardCharsets.UTF_8).trim();
+                boolean running = p.waitFor() == 0 || out.contains("STATUS:RUNNING");
                 lastKnownWebRunning = running;
+                if (running && webAuthUrl.isEmpty()) {
+                    String url = extractAuthUrl(out);
+                    if (url != null && !url.isEmpty()) {
+                        synchronized (lifecycle) {
+                            if (webAuthUrl.isEmpty()) {
+                                webAuthUrl = url;
+                            }
+                        }
+                    }
+                }
                 return running;
             } catch (Throwable e) {
                 lastKnownWebRunning = false;
@@ -127,13 +170,14 @@ public class HarnessController {
         }
     }
 
-    /** 若服务已在后台运行但内存中鉴权链接丢失，尝试从模块运行日志中恢复鉴权链接（带 3s 防抖）。 */
+    /** 若服务已在后台运行但内存中鉴权链接丢失，尝试从模块运行日志中恢复鉴权链接（带 2s 防抖）。 */
     public void tryRecoverRunningUrl() {
         if (!webAuthUrl.isEmpty()) return;
         long now = android.os.SystemClock.elapsedRealtime();
-        if (now - lastRecoverAttemptMs < 3000L) return;
+        if (now - lastRecoverAttemptMs < 2000L) return;
         lastRecoverAttemptMs = now;
-        if ("ksu_chroot".equals(proot.runtime().id()) && lastKnownWebRunning) {
+        if ("ksu_chroot".equals(proot.runtime().id())) {
+            asyncRefreshStatus();
             io.execute(() -> {
                 try {
                     Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
@@ -233,6 +277,15 @@ public class HarnessController {
 
             // 自动根据 APK 设置应用第三方插件兼容模式（放开白名单与防崩容错）
             applyThirdPartyPluginCompat(config.isThirdPartyPluginCompat());
+
+            // 深度破除异常中断死锁：清理 .credentials.yaml.lock 等遗留 lock 文件，防止 atomic-write 超时卡死
+            File dshDir = new File(proot.getRootfsDir(), "root/.dsh");
+            if (dshDir.isDirectory()) {
+                File[] locks = dshDir.listFiles((dir, name) -> name.endsWith(".lock"));
+                if (locks != null) {
+                    for (File lk : locks) lk.delete();
+                }
+            }
         } catch (Throwable e) {
             Log.w("DSHA", "写入心跳补丁失败: " + e.getMessage());
         }
