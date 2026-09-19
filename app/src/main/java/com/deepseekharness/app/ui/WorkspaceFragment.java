@@ -89,10 +89,6 @@ public class WorkspaceFragment extends Fragment {
             }).start();
         });
 
-        // 清理损坏会话：1.2-alpha 的会话是 packed/zstd，对 DSHA 不透明，照原版隐藏该控制
-        View cleanSessions = v.findViewById(R.id.workspace_clean_sessions);
-        if (cleanSessions != null) cleanSessions.setVisibility(View.GONE);
-
         // 重置配置（保留对话记录）
         v.findViewById(R.id.workspace_reset).setOnClickListener(x ->
                 new MaterialAlertDialogBuilder(requireContext())

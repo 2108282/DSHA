@@ -151,18 +151,6 @@ public class ConfigStore {
         prefs.edit().putBoolean(Constants.KEY_THIRD_PARTY_PLUGIN_COMPAT, v).apply();
     }
 
-    public int getAutoBackupLaunches() {
-        try {
-            return Integer.parseInt(prefs.getString(Constants.KEY_AUTO_BACKUP, "5"));
-        } catch (NumberFormatException e) {
-            return 0;
-        }
-    }
-
-    public void setAutoBackupLaunches(int v) {
-        prefs.edit().putString(Constants.KEY_AUTO_BACKUP, String.valueOf(Math.max(0, v))).apply();
-    }
-
     // ================= 其他 =================
 
     public String getPermissionMode() {

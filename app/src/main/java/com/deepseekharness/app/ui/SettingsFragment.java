@@ -42,7 +42,7 @@ public class SettingsFragment extends Fragment {
     private final Handler main = new Handler(Looper.getMainLooper());
 
     private static final TabOption[] TAB_OPTIONS = {
-            new TabOption("配置", "API key · 端口 · 行为", ConfigFragment::new),
+            new TabOption("配置", "端口 · 行为 · 权限", ConfigFragment::new),
             new TabOption("数据与备份", "备份恢复 · 保存位置 · 工作区", WorkspaceFragment::new),
             new TabOption("抽屉设置", "反色 · 圈定即搜 · 白天黑夜透明度", SheetSettingsFragment::new),
     };

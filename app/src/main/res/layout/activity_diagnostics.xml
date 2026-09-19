@@ -38,20 +38,10 @@
             android:layout_marginTop="8dp" />
 
         <Button
-            android:id="@+id/diagnostic_refresh"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:background="@drawable/bg_btn"
-            android:text="重新诊断"
-            android:textAllCaps="false"
-            android:textColor="@color/text" />
-
-        <Button
             android:id="@+id/diagnostic_repair"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="12dp"
             android:background="@drawable/bg_btn"
             android:text="修复证书与 npm"
             android:textAllCaps="false"
@@ -66,47 +56,6 @@
             android:text="前往插件页使用备用文件选择器"
             android:textAllCaps="false"
             android:textColor="@color/text" />
-
-        <EditText
-            android:id="@+id/diagnostic_steps"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:background="@drawable/bg_input"
-            android:gravity="top"
-            android:hint="补充复现步骤（请勿填写密钥或私人对话）"
-            android:inputType="textMultiLine"
-            android:maxLength="2000"
-            android:minHeight="96dp"
-            android:padding="12dp" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/diagnostic_copy"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:background="@drawable/bg_btn"
-                android:text="复制反馈信息"
-                android:textAllCaps="false"
-                android:textColor="@color/text" />
-
-            <Button
-                android:id="@+id/diagnostic_export"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_btn"
-                android:text="导出诊断报告"
-                android:textAllCaps="false"
-                android:textColor="@color/text" />
-        </LinearLayout>
 
         <TextView
             android:id="@+id/diagnostic_report"

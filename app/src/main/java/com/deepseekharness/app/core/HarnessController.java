@@ -338,11 +338,7 @@ public class HarnessController {
      * 独立线程捕获 BrowserAuth 鉴权链接。
      */
     public boolean startWeb(Consumer<String> onStatus) {
-        return requestStart(onStatus, false, 0, false);
-    }
-
-    public boolean startWebSafely(Consumer<String> onStatus) {
-        return requestStart(onStatus, false, 0, true);
+        return requestStart(onStatus, false, 0);
     }
 
     /** 用户手动点击「重启」：强制清除旧状态与旧进程，重新发起一次启动。 */
@@ -351,7 +347,7 @@ public class HarnessController {
             long generation = lifecycle.forceBeginStart();
             webAuthUrl = "";
             try {
-                io.execute(() -> startWeb(generation, onStatus, false));
+                io.execute(() -> startWeb(generation, onStatus));
                 return true;
             } catch (RuntimeException e) {
                 lifecycle.finishStart(generation);
@@ -363,10 +359,10 @@ public class HarnessController {
 
     /** 看门狗不能撤销用户停止意图；检查与入队在同一把锁内完成。 */
     public boolean restartWebAutomatically(long expectedGeneration, Consumer<String> onStatus) {
-        return requestStart(onStatus, true, expectedGeneration, false);
+        return requestStart(onStatus, true, expectedGeneration);
     }
 
-    private boolean requestStart(Consumer<String> onStatus, boolean automatic, long expectedGeneration, boolean safeMode) {
+    private boolean requestStart(Consumer<String> onStatus, boolean automatic, long expectedGeneration) {
         synchronized (lifecycle) {
             if (automatic && (expectedGeneration != lifecycle.generation()
                     || Thread.currentThread().isInterrupted())) return false;
@@ -374,7 +370,7 @@ public class HarnessController {
             if (generation < 0) return false;
             webAuthUrl = "";
             try {
-                io.execute(() -> startWeb(generation, onStatus, safeMode));
+                io.execute(() -> startWeb(generation, onStatus));
                 return true;
             } catch (RuntimeException e) {
                 lifecycle.finishStart(generation);
@@ -384,11 +380,11 @@ public class HarnessController {
         }
     }
 
-    private void startWeb(long generation, Consumer<String> onStatus, boolean safeMode) {
+    private void startWeb(long generation, Consumer<String> onStatus) {
         boolean draining = false;
         try {
             if (!lifecycle.isCurrent(generation)) return;
-            startupDiagnostics.begin(generation, safeMode);
+            startupDiagnostics.begin(generation);
             com.deepseekharness.app.LanProxyService.stop();
             webProc.stop(); // 先清掉可能残留的 dsh，否则新进程撞 EADDRINUSE
             if (!lifecycle.isCurrent(generation)) return;
@@ -471,12 +467,6 @@ public class HarnessController {
                     }
                 }
             } catch (Throwable ignored) {
-            }
-            if (safeMode) {
-                reportStatus(generation, onStatus, "正在暂时禁用第三方插件，准备安全启动…");
-                String result = com.deepseekharness.app.util.PluginOutput.resultJson(proot.runPluginManager("safe-mode on"));
-                org.json.JSONObject status = new org.json.JSONObject(result);
-                if (!"ok".equals(status.optString("status"))) throw new java.io.IOException(status.optString("message"));
             }
             // 只有当前启动任务能清哨兵；延迟进入容器的旧 shell 不再自行删除它。
             synchronized (lifecycle) {

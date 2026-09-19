@@ -82,11 +82,6 @@ public class LaunchFragment extends Fragment {
             v.findViewById(R.id.launch_port_chip_8080).setOnClickListener(x -> portInput.setText("8080"));
         }
 
-        v.findViewById(R.id.launch_safe).setOnClickListener(x -> new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
-                .setTitle("安全启动 Web？")
-                .setMessage("暂时禁用第三方插件后启动，保留插件文件、会话和配置。可在插件管理中逐个启用或恢复之前的状态。")
-                .setNegativeButton("取消", null).setPositiveButton("安全启动", (dialog, which) -> doStart(activity, status, start, true)).show());
-
         // 启动按钮：未就绪时是「启动」；鉴权链接就绪后自动变为「进入」，点击进 WebUI。
         start.setOnClickListener(x -> {
             if ((webReady || !controller.getWebAuthUrl().isEmpty()) && controller.isWebRunning()) {
@@ -158,10 +153,6 @@ public class LaunchFragment extends Fragment {
 
     /** 启动 dsh：记录启动时刻，鉴权链接就绪后把「启动」变「进入」并输出 URL 到日志。 */
     private void doStart(Activity activity, TextView status, Button start) {
-        doStart(activity, status, start, false);
-    }
-
-    private void doStart(Activity activity, TextView status, Button start, boolean safeMode) {
         if (controller.isStarting() || controller.isStopping()) return;
         final View root = getView();
         startAtMs = System.currentTimeMillis();
@@ -189,7 +180,7 @@ public class LaunchFragment extends Fragment {
                 refreshLanAddr();
             });
         };
-        boolean accepted = safeMode ? controller.startWebSafely(startStatus) : controller.startWeb(startStatus);
+        boolean accepted = controller.startWeb(startStatus);
         refreshRunState();
         if (!accepted) return;
         // 核心运转常驻通知：根据用户设置与核心状态自动挂载

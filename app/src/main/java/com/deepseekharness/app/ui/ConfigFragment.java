@@ -50,7 +50,6 @@ public class ConfigFragment extends Fragment {
 
         v.findViewById(R.id.config_workspace_entry).setOnClickListener(x -> open(new WorkspaceFragment()));
 
-        EditText apiKey = v.findViewById(R.id.config_api_key);
         EditText port = v.findViewById(R.id.config_port);
         EditText taskset = v.findViewById(R.id.config_taskset);
         CheckBox confirm = v.findViewById(R.id.config_confirm_shell);
@@ -59,7 +58,6 @@ public class ConfigFragment extends Fragment {
         CheckBox sensors = v.findViewById(R.id.config_cap_sensors);
         CheckBox location = v.findViewById(R.id.config_cap_location);
         CheckBox thirdPartyCompat = v.findViewById(R.id.config_third_party_compat);
-        EditText autoBackup = v.findViewById(R.id.config_auto_backup);
         Button save = v.findViewById(R.id.config_save);
 
         // 高级项折叠
@@ -68,7 +66,6 @@ public class ConfigFragment extends Fragment {
                 advBody.setVisibility(advBody.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
 
         // 回填当前值
-        apiKey.setText(c.getApiKey());
         port.setText(c.getPort());
         if (taskset != null) taskset.setText(c.getTaskset());
         confirm.setChecked(c.isConfirmShell());
@@ -105,7 +102,6 @@ public class ConfigFragment extends Fragment {
         v.findViewById(R.id.config_repo_link).setOnClickListener(x -> openRepo(ctx));
 
         save.setOnClickListener(x -> {
-            c.setApiKey(apiKey.getText().toString());
             c.setPort(port.getText().toString());
             String tsVal = taskset != null ? taskset.getText().toString().trim().replaceAll("[^0-9,-]", "") : "";
             c.setTaskset(tsVal);
@@ -117,7 +113,6 @@ public class ConfigFragment extends Fragment {
                 c.setThirdPartyPluginCompat(compatOn);
                 com.deepseekharness.app.core.HarnessController.get(ctx).applyThirdPartyPluginCompat(compatOn);
             }
-            c.setAutoBackupLaunches(parseInt(autoBackup.getText().toString()));
             setPref(ctx, "overlay_stream", overlay.isChecked());
             setPref(ctx, "cap_sensors", sensors.isChecked());
             setPref(ctx, "cap_location", location.isChecked());

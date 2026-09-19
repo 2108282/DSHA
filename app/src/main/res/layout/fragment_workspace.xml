@@ -188,24 +188,13 @@
                 style="@style/DshaText.Title"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="会话维护与重置" />
-
-            <Button
-                android:id="@+id/workspace_clean_sessions"
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/btn_height"
-                android:layout_marginTop="@dimen/gap_control"
-                android:background="@drawable/bg_btn"
-                android:text="清理损坏会话（隔离到 corrupt-backup）"
-                android:textAllCaps="false"
-                android:textColor="@color/text"
-                android:textSize="@dimen/text_body" />
+                android:text="环境与配置重置" />
 
             <Button
                 android:id="@+id/workspace_reset"
                 android:layout_width="match_parent"
                 android:layout_height="@dimen/btn_height"
-                android:layout_marginTop="@dimen/gap_tight"
+                android:layout_marginTop="@dimen/gap_control"
                 android:background="@drawable/bg_btn"
                 android:text="重置配置（保留对话与插件）"
                 android:textAllCaps="false"

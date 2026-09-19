@@ -134,9 +134,6 @@ public class PluginFragment extends Fragment {
         view.findViewById(R.id.btnInstalled).setOnClickListener(v -> selectTab(false));
         view.findViewById(R.id.btnRefresh).setOnClickListener(v -> repository.refresh());
         view.findViewById(R.id.btnPluginUpdates).setOnClickListener(v -> repository.checkUpdates(null));
-        view.findViewById(R.id.btnPluginRestore).setOnClickListener(v -> new MaterialAlertDialogBuilder(requireContext())
-                .setTitle("恢复第三方插件？").setMessage("恢复安全启动前已启用的插件；之后手动禁用的插件保持禁用。恢复后重启 Web 生效。")
-                .setNegativeButton("取消", null).setPositiveButton("恢复", (d, which) -> repository.safeMode(false, null)).show());
         view.findViewById(R.id.btnPluginInstall).setOnClickListener(v -> installLink());
         view.findViewById(R.id.btnPluginPaste).setOnClickListener(v -> pasteLink());
         view.findViewById(R.id.btnImport).setOnClickListener(v -> chooseImport(false));
@@ -285,7 +282,6 @@ public class PluginFragment extends Fragment {
         root.findViewById(R.id.marketHelp).setVisibility(market ? View.VISIBLE : View.GONE);
         root.findViewById(R.id.pluginWebsiteSection).setVisibility(market ? View.VISIBLE : View.GONE);
         root.findViewById(R.id.pluginLinkSection).setVisibility(market ? View.VISIBLE : View.GONE);
-        root.findViewById(R.id.btnPluginRestore).setVisibility(repository.isSafeMode() ? View.VISIBLE : View.GONE);
         root.findViewById(R.id.installedControls).setVisibility(market ? View.GONE : View.VISIBLE);
         root.findViewById(R.id.pluginList).setVisibility(market ? View.GONE : View.VISIBLE);
         root.findViewById(R.id.btnMarket).setBackgroundResource(market ? R.drawable.bg_tab_on : R.drawable.bg_tab);
@@ -296,7 +292,7 @@ public class PluginFragment extends Fragment {
                 market ? R.color.text_secondary : R.color.primary));
         root.findViewById(R.id.pluginBusy).setVisibility(current.busy ? View.VISIBLE : View.GONE);
         ((TextView) root.findViewById(R.id.statusText)).setText(current.message);
-        for (int id : new int[]{R.id.btnImport, R.id.btnImportFallback, R.id.btnExport, R.id.btnRefresh, R.id.btnPluginUpdates, R.id.btnPluginRestore})
+        for (int id : new int[]{R.id.btnImport, R.id.btnImportFallback, R.id.btnExport, R.id.btnRefresh, R.id.btnPluginUpdates})
             root.findViewById(id).setEnabled(!current.busy);
         ((TextView) root.findViewById(R.id.btnSort)).setText(enabledFirst ? "已启用优先" : "名称排序");
         visibleItems.clear();

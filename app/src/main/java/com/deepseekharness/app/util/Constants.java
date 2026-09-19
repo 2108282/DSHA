@@ -90,8 +90,6 @@ public final class Constants {
     public static final String KEY_LAN_TOKEN_V2 = "lan_token_v2";
     /** 容器运行时：proroot / proot。 */
     public static final String KEY_CONTAINER_RUNTIME = "container_runtime";
-    /** 自动备份频率（每启动 N 次，0=关）。 */
-    public static final String KEY_AUTO_BACKUP = "auto_backup_launches";
     /** 常驻后台服务通知（检测核心运转）。 */
     public static final String KEY_PERSISTENT_NOTIFICATION = "persistent_notification";
     /** 快捷抽屉反色开关（独立深色反色，与主应用黑夜白天按钮完全分离）。 */

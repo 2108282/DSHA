@@ -26,10 +26,13 @@ public final class StartupTrace {
             this.stage=stage;this.log=log;this.safe=safe;browserReady=ready;this.issues=java.util.Collections.unmodifiableMap(issues);
         }
     }
-    public synchronized void begin(long next, long now, boolean safeMode) {
-        generation=next;began=stageBegan=now;stage="排队启动";safe=safeMode;browserReady=false;
+    public synchronized void begin(long next, long now) {
+        generation=next;began=stageBegan=now;stage="排队启动";safe=false;browserReady=false;
         lines.clear();issues.clear();length=0;revision++;
-        add(next,now,safeMode?"开始安全启动：使用独立基础配置，原插件和配置保留":"开始启动 DSH");
+        add(next,now,"开始启动 DSH");
+    }
+    public synchronized void begin(long next, long now, boolean safeMode) {
+        begin(next, now);
     }
     public synchronized void stage(long expected,long now,String next) {
         if (expected!=generation || next==null || next.equals(stage)) return;

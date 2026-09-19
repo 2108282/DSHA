@@ -133,8 +133,8 @@ public final class DiagnosticRepository extends AndroidViewModel {
             }
         }
         out.append("\n最近操作与失败步骤\n").append(DiagnosticLog.read(getApplication()));
-        out.append("\n建议操作\n证书或 npm 异常：点击「修复证书与 npm」。\n文件选择无返回：到插件页使用「其他文件选择器」。\n第三方插件导致启动失败：使用启动页的安全启动，再逐个恢复插件。\n存储不足：清理下载目录后重试，避免重新解压整个环境。\n");
-        out.append("\n隐私范围：未读取 API 配置、对话、终端命令或系统完整日志；没有自动上传此报告。可在下面补充复现步骤后复制或导出。\n");
+        out.append("\n建议操作\n证书或 npm 异常：点击「修复证书与 npm」。\n文件选择无返回：到插件页使用「其他文件选择器」。\n存储不足：清理下载目录后重试，避免重新解压整个环境。\n");
+        out.append("\n隐私范围：未读取 API 配置、对话、终端命令或系统完整日志；没有自动上传此报告。\n");
         return out.toString();
     }
 }
