@@ -302,6 +302,7 @@ chroot "$ROOTFS" /usr/bin/env -i \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     DSH_CONFIRM=1 \
+    NODE_PATH=/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules \
     $PRELOAD_OPT \
     nice -n 10 /usr/local/bin/node --v8-pool-size=2 /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
 
