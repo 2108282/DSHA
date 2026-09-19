@@ -16,6 +16,9 @@ public final class StartupDiagnostics {
     private String recentError = "";
     private int errorLines;
     public StartupDiagnostics(Context context) { this.context = context.getApplicationContext(); }
+    public synchronized void begin(long generation) {
+        begin(generation, false);
+    }
     public synchronized void begin(long generation, boolean safe) {
         owners.clear(); recentError = ""; errorLines = 0; trace.begin(generation, SystemClock.elapsedRealtime(), safe);
     }

@@ -80,7 +80,6 @@ public class ConfigFragment extends Fragment {
                 requestPermissions(new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION,
                         android.Manifest.permission.ACCESS_COARSE_LOCATION}, 104);
         });
-        autoBackup.setText(String.valueOf(c.getAutoBackupLaunches()));
 
         // 待接回项（诚实提示）
         v.findViewById(R.id.config_translate).setOnClickListener(x -> toast("插件市场翻译待接回"));
