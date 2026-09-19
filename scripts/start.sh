@@ -64,10 +64,16 @@ mount_if_needed() {
     if ! is_mounted "$target"; then
         mkdir -p "$target" 2>/dev/null
         mount "$@" "$target"
-        # 若为 bind 挂载，追加 remount noatime,nodiratime 消除闪存元数据写入放大
-        case "$*" in
-            *bind*)
-                mount -o remount,bind,noatime,nodiratime "$target" 2>/dev/null || true
+        # 严禁对 FUSE 文件系统（/sdcard、/storage）或虚拟设备（/dev）追加 remount，否则会导致 Android vold abort FUSE 连接引发热重启
+        case "$target" in
+            */sdcard*|*/storage*|*/dev*)
+                ;;
+            *)
+                case "$*" in
+                    *bind*)
+                        mount -o remount,bind,noatime,nodiratime "$target" 2>/dev/null || true
+                        ;;
+                esac
                 ;;
         esac
     fi
