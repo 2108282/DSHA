@@ -1,137 +1,421 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/pluginScroll" android:layout_width="match_parent" android:layout_height="match_parent"
-    android:background="@color/surface" android:fillViewport="true" android:clipToPadding="false">
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="vertical" android:padding="@dimen/page_pad">
+    android:id="@+id/pluginScroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/surface"
+    android:clipToPadding="false"
+    android:fillViewport="true"
+    android:overScrollMode="never">
 
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:orientation="horizontal" android:gravity="center_vertical">
-            <TextView android:id="@+id/btnMarket" style="@style/PluginAction"
-                android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
-                android:background="@drawable/bg_tab_on" android:text="插件市场" />
-            <TextView android:id="@+id/btnInstalled" style="@style/PluginAction"
-                android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/gap_tight" android:background="@drawable/bg_tab"
-                android:text="插件管理" />
-            <TextView android:id="@+id/btnRefresh" style="@style/PluginAction"
-                android:layout_width="48dp" android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/gap_tight" android:text="↻"
-                android:contentDescription="刷新插件状态" android:textSize="22sp" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/page_pad"
+        android:paddingTop="12dp"
+        android:paddingEnd="@dimen/page_pad"
+        android:paddingBottom="24dp">
+
+        <!-- ================= SukiSU-Ultra 风格分段胶囊 Tab ================= -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:background="@drawable/bg_chip"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="3dp">
+
+            <TextView
+                android:id="@+id/btnMarket"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/bg_tab_on"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="插件市场"
+                android:textColor="@color/primary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnInstalled"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_tab"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="插件管理"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnRefresh"
+                android:layout_width="40dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="4dp"
+                android:background="@drawable/bg_chip_clickable"
+                android:clickable="true"
+                android:contentDescription="刷新插件状态"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="↻"
+                android:textColor="@color/text_secondary"
+                android:textSize="18sp" />
         </LinearLayout>
 
-        <LinearLayout android:id="@+id/pluginWebsiteSection" style="@style/DshaCard"
-            android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_block">
-            <TextView style="@style/DshaText.Title" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="发现更多插件" />
-            <TextView style="@style/DshaText.Body" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:layout_marginTop="@dimen/gap_tight"
-                android:text="在网站选取插件并打开 DSHA，核对实际包信息后确认安装；也可在此粘贴链接或导入插件包。" />
-            <Button android:id="@+id/btnPluginWebsite" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:minHeight="48dp"
-                android:layout_marginTop="@dimen/gap_control"
-                android:background="@drawable/bg_btn_primary" android:textColor="@color/accent_on"
-                android:text="前往 dsha.cc 选插件" />
+        <!-- ================= 发现更多插件卡片 ================= -->
+        <LinearLayout
+            android:id="@+id/pluginWebsiteSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_card_ultra"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                style="@style/DshaText.Title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="发现官方与社区插件"
+                android:textColor="@color/text"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:lineSpacingExtra="2dp"
+                android:text="在官方目录选取所需扩展并在 DSHA 中一键激活，支持即时安装与在线热加载。"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnPluginWebsite"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/btn_height"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_btn_primary_pill"
+                android:fontFamily="sans-serif-medium"
+                android:text="前往 dsha.cc 浏览插件库"
+                android:textAllCaps="false"
+                android:textColor="@color/accent_on"
+                android:textSize="14sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
-        <LinearLayout android:id="@+id/pluginLinkSection" style="@style/DshaCard"
-            android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_block">
-            <TextView style="@style/DshaText.Title" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="通过链接安装" />
-            <EditText android:id="@+id/appbar_github_input" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:minHeight="48dp"
-                android:layout_marginTop="@dimen/gap_control" android:background="@drawable/bg_input"
-                android:hint="粘贴插件链接或 owner/repo" android:inputType="textUri"
-                android:imeOptions="actionGo" android:singleLine="true" android:importantForAutofill="no"
-                android:padding="@dimen/gap_control" android:textColor="@color/text"
-                android:textColorHint="@color/text_muted" android:textSize="@dimen/text_body" />
-            <TextView android:id="@+id/pluginLinkHint" style="@style/DshaText.Caption"
-                android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_tight" />
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/gap_control" android:orientation="horizontal">
-                <TextView android:id="@+id/btnPluginPaste" style="@style/PluginAction"
-                    android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
-                    android:text="粘贴链接" />
-                <TextView android:id="@+id/btnPluginInstall" style="@style/PluginAction"
-                    android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
-                    android:layout_marginStart="@dimen/gap_tight" android:text="安装插件" />
+        <!-- ================= 链接安装卡片 ================= -->
+        <LinearLayout
+            android:id="@+id/pluginLinkSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_card_ultra"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                style="@style/DshaText.Title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="通过链接直接安装"
+                android:textColor="@color/text"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/appbar_github_input"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/input_height"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_input"
+                android:hint="粘贴 GitHub 链接、Release 附件或 owner/repo"
+                android:imeOptions="actionGo"
+                android:importantForAutofill="no"
+                android:inputType="textUri"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:singleLine="true"
+                android:textColor="@color/text"
+                android:textColorHint="@color/text_muted"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/pluginLinkHint"
+                style="@style/DshaText.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textColor="@color/text_muted"
+                android:textSize="11sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnPluginPaste"
+                    android:layout_width="0dp"
+                    android:layout_height="@dimen/btn_height"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_btn_secondary_pill"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:text="粘贴链接"
+                    android:textColor="@color/text"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btnPluginInstall"
+                    android:layout_width="0dp"
+                    android:layout_height="@dimen/btn_height"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_btn_primary_pill"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:text="解析并安装"
+                    android:textColor="@color/accent_on"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
             </LinearLayout>
         </LinearLayout>
 
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_block" android:orientation="horizontal">
-            <TextView android:id="@+id/btnImport" style="@style/PluginAction"
-                android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
-                android:text="导入插件包" />
-            <TextView android:id="@+id/btnExport" style="@style/PluginAction"
-                android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/gap_tight" android:text="导出插件包" />
+        <!-- ================= 本地导入与导出按钮行 ================= -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/btnImport"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_card_ultra_clickable"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="📦 导入插件包"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnExport"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="10dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_card_ultra_clickable"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="📤 导出插件包"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
-        <TextView android:id="@+id/btnImportFallback" style="@style/PluginAction"
-            android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_tight" android:text="其他文件选择器"
-            android:textColor="@color/text_secondary" />
+        <TextView
+            android:id="@+id/btnImportFallback"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="8dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:padding="6dp"
+            android:text="使用备用文件选择器 ›"
+            android:textColor="@color/text_muted"
+            android:textSize="11sp" />
 
-        <ProgressBar android:id="@+id/pluginBusy" style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent" android:layout_height="3dp"
-            android:layout_marginTop="@dimen/gap_control" android:indeterminate="true"
-            android:indeterminateTint="@color/primary" android:visibility="gone" />
-        <TextView android:id="@+id/statusText" style="@style/DshaText.Caption"
-            android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_control" android:layout_marginBottom="@dimen/gap_block"
-            android:maxLines="2" android:ellipsize="end" android:minHeight="32dp"
-            android:paddingTop="@dimen/gap_hair" android:paddingBottom="@dimen/gap_hair" android:clickable="true" android:focusable="true"
-            android:contentDescription="插件操作状态，点按查看完整信息" />
+        <!-- 忙碌指示条 -->
+        <ProgressBar
+            android:id="@+id/pluginBusy"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_marginTop="8dp"
+            android:indeterminate="true"
+            android:indeterminateTint="@color/primary"
+            android:visibility="gone" />
 
-        <LinearLayout android:id="@+id/marketHelp" style="@style/DshaCard"
-            android:layout_width="match_parent" android:layout_height="wrap_content">
-            <TextView style="@style/DshaText.Title" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="安装与分享" />
-            <TextView style="@style/DshaText.Body" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:layout_marginTop="@dimen/gap_control"
-                android:text="链接安装：支持 GitHub 仓库、分支与子目录、Release 附件和 HTTPS 压缩包直链。\n\n本地导入：支持 ZIP、TAR、TAR.GZ、TGZ。请使用作者已构建好的插件包。\n\n导出分享：可多选插件并选择保存位置，导出包可在其他 DSHA 中导入。\n\n安装、切换开关或删除后，重启 Web 生效。" />
+        <!-- 状态反馈标签 -->
+        <TextView
+            android:id="@+id/statusText"
+            style="@style/DshaText.Caption"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:clickable="true"
+            android:contentDescription="插件操作状态，点按查看完整信息"
+            android:ellipsize="end"
+            android:focusable="true"
+            android:maxLines="2"
+            android:textColor="@color/primary"
+            android:textSize="12sp" />
+
+        <!-- ================= 市场指引卡片 ================= -->
+        <LinearLayout
+            android:id="@+id/marketHelp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_card_ultra"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                style="@style/DshaText.Title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="安装规范与热生效说明"
+                android:textColor="@color/text"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                style="@style/DshaText.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:lineSpacingExtra="2dp"
+                android:text="• 链接安装：支持 GitHub 仓库、分支、Release 附件与 npm 预构建包。\n• 本地导入：支持 ZIP、TAR.GZ 等已打包好的扩展。\n• 生效方式：安装、切换开关或卸载后，重启服务即可全域生效。"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
         </LinearLayout>
 
-        <LinearLayout android:id="@+id/installedControls" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone">
-            <Button android:id="@+id/btnPluginUpdates" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginBottom="@dimen/gap_control" android:text="检查第三方插件更新" />
-            <EditText android:id="@+id/pluginSearch" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:minHeight="48dp"
-                android:background="@drawable/bg_input" android:hint="搜索插件名称或描述"
-                android:singleLine="true" android:imeOptions="actionDone" android:inputType="text"
-                android:padding="@dimen/gap_control" android:textColor="@color/text"
-                android:textColorHint="@color/text_muted" android:textSize="@dimen/text_body" />
-            <CheckBox android:id="@+id/chkHideBuiltin" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:minHeight="48dp"
-                android:layout_marginTop="@dimen/gap_hair" android:text="只看自己装的"
-                android:buttonTint="@color/primary" android:textColor="@color/text_secondary"
-                android:textSize="@dimen/text_label" />
-            <CheckBox android:id="@+id/chkThirdPartyCompat" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:minHeight="48dp"
-                android:text="第三方插件兼容模式（放开配置白名单与防崩容错）"
-                android:buttonTint="@color/primary" android:textColor="@color/text_secondary"
-                android:textSize="@dimen/text_label" />
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:gravity="center_vertical" android:orientation="horizontal"
-                android:layout_marginBottom="@dimen/gap_control">
-                <TextView android:id="@+id/pluginCount" style="@style/DshaText.Caption"
-                    android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" />
-                <TextView android:id="@+id/btnSort" style="@style/PluginAction"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:text="名称排序" />
+        <!-- ================= 已安装插件管理控制区 ================= -->
+        <LinearLayout
+            android:id="@+id/installedControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/btnPluginUpdates"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/btn_height"
+                android:background="@drawable/bg_btn_secondary_pill"
+                android:fontFamily="sans-serif-medium"
+                android:text="🔍 检查第三方插件更新"
+                android:textAllCaps="false"
+                android:textColor="@color/text"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/pluginSearch"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/input_height"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_input"
+                android:hint="搜索已安装插件名称或关键词…"
+                android:imeOptions="actionDone"
+                android:importantForAutofill="no"
+                android:inputType="text"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:singleLine="true"
+                android:textColor="@color/text"
+                android:textColorHint="@color/text_muted"
+                android:textSize="13sp" />
+
+            <CheckBox
+                android:id="@+id/chkHideBuiltin"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:buttonTint="@color/primary"
+                android:minHeight="44dp"
+                android:text="只显示用户自定义安装的插件"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+
+            <CheckBox
+                android:id="@+id/chkThirdPartyCompat"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/primary"
+                android:minHeight="44dp"
+                android:text="第三方扩展兼容增强（宽松沙箱白名单）"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:layout_marginBottom="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/pluginCount"
+                    style="@style/DshaText.Caption"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/text_muted"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btnSort"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_chip_clickable"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="名称排序 ⇅"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
             </LinearLayout>
         </LinearLayout>
-        <TextView android:id="@+id/pluginEmpty" style="@style/DshaText.Body"
-            android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:padding="@dimen/card_pad" android:gravity="center"
-            android:visibility="gone" android:textColor="@color/text_muted" />
-        <androidx.recyclerview.widget.RecyclerView android:id="@+id/pluginList"
-            android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:nestedScrollingEnabled="false" android:visibility="gone" />
+
+        <!-- 空态占位 -->
+        <TextView
+            android:id="@+id/pluginEmpty"
+            style="@style/DshaText.Body"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:gravity="center"
+            android:padding="24dp"
+            android:text="暂无匹配插件"
+            android:textColor="@color/text_muted"
+            android:visibility="gone" />
+
+        <!-- 插件 RecyclerView 列表 -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/pluginList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:nestedScrollingEnabled="false"
+            android:overScrollMode="never"
+            android:visibility="gone" />
+
     </LinearLayout>
 </androidx.core.widget.NestedScrollView>

@@ -1,32 +1,63 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#3D6FD4</color>
-    <color name="primary_dark">#2E5BB8</color>
+    <!-- SukiSU-Ultra 标志性科技主色与强调色 -->
+    <color name="primary">#2563EB</color>
+    <color name="primary_dark">#1D4ED8</color>
+    <color name="primary_light">#60A5FA</color>
+    <color name="primary_container">#EFF6FF</color>
     <color name="accent_on">#FFFFFF</color>
-    <color name="surface">#F7F8FB</color>
+
+    <!-- 表面与背景层次规范（SukiSU-Ultra 极简通透风格） -->
+    <color name="surface">#F4F6FA</color>
     <color name="card">#FFFFFF</color>
-    <color name="raised">#EEF1F6</color>
-    <color name="line">#E2E6EE</color>
-    <color name="text">#1A2230</color>
-    <color name="text_secondary">#4A5568</color>
-    <color name="text_muted">#7A8494</color>
-    <color name="ok">#2F9E64</color>
-    <color name="warn">#C48A1A</color>
-    <color name="err">#C45A5A</color>
-    <color name="preview">#F0F3F8</color>
-    <!-- Termux 的默认 ANSI 前景色是白色；终端背景必须固定为深色，不能复用
-         会在浅色主题下变亮的 preview，否则就会出现浅灰底白字。 -->
-    <color name="terminal_surface">#0A0D12</color>
-    <color name="terminal_outline">#263041</color>
-    <color name="logo_top">#E8EEF8</color>
-    <color name="logo_bot">#D5DFF0</color>
-    <!-- 按压涟漪：主色低透明度，浅色底上淡淡一层 -->
-    <color name="ripple">#233D6FD4</color>
-    <!-- 禁用态：按钮变灰 + 文字降到可读下限（不可点却外观照旧最让人困惑） -->
-    <color name="disabled">#E9ECF2</color>
-    <!-- 状态色的浅底（用于状态条/标签背景，不刺眼） -->
-    <color name="err_bg">#14C45A5A</color>
-    <!-- 危险操作按钮：背景深红 + 纯白文字高对比度 -->
-    <color name="btn_danger_bg">#C45A5A</color>
+    <color name="card_elevated">#FFFFFF</color>
+    <color name="raised">#F0F3F8</color>
+    <color name="line">#E2E8F0</color>
+    <color name="line_subtle">#EDF2F7</color>
+
+    <!-- 文字层级阶梯 -->
+    <color name="text">#0F172A</color>
+    <color name="text_secondary">#475569</color>
+    <color name="text_muted">#94A3B8</color>
+
+    <!-- SukiSU-Ultra 标志性状态与英雄语义色 -->
+    <color name="ok">#16A34A</color>
+    <color name="ok_bg">#DCFCE7</color>
+    <color name="ok_glow">#3316A34A</color>
+    <color name="ok_card_bg">#E8FDF0</color>
+    <color name="ok_card_border">#BBF7D0</color>
+    <color name="ok_watermark">#1A16A34A</color>
+
+    <color name="warn">#D97706</color>
+    <color name="warn_bg">#FEF3C7</color>
+
+    <color name="err">#DC2626</color>
+    <color name="err_bg">#FEE2E2</color>
+
+    <!-- 终端视口与预览底色 -->
+    <color name="preview">#090D14</color>
+    <color name="terminal_surface">#090D14</color>
+    <color name="terminal_outline">#1E293B</color>
+
+    <color name="logo_top">#EFF6FF</color>
+    <color name="logo_bot">#DBEAFE</color>
+
+    <!-- SukiSU-Ultra 悬浮底栏与水波纹 -->
+    <color name="ripple">#1A2563EB</color>
+    <color name="disabled">#E2E8F0</color>
+
+    <!-- 悬浮胶囊底栏专用色 -->
+    <color name="pill_bg">#F2FFFFFF</color>
+    <color name="pill_border">#E2E8F0</color>
+    <color name="pill_indicator">#E0E7FF</color>
+    <color name="pill_shadow">#1F0F172A</color>
+
+    <!-- 危险操作按钮 -->
+    <color name="btn_danger_bg">#EF4444</color>
     <color name="btn_danger_text">#FFFFFF</color>
+
+    <!-- 英雄卡片未激活状态 -->
+    <color name="hero_idle_bg">#F1F5F9</color>
+    <color name="hero_idle_border">#E2E8F0</color>
+    <color name="hero_idle_watermark">#1264748B</color>
 </resources>

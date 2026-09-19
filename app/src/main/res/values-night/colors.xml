@@ -1,26 +1,61 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#7DA7F4</color>
-    <color name="primary_dark">#6F9BEF</color>
-    <color name="accent_on">#0B1524</color>
-    <color name="surface">#10141B</color>
-    <color name="card">#161B24</color>
-    <color name="raised">#1C2330</color>
-    <color name="line">#2A3344</color>
-    <color name="text">#E8ECF4</color>
-    <color name="text_secondary">#A6B0C3</color>
-    <color name="text_muted">#6B7689</color>
-    <color name="ok">#7ED6A2</color>
-    <color name="warn">#E5C07B</color>
-    <color name="err">#E08A8A</color>
-    <color name="preview">#0A0D12</color>
-    <color name="logo_top">#273349</color>
-    <color name="logo_bot">#161D2B</color>
-    <!-- 深色底下涟漪要更亮一点才看得见 -->
-    <color name="ripple">#337DA7F4</color>
-    <color name="disabled">#1B2130</color>
-    <color name="err_bg">#1AE08A8A</color>
-    <!-- 危险操作按钮深色模式：暗红背景 + 纯白文字高对比度 -->
-    <color name="btn_danger_bg">#992B2B</color>
-    <color name="btn_danger_text">#FFFFFF</color>
+    <!-- SukiSU-Ultra 暗黑模式标志性科技主色与强调色 -->
+    <color name="primary">#60A5FA</color>
+    <color name="primary_dark">#3B82F6</color>
+    <color name="primary_light">#93C5FD</color>
+    <color name="primary_container">#1E293B</color>
+    <color name="accent_on">#0B132B</color>
+
+    <!-- 表面与背景层次规范（通透深灰，层次分明） -->
+    <color name="surface">#0B0F17</color>
+    <color name="card">#131924</color>
+    <color name="card_elevated">#1A2230</color>
+    <color name="raised">#1B2332</color>
+    <color name="line">#222D3F</color>
+    <color name="line_subtle">#1A2332</color>
+
+    <!-- 文字层级阶梯 -->
+    <color name="text">#F1F5F9</color>
+    <color name="text_secondary">#94A3B8</color>
+    <color name="text_muted">#64748B</color>
+
+    <!-- SukiSU-Ultra 翡翠绿英雄卡片（暗黑极客高亮） -->
+    <color name="ok">#4ADE80</color>
+    <color name="ok_bg">#14532D</color>
+    <color name="ok_glow">#404ADE80</color>
+    <color name="ok_card_bg">#0E2A1C</color>
+    <color name="ok_card_border">#1B4330</color>
+    <color name="ok_watermark">#224ADE80</color>
+
+    <color name="warn">#FBBF24</color>
+    <color name="warn_bg">#451A03</color>
+
+    <color name="err">#F87171</color>
+    <color name="err_bg">#450A0A</color>
+
+    <color name="preview">#070A0F</color>
+    <color name="terminal_surface">#070A0F</color>
+    <color name="terminal_outline">#1A2332</color>
+
+    <color name="logo_top">#1E293B</color>
+    <color name="logo_bot">#0F172A</color>
+
+    <color name="ripple">#3360A5FA</color>
+    <color name="disabled">#171F2C</color>
+
+    <!-- SukiSU-Ultra 悬浮胶囊底栏专用色（高通透磨砂感） -->
+    <color name="pill_bg">#D9151C28</color>
+    <color name="pill_border">#2A364B</color>
+    <color name="pill_indicator">#222F44</color>
+    <color name="pill_shadow">#80000000</color>
+
+    <!-- 危险操作按钮暗黑模式 -->
+    <color name="btn_danger_bg">#991B1B</color>
+    <color name="btn_danger_text">#FEE2E2</color>
+
+    <!-- 英雄卡片未激活状态（深邃玄武灰） -->
+    <color name="hero_idle_bg">#121721</color>
+    <color name="hero_idle_border">#20293A</color>
+    <color name="hero_idle_watermark">#18334155</color>
 </resources>

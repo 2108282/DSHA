@@ -57,9 +57,11 @@ public class SettingsFragment extends Fragment {
         for (int i = 0; i < TAB_OPTIONS.length; i++) {
             if (i > 0) {
                 View divider = new View(requireContext());
-                divider.setLayoutParams(new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, 1));
-                divider.setBackgroundColor(requireContext().getColor(R.color.line));
+                LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, 1);
+                dlp.setMarginStart(dp(52));
+                divider.setLayoutParams(dlp);
+                divider.setBackgroundColor(requireContext().getColor(R.color.line_subtle));
                 tabs.addView(divider);
             }
             tabs.addView(buildRow(i));
@@ -211,16 +213,37 @@ public class SettingsFragment extends Fragment {
         LinearLayout row = new LinearLayout(requireContext());
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(15), dp(15), dp(15), dp(15));
-        // 用主题的 selectableItemBackground（Material ripple），不用 Holo 的黄色 list_selector
+        row.setPadding(dp(16), dp(16), dp(16), dp(16));
+
         TypedValue tv = new TypedValue();
         requireContext().getTheme().resolveAttribute(
                 android.R.attr.selectableItemBackground, tv, true);
         row.setBackgroundResource(tv.resourceId);
 
+        // 左侧 SukiSU 风格微标底座
+        android.widget.FrameLayout iconFrame = new android.widget.FrameLayout(requireContext());
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(dp(38), dp(38));
+        iconFrame.setLayoutParams(flp);
+        iconFrame.setBackgroundResource(R.drawable.bg_chip);
+
+        TextView iconTv = new TextView(requireContext());
+        android.widget.FrameLayout.LayoutParams ilp = new android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ilp.gravity = Gravity.CENTER;
+        iconTv.setLayoutParams(ilp);
+        iconTv.setTextSize(17);
+        if (index == 0) iconTv.setText("⚙️");
+        else if (index == 1) iconTv.setText("📦");
+        else iconTv.setText("🪟");
+        iconFrame.addView(iconTv);
+
+        row.addView(iconFrame);
+
         LinearLayout body = new LinearLayout(requireContext());
         body.setOrientation(LinearLayout.VERTICAL);
-        body.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        blp.setMarginStart(dp(14));
+        body.setLayoutParams(blp);
 
         TextView title = new TextView(requireContext());
         title.setText(opt.title);
@@ -242,7 +265,7 @@ public class SettingsFragment extends Fragment {
 
         TextView chev = new TextView(requireContext());
         chev.setText("›");
-        chev.setTextSize(18);
+        chev.setTextSize(20);
         chev.setTextColor(requireContext().getColor(R.color.text_muted));
 
         row.addView(body);

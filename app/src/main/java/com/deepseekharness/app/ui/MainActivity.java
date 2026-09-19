@@ -1,13 +1,21 @@
 package com.deepseekharness.app.ui;
 
+import android.animation.ArgbEvaluator;
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.animation.OvershootInterpolator;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 
 import com.deepseekharness.app.R;
@@ -16,12 +24,33 @@ import com.deepseekharness.app.core.HarnessController;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 
 /**
- * 主界面外壳：启动门禁 + 底部导航（启动 / 插件 / 设置 / 终端）+ 顶栏标题 + 关于入口。
+ * 主界面外壳：SukiSU-Ultra 风格全景沉浸式布局 + 悬浮药丸胶囊底栏 + 平滑页面切换。
  */
 public class MainActivity extends AppCompatActivity {
 
     public static volatile MainActivity current;
     private boolean requestingLocalNetwork;
+
+    // 悬浮药丸底栏控制引用
+    private View pillIndicator;
+    private ViewGroup tabsContainer;
+    private View tabItemLaunch;
+    private View tabItemTerminal;
+    private View tabItemPlugins;
+    private View tabItemSettings;
+
+    private ImageView tabIconLaunch;
+    private ImageView tabIconTerminal;
+    private ImageView tabIconPlugins;
+    private ImageView tabIconSettings;
+
+    private TextView tabTextLaunch;
+    private TextView tabTextTerminal;
+    private TextView tabTextPlugins;
+    private TextView tabTextSettings;
+
+    private int currentTab = 0; // 0: Launch, 1: Terminal, 2: Plugins, 3: Settings
+
     private final androidx.activity.result.ActivityResultLauncher<String> localNetworkPermission =
             registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
                     granted -> {
@@ -59,7 +88,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        // Android 13+ (API 33+) 动态申请通知权限，避免重装后系统默认禁用导致通知与胶囊彻底哑火
+        // Android 13+ (API 33+) 动态申请通知权限
         if (Build.VERSION.SDK_INT >= 33) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
                     != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -77,7 +106,6 @@ public class MainActivity extends AppCompatActivity {
             } catch (IllegalArgumentException ignored) { }
         }
 
-        TextView title = findViewById(R.id.app_title);
         TextView themeBtn = findViewById(R.id.btn_theme);
         if (themeBtn != null) {
             boolean dark = ThemeController.isDark(this);
@@ -87,67 +115,161 @@ public class MainActivity extends AppCompatActivity {
         }
         findViewById(R.id.btn_about).setOnClickListener(v -> AboutDialog.show(this));
 
-        BottomNavigationView nav = findViewById(R.id.bottom_nav);
-        nav.setOnItemSelectedListener(item -> {
-            Fragment f;
-            int id = item.getItemId();
-            if (id == R.id.nav_launch) {
-                f = new LaunchFragment();
-                title.setText(R.string.nav_launch);
-            } else if (id == R.id.nav_plugins) {
-                f = new PluginFragment();
-                if (getIntent().getBooleanExtra("open_plugins", false)) {
-                    Bundle args = new Bundle(); args.putBoolean("show_installed", true); f.setArguments(args);
-                    getIntent().removeExtra("open_plugins");
-                }
-                title.setText(R.string.nav_plugins);
-            } else if (id == R.id.nav_settings) {
-                f = new SettingsFragment();
-                title.setText(R.string.nav_settings);
-            } else {
-                // 终端：默认挂真 PTY 页（vim/htop/tmux 能跑），可在 PTY 页切回简易版
-                f = PtyTerminalFragment.preferred(this)
-                        ? new PtyTerminalFragment() : new TerminalFragment();
-                title.setText(R.string.nav_terminal);
-            }
-            getSupportFragmentManager().beginTransaction()
-                    .replace(R.id.fragment_container, f)
-                    .commit();
-            return true;
-        });
+        // 初始化悬浮药丸底栏视图
+        initFloatingBottomBar();
 
         if (savedInstanceState == null) {
             if (getIntent().getBooleanExtra("open_terminal", false)) {
-                nav.setSelectedItemId(R.id.nav_terminal);
+                selectTab(1, false);
             } else if (getIntent().getBooleanExtra("open_plugins", false)) {
-                nav.setSelectedItemId(R.id.nav_plugins);
+                selectTab(2, false);
             } else {
-                nav.setSelectedItemId(R.id.nav_launch);
+                selectTab(0, false);
             }
         } else {
-            // 重建时（如切换主题），根据当前恢复的 tab 状态同步更新标题，避免错乱停留在“启动”
-            int selectedId = nav.getSelectedItemId();
-            if (selectedId == R.id.nav_plugins) {
-                title.setText(R.string.nav_plugins);
-            } else if (selectedId == R.id.nav_settings) {
-                title.setText(R.string.nav_settings);
-            } else if (selectedId == R.id.nav_terminal) {
-                title.setText(R.string.nav_terminal);
-            } else {
-                title.setText(R.string.nav_launch);
-            }
+            selectTab(currentTab, false);
         }
     }
 
-    @Override protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent); setIntent(intent);
-        BottomNavigationView nav = findViewById(R.id.bottom_nav);
-        if (nav != null) {
-            if (intent.getBooleanExtra("open_terminal", false)) {
-                nav.setSelectedItemId(R.id.nav_terminal);
-            } else if (intent.getBooleanExtra("open_plugins", false)) {
-                nav.setSelectedItemId(R.id.nav_plugins);
+    private void initFloatingBottomBar() {
+        pillIndicator = findViewById(R.id.pill_indicator);
+        tabsContainer = findViewById(R.id.floating_tabs_container);
+
+        tabItemLaunch = findViewById(R.id.tab_item_launch);
+        tabItemTerminal = findViewById(R.id.tab_item_terminal);
+        tabItemPlugins = findViewById(R.id.tab_item_plugins);
+        tabItemSettings = findViewById(R.id.tab_item_settings);
+
+        tabIconLaunch = findViewById(R.id.tab_icon_launch);
+        tabIconTerminal = findViewById(R.id.tab_icon_terminal);
+        tabIconPlugins = findViewById(R.id.tab_icon_plugins);
+        tabIconSettings = findViewById(R.id.tab_icon_settings);
+
+        tabTextLaunch = findViewById(R.id.tab_text_launch);
+        tabTextTerminal = findViewById(R.id.tab_text_terminal);
+        tabTextPlugins = findViewById(R.id.tab_text_plugins);
+        tabTextSettings = findViewById(R.id.tab_text_settings);
+
+        tabItemLaunch.setOnClickListener(v -> selectTab(0, true));
+        tabItemTerminal.setOnClickListener(v -> selectTab(1, true));
+        tabItemPlugins.setOnClickListener(v -> selectTab(2, true));
+        tabItemSettings.setOnClickListener(v -> selectTab(3, true));
+
+        // 布局就绪后初始化指示器位置
+        tabsContainer.getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+            @Override
+            public void onGlobalLayout() {
+                tabsContainer.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+                updateIndicatorPosition(currentTab, false);
             }
+        });
+    }
+
+    public void selectTab(int index, boolean animate) {
+        currentTab = index;
+        TextView title = findViewById(R.id.app_title);
+        TextView subtitle = findViewById(R.id.app_subtitle);
+        Fragment f;
+
+        int activeColor = ContextCompat.getColor(this, R.color.primary);
+        int inactiveColor = ContextCompat.getColor(this, R.color.text_muted);
+
+        // 重置所有 Tab 状态
+        resetTabVisual(tabIconLaunch, tabTextLaunch, inactiveColor);
+        resetTabVisual(tabIconTerminal, tabTextTerminal, inactiveColor);
+        resetTabVisual(tabIconPlugins, tabTextPlugins, inactiveColor);
+        resetTabVisual(tabIconSettings, tabTextSettings, inactiveColor);
+
+        switch (index) {
+            case 0:
+            default:
+                f = new LaunchFragment();
+                if (title != null) title.setText(R.string.nav_launch);
+                if (subtitle != null) subtitle.setText("DSHA · KernelSU / Magisk 原生服务控制");
+                highlightTabVisual(tabIconLaunch, tabTextLaunch, activeColor, tabItemLaunch);
+                break;
+            case 1:
+                f = PtyTerminalFragment.preferred(this) ? new PtyTerminalFragment() : new TerminalFragment();
+                if (title != null) title.setText(R.string.nav_terminal);
+                if (subtitle != null) subtitle.setText("DSHA · 原生 PTY 交互终端");
+                highlightTabVisual(tabIconTerminal, tabTextTerminal, activeColor, tabItemTerminal);
+                break;
+            case 2:
+                f = new PluginFragment();
+                if (getIntent().getBooleanExtra("open_plugins", false)) {
+                    Bundle args = new Bundle();
+                    args.putBoolean("show_installed", true);
+                    f.setArguments(args);
+                    getIntent().removeExtra("open_plugins");
+                }
+                if (title != null) title.setText(R.string.nav_plugins);
+                if (subtitle != null) subtitle.setText("DSHA · 官方核心扩展与插件市场");
+                highlightTabVisual(tabIconPlugins, tabTextPlugins, activeColor, tabItemPlugins);
+                break;
+            case 3:
+                f = new SettingsFragment();
+                if (title != null) title.setText(R.string.nav_settings);
+                if (subtitle != null) subtitle.setText("DSHA · 系统参数、自愈与抽屉沉浸配置");
+                highlightTabVisual(tabIconSettings, tabTextSettings, activeColor, tabItemSettings);
+                break;
+        }
+
+        // 平滑淡入切换 Fragment
+        getSupportFragmentManager().beginTransaction()
+                .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out)
+                .replace(R.id.fragment_container, f)
+                .commit();
+
+        updateIndicatorPosition(index, animate);
+    }
+
+    private void resetTabVisual(ImageView icon, TextView text, int color) {
+        if (icon != null) icon.setImageTintList(ColorStateList.valueOf(color));
+        if (text != null) text.setTextColor(color);
+    }
+
+    private void highlightTabVisual(ImageView icon, TextView text, int color, View container) {
+        if (icon != null) icon.setImageTintList(ColorStateList.valueOf(color));
+        if (text != null) text.setTextColor(color);
+        if (container != null) {
+            container.setScaleX(0.92f);
+            container.setScaleY(0.92f);
+            container.animate().scaleX(1.0f).scaleY(1.0f).setDuration(220).setInterpolator(new OvershootInterpolator(1.4f)).start();
+        }
+    }
+
+    private void updateIndicatorPosition(int index, boolean animate) {
+        if (tabsContainer == null || pillIndicator == null) return;
+        int containerWidth = tabsContainer.getWidth();
+        if (containerWidth <= 0) return;
+
+        int tabWidth = containerWidth / 4;
+        ViewGroup.LayoutParams lp = pillIndicator.getLayoutParams();
+        if (lp.width != tabWidth) {
+            lp.width = tabWidth;
+            pillIndicator.setLayoutParams(lp);
+        }
+
+        float targetX = index * tabWidth;
+        if (animate) {
+            pillIndicator.animate()
+                    .translationX(targetX)
+                    .setDuration(280)
+                    .setInterpolator(new OvershootInterpolator(1.15f))
+                    .start();
+        } else {
+            pillIndicator.setTranslationX(targetX);
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent.getBooleanExtra("open_terminal", false)) {
+            selectTab(1, true);
+        } else if (intent.getBooleanExtra("open_plugins", false)) {
+            selectTab(2, true);
         }
     }
 
@@ -155,27 +277,24 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         com.deepseekharness.app.HarnessService.checkAndSyncService(this);
-        if (!isFinishing() && findViewById(R.id.bottom_nav) != null
-                && new ConfigStore(this).isLanMode()
+        if (!isFinishing() && new ConfigStore(this).isLanMode()
                 && !com.deepseekharness.app.bridge.LocalNetworkAccess.granted(this)
                 && !getSharedPreferences(com.deepseekharness.app.util.Constants.PREFS, MODE_PRIVATE)
-                .getBoolean("local_network_permission_asked", false)) requestLocalNetwork();
+                .getBoolean("local_network_permission_asked", false)) {
+            requestLocalNetwork();
+        }
     }
 
     @Override
     protected void onDestroy() {
         if (current == this) current = null;
         if (isFinishing()) {
-            // 仅在 Activity 真正关闭退出时收掉 PTY 会话与简易 shell（防在容器里留孤儿 bash）
-            // 因主题切换或旋转屏幕触发的 recreate 不应杀灭用户正在运行的终端任务！
             try {
                 PtyTerminalFragment.shutdown();
-            } catch (Throwable ignored) {
-            }
+            } catch (Throwable ignored) { }
             try {
                 TerminalFragment.shutdownShell();
-            } catch (Throwable ignored) {
-            }
+            } catch (Throwable ignored) { }
         }
         super.onDestroy();
     }

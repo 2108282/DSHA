@@ -176,7 +176,7 @@ public final class PtyTerminalFragment extends Fragment
             TextView b = new TextView(requireContext());
             b.setText(k[0]);
             b.setGravity(Gravity.CENTER);
-            b.setBackgroundResource(R.drawable.bg_chip);
+            b.setBackgroundResource(R.drawable.bg_chip_terminal_key);
             b.setTextColor(getResources().getColor(R.color.text_secondary));
             b.setTypeface(android.graphics.Typeface.MONOSPACE);
             b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);

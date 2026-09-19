@@ -64,6 +64,38 @@ public class LaunchFragment extends Fragment {
 
         restart.setText("重启");
 
+        // 快捷入口：系统浏览器 & 快捷抽屉
+        View quickBrowser = v.findViewById(R.id.btn_quick_browser);
+        if (quickBrowser != null) {
+            quickBrowser.setOnClickListener(x -> {
+                String url = controller.getWebAuthUrl();
+                if (url == null || url.isEmpty()) {
+                    url = "http://127.0.0.1:" + controller.config().getPort();
+                }
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                } catch (Exception e) {
+                    Toast.makeText(requireContext(), "调起浏览器失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+        View quickSheet = v.findViewById(R.id.btn_quick_sheet);
+        if (quickSheet != null) {
+            quickSheet.setOnClickListener(x -> {
+                QuickChatSheetActivity.launch(requireContext());
+            });
+        }
+
+        // Hero 卡片按压微动与点击进入
+        View heroCard = v.findViewById(R.id.hero_card);
+        if (heroCard != null) {
+            heroCard.setOnClickListener(x -> {
+                if (controller.isWebRunning() && !controller.getWebAuthUrl().isEmpty()) {
+                    enterWeb();
+                }
+            });
+        }
+
         android.widget.EditText portInput = v.findViewById(R.id.launch_port_input);
         if (portInput != null) {
             portInput.setText(String.valueOf(controller.config().getPortInt()));
@@ -297,6 +329,22 @@ public class LaunchFragment extends Fragment {
             if (restart != null) restart.setEnabled(!starting && !stopping);
             Button stop = root.findViewById(R.id.launch_stop);
             if (stop != null) stop.setEnabled(!stopping);
+
+            // 联动 SukiSU-Ultra 风格 Hero 状态大卡片背景与水印
+            View heroCard = root.findViewById(R.id.hero_card);
+            android.widget.ImageView heroWatermark = root.findViewById(R.id.hero_watermark);
+            TextView runDot = root.findViewById(R.id.launch_run_dot);
+            if (heroCard != null && heroWatermark != null && isAdded()) {
+                if (ready || running) {
+                    heroCard.setBackgroundResource(R.drawable.bg_hero_card_running);
+                    heroWatermark.setImageResource(R.drawable.ic_watermark_check);
+                    if (runDot != null) runDot.setTextColor(androidx.core.content.ContextCompat.getColor(requireContext(), R.color.ok));
+                } else {
+                    heroCard.setBackgroundResource(R.drawable.bg_hero_card_stopped);
+                    heroWatermark.setImageResource(R.drawable.ic_watermark_power);
+                    if (runDot != null) runDot.setTextColor(androidx.core.content.ContextCompat.getColor(requireContext(), R.color.text_muted));
+                }
+            }
         } catch (Throwable ignored) {
         }
     }
