@@ -35,6 +35,11 @@ fi
 # 2. 解除 Android 12+ 幽灵进程限制
 /system/bin/device_config put activity_manager max_phantom_processes 2147483647 2>/dev/null
 
+# 2.3 深度破除残留死锁：清理上次异常退出遗留的 stale .lock 文件，防止 atomic-write 写入超时卡死
+rm -f "$ROOTFS/root/.dsh/"*.lock 2>/dev/null || true
+rm -f "$ROOTFS/root/.dsh/."*.lock 2>/dev/null || true
+rm -f "$ROOTFS/root/.dsh/.credentials.yaml.lock" 2>/dev/null || true
+
 # 2.5 自动补齐 CA 根证书与前端首帧防闪白样式
 mkdir -p "$ROOTFS/etc/ssl/certs" "$ROOTFS/usr/lib/ssl" 2>/dev/null || true
 if [ -f "$ROOTFS/usr/local/share/dsha/ca-certificates.crt" ]; then
