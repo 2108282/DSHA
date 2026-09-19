@@ -80,18 +80,36 @@ public class HarnessController {
         return config != null ? config.getPortInt() : 3080;
     }
 
-    /** Web 是否在运行（针对 ksu_chroot 使用 Socket 探活与 status.sh，否则按 pid 文件 + kill -0）。 */
+    private static volatile boolean lastKnownWebRunning = false;
+    private static volatile long lastStatusCheckMs = 0L;
+    private static volatile long lastRecoverAttemptMs = 0L;
+
+    /** Web 是否在运行（针对 ksu_chroot 使用 Socket 探活与 status.sh，严禁在主线程执行 su，且后台执行有 3s 节流）。 */
     public boolean isWebRunning() {
         if ("ksu_chroot".equals(proot.runtime().id())) {
             try (java.net.Socket s = new java.net.Socket()) {
-                s.connect(new java.net.InetSocketAddress("127.0.0.1", config != null ? config.getPortInt() : 3080), 200);
+                s.connect(new java.net.InetSocketAddress("127.0.0.1", config != null ? config.getPortInt() : 3080), 50);
+                lastKnownWebRunning = true;
                 return true;
             } catch (Throwable ignored) {
             }
+            // 主线程调用：绝不在 UI 线程同步等待 su 进程，直接返回快速探活/缓存结果
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                return lastKnownWebRunning;
+            }
+            // 非主线程：节流限制（最少间隔 3 秒才执行一次 status.sh，消除 su 轰炸与 Magisk 弹窗风暴）
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (now - lastStatusCheckMs < 3000L) {
+                return lastKnownWebRunning;
+            }
+            lastStatusCheckMs = now;
             try {
                 Process p = Runtime.getRuntime().exec(new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/status.sh"});
-                return p.waitFor() == 0;
+                boolean running = p.waitFor() == 0;
+                lastKnownWebRunning = running;
+                return running;
             } catch (Throwable e) {
+                lastKnownWebRunning = false;
                 return false;
             }
         }
@@ -108,10 +126,13 @@ public class HarnessController {
         }
     }
 
-    /** 若服务已在后台运行但内存中鉴权链接丢失，尝试从模块运行日志中恢复鉴权链接。 */
+    /** 若服务已在后台运行但内存中鉴权链接丢失，尝试从模块运行日志中恢复鉴权链接（带 3s 防抖）。 */
     public void tryRecoverRunningUrl() {
         if (!webAuthUrl.isEmpty()) return;
-        if ("ksu_chroot".equals(proot.runtime().id()) && isWebRunning()) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastRecoverAttemptMs < 3000L) return;
+        lastRecoverAttemptMs = now;
+        if ("ksu_chroot".equals(proot.runtime().id()) && lastKnownWebRunning) {
             io.execute(() -> {
                 try {
                     Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
@@ -526,20 +547,15 @@ public class HarnessController {
                 return;
             }
             int targetPort = config != null ? config.getPortInt() : 3080;
-            for (int i = 0; i < 8; i++) {
+            for (int i = 0; i < 6; i++) {
                 synchronized (lifecycle) {
                     if (!lifecycle.isCurrent(generation)) return;
                     if (!webAuthUrl.isEmpty()) return;
                 }
                 try {
-                    Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                            "grep -o 'http://127\\.0\\.0\\.1:" + targetPort + "/?token=[^ ]*' /data/adb/dsha/run/dsh-web.log 2>/dev/null | tail -n 1"});
+                    String grepCmd = "grep -o 'http://127\\.0\\.0\\.1:" + targetPort + "/?token=[^ ]*' /data/adb/dsha/run/dsh-web.log 2>/dev/null | tail -n 1 || grep -o 'http://127\\.0\\.0\\.1:[0-9]*/?token=[^ ]*' /data/adb/dsha/run/dsh-web.log 2>/dev/null | tail -n 1";
+                    Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", grepCmd});
                     String out = new String(Compat.readAllBytes(p.getInputStream()), StandardCharsets.UTF_8).trim();
-                    if (out.isEmpty()) {
-                        Process pAny = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                                "grep -o 'http://127\\.0\\.0\\.1:[0-9]*/?token=[^ ]*' /data/adb/dsha/run/dsh-web.log 2>/dev/null | tail -n 1"});
-                        out = new String(Compat.readAllBytes(pAny.getInputStream()), StandardCharsets.UTF_8).trim();
-                    }
                     String url = extractAuthUrl(out);
                     if (url != null && !url.isEmpty()) {
                         synchronized (lifecycle) {
@@ -557,7 +573,7 @@ public class HarnessController {
                 } catch (Throwable ignored) {
                 }
                 try {
-                    Thread.sleep(1500);
+                    Thread.sleep(2000);
                 } catch (InterruptedException e) {
                     break;
                 }

@@ -42,7 +42,8 @@ public class LaunchFragment extends Fragment {
         @Override public void run() {
             refreshRunState();
             refreshLanAddr();
-            ui.postDelayed(this, 1000);
+            long delay = (webReady || (controller != null && !controller.getWebAuthUrl().isEmpty())) ? 2500L : 1000L;
+            ui.postDelayed(this, delay);
         }
     };
 

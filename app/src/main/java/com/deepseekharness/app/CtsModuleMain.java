@@ -121,14 +121,25 @@ public class CtsModuleMain extends XposedModule {
         }
     }
 
-    /** 开关开 → 重定向；关 → 透传系统原逻辑。每次手势都实时读取，改开关即时生效。 */
+    private static volatile boolean sCachedEnabled = true;
+    private static volatile long sLastPrefFetchMs = 0L;
+    private static final long PREF_CACHE_TTL_MS = 5_000L;
+
+    /** 开关开 → 重定向；关 → 透传系统原逻辑。带 TTL 内存缓存，严禁在 ATMS 核心锁路径同步跨进程 IPC。 */
     private boolean isEnabled() {
-        try {
-            return instance != null
-                    && instance.getRemotePreferences(CONFIG_NAME).getBoolean(KEY_ENABLED, true);
-        } catch (Throwable t) {
-            return true;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - sLastPrefFetchMs < PREF_CACHE_TTL_MS) {
+            return sCachedEnabled;
         }
+        sLastPrefFetchMs = now;
+        try {
+            if (instance != null) {
+                sCachedEnabled = instance.getRemotePreferences(CONFIG_NAME).getBoolean(KEY_ENABLED, true);
+            }
+        } catch (Throwable t) {
+            // 异常时维持已有缓存值，绝不阻塞调用者
+        }
+        return sCachedEnabled;
     }
 
     /**
@@ -140,39 +151,54 @@ public class CtsModuleMain extends XposedModule {
     private final class AtmsStartActivityHooker implements Hooker {
         @Override
         public Object intercept(Chain chain) throws Throwable {
+            List<?> args = chain.getArgs();
+            if (args == null || args.isEmpty()) {
+                return chain.proceed();
+            }
+
+            Intent targetIntent = null;
+            ComponentName comp = null;
+            String act = null;
+            for (Object arg : args) {
+                if (arg instanceof Intent) {
+                    Intent intent = (Intent) arg;
+                    comp = intent.getComponent();
+                    String pkg = comp != null ? comp.getPackageName() : intent.getPackage();
+                    String cls = comp != null ? comp.getClassName() : "";
+                    act = intent.getAction();
+
+                    boolean isGoogleTarget = "com.google.android.googlequicksearchbox".equals(pkg)
+                            && (cls.contains("FloatyActivity")
+                                    || cls.contains("VoiceSearchActivity")
+                                    || cls.contains("OpaSearchActivity"));
+
+                    boolean isCtsAction = "android.app.contextualsearch.action.LAUNCH_CONTEXTUAL_SEARCH".equals(act);
+
+                    if (isGoogleTarget || isCtsAction) {
+                        targetIntent = intent;
+                        break;
+                    }
+                }
+            }
+
+            // 极速前置过滤：非目标调用 0 开销直接放行，绝不阻碍系统其他任何 Activity 的启动调度！
+            if (targetIntent == null) {
+                return chain.proceed();
+            }
+
+            // 仅在命中目标后，读取内存缓存的开关
             if (!isEnabled()) {
                 return chain.proceed();
             }
 
-            List<?> args = chain.getArgs();
-            if (args != null) {
-                for (Object arg : args) {
-                    if (arg instanceof Intent) {
-                        Intent intent = (Intent) arg;
-                        ComponentName comp = intent.getComponent();
-                        String pkg = comp != null ? comp.getPackageName() : intent.getPackage();
-                        String cls = comp != null ? comp.getClassName() : "";
-                        String act = intent.getAction();
+            log(Log.INFO, TAG, "ATMS pre-intercepted assist startActivity: "
+                    + (comp != null ? comp.flattenToShortString() : act)
+                    + " -> cleanly redirected to " + TARGET_PACKAGE);
+            targetIntent.setComponent(new ComponentName(TARGET_PACKAGE,
+                    "com.deepseekharness.app.ui.AssistGatewayActivity"));
+            targetIntent.setAction(Intent.ACTION_ASSIST);
+            targetIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
 
-                        boolean isGoogleTarget = "com.google.android.googlequicksearchbox".equals(pkg)
-                                && (cls.contains("FloatyActivity")
-                                        || cls.contains("VoiceSearchActivity")
-                                        || cls.contains("OpaSearchActivity"));
-
-                        boolean isCtsAction = "android.app.contextualsearch.action.LAUNCH_CONTEXTUAL_SEARCH".equals(act);
-
-                        if (isGoogleTarget || isCtsAction) {
-                            log(Log.INFO, TAG, "ATMS pre-intercepted assist startActivity: "
-                                    + (comp != null ? comp.flattenToShortString() : act)
-                                    + " -> cleanly redirected to " + TARGET_PACKAGE);
-                            intent.setClassName(TARGET_PACKAGE,
-                                    "com.deepseekharness.app.ui.AssistGatewayActivity");
-                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-                            break;
-                        }
-                    }
-                }
-            }
             return chain.proceed();
         }
     }
