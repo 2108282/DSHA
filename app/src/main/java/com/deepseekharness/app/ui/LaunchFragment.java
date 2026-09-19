@@ -82,7 +82,12 @@ public class LaunchFragment extends Fragment {
         View quickSheet = v.findViewById(R.id.btn_quick_sheet);
         if (quickSheet != null) {
             quickSheet.setOnClickListener(x -> {
-                QuickChatSheetActivity.launch(requireContext());
+                try {
+                    Intent intent = QuickChatSheetActivity.createLaunchIntent(requireContext());
+                    startActivity(intent);
+                } catch (Exception e) {
+                    Toast.makeText(requireContext(), "调起快捷抽屉失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
             });
         }
 
