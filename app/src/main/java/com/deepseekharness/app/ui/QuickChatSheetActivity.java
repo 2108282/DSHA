@@ -362,6 +362,19 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         setupBackDispatcher();
         attachChatWeb();
         animateIn();
+        triggerAdaptiveMonetSampling();
+    }
+
+    /** 异步触发当前屏幕画面自适应取色，若识别到新环境色则平滑刷新抽屉与 WebView 样式 */
+    private void triggerAdaptiveMonetSampling() {
+        if (!isMonetColor) return;
+        MonetThemeHelper.refreshAdaptiveSeedAsync(this, newSeed -> {
+            runOnUiThread(() -> {
+                if (!isFinishing() && !isDestroyed()) {
+                    updateCardTheme();
+                }
+            });
+        });
     }
 
     private void setupBackDispatcher() {
@@ -388,6 +401,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         isDarkMode = dark;
         isMonetColor = monet;
         updateCardTheme();
+        triggerAdaptiveMonetSampling();
         if (sCachedWebView != null) {
             triggerForegroundWakeup();
             injectTransparentBackground(sCachedWebView);
@@ -1802,6 +1816,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             if (sCachedWebView != null) {
                 injectTransparentBackground(sCachedWebView);
             }
+        }
+        if (isMonetColor) {
+            triggerAdaptiveMonetSampling();
         }
         if (sCachedWebView != null) {
             if (sPendingApprovalDecision != null) {
