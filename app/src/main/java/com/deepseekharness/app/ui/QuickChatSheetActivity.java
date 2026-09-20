@@ -15,7 +15,12 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.graphics.Canvas;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -218,6 +223,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private boolean isKeyboardElevated = false;
     private ValueAnimator heightAnimator = null;
     private ViewTreeObserver.OnGlobalLayoutListener keyboardLayoutListener;
+
+    // ================= 自动语音输入状态机 =================
+    private SpeechRecognizer mSpeechRecognizer;
+    private Intent mSpeechIntent;
+    private boolean mIsListening = false;
+    private final Handler mVoiceHandler = new Handler(Looper.getMainLooper());
 
     private ValueCallback<Uri[]> fileCallback = null;
     private final ArrayList<File> uploads = new ArrayList<>();
@@ -1803,11 +1814,28 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 reloadWithLatestToken();
             }
         }
+
+        // 3. 进场动效展开完成后，按配置自动开启语音拾音
+        mVoiceHandler.removeCallbacksAndMessages(null);
+        mVoiceHandler.postDelayed(this::startVoiceListening, 300);
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        // 关键交互：用户手指触摸屏幕任意位置（点按、输入框获焦、滑动等），麦克风立刻闭嘴停止录音
+        if (ev.getAction() == MotionEvent.ACTION_DOWN) {
+            if (mIsListening) {
+                stopVoiceListening(true);
+            }
+        }
+        return super.dispatchTouchEvent(ev);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        mVoiceHandler.removeCallbacksAndMessages(null);
+        stopVoiceListening(true);
         // 抽屉退入后台时仅暂停单个 WebView 渲染合成释放 GPU，保留全局 JS 定时器与网络心跳存活
         if (sCachedWebView != null) {
             sCachedWebView.onPause();
@@ -1817,6 +1845,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         super.onStop();
+        mVoiceHandler.removeCallbacksAndMessages(null);
+        stopVoiceListening(true);
         if (sCachedWebView != null) {
             sCachedWebView.onPause();
         }
@@ -1827,6 +1857,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         if (sCurrentInstance == this) {
             sCurrentInstance = null;
         }
+        mVoiceHandler.removeCallbacksAndMessages(null);
+        destroyVoiceRecognizer();
         cancelFileSelection();
         WebUploads.clean(uploads);
         if (keyboardLayoutListener != null && getWindow() != null && getWindow().getDecorView() != null) {
@@ -1835,6 +1867,171 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         super.onDestroy();
         if (sCachedWebView != null && sCachedWebView.getParent() == webContainer) {
             webContainer.removeView(sCachedWebView);
+        }
+    }
+
+    // ================= 自动语音输入实现 =================
+
+    private void initSpeechRecognizer() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            return;
+        }
+        try {
+            if (mSpeechRecognizer != null) {
+                mSpeechRecognizer.destroy();
+            }
+            mSpeechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            mSpeechIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN");
+            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+            // 静音自动断句：用户停止说话 1.5 秒自动断句收尾
+            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L);
+            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L);
+
+            mSpeechRecognizer.setRecognitionListener(new RecognitionListener() {
+                @Override
+                public void onReadyForSpeech(Bundle params) {
+                    mIsListening = true;
+                }
+
+                @Override
+                public void onBeginningOfSpeech() {
+                    mIsListening = true;
+                }
+
+                @Override
+                public void onRmsChanged(float rmsdB) {}
+
+                @Override
+                public void onBufferReceived(byte[] buffer) {}
+
+                @Override
+                public void onEndOfSpeech() {
+                    mIsListening = false;
+                }
+
+                @Override
+                public void onError(int error) {
+                    mIsListening = false;
+                }
+
+                @Override
+                public void onResults(Bundle results) {
+                    mIsListening = false;
+                    if (results != null) {
+                        ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                        if (matches != null && !matches.isEmpty()) {
+                            injectSpeechTextToWeb(matches.get(0), true);
+                        }
+                    }
+                }
+
+                @Override
+                public void onPartialResults(Bundle partialResults) {
+                    if (partialResults != null) {
+                        ArrayList<String> matches = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                        if (matches != null && !matches.isEmpty()) {
+                            injectSpeechTextToWeb(matches.get(0), false);
+                        }
+                    }
+                }
+
+                @Override
+                public void onEvent(int eventType, Bundle params) {}
+            });
+        } catch (Throwable t) {
+            mSpeechRecognizer = null;
+        }
+    }
+
+    private void startVoiceListening() {
+        ConfigStore cfg = new ConfigStore(this);
+        if (!cfg.isAutoVoiceInputEnabled()) {
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 1001);
+            return;
+        }
+        if (mSpeechRecognizer == null) {
+            initSpeechRecognizer();
+        }
+        if (mSpeechRecognizer != null && !mIsListening && !isFinishing() && !isDestroyed()) {
+            try {
+                mSpeechRecognizer.startListening(mSpeechIntent);
+                mIsListening = true;
+            } catch (Throwable t) {
+                mIsListening = false;
+            }
+        }
+    }
+
+    private void stopVoiceListening(boolean cancel) {
+        if (mSpeechRecognizer != null) {
+            try {
+                if (cancel) {
+                    mSpeechRecognizer.cancel();
+                } else {
+                    mSpeechRecognizer.stopListening();
+                }
+            } catch (Throwable ignored) {}
+        }
+        mIsListening = false;
+    }
+
+    private void destroyVoiceRecognizer() {
+        stopVoiceListening(true);
+        if (mSpeechRecognizer != null) {
+            try {
+                mSpeechRecognizer.destroy();
+            } catch (Throwable ignored) {}
+            mSpeechRecognizer = null;
+        }
+    }
+
+    private void injectSpeechTextToWeb(String text, boolean isFinal) {
+        if (sCachedWebView == null || text == null || isFinishing() || isDestroyed()) return;
+        String escaped = org.json.JSONObject.quote(text);
+        String js = "(function() {"
+                + "  try {"
+                + "    var el = document.querySelector('[data-composer-input], textarea, [contenteditable=\"true\"]');"
+                + "    if (!el) el = document.querySelector('input[type=\"text\"]');"
+                + "    if (!el) return;"
+                + "    var txt = " + escaped + ";"
+                + "    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {"
+                + "      el.value = txt;"
+                + "      el.dispatchEvent(new Event('input', { bubbles: true }));"
+                + "      el.dispatchEvent(new Event('change', { bubbles: true }));"
+                + "    } else if (el.isContentEditable || el.hasAttribute('data-composer-input')) {"
+                + "      el.focus();"
+                + "      var sel = window.getSelection();"
+                + "      var range = document.createRange();"
+                + "      range.selectNodeContents(el);"
+                + "      sel.removeAllRanges();"
+                + "      sel.addRange(range);"
+                + "      if (!document.execCommand('insertText', false, txt)) {"
+                + "        el.innerText = txt;"
+                + "      }"
+                + "      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: txt }));"
+                + "    }"
+                + "  } catch (e) {"
+                + "    console.warn('injectSpeechText fail', e);"
+                + "  }"
+                + "})();";
+        sCachedWebView.post(() -> {
+            if (sCachedWebView != null && !isFinishing() && !isDestroyed()) {
+                sCachedWebView.evaluateJavascript(js, null);
+            }
+        });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @androidx.annotation.NonNull String[] permissions, @androidx.annotation.NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 1001 && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startVoiceListening();
         }
     }
 }

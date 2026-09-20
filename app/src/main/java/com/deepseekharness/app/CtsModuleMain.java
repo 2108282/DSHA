@@ -199,7 +199,31 @@ public class CtsModuleMain extends XposedModule {
             targetIntent.setAction(Intent.ACTION_ASSIST);
             targetIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
 
+            // 彻底根除 Google 后台语音空转：主动通知系统销毁/隐藏 Google 的 VoiceInteractionSession
+            dismissActiveVoiceSession();
+
             return chain.proceed();
+        }
+    }
+
+    /** 主动通知系统 VoiceInteractionManagerService 隐藏并结束活跃会话，释放被 Google 占用的麦克风。 */
+    private static void dismissActiveVoiceSession() {
+        try {
+            Class<?> smClass = Class.forName("android.os.ServiceManager");
+            Method getService = smClass.getMethod("getService", String.class);
+            android.os.IBinder binder = (android.os.IBinder) getService.invoke(null, "voiceinteraction");
+            if (binder != null) {
+                Class<?> stubClass = Class.forName("com.android.internal.app.IVoiceInteractionManagerService$Stub");
+                Method asInterface = stubClass.getMethod("asInterface", android.os.IBinder.class);
+                Object service = asInterface.invoke(null, binder);
+                if (service != null) {
+                    Method hideSession = service.getClass().getMethod("hideCurrentSession");
+                    hideSession.invoke(service);
+                    Log.i(TAG, "dismissActiveVoiceSession: successfully hid voice session and released mic");
+                }
+            }
+        } catch (Throwable t) {
+            Log.d(TAG, "dismissActiveVoiceSession skip: " + t.getMessage());
         }
     }
 
@@ -245,6 +269,7 @@ public class CtsModuleMain extends XposedModule {
                 activity.startActivity(intent);
                 activity.finishAndRemoveTask();
                 activity.overridePendingTransition(0, 0);
+                dismissActiveVoiceSession();
                 log(Log.INFO, TAG, "FloatyActivity redirected cleanly via fallback");
 
                 // 满足系统 super.onCreate 检查，阻断 Google 子类 View 加载

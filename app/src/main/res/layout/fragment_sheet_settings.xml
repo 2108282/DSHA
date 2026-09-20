@@ -154,6 +154,65 @@
                 android:layout_height="@dimen/stroke"
                 android:background="@color/line" />
 
+            <!-- 2.5 呼出抽屉自动语音输入 -->
+            <LinearLayout
+                android:id="@+id/sheet_settings_auto_voice_row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="@dimen/card_pad">
+
+                <TextView
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:background="@drawable/bg_chip"
+                    android:gravity="center"
+                    android:text="🎙️"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="@dimen/text_title" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/gap_control"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="呼出抽屉自动语音输入"
+                        android:textColor="@color/text_primary"
+                        android:textSize="@dimen/text_body"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/gap_hair"
+                        android:lineSpacingExtra="2dp"
+                        android:text="手势唤起抽屉时自动拾音并实时转文字，说完停顿 1.5 秒自动断句；碰触屏幕即可随时取消"
+                        android:textColor="@color/text_muted"
+                        android:textSize="@dimen/text_caption" />
+                </LinearLayout>
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/sheet_settings_auto_voice_switch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:clickable="false"
+                    android:focusable="false" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/stroke"
+                android:background="@color/line" />
+
             <!-- 3. 抽屉白天不透明度 -->
             <LinearLayout
                 android:id="@+id/sheet_settings_opacity_day_row"
