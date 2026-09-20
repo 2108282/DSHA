@@ -1816,9 +1816,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 reloadWithLatestToken();
             }
         }
-
-        
-    
+    }
 
     @Override
     protected void onPause() {
