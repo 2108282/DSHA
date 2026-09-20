@@ -36,7 +36,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -95,6 +97,8 @@ import java.util.Arrays;
  */
 @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
 public class QuickChatSheetActivity extends AppCompatActivity {
+
+    private static final String TAG = "QuickChatSheet";
 
     public static final int ICON_CLOSE = 1;
     public static final int ICON_SETTINGS = 2;
