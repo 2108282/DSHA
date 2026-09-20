@@ -126,15 +126,6 @@ public class ConfigStore {
         prefs.edit().putBoolean(Constants.KEY_GECKO_CORE, v).apply();
     }
 
-    /** 默认 proroot；关掉用传统 proot。 */
-    public boolean isProroot() {
-        return "proroot".equals(prefs.getString(Constants.KEY_CONTAINER_RUNTIME, "proot"));
-    }
-
-    public void setProroot(boolean v) {
-        prefs.edit().putString(Constants.KEY_CONTAINER_RUNTIME, v ? "proroot" : "proot").apply();
-    }
-
     public boolean isLanMode() {
         return prefs.getBoolean(Constants.KEY_LAN_MODE, false);
     }

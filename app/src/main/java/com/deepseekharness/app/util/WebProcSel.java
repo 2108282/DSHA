@@ -12,7 +12,7 @@ package com.deepseekharness.app.util;
  * <ul>
  *   <li>真机上 dsh 的实际 cmdline（{@code node --expose-internals
  *       /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web}）必须被认出来；</li>
- *   <li>容器启动器（{@code libproot.so} / {@code libproroot}）<b>绝不能</b>被认成目标：
+ *   <li>容器启动器（{@code libproot.so}）<b>绝不能</b>被认成目标：
  *       杀到它等于把整个环境连 App 一起带走；</li>
  *   <li>用户自己或 agent 跑的 node 进程<b>不能</b>被误杀（曾经用 {@code pkill -f node}）。</li>
  * </ul>
@@ -71,9 +71,8 @@ public final class WebProcSel {
      */
     public static boolean looksLikeWeb(String cmdline) {
         if (cmdline == null || cmdline.isEmpty()) return false;
-        // 仅排除启动器可执行文件本体，不能排除受 libproroot-bridge 注入的 node 目标进程
-        if (cmdline.endsWith("/libproot.so") || cmdline.endsWith("/libproroot.so")
-                || cmdline.equals("proot") || cmdline.equals("proroot")) {
+        // 仅排除启动器可执行文件本体
+        if (cmdline.endsWith("/libproot.so") || cmdline.equals("proot")) {
             return false;
         }
         return (cmdline.contains("bin.js") && cmdline.contains("web"))

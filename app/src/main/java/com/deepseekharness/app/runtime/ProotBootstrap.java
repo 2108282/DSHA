@@ -23,7 +23,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * proot/proroot 启动 + rootfs 生命周期（下载/解压/离线包）。
+ * proot 启动 + rootfs 生命周期（下载/解压/离线包）。
  *
  * <p>关键设计：proot、loader、libtalloc 伪装成 lib*.so 放进 jniLibs，Android 安装时
  * 自动解压到 nativeLibraryDir（可执行目录，绕过 app 私有目录的 noexec）。运行时通过
@@ -187,7 +187,8 @@ public class ProotBootstrap {
     }
 
     private String prootPath() {
-        return findNativeLib("libproot.so").getAbsolutePath();
+        File f = findNativeLib("libproot.so");
+        return f.exists() ? f.getAbsolutePath() : "native_chroot";
     }
 
     private void copyExec(File src, File dst) {
@@ -220,11 +221,6 @@ public class ProotBootstrap {
         baseDir.mkdirs();
         tmpDir.mkdirs();
         libDir.mkdirs();
-        // 这两个是 proot 的 NEEDED 依赖；proroot 只链 libdl/libc，用不到
-        if ("proot".equals(runtime().id())) {
-            copyExec(findNativeLib("libtalloc.so"), new File(libDir, "libtalloc.so.2"));
-            copyExec(findNativeLib("libandroidshmem.so"), new File(libDir, "libandroid-shmem.so"));
-        }
         ensureDshRuntimePatches();
         patchClientCombos();
         if (hasBash()) ensureNetworkTools();
@@ -890,20 +886,10 @@ public class ProotBootstrap {
         return runtime().baseArgv(rootfsDir, hardlinkSupported());
     }
 
-    /** proot 运行环境（两个 exec 入口共用）。proroot 是 LD_PRELOAD 方案，对 LD_LIBRARY_PATH 敏感。 */
+    /** proot 运行环境（两个 exec 入口共用）。 */
     private void applyProotEnv(ProcessBuilder pb) {
         ensureNetworkTools();
         ContainerRuntime rt = runtime();
-        if ("proot".equals(rt.id())) {
-            pb.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
-            applyL2sEnv(pb);
-            pb.environment().put("PROOT_LOADER",
-                    findNativeLib("libprootloader.so").getAbsolutePath());
-            pb.environment().put("PROOT_LOADER_32",
-                    findNativeLib("libprootloader32.so").getAbsolutePath());
-            pb.environment().put("LD_LIBRARY_PATH",
-                    libDir.getAbsolutePath() + ":" + findNativeLib("libproot.so").getParent());
-        }
         try {
             rt.applyEnv(pb, baseDir, libDir, tmpDir);
         } catch (Throwable ignored) {
@@ -977,9 +963,8 @@ public class ProotBootstrap {
     }
 
     /**
-     * 用 proot（非 proroot）运行时执行并读回输出。
-     * python 等依赖 Android linker 的二进制在 proroot（LD_PRELOAD 方案）下可能找不到 libc，
-     * 而 proot 走真实 linker64，对这类二进制最稳。执行完恢复用户的运行时选择。
+     * 用 proot 运行时执行并读回输出。
+     * python 等依赖 Android linker 的二进制在 proot 真实 linker64 下最稳。执行完恢复用户的运行时选择。
      */
     public String execAndReadWithProot(String bashCommand, long timeoutMs) {
         ensureRuntimeFiles();

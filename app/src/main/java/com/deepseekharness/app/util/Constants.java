@@ -88,7 +88,7 @@ public final class Constants {
     public static final String KEY_LAN_MODE = "lan_mode";
     /** 局域网桥凭据（256-bit，等长比对，v2 键名）。 */
     public static final String KEY_LAN_TOKEN_V2 = "lan_token_v2";
-    /** 容器运行时：proroot / proot。 */
+    /** 容器运行时类型键名。 */
     public static final String KEY_CONTAINER_RUNTIME = "container_runtime";
     /** 常驻后台服务通知（检测核心运转）。 */
     public static final String KEY_PERSISTENT_NOTIFICATION = "persistent_notification";
