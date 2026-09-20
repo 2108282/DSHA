@@ -4,12 +4,6 @@ on:
   push:
     branches:
       - 'magisk-apk'
-      - 'dsha-fr-apk'
-      - '1.2.0-rc1.3test'
-      - '1.2.0rc1test'
-      - '0.1.5rc.2底包'
-      - 'test'
-      - main
   workflow_dispatch:
 
 concurrency:
