@@ -16,16 +16,13 @@ import androidx.core.graphics.ColorUtils;
 import com.deepseekharness.app.HttpShellService;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 /**
  * 快捷抽屉莫奈（Material You）调色板核心引擎：
- * 1. 首选从系统官方 /data/system/users/0/wallpaper_info.xml 提取当前壁纸实时计算的高保真调色板；
- * 2. 备选物理壁纸图片采样与原生 WallpaperColors API；
- * 3. 严格限制：打开反色（深色模式）之后，坚决不使用莫奈取色，保持纯正经典深色反色；
- * 4. 仅在浅色模式下生效，彻底告别发白苍白的 L=0.96，打造通透清丽、肉眼鲜明可辨的专属浅彩。
+ * 1. 严格 100% 采用 c8ea259 原版壁纸取色引擎；
+ * 2. 严格限制：打开反色（深色模式）之后，坚决不使用莫奈取色，保持纯正经典深色反色；
+ * 3. 浅色模式调色板的明度与饱和度严格 100% 对齐 c8ea259 原版。
  */
 public final class MonetThemeHelper {
 
@@ -116,18 +113,6 @@ public final class MonetThemeHelper {
         return String.format(Locale.US, "rgba(%d, %d, %d, %.2f)", r, g, b, alpha);
     }
 
-    private static int indexOf(byte[] src, byte[] target, int from) {
-        if (src == null || target == null || from >= src.length) return -1;
-        outer:
-        for (int i = from; i <= src.length - target.length; i++) {
-            for (int j = 0; j < target.length; j++) {
-                if (src[i + j] != target[j]) continue outer;
-            }
-            return i;
-        }
-        return -1;
-    }
-
     /**
      * 从当前系统壁纸中提取最具辨识度的鲜艳种子色（Seed Color）
      */
@@ -136,87 +121,32 @@ public final class MonetThemeHelper {
             return sCachedSeedColor;
         }
         if (context == null) {
-            return Color.parseColor("#0380E0");
+            return Color.parseColor("#10B981");
         }
 
         int extracted = 0;
 
-        // 阶段 0：通过 Root 直读系统官方 /data/system/users/0/wallpaper_info.xml（系统实时计算的当前壁纸颜色盘）
+        // 阶段 1：通过 Root 特权通道直取系统壁纸图片（穿透小米澎湃 OS/MIUI/OPPO/vivo 等系统壁纸签名墙）
         try {
-            File infoCache = new File(context.getCacheDir(), "wallpaper_info.xml");
-            if (!infoCache.exists() || infoCache.length() <= 0) {
-                String copyCmd = "cp /data/system/users/0/wallpaper_info.xml " + infoCache.getAbsolutePath()
-                        + " 2>/dev/null; chmod 666 " + infoCache.getAbsolutePath() + " 2>/dev/null";
+            File cacheFile = new File(context.getCacheDir(), "wallpaper_monet_seed.jpg");
+            if (!cacheFile.exists() || cacheFile.length() <= 0) {
+                String copyCmd = "cp /data/system/users/0/wallpaper " + cacheFile.getAbsolutePath()
+                        + " 2>/dev/null || cp /data/system/users/0/wallpaper_orig " + cacheFile.getAbsolutePath()
+                        + " 2>/dev/null || cp /data/system/users/0/blurwallpaper " + cacheFile.getAbsolutePath()
+                        + " 2>/dev/null; chmod 666 " + cacheFile.getAbsolutePath() + " 2>/dev/null";
                 HttpShellService.execRootCommand(copyCmd);
             }
 
-            if (infoCache.exists() && infoCache.length() > 32) {
-                int maxLen = (int) Math.min(infoCache.length(), 32768);
-                byte[] b = new byte[maxLen];
-                try (FileInputStream fis = new FileInputStream(infoCache)) {
-                    fis.read(b);
-                }
-
-                byte[] target = "colorValue".getBytes(StandardCharsets.US_ASCII);
-                int pos = 0;
-                int bestColor = 0;
-                float bestScore = -1f;
-                float[] hsl = new float[3];
-
-                while (pos < b.length - 16) {
-                    int idx = indexOf(b, target, pos);
-                    if (idx == -1) break;
-                    int p = idx + target.length;
-                    while (p < b.length && b[p] >= '0' && b[p] <= '9') {
-                        p++;
-                    }
-                    if (p + 4 <= b.length) {
-                        int val = ((b[p] & 0xFF) << 24) | ((b[p + 1] & 0xFF) << 16)
-                                | ((b[p + 2] & 0xFF) << 8) | (b[p + 3] & 0xFF);
-                        if ((val & 0xFF000000) == 0xFF000000) {
-                            ColorUtils.colorToHSL(val, hsl);
-                            float sat = hsl[1];
-                            float lum = hsl[2];
-                            if (lum >= 0.15f && lum <= 0.85f && sat >= 0.12f) {
-                                float score = sat * 0.7f + (1.0f - Math.abs(lum - 0.5f) * 2f) * 0.3f;
-                                if (score > bestScore) {
-                                    bestScore = score;
-                                    bestColor = val;
-                                }
-                            }
-                        }
-                    }
-                    pos = idx + target.length;
-                }
-                if (bestColor != 0) {
-                    extracted = bestColor;
+            if (cacheFile.exists() && cacheFile.length() > 0) {
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inSampleSize = 16;
+                Bitmap bmp = BitmapFactory.decodeFile(cacheFile.getAbsolutePath(), opts);
+                if (bmp != null) {
+                    extracted = extractVibrantFromBitmap(bmp);
+                    bmp.recycle();
                 }
             }
         } catch (Throwable ignored) {}
-
-        // 阶段 1：通过 Root 特权通道直取系统物理壁纸图片
-        if (extracted == 0) {
-            try {
-                File cacheFile = new File(context.getCacheDir(), "wallpaper_monet_seed.jpg");
-                if (!cacheFile.exists() || cacheFile.length() <= 0) {
-                    String copyCmd = "cp /data/system/users/0/wallpaper " + cacheFile.getAbsolutePath()
-                            + " 2>/dev/null || cp /data/system/users/0/wallpaper_orig " + cacheFile.getAbsolutePath()
-                            + " 2>/dev/null || cp /data/system/users/0/blurwallpaper " + cacheFile.getAbsolutePath()
-                            + " 2>/dev/null; chmod 666 " + cacheFile.getAbsolutePath() + " 2>/dev/null";
-                    HttpShellService.execRootCommand(copyCmd);
-                }
-
-                if (cacheFile.exists() && cacheFile.length() > 0) {
-                    BitmapFactory.Options opts = new BitmapFactory.Options();
-                    opts.inSampleSize = 16;
-                    Bitmap bmp = BitmapFactory.decodeFile(cacheFile.getAbsolutePath(), opts);
-                    if (bmp != null) {
-                        extracted = extractVibrantFromBitmap(bmp);
-                        bmp.recycle();
-                    }
-                }
-            } catch (Throwable ignored) {}
-        }
 
         // 阶段 2：优先尝试系统级 WallpaperColors（适用于原生 Pixel/AOSP 系统，API 27+）
         if (extracted == 0) {
@@ -266,9 +196,9 @@ public final class MonetThemeHelper {
             } catch (Throwable ignored) {}
         }
 
-        // 阶段 5：保底活力天空蓝
+        // 阶段 5：保底活力翡翠绿（与护眼绿同系）
         if (extracted == 0) {
-            extracted = Color.parseColor("#0380E0");
+            extracted = Color.parseColor("#10B981");
         }
 
         sCachedSeedColor = extracted;
