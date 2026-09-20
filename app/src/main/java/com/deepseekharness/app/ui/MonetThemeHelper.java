@@ -16,13 +16,16 @@ import androidx.core.graphics.ColorUtils;
 import com.deepseekharness.app.HttpShellService;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 /**
  * 快捷抽屉莫奈（Material You）调色板核心引擎：
- * 1. 回归纯粹系统壁纸取色（Root 特权直取 / 原生 WallpaperColors 双轨制）；
- * 2. 严格限制：反色（深色模式）下坚决不使用莫奈取色，保持纯正经典深色反色高对比体验；
- * 3. 仅在浅色模式下生效，将系统壁纸种子色融入抽屉浅彩微光中。
+ * 1. 首选从系统官方 /data/system/users/0/wallpaper_info.xml 提取当前壁纸实时计算的高保真调色板；
+ * 2. 备选物理壁纸图片采样与原生 WallpaperColors API；
+ * 3. 严格限制：打开反色（深色模式）之后，坚决不使用莫奈取色，保持纯正经典深色反色；
+ * 4. 仅在浅色模式下生效，彻底告别发白苍白的 L=0.96，打造通透清丽、肉眼鲜明可辨的专属浅彩。
  */
 public final class MonetThemeHelper {
 
@@ -38,6 +41,10 @@ public final class MonetThemeHelper {
                 File cacheFile = new File(context.getCacheDir(), "wallpaper_monet_seed.jpg");
                 if (cacheFile.exists()) {
                     cacheFile.delete();
+                }
+                File infoFile = new File(context.getCacheDir(), "wallpaper_info.xml");
+                if (infoFile.exists()) {
+                    infoFile.delete();
                 }
             } catch (Throwable ignored) {}
         }
@@ -109,6 +116,18 @@ public final class MonetThemeHelper {
         return String.format(Locale.US, "rgba(%d, %d, %d, %.2f)", r, g, b, alpha);
     }
 
+    private static int indexOf(byte[] src, byte[] target, int from) {
+        if (src == null || target == null || from >= src.length) return -1;
+        outer:
+        for (int i = from; i <= src.length - target.length; i++) {
+            for (int j = 0; j < target.length; j++) {
+                if (src[i + j] != target[j]) continue outer;
+            }
+            return i;
+        }
+        return -1;
+    }
+
     /**
      * 从当前系统壁纸中提取最具辨识度的鲜艳种子色（Seed Color）
      */
@@ -117,32 +136,87 @@ public final class MonetThemeHelper {
             return sCachedSeedColor;
         }
         if (context == null) {
-            return Color.parseColor("#10B981");
+            return Color.parseColor("#0380E0");
         }
 
         int extracted = 0;
 
-        // 阶段 1：通过 Root 特权通道直取系统壁纸图片（穿透小米澎湃 OS/MIUI/OPPO/vivo 等系统壁纸签名墙）
+        // 阶段 0：通过 Root 直读系统官方 /data/system/users/0/wallpaper_info.xml（系统实时计算的当前壁纸颜色盘）
         try {
-            File cacheFile = new File(context.getCacheDir(), "wallpaper_monet_seed.jpg");
-            if (!cacheFile.exists() || cacheFile.length() <= 0) {
-                String copyCmd = "cp /data/system/users/0/wallpaper " + cacheFile.getAbsolutePath()
-                        + " 2>/dev/null || cp /data/system/users/0/wallpaper_orig " + cacheFile.getAbsolutePath()
-                        + " 2>/dev/null || cp /data/system/users/0/blurwallpaper " + cacheFile.getAbsolutePath()
-                        + " 2>/dev/null; chmod 666 " + cacheFile.getAbsolutePath() + " 2>/dev/null";
+            File infoCache = new File(context.getCacheDir(), "wallpaper_info.xml");
+            if (!infoCache.exists() || infoCache.length() <= 0) {
+                String copyCmd = "cp /data/system/users/0/wallpaper_info.xml " + infoCache.getAbsolutePath()
+                        + " 2>/dev/null; chmod 666 " + infoCache.getAbsolutePath() + " 2>/dev/null";
                 HttpShellService.execRootCommand(copyCmd);
             }
 
-            if (cacheFile.exists() && cacheFile.length() > 0) {
-                BitmapFactory.Options opts = new BitmapFactory.Options();
-                opts.inSampleSize = 16;
-                Bitmap bmp = BitmapFactory.decodeFile(cacheFile.getAbsolutePath(), opts);
-                if (bmp != null) {
-                    extracted = extractVibrantFromBitmap(bmp);
-                    bmp.recycle();
+            if (infoCache.exists() && infoCache.length() > 32) {
+                int maxLen = (int) Math.min(infoCache.length(), 32768);
+                byte[] b = new byte[maxLen];
+                try (FileInputStream fis = new FileInputStream(infoCache)) {
+                    fis.read(b);
+                }
+
+                byte[] target = "colorValue".getBytes(StandardCharsets.US_ASCII);
+                int pos = 0;
+                int bestColor = 0;
+                float bestScore = -1f;
+                float[] hsl = new float[3];
+
+                while (pos < b.length - 16) {
+                    int idx = indexOf(b, target, pos);
+                    if (idx == -1) break;
+                    int p = idx + target.length;
+                    while (p < b.length && b[p] >= '0' && b[p] <= '9') {
+                        p++;
+                    }
+                    if (p + 4 <= b.length) {
+                        int val = ((b[p] & 0xFF) << 24) | ((b[p + 1] & 0xFF) << 16)
+                                | ((b[p + 2] & 0xFF) << 8) | (b[p + 3] & 0xFF);
+                        if ((val & 0xFF000000) == 0xFF000000) {
+                            ColorUtils.colorToHSL(val, hsl);
+                            float sat = hsl[1];
+                            float lum = hsl[2];
+                            if (lum >= 0.15f && lum <= 0.85f && sat >= 0.12f) {
+                                float score = sat * 0.7f + (1.0f - Math.abs(lum - 0.5f) * 2f) * 0.3f;
+                                if (score > bestScore) {
+                                    bestScore = score;
+                                    bestColor = val;
+                                }
+                            }
+                        }
+                    }
+                    pos = idx + target.length;
+                }
+                if (bestColor != 0) {
+                    extracted = bestColor;
                 }
             }
         } catch (Throwable ignored) {}
+
+        // 阶段 1：通过 Root 特权通道直取系统物理壁纸图片
+        if (extracted == 0) {
+            try {
+                File cacheFile = new File(context.getCacheDir(), "wallpaper_monet_seed.jpg");
+                if (!cacheFile.exists() || cacheFile.length() <= 0) {
+                    String copyCmd = "cp /data/system/users/0/wallpaper " + cacheFile.getAbsolutePath()
+                            + " 2>/dev/null || cp /data/system/users/0/wallpaper_orig " + cacheFile.getAbsolutePath()
+                            + " 2>/dev/null || cp /data/system/users/0/blurwallpaper " + cacheFile.getAbsolutePath()
+                            + " 2>/dev/null; chmod 666 " + cacheFile.getAbsolutePath() + " 2>/dev/null";
+                    HttpShellService.execRootCommand(copyCmd);
+                }
+
+                if (cacheFile.exists() && cacheFile.length() > 0) {
+                    BitmapFactory.Options opts = new BitmapFactory.Options();
+                    opts.inSampleSize = 16;
+                    Bitmap bmp = BitmapFactory.decodeFile(cacheFile.getAbsolutePath(), opts);
+                    if (bmp != null) {
+                        extracted = extractVibrantFromBitmap(bmp);
+                        bmp.recycle();
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
 
         // 阶段 2：优先尝试系统级 WallpaperColors（适用于原生 Pixel/AOSP 系统，API 27+）
         if (extracted == 0) {
@@ -192,9 +266,9 @@ public final class MonetThemeHelper {
             } catch (Throwable ignored) {}
         }
 
-        // 阶段 5：保底活力翡翠绿（与护眼绿同系）
+        // 阶段 5：保底活力天空蓝
         if (extracted == 0) {
-            extracted = Color.parseColor("#10B981");
+            extracted = Color.parseColor("#0380E0");
         }
 
         sCachedSeedColor = extracted;
@@ -296,33 +370,34 @@ public final class MonetThemeHelper {
             }
         }
 
-        // ================= 仅在浅色模式且开启莫奈时：基于壁纸生成通透浅彩调色板 =================
+        // ================= 仅在浅色模式且开启莫奈时：基于壁纸生成高质感、肉眼鲜明可辨的浅彩调色板 =================
         int seed = getWallpaperSeedColor(ctx);
         float[] seedHsl = new float[3];
         ColorUtils.colorToHSL(seed, seedHsl);
         float h = seedHsl[0]; // 壁纸色相 0 ~ 360°
 
-        int lightCardRgb = ColorUtils.HSLToColor(new float[]{h, 0.22f, 0.96f});
+        // 卡片底色：高质感通透浅彩（S=36%, L=91.5%），告别苍白死白，色彩鲜活明朗、极富透光底蕴！
+        int lightCardRgb = ColorUtils.HSLToColor(new float[]{h, 0.36f, 0.915f});
         int cardBg = Color.argb(alpha, Color.red(lightCardRgb), Color.green(lightCardRgb), Color.blue(lightCardRgb));
 
-        // 主文字与按钮：深邃墨色（S=18%, L=14%），保证清晰可读
-        int text = ColorUtils.HSLToColor(new float[]{h, 0.18f, 0.14f});
-        // 次级提示文字（S=14%, L=38%）
-        int textSecondary = ColorUtils.HSLToColor(new float[]{h, 0.14f, 0.38f});
-        // 品牌强调色（S=75%, L=35%）
-        int brand = ColorUtils.HSLToColor(new float[]{h, 0.75f, 0.35f});
+        // 主文字与按钮：深邃墨色（S=22%, L=12%），保证顶级清晰对比度
+        int text = ColorUtils.HSLToColor(new float[]{h, 0.22f, 0.12f});
+        // 次级提示文字（S=18%, L=38%）
+        int textSecondary = ColorUtils.HSLToColor(new float[]{h, 0.18f, 0.38f});
+        // 品牌强调色：高饱和鲜艳色（S=85%, L=38%）
+        int brand = ColorUtils.HSLToColor(new float[]{h, 0.85f, 0.38f});
 
-        // 拖拽横条
-        int handle = ColorUtils.HSLToColor(new float[]{h, 0.28f, 0.70f});
-        // 分割线与细边框
-        int borderRaw = ColorUtils.HSLToColor(new float[]{h, 0.25f, 0.82f});
-        int line = Color.argb(0x35, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
-        int border = Color.argb(0x3A, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
+        // 拖拽横条：清爽同系彩色（S=45%, L=55%）
+        int handle = ColorUtils.HSLToColor(new float[]{h, 0.45f, 0.55f});
+        // 分割线与细边框（S=35%, L=78%）
+        int borderRaw = ColorUtils.HSLToColor(new float[]{h, 0.35f, 0.78f});
+        int line = Color.argb(0x45, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
+        int border = Color.argb(0x50, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
 
         // WebView 控件同系质感颜色
-        int inputInner = ColorUtils.HSLToColor(new float[]{h, 0.18f, 0.98f});
-        int inputBorderColor = ColorUtils.HSLToColor(new float[]{h, 0.25f, 0.82f});
-        int menuInner = ColorUtils.HSLToColor(new float[]{h, 0.20f, 0.97f});
+        int inputInner = ColorUtils.HSLToColor(new float[]{h, 0.20f, 0.97f});
+        int inputBorderColor = ColorUtils.HSLToColor(new float[]{h, 0.35f, 0.78f});
+        int menuInner = ColorUtils.HSLToColor(new float[]{h, 0.25f, 0.93f});
 
         return new Palette(
                 cardBg, text, textSecondary, line, handle, border,
