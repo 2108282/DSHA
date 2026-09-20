@@ -1800,17 +1800,16 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 }
             }, 350);
 
-            // 2. 检查底层服务是否发生过重启或端口已切换
+            // 2. 检查底层服务是否发生过重启（generation 改变）
             long currentGen = controller != null ? controller.getWebGeneration() : -1;
             boolean serviceRestarted = sLoadedGeneration > 0 && currentGen > 0 && sLoadedGeneration != currentGen;
-            int currentPort = controller != null ? controller.getPort() : 3080;
-            boolean portChanged = sLoadedPort != currentPort && sLoadedPort != 0;
 
             String curUrl = sCachedWebView.getUrl();
-            boolean detached = curUrl != null && !curUrl.startsWith("http://127.0.0.1:" + currentPort) && !curUrl.startsWith("http://localhost:" + currentPort);
+            boolean isLocalDsh = curUrl != null && (curUrl.contains("://127.0.0.1:") || curUrl.contains("://localhost:"));
 
-            if (!sWebLoaded || serviceRestarted || portChanged || detached) {
-                sLoadedPort = currentPort;
+            // 核心重加载防卡死：仅当服务真正重启、完全脱离本地服务或此前未成功载入时才触发重载；
+            // 只要 WebView 已在正常显示本地网页，绝对不重新刷新，彻底消除白屏与卡顿！
+            if (!sWebLoaded || serviceRestarted || !isLocalDsh) {
                 reloadWithLatestToken();
             }
         }
