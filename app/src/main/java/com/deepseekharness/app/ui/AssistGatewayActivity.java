@@ -36,13 +36,6 @@ public class AssistGatewayActivity extends Activity {
         }
         sLastGatewayLaunchTime = now;
 
-        // 手势呼出第 0 毫秒预抓帧：此时底层 App 界面 100% 毫无遮挡、无 Dim 蒙层，抓取最纯净画面
-        try {
-            if (new com.deepseekharness.app.core.ConfigStore(this).isSheetMonetColor()) {
-                MonetThemeHelper.triggerPreCapture(this);
-            }
-        } catch (Throwable ignored) {}
-
         Intent intent = new Intent(this, QuickChatSheetActivity.class);
         intent.setAction(Intent.ACTION_ASSIST);
         intent.putExtra(EXTRA_START_SOURCE, SOURCE_GESTURE);

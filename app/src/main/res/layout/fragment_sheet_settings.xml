@@ -126,7 +126,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="抽屉屏幕自适应取色"
+                        android:text="抽屉莫奈取色"
                         android:textColor="@color/text"
                         android:textSize="@dimen/text_body"
                         android:textStyle="bold" />
@@ -135,7 +135,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/gap_hair"
-                        android:text="变色龙机制：实时感应屏幕当前内容色彩，随底层环境自适应融入"
+                        android:text="跟随系统壁纸提取 Material You 调色板（仅浅色模式生效，打开反色不使用）"
                         android:textColor="@color/text_muted"
                         android:textSize="@dimen/text_caption" />
                 </LinearLayout>

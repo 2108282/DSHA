@@ -362,19 +362,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         setupBackDispatcher();
         attachChatWeb();
         animateIn();
-        triggerAdaptiveMonetSampling();
-    }
-
-    /** 异步触发当前屏幕画面自适应取色，若识别到新环境色则平滑刷新抽屉与 WebView 样式 */
-    private void triggerAdaptiveMonetSampling() {
-        if (!isMonetColor) return;
-        MonetThemeHelper.refreshAdaptiveSeedAsync(this, newSeed -> {
-            runOnUiThread(() -> {
-                if (!isFinishing() && !isDestroyed()) {
-                    updateCardTheme();
-                }
-            });
-        });
     }
 
     private void setupBackDispatcher() {
@@ -401,7 +388,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         isDarkMode = dark;
         isMonetColor = monet;
         updateCardTheme();
-        triggerAdaptiveMonetSampling();
         if (sCachedWebView != null) {
             triggerForegroundWakeup();
             injectTransparentBackground(sCachedWebView);
@@ -1801,11 +1787,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         sCurrentInstance = this;
         super.onResume();
         isDismissing = false;
-        boolean isEntering = false;
         if (sheetCard != null) {
             // 若卡片当前处于屏幕外（平移距离大于 0 或不可见），可靠执行进场动画恢复显示
             if (sheetCard.getTranslationY() > 0 || sheetCard.getVisibility() != View.VISIBLE) {
-                isEntering = true;
                 animateIn();
             }
         }
@@ -1818,9 +1802,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             if (sCachedWebView != null) {
                 injectTransparentBackground(sCachedWebView);
             }
-        }
-        if (isMonetColor && isEntering) {
-            triggerAdaptiveMonetSampling();
         }
         if (sCachedWebView != null) {
             if (sPendingApprovalDecision != null) {
