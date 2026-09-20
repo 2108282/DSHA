@@ -15,12 +15,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
-import android.Manifest;
-import android.content.pm.PackageManager;
 import android.graphics.Canvas;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
-import android.speech.SpeechRecognizer;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -227,14 +222,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private boolean isKeyboardElevated = false;
     private ValueAnimator heightAnimator = null;
     private ViewTreeObserver.OnGlobalLayoutListener keyboardLayoutListener;
-
-    // ================= 自动语音输入状态机 =================
-    private SpeechRecognizer mSpeechRecognizer;
-    private Intent mSpeechIntent;
-    private boolean mIsListening = false;
-    private final Handler mVoiceHandler = new Handler(Looper.getMainLooper());
-    private long mGestureWakeupTime = 0L;
-    private int mVoiceRetryCount = 0;
 
     private ValueCallback<Uri[]> fileCallback = null;
     private final ArrayList<File> uploads = new ArrayList<>();
@@ -1294,6 +1281,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "  overflow-y: auto !important;\n"
                         + "  overflow-x: hidden !important;\n"
                         + "}\n"
+                        + "/* 轨迹全景视图专项隔离：消除官方 overlay 引入的相对定位与底部断层，底座无缝贴底，且 100% 绝不干扰普通对话 */\n"
+                        + "div[class*='_scrollBody']:has([data-conversation-composer-overlay]) {\n"
+                        + "  margin-bottom: 0px !important;\n"
+                        + "  position: static !important;\n"
+                        + "}\n"
                         + "/* 输入框底座：完全透明透光，绝对定位固定贴底，绝不使用实心色遮挡 */\n"
                         + "div[class*='_composerSeat'] {\n"
                         + "  position: absolute !important;\n"
@@ -1825,49 +1817,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             }
         }
 
-        // 3. 仅当由手势/数字助理唤醒时（ACTION_ASSIST / CTS / 手势专属标识），才自动开启语音拾音；
-        // 通知栏点击、应用内按钮等打开方式绝不触发，避免无端占用麦克风。
-        Intent curIntent = getIntent();
-        String curAction = curIntent != null ? curIntent.getAction() : null;
-        boolean isGestureWakeup = false;
-        if (curIntent != null) {
-            if (Intent.ACTION_ASSIST.equals(curAction)
-                    || "android.app.contextualsearch.action.LAUNCH_CONTEXTUAL_SEARCH".equals(curAction)
-                    || curIntent.hasExtra(AssistGatewayActivity.EXTRA_START_SOURCE)) {
-                isGestureWakeup = true;
-                // 单次消费：改写为普通展示态，防止切后台看微信返回再次走 onResume 时重复开启语音
-                curIntent.setAction("com.deepseekharness.app.OPEN_SHEET");
-                curIntent.removeExtra(AssistGatewayActivity.EXTRA_START_SOURCE);
-            }
-        }
-
-        mVoiceHandler.removeCallbacksAndMessages(null);
-        if (isGestureWakeup) {
-            mGestureWakeupTime = SystemClock.elapsedRealtime();
-            mVoiceRetryCount = 0;
-            // 延时 550ms：等待抽屉完全平滑展开，并留足时间让系统语音会话交接释放音频焦点
-            mVoiceHandler.postDelayed(this::startVoiceListening, 550);
-        }
-    }
-
-    @Override
-    public boolean dispatchTouchEvent(MotionEvent ev) {
-        // 关键交互：用户手指触摸屏幕任意位置（点按、输入框获焦、滑动等），麦克风立刻闭嘴停止录音；
-        // 核心保护：手势唤醒后的 800ms 内属于“手势离手保护期”，忽略手势余触，防止刚启动的录音被当场掐灭
-        if (ev.getAction() == MotionEvent.ACTION_DOWN) {
-            long elapsed = SystemClock.elapsedRealtime() - mGestureWakeupTime;
-            if (mIsListening && elapsed > 800L) {
-                stopVoiceListening(true);
-            }
-        }
-        return super.dispatchTouchEvent(ev);
-    }
+        
+    
 
     @Override
     protected void onPause() {
         super.onPause();
-        mVoiceHandler.removeCallbacksAndMessages(null);
-        stopVoiceListening(true);
+        
         // 抽屉退入后台时仅暂停单个 WebView 渲染合成释放 GPU，保留全局 JS 定时器与网络心跳存活
         if (sCachedWebView != null) {
             sCachedWebView.onPause();
@@ -1877,8 +1833,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         super.onStop();
-        mVoiceHandler.removeCallbacksAndMessages(null);
-        stopVoiceListening(true);
+        
         if (sCachedWebView != null) {
             sCachedWebView.onPause();
         }
@@ -1889,8 +1844,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         if (sCurrentInstance == this) {
             sCurrentInstance = null;
         }
-        mVoiceHandler.removeCallbacksAndMessages(null);
-        destroyVoiceRecognizer();
+        
         cancelFileSelection();
         WebUploads.clean(uploads);
         if (keyboardLayoutListener != null && getWindow() != null && getWindow().getDecorView() != null) {
@@ -1899,181 +1853,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         super.onDestroy();
         if (sCachedWebView != null && sCachedWebView.getParent() == webContainer) {
             webContainer.removeView(sCachedWebView);
-        }
-    }
-
-    // ================= 自动语音输入实现 =================
-
-    private void initSpeechRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            return;
-        }
-        try {
-            if (mSpeechRecognizer != null) {
-                mSpeechRecognizer.destroy();
-            }
-            mSpeechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
-            mSpeechIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN");
-            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-            // 静音自动断句：用户停止说话 1.5 秒自动断句收尾
-            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L);
-            mSpeechIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L);
-
-            mSpeechRecognizer.setRecognitionListener(new RecognitionListener() {
-                @Override
-                public void onReadyForSpeech(Bundle params) {
-                    mIsListening = true;
-                }
-
-                @Override
-                public void onBeginningOfSpeech() {
-                    mIsListening = true;
-                }
-
-                @Override
-                public void onRmsChanged(float rmsdB) {}
-
-                @Override
-                public void onBufferReceived(byte[] buffer) {}
-
-                @Override
-                public void onEndOfSpeech() {
-                    mIsListening = false;
-                }
-
-                @Override
-                public void onError(int error) {
-                    Log.w(TAG, "SpeechRecognizer onError: " + error);
-                    mIsListening = false;
-                    // 容错重试：如果手势唤起瞬间遇到 RECOGNIZER_BUSY (8) 或 AUDIO (3)，允许延时 200ms 重试一次
-                    if ((error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_AUDIO)
-                            && mVoiceRetryCount < 1 && !isFinishing() && !isDestroyed()) {
-                        mVoiceRetryCount++;
-                        Log.i(TAG, "SpeechRecognizer audio/busy conflict, retry listening in 200ms...");
-                        mVoiceHandler.postDelayed(QuickChatSheetActivity.this::startVoiceListening, 200);
-                    }
-                }
-
-                @Override
-                public void onResults(Bundle results) {
-                    mIsListening = false;
-                    if (results != null) {
-                        ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                        if (matches != null && !matches.isEmpty()) {
-                            injectSpeechTextToWeb(matches.get(0), true);
-                        }
-                    }
-                }
-
-                @Override
-                public void onPartialResults(Bundle partialResults) {
-                    if (partialResults != null) {
-                        ArrayList<String> matches = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                        if (matches != null && !matches.isEmpty()) {
-                            injectSpeechTextToWeb(matches.get(0), false);
-                        }
-                    }
-                }
-
-                @Override
-                public void onEvent(int eventType, Bundle params) {}
-            });
-        } catch (Throwable t) {
-            mSpeechRecognizer = null;
-        }
-    }
-
-    private void startVoiceListening() {
-        ConfigStore cfg = new ConfigStore(this);
-        if (!cfg.isAutoVoiceInputEnabled()) {
-            return;
-        }
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 1001);
-            return;
-        }
-        if (mSpeechRecognizer == null) {
-            initSpeechRecognizer();
-        }
-        if (mSpeechRecognizer != null && !mIsListening && !isFinishing() && !isDestroyed()) {
-            try {
-                Log.i(TAG, "SpeechRecognizer startListening called cleanly");
-                mSpeechRecognizer.startListening(mSpeechIntent);
-                mIsListening = true;
-            } catch (Throwable t) {
-                Log.w(TAG, "SpeechRecognizer startListening fail", t);
-                mIsListening = false;
-            }
-        }
-    }
-
-    private void stopVoiceListening(boolean cancel) {
-        if (mSpeechRecognizer != null) {
-            try {
-                if (cancel) {
-                    mSpeechRecognizer.cancel();
-                } else {
-                    mSpeechRecognizer.stopListening();
-                }
-            } catch (Throwable ignored) {}
-        }
-        mIsListening = false;
-    }
-
-    private void destroyVoiceRecognizer() {
-        stopVoiceListening(true);
-        if (mSpeechRecognizer != null) {
-            try {
-                mSpeechRecognizer.destroy();
-            } catch (Throwable ignored) {}
-            mSpeechRecognizer = null;
-        }
-    }
-
-    private void injectSpeechTextToWeb(String text, boolean isFinal) {
-        if (sCachedWebView == null || text == null || isFinishing() || isDestroyed()) return;
-        String escaped = org.json.JSONObject.quote(text);
-        String js = "(function() {"
-                + "  try {"
-                + "    var el = document.querySelector('[data-composer-input], textarea, [contenteditable=\"true\"]');"
-                + "    if (!el) el = document.querySelector('input[type=\"text\"]');"
-                + "    if (!el) return;"
-                + "    var txt = " + escaped + ";"
-                + "    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {"
-                + "      el.value = txt;"
-                + "      el.dispatchEvent(new Event('input', { bubbles: true }));"
-                + "      el.dispatchEvent(new Event('change', { bubbles: true }));"
-                + "    } else if (el.isContentEditable || el.hasAttribute('data-composer-input')) {"
-                + "      el.focus();"
-                + "      var sel = window.getSelection();"
-                + "      var range = document.createRange();"
-                + "      range.selectNodeContents(el);"
-                + "      sel.removeAllRanges();"
-                + "      sel.addRange(range);"
-                + "      if (!document.execCommand('insertText', false, txt)) {"
-                + "        el.innerText = txt;"
-                + "      }"
-                + "      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: txt }));"
-                + "    }"
-                + "  } catch (e) {"
-                + "    console.warn('injectSpeechText fail', e);"
-                + "  }"
-                + "})();";
-        sCachedWebView.post(() -> {
-            if (sCachedWebView != null && !isFinishing() && !isDestroyed()) {
-                sCachedWebView.evaluateJavascript(js, null);
-            }
-        });
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @androidx.annotation.NonNull String[] permissions, @androidx.annotation.NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == 1001 && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            startVoiceListening();
         }
     }
 }

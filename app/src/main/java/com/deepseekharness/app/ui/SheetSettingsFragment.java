@@ -63,20 +63,6 @@ public class SheetSettingsFragment extends Fragment {
             });
         }
 
-        // 2.5 呼出抽屉自动语音输入开关
-        SwitchCompat autoVoiceSwitch = v.findViewById(R.id.sheet_settings_auto_voice_switch);
-        if (autoVoiceSwitch != null) {
-            autoVoiceSwitch.setChecked(cfg.isAutoVoiceInputEnabled());
-            v.findViewById(R.id.sheet_settings_auto_voice_row).setOnClickListener(x -> {
-                boolean next = !autoVoiceSwitch.isChecked();
-                autoVoiceSwitch.setChecked(next);
-                cfg.setAutoVoiceInputEnabled(next);
-                Toast.makeText(requireContext(),
-                        next ? "呼出自动语音输入已开启（呼出即拾音）" : "呼出自动语音输入已关闭（纯键盘模式）",
-                        Toast.LENGTH_SHORT).show();
-            });
-        }
-
         // 3. 抽屉白天不透明度
         EditText opacityDayInput = v.findViewById(R.id.sheet_settings_opacity_day_input);
         Button opacityDaySave = v.findViewById(R.id.sheet_settings_opacity_day_save);
