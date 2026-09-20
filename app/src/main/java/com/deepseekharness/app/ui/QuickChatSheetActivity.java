@@ -1337,8 +1337,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "[data-mobile-nav=\"frame\"][data-aionui-explorer-open] div[class*='pI_x6G_centerCol'],\n"
                         + "[data-mobile-nav=\"frame\"][data-aionui-preview-open] div[class*='_composerSeat'],\n"
                         + "[data-mobile-nav=\"frame\"][data-aionui-explorer-open] div[class*='_composerSeat'],\n"
-                        + "[data-mobile-nav=\"frame\"]:not([data-sidebar-collapsed]) div[class*='pI_x6G_centerCol'],\n"
-                        + "[data-mobile-nav=\"frame\"]:not([data-sidebar-collapsed]) div[class*='_composerSeat'],\n"
                         + "body:has([aria-modal=\"true\"]) div[class*='pI_x6G_centerCol'],\n"
                         + "body:has([aria-modal=\"true\"]) div[class*='_composerSeat'],\n"
                         + "html[data-dsh-taskboard-active] div[class*='pI_x6G_centerCol'],\n"
