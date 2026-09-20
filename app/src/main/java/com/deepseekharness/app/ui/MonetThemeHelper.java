@@ -370,34 +370,34 @@ public final class MonetThemeHelper {
             }
         }
 
-        // ================= 仅在浅色模式且开启莫奈时：基于壁纸生成高质感、肉眼鲜明可辨的浅彩调色板 =================
+        // ================= 仅在浅色模式且开启莫奈时：严格按 c8ea259 原始明度与饱和度生成调色板 =================
         int seed = getWallpaperSeedColor(ctx);
         float[] seedHsl = new float[3];
         ColorUtils.colorToHSL(seed, seedHsl);
         float h = seedHsl[0]; // 壁纸色相 0 ~ 360°
 
-        // 卡片底色：高质感通透浅彩（S=36%, L=91.5%），告别苍白死白，色彩鲜活明朗、极富透光底蕴！
-        int lightCardRgb = ColorUtils.HSLToColor(new float[]{h, 0.36f, 0.915f});
+        // 卡片底色：高明度柔彩（S=28%, L=95%），通透呈现壁纸专属调性！
+        int lightCardRgb = ColorUtils.HSLToColor(new float[]{h, 0.28f, 0.95f});
         int cardBg = Color.argb(alpha, Color.red(lightCardRgb), Color.green(lightCardRgb), Color.blue(lightCardRgb));
 
-        // 主文字与按钮：深邃墨色（S=22%, L=12%），保证顶级清晰对比度
-        int text = ColorUtils.HSLToColor(new float[]{h, 0.22f, 0.12f});
-        // 次级提示文字（S=18%, L=38%）
-        int textSecondary = ColorUtils.HSLToColor(new float[]{h, 0.18f, 0.38f});
-        // 品牌强调色：高饱和鲜艳色（S=85%, L=38%）
-        int brand = ColorUtils.HSLToColor(new float[]{h, 0.85f, 0.38f});
+        // 主文字与按钮：壁纸极深浓郁彩色（S=65%, L=16%），保证无障碍顶级对比度
+        int text = ColorUtils.HSLToColor(new float[]{h, 0.65f, 0.16f});
+        // 次级提示文字（S=35%, L=42%）
+        int textSecondary = ColorUtils.HSLToColor(new float[]{h, 0.35f, 0.42f});
+        // 品牌强调色（S=85%, L=36%）
+        int brand = ColorUtils.HSLToColor(new float[]{h, 0.85f, 0.36f});
 
-        // 拖拽横条：清爽同系彩色（S=45%, L=55%）
-        int handle = ColorUtils.HSLToColor(new float[]{h, 0.45f, 0.55f});
-        // 分割线与细边框（S=35%, L=78%）
-        int borderRaw = ColorUtils.HSLToColor(new float[]{h, 0.35f, 0.78f});
-        int line = Color.argb(0x45, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
-        int border = Color.argb(0x50, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
+        // 拖拽横条
+        int handle = ColorUtils.HSLToColor(new float[]{h, 0.36f, 0.72f});
+        // 分割线与细边框
+        int borderRaw = ColorUtils.HSLToColor(new float[]{h, 0.32f, 0.82f});
+        int line = Color.argb(0x40, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
+        int border = Color.argb(0x45, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
 
         // WebView 控件同系质感颜色
-        int inputInner = ColorUtils.HSLToColor(new float[]{h, 0.20f, 0.97f});
-        int inputBorderColor = ColorUtils.HSLToColor(new float[]{h, 0.35f, 0.78f});
-        int menuInner = ColorUtils.HSLToColor(new float[]{h, 0.25f, 0.93f});
+        int inputInner = ColorUtils.HSLToColor(new float[]{h, 0.22f, 0.98f});
+        int inputBorderColor = ColorUtils.HSLToColor(new float[]{h, 0.35f, 0.80f});
+        int menuInner = ColorUtils.HSLToColor(new float[]{h, 0.26f, 0.97f});
 
         return new Palette(
                 cardBg, text, textSecondary, line, handle, border,
