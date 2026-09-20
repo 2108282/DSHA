@@ -177,42 +177,6 @@
                 android:text="授权后，Agent 可通过 3095 硬件桥执行宿主 shell 命令：\ncurl http://127.0.0.1:3095/exec?cmd=..." />
         </LinearLayout>
 
-        <!-- 高级维护与重置卡片 -->
-        <LinearLayout
-            style="@style/DshaCard"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/gap_control">
-
-            <TextView
-                style="@style/DshaText.Title"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="环境与配置重置" />
-
-            <Button
-                android:id="@+id/workspace_reset"
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/btn_height"
-                android:layout_marginTop="@dimen/gap_control"
-                android:background="@drawable/bg_btn"
-                android:text="重置配置（保留对话与插件）"
-                android:textAllCaps="false"
-                android:textColor="@color/warn"
-                android:textSize="@dimen/text_body" />
-
-            <Button
-                android:id="@+id/workspace_clear"
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/btn_height"
-                android:layout_marginTop="@dimen/gap_tight"
-                android:background="@drawable/bg_btn_danger"
-                android:text="清除环境（重置全部配置）"
-                android:textAllCaps="false"
-                android:textColor="@color/btn_danger_text"
-                android:textStyle="bold"
-                android:textSize="@dimen/text_body" />
-        </LinearLayout>
 
         <!-- 文件共享状态 -->
         <TextView

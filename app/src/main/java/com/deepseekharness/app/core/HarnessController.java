@@ -769,43 +769,6 @@ public class HarnessController {
         proot.markNotExtracted();
     }
 
-    /** 重置容器内配置（settings.yaml + .env），保留对话记录，并按当前 App 配置重写 .env。 */
-    public String resetConfig() {
-        try {
-            boolean any = false;
-            java.io.File settings = new java.io.File(proot.getRootfsDir(), "root/.dsh/settings.yaml");
-            if (settings.isFile()) {
-                //noinspection ResultOfMethodCallIgnored
-                settings.delete();
-                any = true;
-            }
-            String wd = config.getWorkdir();
-            File wdDir = proot.containerFile(wd.startsWith("/") ? wd : "/root/" + wd);
-            java.io.File env = new java.io.File(wdDir, ".env");
-            if (env.isFile()) {
-                //noinspection ResultOfMethodCallIgnored
-                env.delete();
-                any = true;
-            }
-            writeEnvFile(env);
-            return any
-                    ? "配置已重置，对话记录已保留\n（.env 已按当前配置重写）"
-                    : "没有可重置的配置（.env 已重写）";
-        } catch (Throwable e) {
-            return "重置失败：" + com.deepseekharness.app.util.SensitiveData.redact(String.valueOf(e));
-        }
-    }
-
-    /** 用当前 App 配置重写 rootfs 内的 .env。 */
-    private void writeEnvFile(java.io.File env) throws Exception {
-        if (env.getParentFile() != null) env.getParentFile().mkdirs();
-        String apiKey = config.getApiKey();
-        String keyLine = apiKey.isEmpty()
-                ? "# DEEPSEEK_API_KEY=\n"
-                : "DEEPSEEK_API_KEY=" + com.deepseekharness.app.util.ShellQuote.arg(apiKey) + "\n";
-        Compat.write(env, keyLine.getBytes(StandardCharsets.UTF_8));
-    }
-
     /** proot 冒烟测试，返回诊断文本。 */
     public String smokeTest() {
         return proot.smokeTest();

@@ -89,41 +89,6 @@ public class WorkspaceFragment extends Fragment {
             }).start();
         });
 
-        // 重置配置（保留对话记录）
-        v.findViewById(R.id.workspace_reset).setOnClickListener(x ->
-                new MaterialAlertDialogBuilder(requireContext())
-                        .setTitle("重置配置？")
-                        .setMessage("将删除 settings.yaml 和 .env（对话记录保留），并重新写入 .env。")
-                        .setPositiveButton("重置", (d, w) -> {
-                            String r = controller.resetConfig();
-                            Toast.makeText(requireContext(),
-                                    com.deepseekharness.app.util.SensitiveData.redact(r),
-                                    Toast.LENGTH_LONG).show();
-                        })
-                        .setNegativeButton("取消", null)
-                        .show());
-
-        // 清除环境（停止服务并抹除 /data/adb/dsha）
-        v.findViewById(R.id.workspace_clear).setOnClickListener(x ->
-                new MaterialAlertDialogBuilder(requireContext())
-                        .setTitle("清除环境？")
-                        .setMessage("将停止服务并删除 /data/adb/dsha 运行环境。\n\n"
-                                + "如需重新安装，请在 KernelSU/Magisk 中重新刷入模块或运行 reinstall.sh 脚本。")
-                        .setPositiveButton("清除", (d, w) -> {
-                            new Thread(() -> {
-                                try {
-                                    controller.stopWeb();
-                                    Process p = Runtime.getRuntime().exec(new String[]{"su", "-mm", "-c", "/data/adb/dsha/scripts/stop.sh --umount && rm -rf /data/adb/dsha"});
-                                    p.waitFor();
-                                    main.post(() -> Toast.makeText(requireContext(), "已清除 /data/adb/dsha 原生环境", Toast.LENGTH_LONG).show());
-                                } catch (Throwable t) {
-                                    main.post(() -> Toast.makeText(requireContext(), "清除失败：" + t.getMessage(), Toast.LENGTH_LONG).show());
-                                }
-                            }).start();
-                        })
-                        .setNegativeButton("取消", null)
-                        .show());
-
         refreshShizukuStatus();
         return v;
     }
