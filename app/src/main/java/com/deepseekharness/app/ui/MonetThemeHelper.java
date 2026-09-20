@@ -1,21 +1,36 @@
 package com.deepseekharness.app.ui;
 
+import android.app.WallpaperColors;
+import android.app.WallpaperManager;
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.os.Build;
 
 import androidx.core.content.ContextCompat;
+import androidx.core.graphics.ColorUtils;
 
 import java.util.Locale;
 
 /**
- * 快捷抽屉莫奈（Material You）调色板与配色管理工具。
- * 支持在 Android 12 (API 31+) 下提取系统壁纸动态调色板，
- * 与抽屉正反色（浅色/深色）正交组合，并提供经典科技蓝灰色回退。
+ * 快捷抽屉莫奈（Material You）调色板核心引擎。
+ * 兼容小米 HyperOS/MIUI、ColorOS、OriginOS 及原生 Pixel 等全系设备：
+ * 1. 真实抓取系统当前壁纸的种子色（Wallpaper Seed Color）；
+ * 2. 基于壁纸色相（Hue）生成高饱和可感知的浅色与深色专属莫奈色阶；
+ * 3. 绝不使用系统无彩中性灰，确保开启后色彩灵动、对比鲜明。
  */
 public final class MonetThemeHelper {
 
     private MonetThemeHelper() {}
+
+    private static volatile Integer sCachedSeedColor = null;
+
+    /** 清除壁纸颜色缓存（在设置页切换或手动刷新时调用） */
+    public static void clearCache() {
+        sCachedSeedColor = null;
+    }
 
     /**
      * 抽屉完整配色包（包含 Android 原生 View 与 WebView 注入所需的所有颜色）
@@ -68,18 +83,6 @@ public final class MonetThemeHelper {
         }
     }
 
-    /**
-     * 安全提取系统动态色彩资源（带降级兜底）
-     */
-    public static int getSystemColor(Context ctx, int resId, int fallback) {
-        if (ctx != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            try {
-                return ContextCompat.getColor(ctx, resId);
-            } catch (Throwable ignored) {}
-        }
-        return fallback;
-    }
-
     public static String toHexString(int color) {
         return String.format(Locale.US, "#%06X", (0xFFFFFF & color));
     }
@@ -89,6 +92,120 @@ public final class MonetThemeHelper {
         int g = Color.green(color);
         int b = Color.blue(color);
         return String.format(Locale.US, "rgba(%d, %d, %d, %.2f)", r, g, b, alpha);
+    }
+
+    /**
+     * 从当前系统壁纸中提取最具辨识度的鲜艳种子色（Seed Color）
+     */
+    public static int getWallpaperSeedColor(Context context) {
+        if (sCachedSeedColor != null) {
+            return sCachedSeedColor;
+        }
+        if (context == null) {
+            return Color.parseColor("#3B82F6"); // 优雅科技蓝兜底
+        }
+
+        int extracted = 0;
+        WallpaperManager wm = null;
+        try {
+            wm = WallpaperManager.getInstance(context);
+        } catch (Throwable ignored) {}
+
+        // 阶段 1：优先尝试系统级 WallpaperColors（API 27+）
+        if (wm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            try {
+                WallpaperColors wc = wm.getWallpaperColors(WallpaperManager.FLAG_SYSTEM);
+                if (wc != null) {
+                    Color p = wc.getPrimaryColor();
+                    if (p != null) {
+                        int c = p.toArgb();
+                        if (getSaturation(c) >= 0.12f) {
+                            extracted = c;
+                        }
+                    }
+                    if (extracted == 0) {
+                        Color s = wc.getSecondaryColor();
+                        if (s != null && getSaturation(s.toArgb()) >= 0.12f) {
+                            extracted = s.toArgb();
+                        }
+                    }
+                    if (extracted == 0) {
+                        Color t = wc.getTertiaryColor();
+                        if (t != null && getSaturation(t.toArgb()) >= 0.12f) {
+                            extracted = t.toArgb();
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        // 阶段 2：如果系统色彩仍偏灰或厂商 ROM 未填充，从壁纸 Drawable 采样活力像素
+        if (extracted == 0 && wm != null) {
+            try {
+                Drawable d = wm.getDrawable();
+                if (d instanceof BitmapDrawable) {
+                    Bitmap bmp = ((BitmapDrawable) d).getBitmap();
+                    extracted = extractVibrantFromBitmap(bmp);
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        // 阶段 3：如果依然未果，尝试 AOSP Accent 主色（API 31+）
+        if (extracted == 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                int a1 = ContextCompat.getColor(context, android.R.color.system_accent1_500);
+                if (getSaturation(a1) >= 0.12f) {
+                    extracted = a1;
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        // 阶段 4：保底色彩
+        if (extracted == 0) {
+            extracted = Color.parseColor("#3B82F6");
+        }
+
+        sCachedSeedColor = extracted;
+        return extracted;
+    }
+
+    /** 计算颜色饱和度 */
+    private static float getSaturation(int color) {
+        float[] hsl = new float[3];
+        ColorUtils.colorToHSL(color, hsl);
+        return hsl[1];
+    }
+
+    /** 对壁纸位图快速网格采样，抓取饱和度最高且明度适中的代表色 */
+    private static int extractVibrantFromBitmap(Bitmap bmp) {
+        if (bmp == null || bmp.getWidth() <= 0 || bmp.getHeight() <= 0) return 0;
+        int w = bmp.getWidth();
+        int h = bmp.getHeight();
+        int stepX = Math.max(1, w / 24);
+        int stepY = Math.max(1, h / 24);
+
+        int bestColor = 0;
+        float bestScore = -1f;
+        float[] hsl = new float[3];
+
+        for (int x = stepX / 2; x < w; x += stepX) {
+            for (int y = stepY / 2; y < h; y += stepY) {
+                int pixel = bmp.getPixel(x, y);
+                ColorUtils.colorToHSL(pixel, hsl);
+                float sat = hsl[1];
+                float lum = hsl[2];
+                // 筛选明度在 0.15 ~ 0.85 之间，且饱和度明显的彩色像素
+                if (lum >= 0.15f && lum <= 0.85f && sat >= 0.15f) {
+                    // 打分模型：饱和度权重 70%，适中明度权重 30%
+                    float score = sat * 0.7f + (1.0f - Math.abs(lum - 0.5f) * 2f) * 0.3f;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestColor = pixel;
+                    }
+                }
+            }
+        }
+        return bestColor;
     }
 
     /**
@@ -104,15 +221,13 @@ public final class MonetThemeHelper {
         if (!isMonet || ctx == null) {
             // ================= 经典科技蓝灰配色（未开启莫奈） =================
             if (isDarkMode) {
-                int cardBg = Color.argb(alpha, 0x10, 0x14, 0x1B);
-                int text = Color.parseColor("#8BA0B8");
-                int textSecondary = Color.parseColor("#56697E");
-                int line = Color.parseColor("#302A3344");
-                int handle = Color.parseColor("#704A5568");
-                int border = Color.parseColor("#352A3344");
-
                 return new Palette(
-                        cardBg, text, textSecondary, line, handle, border,
+                        Color.argb(alpha, 0x10, 0x14, 0x1B),
+                        Color.parseColor("#8BA0B8"),
+                        Color.parseColor("#56697E"),
+                        Color.parseColor("#302A3344"),
+                        Color.parseColor("#704A5568"),
+                        Color.parseColor("#352A3344"),
                         "rgba(255, 255, 255, 0.06)",
                         "rgba(255, 255, 255, 0.12)",
                         "rgba(16, 20, 27, 0.96)",
@@ -126,15 +241,13 @@ public final class MonetThemeHelper {
                         "#10141B"
                 );
             } else {
-                int cardBg = Color.argb(alpha, 0xF5, 0xF8, 0xFC);
-                int text = Color.parseColor("#1A2230");
-                int textSecondary = Color.parseColor("#64748B");
-                int line = Color.parseColor("#30E2E6EE");
-                int handle = Color.parseColor("#90CBD5E1");
-                int border = Color.parseColor("#35CBD5E1");
-
                 return new Palette(
-                        cardBg, text, textSecondary, line, handle, border,
+                        Color.argb(alpha, 0xF5, 0xF8, 0xFC),
+                        Color.parseColor("#1A2230"),
+                        Color.parseColor("#64748B"),
+                        Color.parseColor("#30E2E6EE"),
+                        Color.parseColor("#90CBD5E1"),
+                        Color.parseColor("#35CBD5E1"),
                         "rgba(255, 255, 255, 0.75)",
                         "rgba(0, 0, 0, 0.08)",
                         "rgba(245, 248, 252, 0.97)",
@@ -150,70 +263,90 @@ public final class MonetThemeHelper {
             }
         }
 
-        // ================= 莫奈动态取色（Material You 调色板） =================
-        if (isDarkMode) {
-            // 深色反色模式下的莫奈色彩映射：
-            // 底色：Neutral1-900；主文字：Neutral1-100；品牌强调：Accent1-200
-            int n1_900 = getSystemColor(ctx, android.R.color.system_neutral1_900, Color.rgb(0x10, 0x14, 0x1B));
-            int n1_800 = getSystemColor(ctx, android.R.color.system_neutral1_800, Color.rgb(0x1E, 0x22, 0x2A));
-            int n1_100 = getSystemColor(ctx, android.R.color.system_neutral1_100, Color.rgb(0xE1, 0xE2, 0xEC));
-            int n2_300 = getSystemColor(ctx, android.R.color.system_neutral2_300, Color.rgb(0x8B, 0xA0, 0xB8));
-            int n2_600 = getSystemColor(ctx, android.R.color.system_neutral2_600, Color.rgb(0x4A, 0x55, 0x68));
-            int n2_700 = getSystemColor(ctx, android.R.color.system_neutral2_700, Color.rgb(0x2A, 0x33, 0x44));
-            int a1_200 = getSystemColor(ctx, android.R.color.system_accent1_200, Color.rgb(0x9E, 0xCA, 0xFF));
+        // ================= 真正提取壁纸色彩的莫奈调色板 =================
+        int seed = getWallpaperSeedColor(ctx);
+        float[] seedHsl = new float[3];
+        ColorUtils.colorToHSL(seed, seedHsl);
+        float h = seedHsl[0]; // 壁纸色相 0 ~ 360°
 
-            int cardBg = Color.argb(alpha, Color.red(n1_900), Color.green(n1_900), Color.blue(n1_900));
-            int text = n1_100;
-            int textSecondary = n2_300;
-            int line = Color.argb(0x35, Color.red(n2_700), Color.green(n2_700), Color.blue(n2_700));
-            int handle = n2_600;
-            int border = Color.argb(0x3A, Color.red(n2_700), Color.green(n2_700), Color.blue(n2_700));
+        if (isDarkMode) {
+            // ----- 深色反色模式：以壁纸色相生成深邃微透光暗彩色 -----
+            // 卡片底色：深沉暗彩（S=36%, L=9.5%），肉眼可清晰感知当前壁纸独特色彩底蕴！
+            int darkCardRgb = ColorUtils.HSLToColor(new float[]{h, 0.36f, 0.095f});
+            int cardBg = Color.argb(alpha, Color.red(darkCardRgb), Color.green(darkCardRgb), Color.blue(darkCardRgb));
+
+            // 主文字与按钮：壁纸高明度淡彩（S=48%, L=86%），在深底上清晰柔和
+            int text = ColorUtils.HSLToColor(new float[]{h, 0.48f, 0.86f});
+            // 次级提示文字：中明度同系色（S=30%, L=62%）
+            int textSecondary = ColorUtils.HSLToColor(new float[]{h, 0.30f, 0.62f});
+            // 品牌强调色：高饱和微荧光色（S=80%, L=74%）
+            int brand = ColorUtils.HSLToColor(new float[]{h, 0.80f, 0.74f});
+
+            // 拖拽横条
+            int handle = ColorUtils.HSLToColor(new float[]{h, 0.32f, 0.34f});
+            // 分割线与细边框
+            int borderRaw = ColorUtils.HSLToColor(new float[]{h, 0.30f, 0.25f});
+            int line = Color.argb(0x40, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
+            int border = Color.argb(0x45, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
+
+            // WebView 控件同系质感颜色
+            int inputInner = ColorUtils.HSLToColor(new float[]{h, 0.32f, 0.16f});
+            int inputBorderColor = ColorUtils.HSLToColor(new float[]{h, 0.40f, 0.30f});
+            int menuInner = ColorUtils.HSLToColor(new float[]{h, 0.35f, 0.12f});
+            int dialogInner = ColorUtils.HSLToColor(new float[]{h, 0.35f, 0.10f});
 
             return new Palette(
                     cardBg, text, textSecondary, line, handle, border,
-                    toRgbaString(n1_800, 0.40f),
-                    toRgbaString(n2_300, 0.16f),
-                    toRgbaString(n1_900, 0.96f),
-                    toRgbaString(n1_800, 0.96f),
-                    toRgbaString(n1_900, 0.98f),
-                    toRgbaString(n1_800, 0.96f),
-                    toRgbaString(n2_300, 0.16f),
+                    toRgbaString(inputInner, 0.45f),
+                    toRgbaString(inputBorderColor, 0.25f),
+                    toRgbaString(darkCardRgb, 0.96f),
+                    toRgbaString(menuInner, 0.96f),
+                    toRgbaString(dialogInner, 0.98f),
+                    toRgbaString(menuInner, 0.96f),
+                    toRgbaString(inputBorderColor, 0.25f),
                     toHexString(text),
                     toHexString(textSecondary),
-                    toHexString(a1_200),
-                    toHexString(n1_900)
+                    toHexString(brand),
+                    toHexString(darkCardRgb)
             );
         } else {
-            // 浅色模式下的莫奈色彩映射：
-            // 底色：Neutral1-50；主文字：Neutral1-900；品牌强调：Accent1-700
-            int n1_50 = getSystemColor(ctx, android.R.color.system_neutral1_50, Color.rgb(0xF5, 0xF8, 0xFC));
-            int n1_100 = getSystemColor(ctx, android.R.color.system_neutral1_100, Color.rgb(0xEE, 0xF1, 0xF6));
-            int n1_900 = getSystemColor(ctx, android.R.color.system_neutral1_900, Color.rgb(0x1A, 0x22, 0x30));
-            int n2_200 = getSystemColor(ctx, android.R.color.system_neutral2_200, Color.rgb(0xCB, 0xD5, 0xE1));
-            int n2_300 = getSystemColor(ctx, android.R.color.system_neutral2_300, Color.rgb(0x90, 0xCB, 0xD5));
-            int n2_700 = getSystemColor(ctx, android.R.color.system_neutral2_700, Color.rgb(0x4A, 0x55, 0x68));
-            int a1_700 = getSystemColor(ctx, android.R.color.system_accent1_700, Color.rgb(0x00, 0x61, 0xA4));
+            // ----- 浅色模式：以壁纸色相生成通透柔和的清丽浅彩 -----
+            // 卡片底色：高明度柔彩（S=28%, L=95%），通透呈现壁纸专属调性！
+            int lightCardRgb = ColorUtils.HSLToColor(new float[]{h, 0.28f, 0.95f});
+            int cardBg = Color.argb(alpha, Color.red(lightCardRgb), Color.green(lightCardRgb), Color.blue(lightCardRgb));
 
-            int cardBg = Color.argb(alpha, Color.red(n1_50), Color.green(n1_50), Color.blue(n1_50));
-            int text = n1_900;
-            int textSecondary = n2_700;
-            int line = Color.argb(0x35, Color.red(n2_200), Color.green(n2_200), Color.blue(n2_200));
-            int handle = n2_300;
-            int border = Color.argb(0x40, Color.red(n2_200), Color.green(n2_200), Color.blue(n2_200));
+            // 主文字与按钮：壁纸极深浓郁彩色（S=65%, L=16%），保证无障碍顶级对比度
+            int text = ColorUtils.HSLToColor(new float[]{h, 0.65f, 0.16f});
+            // 次级提示文字（S=35%, L=42%）
+            int textSecondary = ColorUtils.HSLToColor(new float[]{h, 0.35f, 0.42f});
+            // 品牌强调色（S=85%, L=36%）
+            int brand = ColorUtils.HSLToColor(new float[]{h, 0.85f, 0.36f});
+
+            // 拖拽横条
+            int handle = ColorUtils.HSLToColor(new float[]{h, 0.36f, 0.72f});
+            // 分割线与细边框
+            int borderRaw = ColorUtils.HSLToColor(new float[]{h, 0.32f, 0.82f});
+            int line = Color.argb(0x40, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
+            int border = Color.argb(0x45, Color.red(borderRaw), Color.green(borderRaw), Color.blue(borderRaw));
+
+            // WebView 控件同系质感颜色
+            int inputInner = ColorUtils.HSLToColor(new float[]{h, 0.22f, 0.98f});
+            int inputBorderColor = ColorUtils.HSLToColor(new float[]{h, 0.35f, 0.80f});
+            int menuInner = ColorUtils.HSLToColor(new float[]{h, 0.26f, 0.97f});
 
             return new Palette(
                     cardBg, text, textSecondary, line, handle, border,
-                    toRgbaString(n1_50, 0.75f),
-                    toRgbaString(n2_200, 0.40f),
-                    toRgbaString(n1_50, 0.97f),
-                    toRgbaString(n1_100, 0.98f),
-                    toRgbaString(n1_100, 0.98f),
-                    toRgbaString(n1_50, 0.96f),
-                    toRgbaString(n2_200, 0.40f),
+                    toRgbaString(inputInner, 0.75f),
+                    toRgbaString(inputBorderColor, 0.35f),
+                    toRgbaString(lightCardRgb, 0.97f),
+                    toRgbaString(menuInner, 0.98f),
+                    toRgbaString(menuInner, 0.98f),
+                    toRgbaString(lightCardRgb, 0.96f),
+                    toRgbaString(inputBorderColor, 0.35f),
                     toHexString(text),
                     toHexString(textSecondary),
-                    toHexString(a1_700),
-                    toHexString(n1_50)
+                    toHexString(brand),
+                    toHexString(lightCardRgb)
             );
         }
     }
