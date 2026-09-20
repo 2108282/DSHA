@@ -165,6 +165,10 @@ public class CtsModuleMain extends XposedModule {
     private static volatile long sLastPrefFetchMs = 0L;
     private static final long PREF_CACHE_TTL_MS = 5_000L;
 
+    /** 手势重定向全局防抖时间戳（杜绝 VIMS 拦截与 ATMS 拦截重复触发两次） */
+    private static volatile long sLastGestureRedirectMs = 0L;
+    private static final long GESTURE_REDIRECT_DEBOUNCE_MS = 800L;
+
     /** 开关开 → 重定向；关 → 透传系统原逻辑。带 TTL 内存缓存，严禁在 ATMS 核心锁路径同步跨进程 IPC。 */
     private boolean isEnabled() {
         long now = android.os.SystemClock.elapsedRealtime();
@@ -207,11 +211,20 @@ public class CtsModuleMain extends XposedModule {
                     String cls = comp != null ? comp.getClassName() : "";
                     act = intent.getAction();
 
-                    boolean isGoogleTarget = "com.google.android.googlequicksearchbox".equals(pkg)
-                            && (cls.contains("FloatyActivity")
+                    boolean isGooglePkg = "com.google.android.googlequicksearchbox".equals(pkg);
+                    boolean isGoogleAssistCls = isGooglePkg && (
+                            cls.contains("FloatyActivity")
                                     || cls.contains("VoiceSearchActivity")
-                                    || cls.contains("OpaSearchActivity"));
+                                    || cls.contains("OpaSearchActivity")
+                                    || cls.contains("Assist")
+                                    || cls.contains("Opa")
+                                    || cls.isEmpty());
 
+                    boolean isAssistAction = Intent.ACTION_ASSIST.equals(act)
+                            || Intent.ACTION_VOICE_COMMAND.equals(act)
+                            || "android.intent.action.VOICE_ASSIST".equals(act);
+
+                    boolean isGoogleTarget = (isGooglePkg && isGoogleAssistCls) || (isGooglePkg && isAssistAction);
                     boolean isCtsAction = "android.app.contextualsearch.action.LAUNCH_CONTEXTUAL_SEARCH".equals(act);
 
                     if (isGoogleTarget || isCtsAction) {
@@ -230,6 +243,16 @@ public class CtsModuleMain extends XposedModule {
             if (!isEnabled()) {
                 return chain.proceed();
             }
+
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (now - sLastGestureRedirectMs < GESTURE_REDIRECT_DEBOUNCE_MS) {
+                // 核心防抖安全网：如果 800ms 内已被 VIMS 或上一次手势成功拉起，
+                // 则本次由系统 Fallback 产生的重复启动直接截断返回成功 (0)，彻底杜绝抽屉被二次拉起！
+                log(Log.INFO, TAG, "ATMS assist startActivity suppressed by debounce: "
+                        + (comp != null ? comp.flattenToShortString() : act));
+                return 0; // START_SUCCESS = 0
+            }
+            sLastGestureRedirectMs = now;
 
             log(Log.INFO, TAG, "ATMS pre-intercepted assist startActivity: "
                     + (comp != null ? comp.flattenToShortString() : act)
@@ -351,6 +374,12 @@ public class CtsModuleMain extends XposedModule {
                 return chain.proceed();
             }
 
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (now - sLastGestureRedirectMs < GESTURE_REDIRECT_DEBOUNCE_MS) {
+                // 防抖窗口内，直接阻断，不重复启动
+                return false;
+            }
+
             try {
                 Context context = null;
                 Object thisObj = chain.getThisObject();
@@ -371,7 +400,16 @@ public class CtsModuleMain extends XposedModule {
                     }
                 }
 
+                if (context == null) {
+                    try {
+                        Class<?> atCls = Class.forName("android.app.ActivityThread");
+                        Method currentAppM = atCls.getMethod("currentApplication");
+                        context = (Context) currentAppM.invoke(null);
+                    } catch (Throwable ignored) {}
+                }
+
                 if (context != null) {
+                    sLastGestureRedirectMs = now;
                     Intent intent = new Intent();
                     intent.setComponent(new ComponentName(TARGET_PACKAGE,
                             "com.deepseekharness.app.ui.AssistGatewayActivity"));

@@ -15,11 +15,30 @@ import android.os.Bundle;
  * 注意：声明的 intent-filter 需含 android.intent.category.DEFAULT，才能被隐式 Intent 命中。
  */
 public class AssistGatewayActivity extends Activity {
+
+    public static final String EXTRA_START_SOURCE = "EXTRA_START_SOURCE";
+    public static final String SOURCE_GESTURE = "GESTURE_WAKEUP";
+
+    private static volatile long sLastGatewayLaunchTime = 0L;
+    private static final long GATEWAY_DEBOUNCE_MS = 600L;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         overridePendingTransition(0, 0);
+
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - sLastGatewayLaunchTime < GATEWAY_DEBOUNCE_MS) {
+            // 防抖守卫：600ms 内重复手势或系统 Fallback 重复唤起直接静默结束，杜绝两次拉起
+            finish();
+            overridePendingTransition(0, 0);
+            return;
+        }
+        sLastGatewayLaunchTime = now;
+
         Intent intent = new Intent(this, QuickChatSheetActivity.class);
+        intent.setAction(Intent.ACTION_ASSIST);
+        intent.putExtra(EXTRA_START_SOURCE, SOURCE_GESTURE);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
                 | Intent.FLAG_ACTIVITY_NO_ANIMATION);

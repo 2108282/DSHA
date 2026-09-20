@@ -229,6 +229,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private Intent mSpeechIntent;
     private boolean mIsListening = false;
     private final Handler mVoiceHandler = new Handler(Looper.getMainLooper());
+    private long mGestureWakeupTime = 0L;
+    private int mVoiceRetryCount = 0;
 
     private ValueCallback<Uri[]> fileCallback = null;
     private final ArrayList<File> uploads = new ArrayList<>();
@@ -416,7 +418,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 }
             }
         }
-        animateIn();
+        // 如果抽屉当前已在屏幕中且处于展开状态，不再重置平移从底部重复播放动画，平滑保持
+        if (sheetCard != null && sheetCard.getVisibility() == View.VISIBLE && sheetCard.getTranslationY() == 0) {
+            triggerForegroundWakeup();
+        } else {
+            animateIn();
+        }
     }
 
     private void calculateDimensions() {
@@ -1814,16 +1821,38 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             }
         }
 
-        // 3. 进场动效展开完成后，按配置自动开启语音拾音
+        // 3. 仅当由手势/数字助理唤醒时（ACTION_ASSIST / CTS / 手势专属标识），才自动开启语音拾音；
+        // 通知栏点击、应用内按钮等打开方式绝不触发，避免无端占用麦克风。
+        Intent curIntent = getIntent();
+        String curAction = curIntent != null ? curIntent.getAction() : null;
+        boolean isGestureWakeup = false;
+        if (curIntent != null) {
+            if (Intent.ACTION_ASSIST.equals(curAction)
+                    || "android.app.contextualsearch.action.LAUNCH_CONTEXTUAL_SEARCH".equals(curAction)
+                    || curIntent.hasExtra(AssistGatewayActivity.EXTRA_START_SOURCE)) {
+                isGestureWakeup = true;
+                // 单次消费：改写为普通展示态，防止切后台看微信返回再次走 onResume 时重复开启语音
+                curIntent.setAction("com.deepseekharness.app.OPEN_SHEET");
+                curIntent.removeExtra(AssistGatewayActivity.EXTRA_START_SOURCE);
+            }
+        }
+
         mVoiceHandler.removeCallbacksAndMessages(null);
-        mVoiceHandler.postDelayed(this::startVoiceListening, 300);
+        if (isGestureWakeup) {
+            mGestureWakeupTime = SystemClock.elapsedRealtime();
+            mVoiceRetryCount = 0;
+            // 延时 550ms：等待抽屉完全平滑展开，并留足时间让系统语音会话交接释放音频焦点
+            mVoiceHandler.postDelayed(this::startVoiceListening, 550);
+        }
     }
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
-        // 关键交互：用户手指触摸屏幕任意位置（点按、输入框获焦、滑动等），麦克风立刻闭嘴停止录音
+        // 关键交互：用户手指触摸屏幕任意位置（点按、输入框获焦、滑动等），麦克风立刻闭嘴停止录音；
+        // 核心保护：手势唤醒后的 800ms 内属于“手势离手保护期”，忽略手势余触，防止刚启动的录音被当场掐灭
         if (ev.getAction() == MotionEvent.ACTION_DOWN) {
-            if (mIsListening) {
+            long elapsed = SystemClock.elapsedRealtime() - mGestureWakeupTime;
+            if (mIsListening && elapsed > 800L) {
                 stopVoiceListening(true);
             }
         }
@@ -1913,7 +1942,15 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
                 @Override
                 public void onError(int error) {
+                    Log.w(TAG, "SpeechRecognizer onError: " + error);
                     mIsListening = false;
+                    // 容错重试：如果手势唤起瞬间遇到 RECOGNIZER_BUSY (8) 或 AUDIO (3)，允许延时 200ms 重试一次
+                    if ((error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_AUDIO)
+                            && mVoiceRetryCount < 1 && !isFinishing() && !isDestroyed()) {
+                        mVoiceRetryCount++;
+                        Log.i(TAG, "SpeechRecognizer audio/busy conflict, retry listening in 200ms...");
+                        mVoiceHandler.postDelayed(QuickChatSheetActivity.this::startVoiceListening, 200);
+                    }
                 }
 
                 @Override
@@ -1959,9 +1996,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         }
         if (mSpeechRecognizer != null && !mIsListening && !isFinishing() && !isDestroyed()) {
             try {
+                Log.i(TAG, "SpeechRecognizer startListening called cleanly");
                 mSpeechRecognizer.startListening(mSpeechIntent);
                 mIsListening = true;
             } catch (Throwable t) {
+                Log.w(TAG, "SpeechRecognizer startListening fail", t);
                 mIsListening = false;
             }
         }

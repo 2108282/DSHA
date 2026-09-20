@@ -35,6 +35,8 @@ public class QuickChatVoiceInteractionSessionService extends VoiceInteractionSes
             Context ctx = getContext();
             if (ctx != null) {
                 Intent intent = new Intent(ctx, QuickChatSheetActivity.class);
+                intent.setAction(Intent.ACTION_ASSIST);
+                intent.putExtra(AssistGatewayActivity.EXTRA_START_SOURCE, AssistGatewayActivity.SOURCE_GESTURE);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
                         | Intent.FLAG_ACTIVITY_NO_ANIMATION);
