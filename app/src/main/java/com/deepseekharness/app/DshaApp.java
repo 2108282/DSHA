@@ -24,10 +24,11 @@ public class DshaApp extends Application {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) {
-                // 1. 常驻后台服务渠道
+                // 1. 常驻后台服务渠道（提升至 DEFAULT，防止小米 HyperOS 折叠隐藏进静默盒子）
                 NotificationChannel chService = new NotificationChannel(
-                        "dsh_harness_channel", "DSHA后台服务", NotificationManager.IMPORTANCE_LOW);
+                        "dsh_harness_channel", "DSHA后台服务", NotificationManager.IMPORTANCE_DEFAULT);
                 chService.setDescription("保持 DeepSeek Harness 原生守护与硬件桥后台运行");
+                chService.setShowBadge(true);
                 nm.createNotificationChannel(chService);
 
                 // 2. 运行状态实时胶囊渠道
@@ -54,10 +55,27 @@ public class DshaApp extends Application {
             }
         }
 
+        // 小米 HyperOS 灵动岛/焦点通知与悬浮窗权限自动自愈守卫（防止卸载重装后被系统剥夺）
+        new Thread(() -> {
+            try {
+                String pkg = getPackageName();
+                HttpShellService.execRootCommand(
+                        "cmd appops set " + pkg + " POST_NOTIFICATION allow 2>/dev/null;"
+                        + "cmd appops set " + pkg + " POST_PROMOTED_NOTIFICATIONS allow 2>/dev/null;"
+                        + "cmd appops set " + pkg + " SYSTEM_ALERT_WINDOW allow 2>/dev/null;"
+                        + "cmd appops set " + pkg + " 10021 allow 2>/dev/null;"
+                        + "cmd appops set " + pkg + " 10022 allow 2>/dev/null;"
+                        + "cmd appops set " + pkg + " 10008 allow 2>/dev/null"
+                );
+            } catch (Throwable ignored) {}
+        }, "dsha-perm-guard").start();
+
         // 核心运转常驻通知：若核心在运行且常驻通知开关开启，自动同步挂载
         new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
             try {
                 HarnessService.checkAndSyncService(this);
+            } catch (Throwable ignored) {}
+        }, 1500);
             } catch (Throwable ignored) {}
         }, 500);
     }

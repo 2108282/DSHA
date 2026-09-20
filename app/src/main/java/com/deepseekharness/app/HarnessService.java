@@ -306,8 +306,9 @@ public class HarnessService extends Service {
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
-                    CHANNEL_ID, "DSHA后台服务", NotificationManager.IMPORTANCE_LOW);
+                    CHANNEL_ID, "DSHA后台服务", NotificationManager.IMPORTANCE_DEFAULT);
             ch.setDescription("保持 DeepSeek Harness 原生守护与硬件桥后台运行");
+            ch.setShowBadge(true);
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.createNotificationChannel(ch);
         }
