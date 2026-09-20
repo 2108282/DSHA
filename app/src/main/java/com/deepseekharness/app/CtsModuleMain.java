@@ -2,6 +2,7 @@ package com.deepseekharness.app;
 
 import android.app.Activity;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
@@ -67,6 +68,32 @@ public class CtsModuleMain extends XposedModule {
     public void onSystemServerStarting(SystemServerStartingParam param) {
         super.onSystemServerStarting(param);
 
+        // 0. 【系统语音最上游拦截】在 VoiceInteractionManagerService 中前置拦截：
+        // 凡是系统通过手势或按键呼出 Google 语音会话 (showSessionForActiveService) 时，
+        // 直接在系统层改写为拉起 DSHA 抽屉，并直接阻断原方法（不向下通知 Google）！
+        // 这样 Google 连一次 Session 启动的信号都收不到，100% 杜绝 Google 麦克风被开启！
+        try {
+            String[] vimsClasses = new String[]{
+                    "com.android.server.voiceinteraction.VoiceInteractionManagerService$VoiceInteractionManagerServiceStub",
+                    "com.android.server.voiceinteraction.VoiceInteractionManagerService"
+            };
+            int vimsHookCount = 0;
+            for (String clsName : vimsClasses) {
+                try {
+                    Class<?> cls = param.getClassLoader().loadClass(clsName);
+                    for (Method m : cls.getDeclaredMethods()) {
+                        if ("showSessionForActiveService".equals(m.getName())) {
+                            hook(m).intercept(new VimsShowSessionHooker());
+                            vimsHookCount++;
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+            log(Log.INFO, TAG, "hook VIMS.showSessionForActiveService installed (count=" + vimsHookCount + ")");
+        } catch (Throwable e) {
+            log(Log.WARN, TAG, "hook VIMS skip", e);
+        }
+
         // 1. 【核心主路径】在 system_server 的 ATMS 中进行前置源头拦截：
         // 凡是系统或进程试图启动 Google 语音助手/FloatyActivity 的 Intent，直接改写为 DSHA 抽屉网关。
         // 从源头彻底阻断 Google 进程的创建与冷启动，实现 0 CPU 消耗与系统级秒开！
@@ -113,6 +140,19 @@ public class CtsModuleMain extends XposedModule {
                     hook(floaty.getDeclaredMethod("onUserLeaveHint"))
                             .intercept(new FloatyUserLeaveHooker());
                 } catch (Throwable ignored) {}
+
+                // 核心安全网：拦截 Google 进程内的 VoiceInteractionSession.onShow，直接隐藏并释放麦克风
+                try {
+                    Class<?> sessionCls = param.getClassLoader().loadClass("android.service.voice.VoiceInteractionSession");
+                    for (Method m : sessionCls.getDeclaredMethods()) {
+                        if ("onShow".equals(m.getName())) {
+                            hook(m).intercept(new VoiceSessionOnShowHooker());
+                        }
+                    }
+                    log(Log.INFO, TAG, "hook VoiceInteractionSession.onShow fallback installed");
+                } catch (Throwable e) {
+                    log(Log.DEBUG, TAG, "hook VoiceInteractionSession skip", e);
+                }
 
                 log(Log.INFO, TAG, "hook FloatyActivity fallback installed cleanly");
             } catch (Throwable e) {
@@ -294,6 +334,91 @@ public class CtsModuleMain extends XposedModule {
         public Object intercept(Chain chain) throws Throwable {
             if (isEnabled()) {
                 return null;
+            }
+            return chain.proceed();
+        }
+    }
+
+    /**
+     * 【系统语音源头终极拦截】
+     * 在 system_server 层直接拦截系统手势/按键向默认助理发起的 showSessionForActiveService，
+     * 100% 从源头直接转跳 DSHA 抽屉，并阻断向 Google 发送会话启动指令！
+     */
+    private final class VimsShowSessionHooker implements Hooker {
+        @Override
+        public Object intercept(Chain chain) throws Throwable {
+            if (!isEnabled()) {
+                return chain.proceed();
+            }
+
+            try {
+                Context context = null;
+                Object thisObj = chain.getThisObject();
+                if (thisObj != null) {
+                    try {
+                        Field f = thisObj.getClass().getDeclaredField("mContext");
+                        f.setAccessible(true);
+                        context = (Context) f.get(thisObj);
+                    } catch (Throwable t) {
+                        try {
+                            Field f2 = thisObj.getClass().getDeclaredField("this$0");
+                            f2.setAccessible(true);
+                            Object parent = f2.get(thisObj);
+                            Field f = parent.getClass().getDeclaredField("mContext");
+                            f.setAccessible(true);
+                            context = (Context) f.get(parent);
+                        } catch (Throwable ignored) {}
+                    }
+                }
+
+                if (context != null) {
+                    Intent intent = new Intent();
+                    intent.setComponent(new ComponentName(TARGET_PACKAGE,
+                            "com.deepseekharness.app.ui.AssistGatewayActivity"));
+                    intent.setAction(Intent.ACTION_ASSIST);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                    context.startActivity(intent);
+                    log(Log.INFO, TAG, "VIMS showSession pre-intercepted cleanly -> redirected to DSHA");
+                }
+            } catch (Throwable t) {
+                log(Log.WARN, TAG, "VIMS pre-intercept redirect fail", t);
+            }
+
+            // 彻底阻断向下调用 Google：返回 false 通知调用方会话未能展示，Google 根本收不到任何信号！
+            return false;
+        }
+    }
+
+    /**
+     * Google 进程内的 Session 兜底：若有漏网之鱼仍创建了 VoiceInteractionSession 并触发 onShow，
+     * 立即拉起 DSHA 抽屉并命令 session.hide()，彻底释放麦克风！
+     */
+    private final class VoiceSessionOnShowHooker implements Hooker {
+        @Override
+        public Object intercept(Chain chain) throws Throwable {
+            if (!isEnabled()) {
+                return chain.proceed();
+            }
+            try {
+                Object thisObj = chain.getThisObject();
+                if (thisObj instanceof android.service.voice.VoiceInteractionSession) {
+                    android.service.voice.VoiceInteractionSession session =
+                            (android.service.voice.VoiceInteractionSession) thisObj;
+                    Context ctx = session.getContext();
+                    if (ctx != null) {
+                        Intent intent = new Intent();
+                        intent.setComponent(new ComponentName(TARGET_PACKAGE,
+                                "com.deepseekharness.app.ui.AssistGatewayActivity"));
+                        intent.setAction(Intent.ACTION_ASSIST);
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                        ctx.startActivity(intent);
+                    }
+                    session.hide();
+                    log(Log.INFO, TAG, "VoiceInteractionSession.onShow intercepted and forced to hide");
+                    return null;
+                }
+            } catch (Throwable t) {
+                log(Log.WARN, TAG, "VoiceInteractionSession onShow intercept fail", t);
             }
             return chain.proceed();
         }
