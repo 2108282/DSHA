@@ -152,10 +152,56 @@ if [ "$FORCE" != "1" ] && is_safe_cleanup "$CMD"; then
   exit 0
 fi
 
+http_confirm() {
+  local port="$1"
+  local token="$2"
+  local cmd="$3"
+  local force="$4"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -s -m 65 -G "http://127.0.0.1:$port/confirm" --data-urlencode "cmd=$cmd" --data-urlencode "force=$force" -H "X-Token: $token" 2>/dev/null
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import sys, urllib.request, urllib.parse
+port, token, cmd, force = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+params = urllib.parse.urlencode({'cmd': cmd, 'force': force})
+url = f'http://127.0.0.1:{port}/confirm?{params}'
+req = urllib.request.Request(url, headers={'X-Token': token})
+try:
+    with urllib.request.urlopen(req, timeout=65) as resp:
+        print(resp.read().decode('utf-8', errors='ignore'))
+except Exception:
+    pass
+" "$port" "$token" "$cmd" "$force" 2>/dev/null
+  elif command -v node >/dev/null 2>&1; then
+    node -e '
+const http = require("http");
+const [, port, token, cmd, force] = process.argv;
+const params = new URLSearchParams({ cmd, force });
+const options = {
+  hostname: "127.0.0.1",
+  port: Number(port),
+  path: `/confirm?${params.toString()}`,
+  method: "GET",
+  headers: { "X-Token": token },
+  timeout: 65000
+};
+const req = http.request(options, (res) => {
+  let data = "";
+  res.on("data", (chunk) => data += chunk);
+  res.on("end", () => process.stdout.write(data));
+});
+req.on("error", () => {});
+req.on("timeout", () => { req.destroy(); });
+req.end();
+' "$port" "$token" "$cmd" "$force" 2>/dev/null
+  fi
+}
+
 TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
 RES=""
 for PORT in 3095 3090; do
-  RES=$(curl -s -m 65 -G "http://127.0.0.1:$PORT/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
+  RES=$(http_confirm "$PORT" "$TOKEN" "$CMD" "$FORCE")
   case "$RES" in
     *'"result":"YES"'*|*'"result":YES'*) exit 0 ;;
     *'"result":"NO"'*|*'"result":NO'*)  echo "已拒绝: $CMD（用户在手机端拒绝了该操作）" >&2; exit 1 ;;

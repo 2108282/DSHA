@@ -17,11 +17,60 @@ CMD="$*"
 # 必须带 X-Token 头（= /root/.dsh/.bridge_token 内容），否则一律 [UNAUTHORIZED] 被拒
 TOKEN=$(cat /root/.dsh/.bridge_token 2>/dev/null)
 # 桥的监听地址随 App 版本不同（新版绑 127.0.0.1 并附加 [::1]，旧版只绑 [::1]）：
+http_confirm() {
+  local host="$1"
+  local port="$2"
+  local token="$3"
+  local cmd="$4"
+  local force="$5"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -s -m 65 -G "http://$host:$port/confirm" --data-urlencode "cmd=$cmd" --data-urlencode "force=$force" -H "X-Token: $token" 2>/dev/null
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import sys, urllib.request, urllib.parse
+host, port, token, cmd, force = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+h = '127.0.0.1' if host == '[::1]' else host
+params = urllib.parse.urlencode({'cmd': cmd, 'force': force})
+url = f'http://{h}:{port}/confirm?{params}'
+req = urllib.request.Request(url, headers={'X-Token': token})
+try:
+    with urllib.request.urlopen(req, timeout=65) as resp:
+        print(resp.read().decode('utf-8', errors='ignore'))
+except Exception:
+    pass
+" "$host" "$port" "$token" "$cmd" "$force" 2>/dev/null
+  elif command -v node >/dev/null 2>&1; then
+    node -e '
+const http = require("http");
+const [, host, port, token, cmd, force] = process.argv;
+const h = host === "[::1]" ? "127.0.0.1" : host;
+const params = new URLSearchParams({ cmd, force });
+const options = {
+  hostname: h,
+  port: Number(port),
+  path: `/confirm?${params.toString()}`,
+  method: "GET",
+  headers: { "X-Token": token },
+  timeout: 65000
+};
+const req = http.request(options, (res) => {
+  let data = "";
+  res.on("data", (chunk) => data += chunk);
+  res.on("end", () => process.stdout.write(data));
+});
+req.on("error", () => {});
+req.on("timeout", () => { req.destroy(); });
+req.end();
+' "$host" "$port" "$token" "$cmd" "$force" 2>/dev/null
+  fi
+}
+
 # 两个地址族都试，避免「桥活着但连不上 → 确认弹窗永不出现」。
 RES=""
 for P in 3095 3090; do
   for H in 127.0.0.1 '[::1]'; do
-    RES=$(curl -s -m 65 -G "http://$H:$P/confirm" --data-urlencode "cmd=$CMD" --data-urlencode "force=$FORCE" -H "X-Token: $TOKEN" 2>/dev/null)
+    RES=$(http_confirm "$H" "$P" "$TOKEN" "$CMD" "$FORCE")
     # 严格匹配 {"result":"YES"}：宽松的 grep YES 会被响应里的其它字段或命令回显
     # 带偏（吸收上游 PR#24）
     case "$RES" in
