@@ -4,6 +4,7 @@ import android.app.WallpaperColors;
 import android.app.WallpaperManager;
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
@@ -12,12 +13,15 @@ import android.os.Build;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.ColorUtils;
 
+import com.deepseekharness.app.HttpShellService;
+
+import java.io.File;
 import java.util.Locale;
 
 /**
  * 快捷抽屉莫奈（Material You）调色板核心引擎。
  * 兼容小米 HyperOS/MIUI、ColorOS、OriginOS 及原生 Pixel 等全系设备：
- * 1. 真实抓取系统当前壁纸的种子色（Wallpaper Seed Color）；
+ * 1. 通过 Root 特权直取 / 系统级 API 双轨制，穿透厂商签名墙，真实抓取系统当前壁纸的种子色；
  * 2. 基于壁纸色相（Hue）生成高饱和可感知的浅色与深色专属莫奈色阶；
  * 3. 绝不使用系统无彩中性灰，确保开启后色彩灵动、对比鲜明。
  */
@@ -28,6 +32,18 @@ public final class MonetThemeHelper {
     private static volatile Integer sCachedSeedColor = null;
 
     /** 清除壁纸颜色缓存（在设置页切换或手动刷新时调用） */
+    public static void clearCache(Context context) {
+        sCachedSeedColor = null;
+        if (context != null) {
+            try {
+                File cacheFile = new File(context.getCacheDir(), "wallpaper_monet_seed.jpg");
+                if (cacheFile.exists()) {
+                    cacheFile.delete();
+                }
+            } catch (Throwable ignored) {}
+        }
+    }
+
     public static void clearCache() {
         sCachedSeedColor = null;
     }
@@ -102,55 +118,72 @@ public final class MonetThemeHelper {
             return sCachedSeedColor;
         }
         if (context == null) {
-            return Color.parseColor("#3B82F6"); // 优雅科技蓝兜底
+            return Color.parseColor("#10B981");
         }
 
         int extracted = 0;
-        WallpaperManager wm = null;
+
+        // 阶段 1：通过 Root 特权通道直取系统壁纸图片（穿透小米澎湃 OS/MIUI/OPPO/vivo 等系统壁纸签名墙）
         try {
-            wm = WallpaperManager.getInstance(context);
+            File cacheFile = new File(context.getCacheDir(), "wallpaper_monet_seed.jpg");
+            if (!cacheFile.exists() || cacheFile.length() <= 0) {
+                String copyCmd = "cp /data/system/users/0/wallpaper " + cacheFile.getAbsolutePath()
+                        + " 2>/dev/null || cp /data/system/users/0/wallpaper_orig " + cacheFile.getAbsolutePath()
+                        + " 2>/dev/null || cp /data/system/users/0/blurwallpaper " + cacheFile.getAbsolutePath()
+                        + " 2>/dev/null; chmod 666 " + cacheFile.getAbsolutePath() + " 2>/dev/null";
+                HttpShellService.execRootCommand(copyCmd);
+            }
+
+            if (cacheFile.exists() && cacheFile.length() > 0) {
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inSampleSize = 16;
+                Bitmap bmp = BitmapFactory.decodeFile(cacheFile.getAbsolutePath(), opts);
+                if (bmp != null) {
+                    extracted = extractVibrantFromBitmap(bmp);
+                    bmp.recycle();
+                }
+            }
         } catch (Throwable ignored) {}
 
-        // 阶段 1：优先尝试系统级 WallpaperColors（API 27+）
-        if (wm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+        // 阶段 2：优先尝试系统级 WallpaperColors（适用于原生 Pixel/AOSP 系统，API 27+）
+        if (extracted == 0) {
             try {
-                WallpaperColors wc = wm.getWallpaperColors(WallpaperManager.FLAG_SYSTEM);
-                if (wc != null) {
-                    Color p = wc.getPrimaryColor();
-                    if (p != null) {
-                        int c = p.toArgb();
-                        if (getSaturation(c) >= 0.12f) {
-                            extracted = c;
+                WallpaperManager wm = WallpaperManager.getInstance(context);
+                if (wm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    WallpaperColors wc = wm.getWallpaperColors(WallpaperManager.FLAG_SYSTEM);
+                    if (wc != null) {
+                        Color p = wc.getPrimaryColor();
+                        if (p != null && getSaturation(p.toArgb()) >= 0.12f) {
+                            extracted = p.toArgb();
                         }
-                    }
-                    if (extracted == 0) {
-                        Color s = wc.getSecondaryColor();
-                        if (s != null && getSaturation(s.toArgb()) >= 0.12f) {
-                            extracted = s.toArgb();
+                        if (extracted == 0 && wc.getSecondaryColor() != null) {
+                            int sc = wc.getSecondaryColor().toArgb();
+                            if (getSaturation(sc) >= 0.12f) extracted = sc;
                         }
-                    }
-                    if (extracted == 0) {
-                        Color t = wc.getTertiaryColor();
-                        if (t != null && getSaturation(t.toArgb()) >= 0.12f) {
-                            extracted = t.toArgb();
+                        if (extracted == 0 && wc.getTertiaryColor() != null) {
+                            int tc = wc.getTertiaryColor().toArgb();
+                            if (getSaturation(tc) >= 0.12f) extracted = tc;
                         }
                     }
                 }
             } catch (Throwable ignored) {}
         }
 
-        // 阶段 2：如果系统色彩仍偏灰或厂商 ROM 未填充，从壁纸 Drawable 采样活力像素
-        if (extracted == 0 && wm != null) {
+        // 阶段 3：如果原生 API 允许，尝试直接获取壁纸 Drawable 采样
+        if (extracted == 0) {
             try {
-                Drawable d = wm.getDrawable();
-                if (d instanceof BitmapDrawable) {
-                    Bitmap bmp = ((BitmapDrawable) d).getBitmap();
-                    extracted = extractVibrantFromBitmap(bmp);
+                WallpaperManager wm = WallpaperManager.getInstance(context);
+                if (wm != null) {
+                    Drawable d = wm.getDrawable();
+                    if (d instanceof BitmapDrawable) {
+                        Bitmap bmp = ((BitmapDrawable) d).getBitmap();
+                        extracted = extractVibrantFromBitmap(bmp);
+                    }
                 }
             } catch (Throwable ignored) {}
         }
 
-        // 阶段 3：如果依然未果，尝试 AOSP Accent 主色（API 31+）
+        // 阶段 4：如果依然未果，尝试 AOSP Accent 主色（API 31+）
         if (extracted == 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
                 int a1 = ContextCompat.getColor(context, android.R.color.system_accent1_500);
@@ -160,9 +193,9 @@ public final class MonetThemeHelper {
             } catch (Throwable ignored) {}
         }
 
-        // 阶段 4：保底色彩
+        // 阶段 5：保底活力翡翠绿（与护眼绿同系）
         if (extracted == 0) {
-            extracted = Color.parseColor("#3B82F6");
+            extracted = Color.parseColor("#10B981");
         }
 
         sCachedSeedColor = extracted;

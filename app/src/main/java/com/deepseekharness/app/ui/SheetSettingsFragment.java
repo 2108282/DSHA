@@ -57,7 +57,7 @@ public class SheetSettingsFragment extends Fragment {
                 boolean next = !monetSwitch.isChecked();
                 monetSwitch.setChecked(next);
                 cfg.setSheetMonetColor(next);
-                MonetThemeHelper.clearCache();
+                MonetThemeHelper.clearCache(requireContext());
                 QuickChatSheetActivity.refreshThemeFromConfig(requireContext());
                 Toast.makeText(requireContext(),
                         next ? "莫奈取色已开启（跟随系统壁纸调色）" : "莫奈取色已关闭（恢复经典科技蓝灰）",

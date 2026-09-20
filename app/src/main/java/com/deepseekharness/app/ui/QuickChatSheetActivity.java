@@ -1178,7 +1178,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     /** 设置页「抽屉反色开关」与「莫奈取色开关」变动时即时刷新活动中的抽屉及缓存的 WebView */
     public static void refreshThemeFromConfig(Context context) {
         if (context == null) return;
-        MonetThemeHelper.clearCache();
+        MonetThemeHelper.clearCache(context);
         boolean invert = new ConfigStore(context).isSheetInvertColor();
         boolean monet = new ConfigStore(context).isSheetMonetColor();
         QuickChatSheetActivity act = sCurrentInstance;
