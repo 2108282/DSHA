@@ -213,6 +213,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private boolean authRetried = false;
     private boolean isDismissing = false;
     private boolean isDarkMode = false;
+    private boolean isMonetColor = false;
     private static volatile QuickChatSheetActivity sCurrentInstance;
 
     private float initialTouchY = 0f;
@@ -341,6 +342,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         sCurrentInstance = this;
         controller = HarnessController.get(this);
         isDarkMode = new ConfigStore(this).isSheetInvertColor();
+        isMonetColor = new ConfigStore(this).isSheetMonetColor();
 
         calculateDimensions();
         setContentView(buildUi());
@@ -382,7 +384,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         boolean dark = new ConfigStore(this).isSheetInvertColor();
+        boolean monet = new ConfigStore(this).isSheetMonetColor();
         isDarkMode = dark;
+        isMonetColor = monet;
         updateCardTheme();
         if (sCachedWebView != null) {
             triggerForegroundWakeup();
@@ -430,9 +434,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private int getCardBgColor(boolean dark) {
         com.deepseekharness.app.core.ConfigStore cfg = new com.deepseekharness.app.core.ConfigStore(this);
         int opacity = dark ? cfg.getSheetOpacityNight() : cfg.getSheetOpacityDay();
-        if (opacity < 30 || opacity > 100) opacity = dark ? 80 : 88;
-        int alpha = (int) Math.round(opacity * 255.0 / 100.0);
-        return dark ? Color.argb(alpha, 0x10, 0x14, 0x1B) : Color.argb(alpha, 0xF5, 0xF8, 0xFC);
+        return MonetThemeHelper.resolve(this, dark, cfg.isSheetMonetColor(), opacity).cardBgColor;
     }
 
     /** 系统状态栏与导航栏根据抽屉反色开关设置文字/图标明暗 */
@@ -450,11 +452,14 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     }
 
     private void updateCardTheme() {
-        int cardBgColor = getCardBgColor(isDarkMode);
-        int textColor = isDarkMode ? Color.parseColor("#8BA0B8") : Color.parseColor("#1A2230");
-        int lineColor = isDarkMode ? Color.parseColor("#302A3344") : Color.parseColor("#30E2E6EE");
-        int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");
-        int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
+        com.deepseekharness.app.core.ConfigStore cfg = new com.deepseekharness.app.core.ConfigStore(this);
+        int opacity = isDarkMode ? cfg.getSheetOpacityNight() : cfg.getSheetOpacityDay();
+        MonetThemeHelper.Palette palette = MonetThemeHelper.resolve(this, isDarkMode, cfg.isSheetMonetColor(), opacity);
+        int cardBgColor = palette.cardBgColor;
+        int textColor = palette.textColor;
+        int lineColor = palette.lineColor;
+        int handleColor = palette.handleColor;
+        int borderColor = palette.borderColor;
 
         // 1. 卡片圆角背景与描边
         if (sheetCard != null) {
@@ -490,7 +495,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         // 6. 错误提示文字颜色
         if (errorHint != null) {
-            errorHint.setTextColor(isDarkMode ? Color.parseColor("#56697E") : Color.parseColor("#64748B"));
+            errorHint.setTextColor(palette.textSecondaryColor);
         }
 
         // 7. 手机系统顶部状态栏与导航栏文字/图标颜色
@@ -503,12 +508,14 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     }
 
     private View buildUi() {
-        // 毛玻璃半透明底色（浅色：#E0F5F8FC 半透轻白蓝；深色：#E010141B 与 App 深蓝底色完全一致）
-        int cardBgColor = getCardBgColor(isDarkMode);
-        int textColor = isDarkMode ? Color.parseColor("#8BA0B8") : Color.parseColor("#1A2230");
-        int lineColor = isDarkMode ? Color.parseColor("#302A3344") : Color.parseColor("#30E2E6EE");
-        int handleColor = isDarkMode ? Color.parseColor("#704A5568") : Color.parseColor("#90CBD5E1");
-        int borderColor = isDarkMode ? Color.parseColor("#352A3344") : Color.parseColor("#35CBD5E1");
+        com.deepseekharness.app.core.ConfigStore cfg = new com.deepseekharness.app.core.ConfigStore(this);
+        int opacity = isDarkMode ? cfg.getSheetOpacityNight() : cfg.getSheetOpacityDay();
+        MonetThemeHelper.Palette palette = MonetThemeHelper.resolve(this, isDarkMode, cfg.isSheetMonetColor(), opacity);
+        int cardBgColor = palette.cardBgColor;
+        int textColor = palette.textColor;
+        int lineColor = palette.lineColor;
+        int handleColor = palette.handleColor;
+        int borderColor = palette.borderColor;
 
         // 1. 根全屏透明遮罩容器（左右 100% 撑满，彻底消费 WindowInsets 杜绝空行）
         rootOverlay = new FrameLayout(this);
@@ -729,7 +736,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         errLp.gravity = Gravity.CENTER;
         errorHint.setLayoutParams(errLp);
         errorHint.setText("正在连接 DSHA 服务…");
-        errorHint.setTextColor(isDarkMode ? Color.parseColor("#56697E") : Color.parseColor("#64748B"));
+        errorHint.setTextColor(palette.textSecondaryColor);
         errorHint.setTextSize(14);
         errorHint.setVisibility(View.GONE);
         webContainer.addView(errorHint);
@@ -1168,14 +1175,16 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
-    /** 设置页「抽屉反色开关」变动时即时刷新活动中的抽屉及缓存的 WebView */
+    /** 设置页「抽屉反色开关」与「莫奈取色开关」变动时即时刷新活动中的抽屉及缓存的 WebView */
     public static void refreshThemeFromConfig(Context context) {
         if (context == null) return;
         boolean invert = new ConfigStore(context).isSheetInvertColor();
+        boolean monet = new ConfigStore(context).isSheetMonetColor();
         QuickChatSheetActivity act = sCurrentInstance;
         if (act != null && !act.isFinishing() && !act.isDestroyed()) {
             act.runOnUiThread(() -> {
                 act.isDarkMode = invert;
+                act.isMonetColor = monet;
                 act.updateCardTheme();
             });
         }
@@ -1187,8 +1196,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         if (sCachedWebView == null || context == null) return;
         sCachedWebView.post(() -> {
             try {
-                boolean dark = new com.deepseekharness.app.core.ConfigStore(context).isSheetInvertColor();
-                boolean immersive = new com.deepseekharness.app.core.ConfigStore(context).isSheetImmersive();
+                com.deepseekharness.app.core.ConfigStore cfg = new com.deepseekharness.app.core.ConfigStore(context);
+                boolean dark = cfg.isSheetInvertColor();
+                boolean monet = cfg.isSheetMonetColor();
+                boolean immersive = cfg.isSheetImmersive();
+                int opacity = dark ? cfg.getSheetOpacityNight() : cfg.getSheetOpacityDay();
+                MonetThemeHelper.Palette palette = MonetThemeHelper.resolve(context, dark, monet, opacity);
 
                 // 动态同步 WebView 内核深浅色模式，使 (prefers-color-scheme: dark) 真实跟随容器模式
                 WebSettings ws = sCachedWebView.getSettings();
@@ -1203,15 +1216,15 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                     } catch (Throwable ignored) {}
                 }
 
-                String inputBg = dark ? "rgba(255, 255, 255, 0.06)" : "rgba(255, 255, 255, 0.75)";
-                String inputBorder = dark ? "rgba(255, 255, 255, 0.12)" : "rgba(0, 0, 0, 0.08)";
+                String inputBg = palette.inputBg;
+                String inputBorder = palette.inputBorder;
 
-                // 二层菜单、抽屉与弹窗的防穿透高质感底色（暗色与 sheetCard 的 #10141B 融为一体；亮色与 #F5F8FC 统一）
-                String drawerBg = dark ? "rgba(16, 20, 27, 0.96)" : "rgba(245, 248, 252, 0.97)";
-                String menuBg = dark ? "rgba(24, 29, 38, 0.96)" : "rgba(255, 255, 255, 0.98)";
-                String selectorBg = dark ? "rgba(30, 36, 48, 0.96)" : "rgba(240, 243, 246, 0.96)";
-                String dialogBg = dark ? "rgba(20, 24, 32, 0.97)" : "rgba(255, 255, 255, 0.98)";
-                String menuBorder = dark ? "rgba(255, 255, 255, 0.12)" : "rgba(0, 0, 0, 0.08)";
+                // 二层菜单、抽屉与弹窗的防穿透高质感底色
+                String drawerBg = palette.drawerBg;
+                String menuBg = palette.menuBg;
+                String selectorBg = palette.selectorBg;
+                String dialogBg = palette.dialogBg;
+                String menuBorder = palette.menuBorder;
 
                 String commonVars = "  --dsw-alias-bg-base: transparent !important;\n"
                         + "  --dsh-boot-bg: transparent !important;\n"
@@ -1234,9 +1247,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "  --dsw-alias-markdown-inline-code: rgba(128, 128, 128, 0.12) !important;\n"
                         + "  --dsw-specific-input-major: " + inputBg + " !important;\n";
 
-                String textColorVars = dark
-                        ? "  --dsw-alias-label-primary: #8BA0B8 !important;\n  --dsw-alias-label-secondary: #56697E !important;\n  --dsw-alias-brand-text: #8BA0B8 !important;\n"
-                        : "  --dsw-alias-label-primary: #1A2230 !important;\n  --dsw-alias-label-secondary: #4A5568 !important;\n  --dsw-alias-brand-text: #1A2230 !important;\n";
+                String textColorVars = "  --dsw-alias-label-primary: " + palette.textPrimaryHex + " !important;\n"
+                        + "  --dsw-alias-label-secondary: " + palette.textSecondaryHex + " !important;\n"
+                        + "  --dsw-alias-brand-text: " + palette.brandTextHex + " !important;\n";
 
                 String dashboardDarkCss = dark ? (
                         "/* ===== dsh-api-dashboard 插件深色模式强制覆盖 ===== */\n"
@@ -1413,7 +1426,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                             ? "  style.innerHTML = " + org.json.JSONObject.quote(cssImmersive) + ";\n"
                             + "  if (document.documentElement) document.documentElement.style.backgroundColor = 'transparent';\n"
                             + "  if (document.body) document.body.style.backgroundColor = 'transparent';\n"
-                            : "  var solidBg = " + (dark ? "'#10141B'" : "'#F5F8FC'") + ";\n"
+                            : "  var solidBg = " + org.json.JSONObject.quote(palette.solidBgHex) + ";\n"
                             + "  var cssSolid = 'html, body, #root, main, .dsh-layout-root, div[class*=\"pI_x6G_frame\"], div[class*=\"pI_x6G_centerCol\"], div[class*=\"_scrollBody\"], div[class*=\"_viewArea\"], div[class*=\"wSkVaW_root\"], div[class*=\"_composerHero\"], div[class*=\"_dock\"] { background: ' + solidBg + ' !important; background-color: ' + solidBg + ' !important; }\n' "
                             + "      + ':root, html, body { --dsw-alias-bg-base: ' + solidBg + ' !important; --dsh-boot-bg: ' + solidBg + ' !important; }\n';\n"
                             + "  style.innerHTML = cssSolid;\n"
@@ -1780,8 +1793,10 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             }
         }
         boolean dark = new ConfigStore(this).isSheetInvertColor();
-        if (dark != isDarkMode) {
+        boolean monet = new ConfigStore(this).isSheetMonetColor();
+        if (dark != isDarkMode || monet != isMonetColor) {
             isDarkMode = dark;
+            isMonetColor = monet;
             updateCardTheme();
             if (sCachedWebView != null) {
                 injectTransparentBackground(sCachedWebView);

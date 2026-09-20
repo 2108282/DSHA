@@ -226,7 +226,7 @@ public class ConfigStore {
         prefs.edit().putBoolean(Constants.KEY_PERSISTENT_NOTIFICATION, enabled).apply();
     }
 
-    // ================= 快捷抽屉反色开关 =================
+    // ================= 快捷抽屉反色与莫奈取色开关 =================
 
     public boolean isSheetInvertColor() {
         return prefs.getBoolean(Constants.KEY_SHEET_INVERT_COLOR, false);
@@ -234,6 +234,14 @@ public class ConfigStore {
 
     public void setSheetInvertColor(boolean enabled) {
         prefs.edit().putBoolean(Constants.KEY_SHEET_INVERT_COLOR, enabled).apply();
+    }
+
+    public boolean isSheetMonetColor() {
+        return prefs.getBoolean(Constants.KEY_SHEET_MONET_COLOR, false);
+    }
+
+    public void setSheetMonetColor(boolean enabled) {
+        prefs.edit().putBoolean(Constants.KEY_SHEET_MONET_COLOR, enabled).apply();
     }
 
     // ================= 圈定即搜重定向 =================

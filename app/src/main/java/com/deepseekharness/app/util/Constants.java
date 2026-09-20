@@ -94,6 +94,8 @@ public final class Constants {
     public static final String KEY_PERSISTENT_NOTIFICATION = "persistent_notification";
     /** 快捷抽屉反色开关（独立深色反色，与主应用黑夜白天按钮完全分离）。 */
     public static final String KEY_SHEET_INVERT_COLOR = "sheet_invert_color";
+    /** 快捷抽屉莫奈取色开关（提取系统壁纸 Material You 调色板）。 */
+    public static final String KEY_SHEET_MONET_COLOR = "sheet_monet_color";
     /** 第三方插件兼容模式（放开官方白名单限制 + 模块加载防崩保护）。 */
     public static final String KEY_THIRD_PARTY_PLUGIN_COMPAT = "third_party_plugin_compat";
 

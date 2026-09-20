@@ -49,6 +49,21 @@ public class SheetSettingsFragment extends Fragment {
             });
         }
 
+        // 2. 抽屉莫奈取色开关（提取系统壁纸 Material You 调色板）
+        SwitchCompat monetSwitch = v.findViewById(R.id.sheet_settings_monet_switch);
+        if (monetSwitch != null) {
+            monetSwitch.setChecked(cfg.isSheetMonetColor());
+            v.findViewById(R.id.sheet_settings_monet_row).setOnClickListener(x -> {
+                boolean next = !monetSwitch.isChecked();
+                monetSwitch.setChecked(next);
+                cfg.setSheetMonetColor(next);
+                QuickChatSheetActivity.refreshThemeFromConfig(requireContext());
+                Toast.makeText(requireContext(),
+                        next ? "莫奈取色已开启（跟随系统壁纸调色）" : "莫奈取色已关闭（恢复经典科技蓝灰）",
+                        Toast.LENGTH_SHORT).show();
+            });
+        }
+
         // 2. 圈定即搜重定向开关（LSPosed 模块配置同步）
         SwitchCompat ctsSwitch = v.findViewById(R.id.sheet_settings_cts_redirect_switch);
         if (ctsSwitch != null) {
