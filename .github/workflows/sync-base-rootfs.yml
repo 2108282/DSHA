@@ -1,0 +1,60 @@
+name: Sync & Publish Base Rootfs Asset
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: '源仓库 (如 DSH-APP/DSHA 或 qiannianhuanxiang/DSHA)'
+        required: true
+        default: 'DSH-APP/DSHA'
+      source_tag:
+        description: '源 Release Tag (如 v0.1.5-rc1)'
+        required: true
+        default: 'v0.1.5-rc1'
+      target_tag:
+        description: '发布到自身仓库的 Tag (如 0.1.5rc1-base)'
+        required: true
+        default: '0.1.5rc1-base'
+
+jobs:
+  sync:
+    name: Sync Rootfs to Own Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Asset from Source Release
+        run: |
+          set -euo pipefail
+          echo "==> 正在从源仓库 ${{ github.event.inputs.source_repo }} 的 ${{ github.event.inputs.source_tag }} 提取双包资产..."
+          APK_URL="https://github.com/${{ github.event.inputs.source_repo }}/releases/download/${{ github.event.inputs.source_tag }}/dsha-${{ github.event.inputs.source_tag }}.apk"
+          curl -L -f -o /tmp/source.apk "$APK_URL"
+          unzip -p /tmp/source.apk "assets/offline-rootfs.bin" > offline-rootfs.bin
+          unzip -p /tmp/source.apk "assets/dsh-runtime.bin" > dsh-runtime.bin
+          unzip -p /tmp/source.apk "assets/offline-rootfs.layout" > offline-rootfs.layout
+          rm -f /tmp/source.apk
+
+          ls -lh offline-rootfs.bin
+          ls -lh dsh-runtime.bin
+          cat offline-rootfs.layout
+
+      - name: Create or Update Own Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TARGET_TAG="${{ github.event.inputs.target_tag }}"
+          
+          echo "==> 检查自身仓库是否已有 Release $TARGET_TAG..."
+          if gh release view "$TARGET_TAG" >/dev/null 2>&1; then
+            echo "Release $TARGET_TAG 已存在，覆盖更新资产..."
+            gh release upload "$TARGET_TAG" offline-rootfs.bin dsh-runtime.bin offline-rootfs.layout --clobber
+          else
+            echo "创建新 Release $TARGET_TAG 并上传资产..."
+            gh release create "$TARGET_TAG" offline-rootfs.bin dsh-runtime.bin offline-rootfs.layout \
+              --title "DSHA 基准离线底包 ($TARGET_TAG)" \
+              --notes "由 GitHub Actions 自动化工作流转存收拢的纯净精简离线底包资产。包含 offline-rootfs.bin、dsh-runtime.bin、offline-rootfs.layout，完全由当前仓库自主掌控。" \
+              --prerelease
+          fi
+          echo "==> 资产成功发布到自身 Release！"
