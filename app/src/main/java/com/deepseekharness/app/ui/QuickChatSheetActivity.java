@@ -1801,9 +1801,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         sCurrentInstance = this;
         super.onResume();
         isDismissing = false;
+        boolean isEntering = false;
         if (sheetCard != null) {
             // 若卡片当前处于屏幕外（平移距离大于 0 或不可见），可靠执行进场动画恢复显示
             if (sheetCard.getTranslationY() > 0 || sheetCard.getVisibility() != View.VISIBLE) {
+                isEntering = true;
                 animateIn();
             }
         }
@@ -1817,7 +1819,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 injectTransparentBackground(sCachedWebView);
             }
         }
-        if (isMonetColor) {
+        if (isMonetColor && isEntering) {
             triggerAdaptiveMonetSampling();
         }
         if (sCachedWebView != null) {

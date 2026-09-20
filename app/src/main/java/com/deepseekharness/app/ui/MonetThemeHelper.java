@@ -58,6 +58,8 @@ public final class MonetThemeHelper {
         sCachedSeedColor = null;
     }
 
+    private static volatile boolean sIsSampling = false;
+
     /**
      * 变色龙机制：异步提取当前屏幕画面上半部分（避开抽屉遮挡）的代表色。
      * 采样完成后若识别到新环境色，通过回调通知主线程刷新主题。
@@ -65,20 +67,37 @@ public final class MonetThemeHelper {
     public static void refreshAdaptiveSeedAsync(Context context, OnThemeSeedReadyListener listener) {
         if (context == null) return;
         final Context appCtx = context.getApplicationContext();
+        if (sIsSampling) return;
+        sIsSampling = true;
         sSamplingExecutor.execute(() -> {
             try {
                 int screenSeed = extractScreenAdaptiveSeed(appCtx);
+                // 核心关键修复：只有当从真实屏幕上成功采样出鲜艳环境色时，才允许更新与通知！
+                // 若屏幕当前为纯黑白、息屏或正在渲染过渡，坚决保持现有色彩，绝对不重置回原样！
                 if (screenSeed != 0) {
                     Integer oldSeed = sCachedSeedColor;
                     sCachedSeedColor = screenSeed;
+                    android.util.Log.i("DSHA_MONET", "Screen sample success: seed=" + toHexString(screenSeed)
+                            + " (old=" + (oldSeed != null ? toHexString(oldSeed) : "null") + ")");
                     if (listener != null) {
                         if (oldSeed == null || isSignificantlyDifferent(oldSeed, screenSeed)) {
                             listener.onThemeSeedReady(screenSeed);
                         }
                     }
+                } else {
+                    android.util.Log.d("DSHA_MONET", "Screen sample skipped: no valid vibrant pixels, keeping current theme");
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable t) {
+                android.util.Log.w("DSHA_MONET", "Screen sampling error: " + t.getMessage());
+            } finally {
+                sIsSampling = false;
+            }
         });
+    }
+
+    /** 在手势唤醒的第 0 毫秒（此时屏幕无抽屉无遮罩）执行预抓帧 */
+    public static void triggerPreCapture(Context context) {
+        refreshAdaptiveSeedAsync(context, null);
     }
 
     private static boolean isSignificantlyDifferent(int c1, int c2) {
@@ -88,16 +107,17 @@ public final class MonetThemeHelper {
         ColorUtils.colorToHSL(c2, hsl2);
         float hueDiff = Math.abs(hsl1[0] - hsl2[0]);
         if (hueDiff > 180f) hueDiff = 360f - hueDiff;
-        return hueDiff > 15f || Math.abs(hsl1[1] - hsl2[1]) > 0.22f;
+        return hueDiff > 12f || Math.abs(hsl1[1] - hsl2[1]) > 0.20f;
     }
 
-    /** 从屏幕上半部分（Y 在 10% ~ 42% 之间）提取当前运行画面的鲜艳代表色 */
+    /** 从屏幕上半部分（Y 在 8% ~ 42% 之间）提取当前运行画面的鲜艳代表色 */
     private static int extractScreenAdaptiveSeed(Context context) {
         int extracted = 0;
         File rawFile = new File(context.getCacheDir(), "screen_sampling.raw");
         try {
             String rawPath = rawFile.getAbsolutePath();
-            String cmd = "screencap " + rawPath + " && chmod 666 " + rawPath;
+            // -d 0 强制指定 Display 0 物理合成图层，穿透小米澎湃 OS 对半透明 Window 的图层过滤
+            String cmd = "screencap -d 0 " + rawPath + " 2>/dev/null || screencap " + rawPath + "; chmod 666 " + rawPath;
             HttpShellService.execRootCommand(cmd);
 
             if (rawFile.exists() && rawFile.length() > 16) {
@@ -107,10 +127,11 @@ public final class MonetThemeHelper {
                     int w = ((hdr[0] & 0xFF)) | ((hdr[1] & 0xFF) << 8) | ((hdr[2] & 0xFF) << 16) | ((hdr[3] & 0xFF) << 24);
                     int h = ((hdr[4] & 0xFF)) | ((hdr[5] & 0xFF) << 8) | ((hdr[6] & 0xFF) << 16) | ((hdr[7] & 0xFF) << 24);
                     if (w > 0 && h > 0 && w <= 8192 && h <= 8192) {
-                        int yStart = (int) (h * 0.10f);
+                        // 避开系统状态栏（顶部 8%）与抽屉可能覆盖的下半区（> 42%）
+                        int yStart = (int) (h * 0.08f);
                         int yEnd = (int) (h * 0.42f);
-                        int stepY = Math.max(1, (yEnd - yStart) / 20);
-                        int stepX = Math.max(1, w / 20);
+                        int stepY = Math.max(1, (yEnd - yStart) / 22);
+                        int stepX = Math.max(1, w / 22);
                         int stride = w * 4;
                         byte[] row = new byte[stride];
                         float[] hsl = new float[3];
@@ -129,8 +150,9 @@ public final class MonetThemeHelper {
                                 ColorUtils.colorToHSL(pixel, hsl);
                                 float sat = hsl[1];
                                 float lum = hsl[2];
-                                if (lum >= 0.15f && lum <= 0.85f && sat >= 0.12f) {
-                                    float score = sat * 0.7f + (1.0f - Math.abs(lum - 0.5f) * 2f) * 0.3f;
+                                // 黑雾逆向宽容阈值：放宽明度至 0.05 ~ 0.90，饱和度 >= 0.07，确保 Dim 蒙层下仍能准确抓取真实色相
+                                if (lum >= 0.05f && lum <= 0.90f && sat >= 0.07f) {
+                                    float score = sat * 0.8f + (1.0f - Math.abs(lum - 0.45f) * 2f) * 0.2f;
                                     if (score > bestScore) {
                                         bestScore = score;
                                         bestColor = pixel;
@@ -151,10 +173,6 @@ public final class MonetThemeHelper {
             }
         }
 
-        // 降级保护：如果当前屏幕几乎没有彩色元素（全黑全白），回退到系统壁纸
-        if (extracted == 0) {
-            extracted = getWallpaperSeedColor(context);
-        }
         return extracted;
     }
 
