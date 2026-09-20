@@ -1273,7 +1273,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 String cssImmersive = "html, body, #root, main, .dsh-layout-root, "
                         + "div[class*='pI_x6G_frame'], div[class*='pI_x6G_centerCol'], "
                         + "div[class*='_scrollBody'], div[class*='_viewArea'], "
-                        + "div[class*='wSkVaW_root'], div[class*='_composerHero'], div[class*='_dock'], "
+                        + "div[class*='wSkVaW_root'], div[class*='wSkVaW_body'], div[class*='_composerHero'], div[class*='_dock'], "
                         + "div[class*='_bannerWrap'] {\n"
                         + "  background: transparent !important;\n"
                         + "  background-color: transparent !important;\n"
@@ -1300,8 +1300,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "  margin-bottom: 0px !important;\n"
                         + "  position: static !important;\n"
                         + "}\n"
-                        + "/* 输入框底座：完全透明透光，绝对定位固定贴底，绝不使用实心色遮挡 */\n"
-                        + "div[class*='_composerSeat'] {\n"
+                        + "/* 输入框底座：多重加固覆盖官方 active/phase/data-composer-seat，绝对定位固定贴底，100% 透明透光消除白底 */\n"
+                        + "[data-phase] div[class*='_composerSeat'],\n"
+                        + "div[class*='_composerSeat'],\n"
+                        + "[data-composer-seat],\n"
+                        + "div[class*='_composerStack'] {\n"
                         + "  position: absolute !important;\n"
                         + "  bottom: 0 !important;\n"
                         + "  left: 0 !important;\n"
@@ -1422,6 +1425,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "    style = document.createElement('style');\n"
                         + "    style.id = 'dsh-transparent-style';\n"
                         + "    document.head.appendChild(style);\n"
+                        + "  } else {\n"
+                        + "    document.head.appendChild(style);\n"
                         + "  }\n"
                         + (immersive
                             ? "  style.innerHTML = " + org.json.JSONObject.quote(cssImmersive) + ";\n"
@@ -1464,6 +1469,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         if (sCachedWebView == null) return;
         sCachedWebView.onResume();
         sCachedWebView.resumeTimers();
+        // 关键加固：唤醒时无条件同步刷新透明沉浸样式，消除后台任务渲染引起的样式断档与白底残留
+        refreshImmersiveTheme(this);
         sCachedWebView.post(() -> {
             if (sCachedWebView == null || isFinishing() || isDestroyed()) return;
             try {
@@ -1799,11 +1806,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             isDarkMode = dark;
             isMonetColor = monet;
             updateCardTheme();
-            if (sCachedWebView != null) {
-                injectTransparentBackground(sCachedWebView);
-            }
         }
         if (sCachedWebView != null) {
+            injectTransparentBackground(sCachedWebView);
             if (sPendingApprovalDecision != null) {
                 boolean allow = "allowed-once".equals(sPendingApprovalDecision);
                 sPendingApprovalDecision = null;
