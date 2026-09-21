@@ -302,9 +302,13 @@ public class HarnessController {
             File flag = new File(runDir, "third_party_plugin_compat");
             if (enabled) {
                 if (!flag.exists()) flag.createNewFile();
-                // 执行容器内/宿主兼容补丁脚本
+                // 执行容器内/宿主兼容补丁脚本（支持原生 KSU/Magisk chroot 运行时）
+                String compatCmd = "if [ -f /data/adb/dsha/rootfs/root/.dsh/dsha-plugin-compat.sh ]; then "
+                        + "/system/bin/chroot /data/adb/dsha/rootfs /bin/bash /root/.dsh/dsha-plugin-compat.sh 2>/dev/null || true; "
+                        + "elif [ -f /root/.dsh/dsha-plugin-compat.sh ]; then "
+                        + "/bin/bash /root/.dsh/dsha-plugin-compat.sh 2>/dev/null || true; fi";
                 Runtime.getRuntime().exec(new String[]{
-                        "su", "-c", "[ -f /root/.dsh/dsha-plugin-compat.sh ] && /bin/bash /root/.dsh/dsha-plugin-compat.sh 2>/dev/null || true"
+                        "su", "-c", compatCmd
                 }).waitFor();
             } else {
                 if (flag.exists()) flag.delete();
