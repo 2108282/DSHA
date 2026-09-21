@@ -346,6 +346,11 @@ class Lifecycle:
         if preview.get('type') == 'npm':
             spec = preview.get('npmSpec') or preview['items'][0]['name']
             name = preview['items'][0]['name']
+            if name in self.builtin.builtin_names():
+                code = self.g['cmd_npm'](spec)
+                if code == 0:
+                    shutil.rmtree(path, ignore_errors=True)
+                return code
             res = subprocess.run(["dsh", "plugin", "--profile", "web", "add", spec],
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=300)
             if res.returncode != 0:
@@ -377,7 +382,10 @@ class Lifecycle:
         sources = self.read(self.local(self.g['SOURCES']), {})
         directory = self.g['resolve_plugin_dir'](name)
         pkg = self.read(os.path.join(directory, 'package.json'), {}) if directory else {}
-        source = sources.get(name, '') or self.g['repository_url'](pkg)
+        repo_url = self.g['repository_url'](pkg)
+        source = sources.get(name, '')
+        if not source or (name in self.builtin.builtin_names() and (source.startswith('npm:') or not source) and repo_url):
+            source = repo_url or source
         if source.startswith('npm:'):
             match = re.fullmatch(r'((?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*)(?:@[^/]+)?', source[4:])
             if not match:
@@ -408,7 +416,7 @@ class Lifecycle:
         states = self.read(self.path('plugin-updates.json'), {})
         checked = []
         for item in candidates:
-            if item in self.builtin.OFFICIAL_BUNDLES or item in self.builtin.builtin_names():
+            if item in self.builtin.OFFICIAL_BUNDLES:
                 continue
             if not self.builtin.valid_name(item):
                 continue
@@ -434,14 +442,21 @@ class Lifecycle:
             latest_states.update({item['name']: item for item in checked})
             self.write(self.path('plugin-updates.json'), latest_states)
         updates = sum(1 for item in checked if item['available'])
-        self.g['result']('ok', '已检查 %d 个第三方插件，%d 个可更新；详情见插件卡片' % (len(checked), updates), updates=checked)
+        self.g['result']('ok', '已检查 %d 个插件，%d 个可更新；详情见插件卡片' % (len(checked), updates), updates=checked)
         return 0
 
     def rollback(self, name, expected=''):
-        if name in self.builtin.OFFICIAL_BUNDLES or name in self.builtin.builtin_names():
-            raise ValueError('内置插件请通过应用更新维护')
+        if name in self.builtin.OFFICIAL_BUNDLES:
+            raise ValueError('官方核心插件请通过应用更新维护')
         previous = self.history_info(name)
         if not previous:
+            if name in self.builtin.builtin_names():
+                imported = os.path.join(self.home, 'plugin-src', name)
+                if os.path.isdir(imported):
+                    shutil.rmtree(imported, ignore_errors=True)
+                    self.builtin.register()
+                    self.g['result']('ok', '已恢复 ' + name + ' 至预装内置版本；重启 Web 生效')
+                    return 0
             raise ValueError('没有可回退的上一版')
         if expected and previous.get('version') != expected:
             raise ValueError('上一版已发生变化，请刷新后重新确认')

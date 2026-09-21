@@ -364,9 +364,12 @@ public class PluginFragment extends Fragment {
         actions.add("复制插件名称");
         if (!item.source.isEmpty()) actions.add("复制来源链接");
         if (item.exportable) actions.add("导出插件包");
-        if (item.deletable) actions.add("检查插件更新");
+        if (!item.official && (!item.source.isEmpty() || item.builtin)) actions.add("检查插件更新");
         if (item.updateAvailable) actions.add("更新至 " + item.latestVersion);
-        if (!item.rollbackVersion.isEmpty()) actions.add("回退至 " + item.rollbackVersion);
+        if (!item.rollbackVersion.isEmpty()) {
+            if (item.builtin) actions.add("恢复至 " + item.rollbackVersion);
+            else actions.add("回退至 " + item.rollbackVersion);
+        }
         if (item.deletable) actions.add("删除插件");
         new MaterialAlertDialogBuilder(requireContext()).setTitle(item.name)
                 .setItems(actions.toArray(new String[0]), (d, which) -> {
@@ -375,11 +378,13 @@ public class PluginFragment extends Fragment {
                         repository.checkUpdates(item);
                     } else if (action.startsWith("更新至 ")) {
                         repository.prepareUpdate(item);
-                    } else if (action.startsWith("回退至 ")) {
-                        new MaterialAlertDialogBuilder(requireContext()).setTitle("回退插件？")
+                    } else if (action.startsWith("回退至 ") || action.startsWith("恢复至 ")) {
+                        new MaterialAlertDialogBuilder(requireContext()).setTitle(item.builtin ? "恢复预装版本？" : "回退插件？")
                                 .setMessage(item.name + "：" + item.version + " → " + item.rollbackVersion
-                                        + "\n只恢复插件文件，当前启用状态和对话数据保留；重启 Web 生效。")
-                                .setNegativeButton("取消", null).setPositiveButton("回退", (confirm, button) -> repository.rollback(item)).show();
+                                        + (item.builtin ? "\n恢复为底座预装内置版本，当前启用状态保留；重启 Web 生效。"
+                                                        : "\n只恢复插件文件，当前启用状态和对话数据保留；重启 Web 生效。"))
+                                .setNegativeButton("取消", null)
+                                .setPositiveButton(item.builtin ? "恢复" : "回退", (confirm, button) -> repository.rollback(item)).show();
                     } else if (action.equals("导出插件包")) {
                         ArrayList<String> names = new ArrayList<>();
                         names.add(item.name);

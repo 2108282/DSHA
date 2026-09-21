@@ -138,18 +138,27 @@ def ensure_runtime_modules():
 
 
 def ensure_global_plugin_links():
-    """确保 plugin-src 下的所有第三方插件：
-    1. 在全局 /usr/local/lib/node_modules 下有软链，供 Cordis loader 发现；
+    """确保所有插件（内置插件与 plugin-src 下插件）：
+    1. 在全局 /usr/local/lib/node_modules 下有软链，指向其实际生效的实体目录（plugin-src 优先，无则指向 /root/dsha-*）；
     2. 在插件自身的 node_modules/@deepseek-ai 提供就近系统库软链，彻底杜绝 peer 模块丢失。
     """
     global_modules = local('/usr/local/lib/node_modules')
     bundled_deepseek = local('/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai')
     src_dir = os.path.join(local(DSH_HOME), 'plugin-src')
-    if not os.path.isdir(src_dir):
-        return 0
     count = 0
-    for name in os.listdir(src_dir):
-        plugin_path = os.path.join(src_dir, name)
+    all_plugins = {}
+    if os.path.isdir(src_dir):
+        for name in os.listdir(src_dir):
+            p = os.path.join(src_dir, name)
+            if os.path.isdir(p) and os.path.isfile(os.path.join(p, 'package.json')):
+                all_plugins[name] = p
+    for b_name in builtin_names():
+        if b_name not in all_plugins:
+            d = entity_dir(b_name)
+            if d:
+                all_plugins[b_name] = local(d)
+
+    for name, plugin_path in all_plugins.items():
         if not os.path.isdir(plugin_path) or not os.path.isfile(os.path.join(plugin_path, 'package.json')):
             continue
         # 1. 全局模块链接
