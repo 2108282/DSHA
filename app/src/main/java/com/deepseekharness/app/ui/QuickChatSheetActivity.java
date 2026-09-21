@@ -2182,14 +2182,22 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.OFFICE) {
                 String content = null;
                 String name = file.getName().toLowerCase();
+                boolean isTable = name.endsWith(".xlsx") || name.endsWith(".xls");
                 if (name.endsWith(".docx")) {
                     content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractDocx(file);
                 } else if (name.endsWith(".doc")) {
                     content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractDoc(file);
                 } else if (name.endsWith(".xlsx")) {
                     content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractXlsx(file);
+                } else if (name.endsWith(".xls")) {
+                    content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractXls(file);
+                } else if (name.endsWith(".pptx")) {
+                    content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractPptx(file);
+                } else if (name.endsWith(".ppt")) {
+                    content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractDoc(file);
                 }
                 final String finalOfficeContent = content;
+                final boolean finalIsTable = isTable;
                 runOnUiThread(() -> {
                     if (thisEpoch != currentFileLoadEpoch) return;
                     fileViewerContainer.removeAllViews();
@@ -2197,7 +2205,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         headerSubTitle.setText(formatFileSize(file.length()) + " · " + ft.kind.name());
                     }
                     if (finalOfficeContent != null && !finalOfficeContent.isEmpty()) {
-                        if (name.endsWith(".xlsx")) {
+                        if (finalIsTable) {
                             View gridView = com.deepseekharness.app.viewer.SheetTableGrid.createGridView(this, finalOfficeContent);
                             fileViewerContainer.addView(gridView);
                         } else {
