@@ -11,6 +11,8 @@ import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -1640,6 +1642,14 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "  background: transparent !important;\n"
                         + "  background-color: transparent !important;\n"
                         + "  background-image: none !important;\n"
+                        + "}\n"
+                        + "/* 6. 彻底禁止文件树与列表节点被长按选中文本，杜绝弹出系统复制选择工具条 */\n"
+                        + "[data-files-entry], [data-files-entry] *,\n"
+                        + "[data-sidebar-right-panel] *, [data-tab=\"files\"] *,\n"
+                        + "[data-sidebar-panel*=\"files\"] * {\n"
+                        + "  -webkit-user-select: none !important;\n"
+                        + "  user-select: none !important;\n"
+                        + "  -webkit-touch-callout: none !important;\n"
                         + "}\n";
 
                 String js = "(function() {"
@@ -1657,7 +1667,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                             + "  if (document.body) document.body.style.backgroundColor = 'transparent';\n"
                             : "  var solidBg = " + org.json.JSONObject.quote(palette.solidBgHex) + ";\n"
                             + "  var cssSolid = 'html, body, #root, main, .dsh-layout-root, div[class*=\"pI_x6G_frame\"], div[class*=\"pI_x6G_centerCol\"], div[class*=\"_scrollBody\"], div[class*=\"_viewArea\"], div[class*=\"wSkVaW_root\"], div[class*=\"_composerHero\"], div[class*=\"_dock\"] { background: ' + solidBg + ' !important; background-color: ' + solidBg + ' !important; }\n' "
-                            + "      + ':root, html, body { --dsw-alias-bg-base: ' + solidBg + ' !important; --dsh-boot-bg: ' + solidBg + ' !important; }\n';\n"
+                            + "      + ':root, html, body { --dsw-alias-bg-base: ' + solidBg + ' !important; --dsh-boot-bg: ' + solidBg + ' !important; }\n' "
+                            + "      + '[data-files-entry], [data-files-entry] *, [data-sidebar-right-panel] *, [data-tab=\"files\"] *, [data-sidebar-panel*=\"files\"] * { -webkit-user-select: none !important; user-select: none !important; -webkit-touch-callout: none !important; }\n';\n"
                             + "  style.innerHTML = cssSolid;\n"
                             + "  if (document.documentElement) document.documentElement.style.backgroundColor = solidBg;\n"
                             + "  if (document.body) document.body.style.backgroundColor = solidBg;\n")
@@ -1692,11 +1703,19 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "      isLongPressTriggered = false;\n"
                         + "      var p = findTargetFile(e, true); /* 长按：文件与文件夹均支持呼出操作菜单 */\n"
                         + "      if (!p) return;\n"
+                        + "      try {\n"
+                        + "        var sel = window.getSelection();\n"
+                        + "        if (sel) sel.removeAllRanges();\n"
+                        + "      } catch(err) {}\n"
                         + "      touchStartX = e.touches[0].clientX;\n"
                         + "      touchStartY = e.touches[0].clientY;\n"
                         + "      clearTimeout(longPressTimer);\n"
                         + "      longPressTimer = setTimeout(function() {\n"
                         + "        isLongPressTriggered = true;\n"
+                        + "        try {\n"
+                        + "          var sel = window.getSelection();\n"
+                        + "          if (sel) sel.removeAllRanges();\n"
+                        + "        } catch(err) {}\n"
                         + "        if (window.DshaNativeBridge) {\n"
                         + "          if (window.DshaNativeBridge.showFileActionMenuAt) {\n"
                         + "            window.DshaNativeBridge.showFileActionMenuAt(p, touchStartX, touchStartY);\n"
@@ -1704,7 +1723,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "            window.DshaNativeBridge.showFileActionMenu(p);\n"
                         + "          }\n"
                         + "        }\n"
-                        + "      }, 480);\n"
+                        + "      }, 450);\n"
                         + "    }, { passive: true, capture: true });\n"
                         + "\n"
                         + "    document.addEventListener('touchmove', function(e) {\n"
@@ -1720,8 +1739,28 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "    document.addEventListener('touchend', function(e) {\n"
                         + "      clearTimeout(longPressTimer);\n"
                         + "      if (isLongPressTriggered) {\n"
+                        + "        try {\n"
+                        + "          var sel = window.getSelection();\n"
+                        + "          if (sel) sel.removeAllRanges();\n"
+                        + "        } catch(err) {}\n"
                         + "        e.preventDefault();\n"
                         + "        e.stopPropagation();\n"
+                        + "      }\n"
+                        + "    }, true);\n"
+                        + "\n"
+                        + "    document.addEventListener('selectstart', function(e) {\n"
+                        + "      if (findTargetFile(e, true) || isLongPressTriggered) {\n"
+                        + "        e.preventDefault();\n"
+                        + "        e.stopPropagation();\n"
+                        + "        return false;\n"
+                        + "      }\n"
+                        + "    }, true);\n"
+                        + "\n"
+                        + "    document.addEventListener('contextmenu', function(e) {\n"
+                        + "      if (findTargetFile(e, true) || isLongPressTriggered) {\n"
+                        + "        e.preventDefault();\n"
+                        + "        e.stopPropagation();\n"
+                        + "        return false;\n"
                         + "      }\n"
                         + "    }, true);\n"
                         + "\n"
@@ -2201,11 +2240,30 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         sCachedWebView.evaluateJavascript(js, null);
     }
 
+    private void copyToClipboard(String text, String tip) {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) {
+                ClipData clip = ClipData.newPlainText("text", text);
+                cm.setPrimaryClip(clip);
+                Toast.makeText(this, tip, Toast.LENGTH_SHORT).show();
+            }
+        } catch (Throwable t) {
+            Toast.makeText(this, "复制失败：" + t.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
     // ---------------- 手势位置跟随的悬浮气泡微菜单（100% 继承抽屉毛玻璃与莫奈主题） ----------------
     private void showWorkspaceFileActionMenu(final File file, float touchX, float touchY) {
         if (file == null || !file.exists() || rootOverlay == null) {
             Toast.makeText(this, "目标不存在", Toast.LENGTH_SHORT).show();
             return;
+        }
+
+        // 清理焦点与网页可能残留的选区
+        if (sCachedWebView != null) {
+            sCachedWebView.clearFocus();
+            sCachedWebView.evaluateJavascript("try{window.getSelection().removeAllRanges();}catch(e){}", null);
         }
 
         // 触觉反馈：长按成功呼出气泡菜单
@@ -2237,7 +2295,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         float posX;
         float posY;
-        int estimatedCardH = dpToPx(175);
+        int estimatedCardH = dpToPx(245);
 
         if (touchX >= 0 && touchY >= 0 && sCachedWebView != null) {
             // 计算 WebView 相对 rootOverlay 的实际物理像素偏移
@@ -2330,7 +2388,19 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             promptRenameFileCustom(file, palette);
         }));
 
-        // 3. 删除（警示红）
+        // 3. 复制文件名
+        menuCard.addView(createMenuItem("📋   复制文件名", palette.textColor, v -> {
+            dismissActiveDialog();
+            copyToClipboard(file.getName(), "✓ 已复制文件名：" + file.getName());
+        }));
+
+        // 4. 复制文件路径
+        menuCard.addView(createMenuItem("📍   复制文件路径", palette.textColor, v -> {
+            dismissActiveDialog();
+            copyToClipboard(file.getAbsolutePath(), "✓ 已复制路径：" + file.getAbsolutePath());
+        }));
+
+        // 5. 删除（警示红）
         menuCard.addView(createMenuItem("🗑️   删除" + (isDir ? "文件夹" : ""), Color.parseColor("#FF5252"), v -> {
             dismissActiveDialog();
             confirmDeleteFileCustom(file, palette);

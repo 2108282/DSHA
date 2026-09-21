@@ -67,21 +67,29 @@ DSHA 在全面重构下沉为原生 Linux chroot 之后，客户端作为纯原�
 - **图片与列表背景透明化**：
   - `fileViewerContainer`、`TouchImageView`、`ListView` 背景全部设为 `Color.TRANSPARENT`，图片和文字自然悬浮在半透明磨砂壁纸之上！
 
-### 5. 手势长按三合一悬浮气泡微菜单与即时无感刷新
+### 5. 手势长按五合一悬浮气泡微菜单与即时无感刷新
+- **彻底消灭长按误触文本选择（Selection/ActionMode）**：
+  - **四重防线阻断**：
+    1. **CSS 强隔离**：注入 `-webkit-user-select: none !important; user-select: none !important; -webkit-touch-callout: none !important;` 彻底禁止文件树节点被系统选词；
+    2. **事件原生拦截**：增加 `selectstart` 与 `contextmenu` 全局 capture 拦截，直接 `preventDefault()` 阻断系统选词状态机；
+    3. **选区主动熔断**：在 `touchstart`、长按超时触发瞬间及 `touchend` 显式执行 `window.getSelection().removeAllRanges()`；
+    4. **Java 焦点重置**：呼出菜单时触发 `sCachedWebView.clearFocus()`，消灭系统浮动工具条（“复制 分享 全选 网页搜索”）和水滴光标。
 - **就近浮现微卡片与物理坐标精准对齐**：
   - **跨视口真实物理坐标换算**：彻底解决抽屉下移（`screenHeight - currentHeight`）及内嵌 HeaderBar 导致坐标漂移的问题，通过 `getLocationInWindow` 实时捕获 WebView 在当前窗口的物理像素基准，叠加 `touchX * density` 与 `touchY * density`，实现毫厘不差的触点对齐；
   - **Z 轴图层提权（Elevation 治理）**：解决 Android 5.0+ RenderNode 按 Z 轴排序导致遮罩被 `sheetCard`（Elevation 16dp）覆盖压制的问题，通过 `showDialogLayer` 赋予 Mask 60dp 顶层 Elevation 并剔除全屏阴影轮廓（`setOutlineProvider(null)`），保障 100% 优先响应点击；
-  - **就近动态避界算法**：以触点为锚点微调，靠近屏幕底部时自动向上展开，靠近边缘时自动内缩保留安全边距；
+  - **就近动态避界算法**：以触点为锚点微调，卡片高度自适应扩充（预估 245dp），靠近屏幕底部时自动向上展开，靠近边缘时自动内缩保留安全边距；
   - **物理级触感反馈**：长按成功瞬间调用 `rootOverlay.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)`，给用户清晰的跟手触感；
-- **三合一功能与二级弹窗交互闭环**：
+- **五合一全能操作闭环**：
   - **`↗ 调用系统打开方式`**：通过 `FileProvider` 安全唤起 QQ阅读/WPS/MT管理器等系统级选择器；
   - **`✏️ 重命名`**：弹出毛玻璃输入卡片（自动上浮避让软键盘、自动聚焦全选文件名、关闭时自动收起键盘），重命名成功后即刻触发前端文件树刷新；
+  - **`📋 复制文件名`**：一键将当前文件名写入系统剪贴板，并伴有成功 Toast 提示；
+  - **`📍 复制文件路径`**：一键将文件的完整绝对路径（`/sdcard/Download/DSHA/工作区/...`）写入剪贴板，方便终端和代码直接引用；
   - **`🗑️ 删除`**：弹出毛玻璃删除确认卡片，删除成功后**原位保留在文件树**，并自动重载树节点，被删条目瞬间消失；
   - **全链路返回键栈式调度（BackDispatcher）**：活动弹窗优先拦截 Back 键平滑关闭，绝不误触退回抽屉；
 - **文件夹手势防误触**：
   - 短按文件夹：绝对不拦截，放行让网页自然折叠/展开；
   - 短按文件：在抽屉内部原地展开万能查看器；
-  - 长按文件或文件夹：一律呼出三合一操作微菜单！
+  - 长按文件或文件夹：一律呼出五合一操作微菜单！
 
 ---
 
