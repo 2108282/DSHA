@@ -140,7 +140,7 @@ dependencies {
     implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:6.1'
 
     // 万能文件查看与编辑器扩展：Sora Editor (代码编辑与语法高亮) + 压缩包解析
-    implementation 'io.github.rosemoe.sora:editor:0.23.4'
+    implementation 'io.github.Rosemoe.sora-editor:editor:0.23.5'
     implementation 'org.apache.commons:commons-compress:1.26.1'
 
     testImplementation 'junit:junit:4.13.2'
