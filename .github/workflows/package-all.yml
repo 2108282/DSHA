@@ -16,11 +16,11 @@ on:
       publish_release:
         description: "是否自动创建或更新 GitHub Release 发布"
         type: boolean
-        default: false
+        default: true
       release_tag:
-        description: "自定义发布 Release Tag (例如 1.0.0 或 dsha-for-root-v1)"
+        description: "自定义发布 Release Tag (例如 0.1.6-alpha.2-u1)"
         required: false
-        default: "0.1.5rc.2-u2"
+        default: "0.1.6-alpha.2-u1"
       prerelease:
         description: "是否标记为预发布 (Pre-release)"
         type: boolean
@@ -40,6 +40,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # ============================================================
+      # 0. 计算并导出动态版本号
+      # ============================================================
+      - name: 计算并导出版本号变量
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            V="${GITHUB_REF#refs/tags/}"
+          elif [ -n "${{ inputs.release_tag }}" ]; then
+            V="${{ inputs.release_tag }}"
+          else
+            V="0.1.6-alpha.2-u1"
+          fi
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+          echo "VERSION=$V" >> "$GITHUB_OUTPUT"
+          echo "当前发版版本号: $V"
+
       # ============================================================
       # 1. 检出两端源码仓库（严格按照各自指定分支，本分支不存任何业务代码）
       # ============================================================
@@ -121,8 +139,8 @@ jobs:
         run: |
           set -euo pipefail
           APK_SRC=$(ls apk_source/app/build/outputs/apk/standard/debug/*.apk | head -1)
-          cp -f "$APK_SRC" "dist/DSHA-FR 0.1.5rc.2-u2.apk"
-          echo "✓ 产物 1 已就绪 (前端 APK): dist/DSHA-FR 0.1.5rc.2-u2.apk ($(ls -lh dist/DSHA-FR 0.1.5rc.2-u2.apk | awk '{print $5}'))"
+          cp -f "$APK_SRC" "dist/DSHA-FR ${VERSION}.apk"
+          echo "✓ 产物 1 已就绪 (前端 APK): dist/DSHA-FR ${VERSION}.apk ($(ls -lh "dist/DSHA-FR ${VERSION}.apk" | awk '{print $5}'))"
 
       # ============================================================
       # 4. 严格按照 dsh-magisk 分支逻辑构建核心完整包与 Lite 包
@@ -158,7 +176,7 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          sha256sum "DSHA-FR 0.1.5rc.2-u2.apk" | tee "DSHA-FR 0.1.5rc.2-u2.apk.sha256"
+          sha256sum "DSHA-FR ${VERSION}.apk" | tee "DSHA-FR ${VERSION}.apk.sha256"
           sha256sum dsha_ksu_native_full.zip | tee dsha_ksu_native_full.zip.sha256
           sha256sum dsha_ksu_native_lite.zip | tee dsha_ksu_native_lite.zip.sha256
           echo "=========================================================="
@@ -185,14 +203,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG_NAME="${GITHUB_REF#refs/tags/}"
-          elif [ -n "${{ inputs.release_tag }}" ]; then
-            TAG_NAME="${{ inputs.release_tag }}"
-          else
-            TAG_NAME="0.1.5rc.2-u2"
-          fi
-          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "tag=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: 发布至 GitHub Releases
         if: steps.release_tag.outputs.tag != ''
@@ -203,20 +214,20 @@ jobs:
           prerelease: ${{ inputs.prerelease || false }}
           generate_release_notes: true
           body: |
-            ## DSHA Native for Root 三大核心交付物联合发布
+            ## DSHA Native for Root 三大核心交付物联合发布 (${{ steps.release_tag.outputs.tag }})
 
-            本产物由 `dsha-for-root.x` 打包流水线严格按照分支原生规范编译合成。
+            本产物由 `dsha-for-root.x` 自动化发版流水线严格按照分支原生规范编译合成。
 
             ### 产物清单：
-            1. **`DSHA-FR 0.1.5rc.2-u2.apk`** (前端 APK)
+            1. **`DSHA-FR ${{ steps.release_tag.outputs.tag }}.apk`** (前端 APK)
                - **构建源分支**：`magisk-apk`
                - **说明**：原生 Root 控制前端外壳，内置 3095 硬件通道桥、无障碍操作守护与沉浸 Web 容器。
             2. **`dsha_ksu_native_full.zip`** (核心完整包)
                - **构建源分支**：`dsh-magisk`
-               - **说明**：全内置完整刷机包（~218MB），内含反射式动态层叠熔铸的全新纯净底包 `rootfs.tar.gz` (源自 Release: rootfs，内置 0.1.6 核心与 3.0.0 移动端)。
+               - **说明**：全内置完整刷机包，内含反射式动态层叠熔铸的全新纯净底包 `rootfs.tar.gz` (源自 Release: rootfs，内置 0.1.6 核心与 3.0.0 移动端)。
             3. **`dsha_ksu_native_lite.zip`** (极速热更新包)
                - **构建源分支**：`dsh-magisk`
-               - **说明**：增量热更新补丁包（几十 KB），带两步音量键交互，老用户无需重装底包现场打补丁。
+               - **说明**：增量热更新补丁包，带两步音量键交互，老用户无需重装底包现场打补丁。
           files: |
             dist/*
           fail_on_unmatched_files: true
