@@ -14,7 +14,7 @@ path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
     src = f.read()
 
-MARKER_V2 = "__DSHA_PLUGINS_WHITELIST_BYPASS_V2__"
+MARKER_V2 = "__DSHA_REGISTER_CONFIGURABLE_TAB__"
 MARKER_V1 = "__DSHA_THIRD_PARTY_PLUGINS_SWITCH__"
 
 patched = False
@@ -23,39 +23,42 @@ patched = False
 if MARKER_V2 not in src:
     changed = False
 
-    # 1. 补充 settings.plugin.item 插槽声明，防止第三方配置卡片被废弃或丢弃
-    p_slot = r'(children:\s*\{\s*["\']settings\.plugins\.tab["\']:\s*\{\s*kind:\s*["\']list["\'],\s*scope:\s*["\']root["\']\s*\}\s*)(\})'
-    if re.search(p_slot, src):
-        src = re.sub(p_slot, r'\1, "settings.plugin.item": { kind: "keyed" }\2', src, count=1)
-        changed = True
-
-    # 2. 放开白名单判定 (支持 localStorage 开关控制，默认放开第三方插件配置)
+    # 1. 注入放开白名单逻辑
     p_available = r'const\s+available\s*=\s*namespaces\.some\(\(namespace\)\s*=>\s*served\.has\(namespace\)\);'
     if re.search(p_available, src):
         bypass_code = (
-            f'/* {MARKER_V2} */ const available = typeof localStorage !== "undefined" && '
+            '/* __DSHA_PLUGINS_WHITELIST_BYPASS_V2__ */ const available = typeof localStorage !== "undefined" && '
             'localStorage.getItem("dsh.allow_third_party_plugins") === "false" ? '
             'namespaces.some((namespace) => served.has(namespace)) : true;'
         )
         src = re.sub(p_available, bypass_code, src, count=1)
         changed = True
 
-    # 3. 在设置页渲染中挂载第三方卡片插槽 (同时覆盖单标签模式与多标签模式)
-    old_single_tail = 'children: renderSlot("settings.plugins.tab", {}, { only: single.id })\n\t\t\t\t\t})'
-    new_single_tail = (
-        'children: [(0, react_jsx_runtime.jsx)("div", { children: renderSlot("settings.plugins.tab", {}, { only: single.id }) }), '
-        '(0, react_jsx_runtime.jsx)("div", { style: { marginTop: "16px", display: "flex", flexDirection: "column", gap: "10px" }, children: renderSlot("settings.plugin.item") })]\n\t\t\t\t\t})'
-    )
-    if old_single_tail in src:
-        src = src.replace(old_single_tail, new_single_tail)
-        changed = True
-
-    old_multi_tail = '})] })\n\t\t\t\t]\n\t\t\t});\n\t\t}'
-    new_multi_tail = (
-        '})] }),\n\t\t\t\t\t(0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\t\tstyle: { marginTop: "16px", display: "flex", flexDirection: "column", gap: "10px" },\n\t\t\t\t\t\tchildren: renderSlot("settings.plugin.item")\n\t\t\t\t\t})\n\t\t\t\t]\n\t\t\t});\n\t\t}'
-    )
-    if old_multi_tail in src:
-        src = src.replace(old_multi_tail, new_multi_tail)
+    # 2. 注入扩展插件配置 Tab 并声明 settings.plugin.item (kind: list)
+    REGISTER_CODE = """
+			/* __DSHA_REGISTER_CONFIGURABLE_TAB__ */
+			ctx.slots.inject("settings.plugins.tab", () => ctx.slots.register({
+				name: "settings.plugins.tab",
+				id: "configurable",
+				order: 5,
+				label: () => "扩展插件配置",
+				children: {
+					"settings.plugin.item": {
+						kind: "list",
+						scope: "root"
+					}
+				}
+			}, function ConfigurablePluginsTab(props) {
+				return (0, react_jsx_runtime.jsx)("ul", {
+					className: PluginsSettingsSection_module_css_default.cards,
+					style: { listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "12px" },
+					children: props.renderSlot("settings.plugin.item")
+				});
+			}));
+"""
+    target_inject = 'ctx.slots.inject("settings.section",'
+    if target_inject in src:
+        src = src.replace(target_inject, REGISTER_CODE + "\n\t\t\t" + target_inject)
         changed = True
 
     if changed:
