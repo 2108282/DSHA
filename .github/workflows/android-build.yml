@@ -1,23 +1,18 @@
-name: Build Android APK
+name: Build Android Release APK (No Release Publish)
 
 on:
   push:
     branches:
       - 'magisk-apk'
-      - '1.2.0-rc1.3test'
-      - '1.2.0rc1test'
-      - '0.1.5rc.2底包'
-      - 'test'
-      - main
   workflow_dispatch:
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-apk-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build Standard Debug APK
+    name: Build Signed Standard Release APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -46,53 +41,48 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Fetch prebuilt offline rootfs from own release
-        if: github.ref != 'refs/heads/magisk-apk' && github.ref != 'refs/heads/main'
-        run: |
-          set -euo pipefail
-          mkdir -p app/src/main/assets
-          BASE_TAG="0.1.5rc1-base"
-          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}"
-
-          if [ ! -f "app/src/main/assets/offline-rootfs.bin" ]; then
-            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 offline-rootfs.bin..."
-            curl -L -f -o app/src/main/assets/offline-rootfs.bin "${BASE_URL}/offline-rootfs.bin"
-          fi
-
-          if [ ! -f "app/src/main/assets/dsh-runtime.bin" ]; then
-            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 dsh-runtime.bin..."
-            curl -L -f -o app/src/main/assets/dsh-runtime.bin "${BASE_URL}/dsh-runtime.bin"
-          fi
-
-          if [ ! -f "app/src/main/assets/offline-rootfs.layout" ]; then
-            echo "==> 正在从自身 Release (${BASE_TAG}) 下载 offline-rootfs.layout..."
-            curl -L -f -o app/src/main/assets/offline-rootfs.layout "${BASE_URL}/offline-rootfs.layout"
-          fi
-
-          ls -lh app/src/main/assets/offline-rootfs.bin
-          ls -lh app/src/main/assets/dsh-runtime.bin
-          cat app/src/main/assets/offline-rootfs.layout
-
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Standard Debug and Release APK
-        run: ./gradlew :app:assembleStandardDebug :app:assembleStandardRelease --stacktrace
-
-      - name: Verify APK size and contents
+      - name: 配置 APK 签名密钥（如有 Secret 则加载，无则使用 debug 签名）
+        env:
+          KS_B64: ${{ secrets.DSHA_KEYSTORE_B64 }}
+          KS_PWD: ${{ secrets.DSHA_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.DSHA_KEY_ALIAS }}
+          KEY_PWD: ${{ secrets.DSHA_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          ls -lh app/build/outputs/apk/standard/*/*.apk
-          unzip -l app/build/outputs/apk/standard/release/*.apk | head -20 || true
+          if [ -n "${KS_B64:-}" ]; then
+            printf "%s" "$KS_B64" | base64 -d > "$RUNNER_TEMP/dsha.keystore"
+            echo "DSHA_KEYSTORE=$RUNNER_TEMP/dsha.keystore" >> "$GITHUB_ENV"
+            echo "DSHA_KEYSTORE_PASSWORD=${KS_PWD:-android}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_ALIAS=${KS_ALIAS:-androiddebugkey}" >> "$GITHUB_ENV"
+            echo "DSHA_KEY_PASSWORD=${KEY_PWD:-android}" >> "$GITHUB_ENV"
+            echo "已成功加载生产发布签名密钥"
+          else
+            echo "未检测到 DSHA_KEYSTORE_B64，将按配置使用 Gradle 默认签名"
+          fi
 
-      - name: Upload Standard Debug APK
+      - name: 执行 Release 编译打包 (:app:assembleStandardRelease)
+        run: ./gradlew :app:assembleStandardRelease --stacktrace
+
+      - name: 收集与重命名 Release 产物
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          APK_SRC=$(ls app/build/outputs/apk/standard/release/*.apk | head -1)
+          cp -f "$APK_SRC" "dist/DSHA-FR-0.1.6-alpha.2-u1-release.apk"
+          cd dist
+          sha256sum "DSHA-FR-0.1.6-alpha.2-u1-release.apk" | tee "DSHA-FR-0.1.6-alpha.2-u1-release.apk.sha256"
+          echo "=========================================================="
+          echo "           带签名 Release APK 打包就绪 (不发布)            "
+          echo "=========================================================="
+          ls -lh
+          echo "=========================================================="
+
+      - name: 上传带签名 Release APK 至 Artifacts (仅供下载，不发布)
         uses: actions/upload-artifact@v4
         with:
-          name: dsha-standard-debug-full
-          path: app/build/outputs/apk/standard/debug/*.apk
-
-      - name: Upload Standard Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: dsha-standard-release-v0.1.5rc.2-u2.5
-          path: app/build/outputs/apk/standard/release/*.apk
+          name: DSHA-FR-0.1.6-alpha.2-u1-release-apk
+          path: dist/*
+          if-no-files-found: error
