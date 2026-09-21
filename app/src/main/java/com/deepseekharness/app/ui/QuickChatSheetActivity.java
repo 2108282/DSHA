@@ -412,19 +412,90 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         mask.bringToFront();
     }
 
-    private void setupBackDispatcher() {
-        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
-            @Override
-            public void handleOnBackPressed() {
-                if (currentActiveDialogMask != null) {
-                    dismissActiveDialog();
-                } else if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
-                    closeFileViewer();
-                } else if (sCachedWebView != null && sCachedWebView.canGoBack()) {
+    private static final String SCRIPT_CONSUME_WEB_BACK =
+            "(function() {\n" +
+            "    try {\n" +
+            "        // 1. 优先消费：模态弹窗（通用设置、对话框、确认框）\n" +
+            "        var modal = document.querySelector('[aria-modal=\"true\"], [role=\"dialog\"]');\n" +
+            "        if (modal) {\n" +
+            "            var closeBtn = modal.querySelector('button[aria-label*=\"Close\" i], button[aria-label*=\"关闭\" i], [class*=\"_close\"], [class*=\"_headerActions\"] button, [class*=\"_header\"] button:last-child');\n" +
+            "            if (closeBtn) { closeBtn.click(); return true; }\n" +
+            "            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));\n" +
+            "            return true;\n" +
+            "        }\n" +
+            "        // 2. 优先消费：右侧文件树 / 面板\n" +
+            "        var rightOpen = document.querySelector('[data-sidebar-right-open=\"true\"], [data-sidebar-right-open]');\n" +
+            "        if (rightOpen && (rightOpen.offsetWidth > 0 || rightOpen.getAttribute('aria-hidden') !== 'true')) {\n" +
+            "            var toggleBtn = document.querySelector('[data-sidebar-right-toggle], button[aria-label*=\"收起\" i], button[aria-label*=\"折叠\" i], button[aria-label*=\"Collapse\" i]');\n" +
+            "            if (toggleBtn) { toggleBtn.click(); return true; }\n" +
+            "            var tabClose = rightOpen.querySelector('button[aria-label*=\"关闭\" i], button[aria-label*=\"Close\" i], [class*=\"_tabClose\"], [class*=\"_closeBtn\"]');\n" +
+            "            if (tabClose) { tabClose.click(); return true; }\n" +
+            "        }\n" +
+            "        var frame = document.querySelector('[data-mobile-nav=\"frame\"]');\n" +
+            "        if (frame && frame.hasAttribute('data-aionui-explorer-open')) {\n" +
+            "            frame.removeAttribute('data-aionui-explorer-open');\n" +
+            "            return true;\n" +
+            "        }\n" +
+            "        if (frame && frame.hasAttribute('data-aionui-preview-open')) {\n" +
+            "            frame.removeAttribute('data-aionui-preview-open');\n" +
+            "            frame.removeAttribute('data-mobile-preview-full');\n" +
+            "            return true;\n" +
+            "        }\n" +
+            "        // 3. 优先消费：左侧抽屉 / 侧边栏\n" +
+            "        if (frame && !frame.hasAttribute('data-sidebar-collapsed')) {\n" +
+            "            var backdrop = document.querySelector('[data-mobile-nav=\"backdrop\"]');\n" +
+            "            if (backdrop) { backdrop.click(); return true; }\n" +
+            "            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));\n" +
+            "            if (!frame.hasAttribute('data-sidebar-collapsed')) {\n" +
+            "                frame.setAttribute('data-sidebar-collapsed', '');\n" +
+            "            }\n" +
+            "            return true;\n" +
+            "        }\n" +
+            "        // 4. 优先消费：删除确认卡片等浮层\n" +
+            "        var deleteBackdrop = document.querySelector('[data-mobile-nav=\"delete-dialog-backdrop\"]');\n" +
+            "        if (deleteBackdrop) { deleteBackdrop.click(); return true; }\n" +
+            "        // 5. 兜底右侧面板展开状态\n" +
+            "        var rightPane = document.querySelector('[data-sidebar-right-panel]');\n" +
+            "        if (rightPane && rightPane.getAttribute('aria-hidden') !== 'true') {\n" +
+            "            var toggleBtn2 = document.querySelector('[data-sidebar-right-toggle]');\n" +
+            "            if (toggleBtn2) { toggleBtn2.click(); return true; }\n" +
+            "        }\n" +
+            "    } catch (e) {\n" +
+            "        console.error('dsha consume back error:', e);\n" +
+            "    }\n" +
+            "    return false;\n" +
+            "})()";
+
+    private void dispatchBackAction() {
+        if (currentActiveDialogMask != null) {
+            dismissActiveDialog();
+            return;
+        }
+        if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
+            closeFileViewer();
+            return;
+        }
+        if (sCachedWebView != null) {
+            sCachedWebView.evaluateJavascript(SCRIPT_CONSUME_WEB_BACK, value -> {
+                if ("true".equals(value)) {
+                    return;
+                }
+                if (sCachedWebView.canGoBack()) {
                     sCachedWebView.goBack();
                 } else {
                     dismissSheet();
                 }
+            });
+            return;
+        }
+        dismissSheet();
+    }
+
+    private void setupBackDispatcher() {
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                dispatchBackAction();
             }
         });
     }
@@ -1900,29 +1971,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
-        if (currentActiveDialogMask != null) {
-            dismissActiveDialog();
-        } else if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
-            closeFileViewer();
-        } else if (sCachedWebView != null && sCachedWebView.canGoBack()) {
-            sCachedWebView.goBack();
-        } else {
-            dismissSheet();
-        }
+        dispatchBackAction();
     }
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            if (currentActiveDialogMask != null) {
-                dismissActiveDialog();
-            } else if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
-                closeFileViewer();
-            } else if (sCachedWebView != null && sCachedWebView.canGoBack()) {
-                sCachedWebView.goBack();
-            } else {
-                dismissSheet();
-            }
+            dispatchBackAction();
             return true;
         }
         return super.onKeyDown(keyCode, event);
