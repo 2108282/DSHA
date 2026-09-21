@@ -14,7 +14,7 @@ public final class FileTypeClassifier {
     public static final int SNIFF_LIMIT = 8 * 1024;
 
     public enum FileKind {
-        TEXT, IMAGE, PDF, ARCHIVE, HEX, UNKNOWN
+        TEXT, IMAGE, PDF, OFFICE, ARCHIVE, HEX, UNKNOWN
     }
 
     public static class FileType {
@@ -102,6 +102,10 @@ public final class FileTypeClassifier {
 
         // ZIP 族: PK\x03\x04
         if (starts(head, 0x50, 0x4B, 0x03, 0x04)) {
+            // 二级区分 Office 文档 (docx, xlsx, pptx)
+            if ("docx".equals(ext) || "xlsx".equals(ext) || "pptx".equals(ext)) {
+                return new FileType(FileKind.OFFICE, ext, ext);
+            }
             return new FileType(FileKind.ARCHIVE, "zip", ext);
         }
         // Gzip: 1F 8B
@@ -113,7 +117,10 @@ public final class FileTypeClassifier {
             return new FileType(FileKind.ARCHIVE, "tar", ext);
         }
 
-        // 扩展名兜底图片
+        // 扩展名兜底
+        if ("docx".equals(ext) || "xlsx".equals(ext) || "pptx".equals(ext) || "doc".equals(ext) || "xls".equals(ext) || "ppt".equals(ext)) {
+            return new FileType(FileKind.OFFICE, ext, ext);
+        }
         if ("svg".equals(ext) || "bmp".equals(ext) || "ico".equals(ext)) {
             return new FileType(FileKind.IMAGE, ext, ext);
         }

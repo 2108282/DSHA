@@ -211,6 +211,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     // 抽屉顶排操作栏与拖拽/分割线组件引用（用于反色时动态同步颜色）
     private View dragHandle;
     private TextView headerTitle;
+    private TextView headerSubTitle;
     private HeaderIconButton btnClose;
     private HeaderIconButton btnSettings;
     private HeaderIconButton btnFiles;
@@ -613,8 +614,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(42)));
         headerBar.setPadding(dpToPx(10), 0, dpToPx(10), dpToPx(2));
 
-        // 左侧按钮组：[① ✕ 关闭] + [② >_ 容器设置]
+        // 左侧按钮组：[① ✕ 关闭] + [② >_ 容器设置] + [②+ 📁 工作区文件]
         LinearLayout leftGroup = new LinearLayout(this);
+        leftGroup.setId(View.generateViewId());
         RelativeLayout.LayoutParams leftLp = new RelativeLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT);
         leftLp.addRule(RelativeLayout.ALIGN_PARENT_START);
@@ -658,20 +660,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         headerBar.addView(leftGroup);
 
-        // 中间标题（物理绝对对称居中）
-        headerTitle = new TextView(this);
-        RelativeLayout.LayoutParams titleLp = new RelativeLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        titleLp.addRule(RelativeLayout.CENTER_IN_PARENT);
-        headerTitle.setLayoutParams(titleLp);
-        headerTitle.setText("DSHA 对话");
-        headerTitle.setTextColor(textColor);
-        headerTitle.setTextSize(16);
-        headerTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        headerBar.addView(headerTitle);
-
-        // 右侧按钮组：[③ 💬➕ 新建对话] + [④ ⬒ 全屏进入App]
+        // 右侧按钮组：[③ 💬➕ 新建对话] + [④ ⬒ 全屏进入App] + [⑤ 💾 保存]
         LinearLayout rightGroup = new LinearLayout(this);
+        rightGroup.setId(View.generateViewId());
         RelativeLayout.LayoutParams rightLp = new RelativeLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT);
         rightLp.addRule(RelativeLayout.ALIGN_PARENT_END);
@@ -691,8 +682,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             String curUrl = sCachedWebView.getUrl();
             boolean detached = curUrl == null || (!curUrl.startsWith("http://127.0.0.1:" + port) && !curUrl.startsWith("http://localhost:" + port));
 
-            // 【识别新 Token / 端口变更】：若底层服务已重启、端口已切换、脱离了本地服务或此前未成功载入，
-            // 立即通过新 Token 重新加载主页并换新 Cookie，确保新对话与附件上传在最新有效凭证下进行
             if (serviceRestarted || detached || !sWebLoaded || sLoadedPort != port) {
                 sLoadedPort = port;
                 sPendingNewChat = true;
@@ -700,7 +689,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 return;
             }
 
-            // 【常态丝滑】：在服务正常运行、Token 依然有效时，100% 走 DOM 毫秒级探测快速新建会话，零白屏不重载
             String js = "(function() {" +
                     "  var btn = document.querySelector('[class*=\"newSession\"], [aria-label*=\"新会话\"], [aria-label*=\"新建\"], button[title*=\"新会话\"], button[title*=\"New session\"], button[title*=\"New Chat\"]');" +
                     "  if (btn) {" +
@@ -755,6 +743,39 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         rightGroup.addView(btnFileSave);
 
         headerBar.addView(rightGroup);
+
+        // 中间标题容器（严格被限制在左侧与右侧按钮组之间，永远不挤压也不遮挡按钮）
+        LinearLayout titleBox = new LinearLayout(this);
+        titleBox.setOrientation(LinearLayout.VERTICAL);
+        titleBox.setGravity(Gravity.CENTER);
+        RelativeLayout.LayoutParams titleBoxLp = new RelativeLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        titleBoxLp.addRule(RelativeLayout.RIGHT_OF, leftGroup.getId());
+        titleBoxLp.addRule(RelativeLayout.LEFT_OF, rightGroup.getId());
+        titleBoxLp.addRule(RelativeLayout.CENTER_VERTICAL);
+        titleBoxLp.setMarginStart(dpToPx(8));
+        titleBoxLp.setMarginEnd(dpToPx(8));
+        titleBox.setLayoutParams(titleBoxLp);
+
+        headerTitle = new TextView(this);
+        headerTitle.setText("DSHA 对话");
+        headerTitle.setTextColor(textColor);
+        headerTitle.setTextSize(15);
+        headerTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        headerTitle.setSingleLine(true);
+        headerTitle.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        headerTitle.setGravity(Gravity.CENTER);
+        titleBox.addView(headerTitle);
+
+        headerSubTitle = new TextView(this);
+        headerSubTitle.setTextColor(Color.parseColor("#888888"));
+        headerSubTitle.setTextSize(10);
+        headerSubTitle.setSingleLine(true);
+        headerSubTitle.setGravity(Gravity.CENTER);
+        headerSubTitle.setVisibility(View.GONE);
+        titleBox.addView(headerSubTitle);
+
+        headerBar.addView(titleBox);
 
         sheetCard.addView(headerBar);
 
@@ -1189,8 +1210,28 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             // 注入原生文件操作通道，打通网页文件树与附件的原生查看拦截
             sCachedWebView.addJavascriptInterface(new Object() {
                 @android.webkit.JavascriptInterface
-                public void openWorkspaceFile(String path) {
-                    runOnUiThread(() -> openFileInSheet(path));
+                public void openWorkspaceFile(String rawPath) {
+                    if (rawPath == null || rawPath.isEmpty()) return;
+                    String path = rawPath;
+                    try {
+                        path = java.net.URLDecoder.decode(rawPath, "UTF-8");
+                    } catch (Exception ignored) {}
+
+                    if (path.contains("dsh-resource://file/session/")) {
+                        int idx = path.indexOf("/session/");
+                        if (idx >= 0) {
+                            String sub = path.substring(idx + 9);
+                            int slash = sub.indexOf('/');
+                            if (slash >= 0) {
+                                path = "/sdcard/Download/DSHA/工作区/" + sub.substring(slash + 1);
+                            }
+                        }
+                    } else if (!path.startsWith("/")) {
+                        path = "/sdcard/Download/DSHA/工作区/" + path;
+                    }
+
+                    final String finalPath = path;
+                    runOnUiThread(() -> openFileInSheet(finalPath));
                 }
             }, "DshaNativeBridge");
             sCachedWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
@@ -1566,17 +1607,19 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "  /* 挂载原生工作区文件点击拦截：将只读报错拦截并升级为原生查看与编辑 */\n"
                         + "  if (!window.__dsha_file_click_hooked) {\n"
                         + "    window.__dsha_file_click_hooked = true;\n"
-                        + "    document.addEventListener('click', function(e) {\n"
-                        + "      var el = e.target && e.target.closest ? e.target.closest('[data-files-entry=\"file\"], [data-files-path]') : null;\n"
+                        + "    function handleDshaFileClick(e) {\n"
+                        + "      var el = e.target && e.target.closest ? e.target.closest('[data-files-entry=\"file\"], [data-files-path], a[href*=\"/sdcard/Download/DSHA/工作区/\"], a[href*=\"dsh-resource://file\"]') : null;\n"
                         + "      if (el) {\n"
-                        + "        var p = el.getAttribute('data-files-path');\n"
+                        + "        var p = el.getAttribute('data-files-path') || el.getAttribute('href');\n"
                         + "        if (p && window.DshaNativeBridge && window.DshaNativeBridge.openWorkspaceFile) {\n"
                         + "          e.preventDefault();\n"
                         + "          e.stopPropagation();\n"
                         + "          window.DshaNativeBridge.openWorkspaceFile(p);\n"
                         + "        }\n"
                         + "      }\n"
-                        + "    }, true);\n"
+                        + "    }\n"
+                        + "    document.addEventListener('click', handleDshaFileClick, true);\n"
+                        + "    document.addEventListener('touchend', handleDshaFileClick, true);\n"
                         + "  }\n"
                         + "})();";
                 sCachedWebView.evaluateJavascript(js, null);
@@ -1993,20 +2036,23 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             return;
         }
         if (sCachedWebView == null) return;
-        // 执行前端联动：优先点击带有 data-tab="files" 的侧边栏按钮，若已在文件面板则执行刷新
+        // 彻底精确化：只操作官方右侧边栏（sidebar-right），严禁任何模糊选择器误伤左抽屉！
         String js = "(function() {" +
                 "  var reloadBtn = document.querySelector('[data-files-reload]');" +
                 "  if (reloadBtn) {" +
                 "    reloadBtn.click();" +
                 "    return;" +
                 "  }" +
-                "  var tab = document.querySelector('[data-tab=\"files\"], [aria-label*=\"文件\"], [title*=\"工作区\"], [title*=\"Files\"], [data-sidebar-tab=\"files\"]');" +
-                "  if (tab) {" +
-                "    tab.click();" +
+                "  var expandBtn = document.querySelector('button[data-sidebar-right-expand]');" +
+                "  if (expandBtn) {" +
+                "    expandBtn.click();" +
                 "    return;" +
                 "  }" +
-                "  var rightToggle = document.querySelector('[data-sidebar-right-toggle], button[class*=\"sidebarRight\"]');" +
-                "  if (rightToggle) rightToggle.click();" +
+                "  var panel = document.querySelector('[data-sidebar-right-panel]');" +
+                "  if (panel && panel.hasAttribute('data-sidebar-right-open')) {" +
+                "    var collapseBtn = panel.querySelector('button[class*=\"iconButton\"]');" +
+                "    if (collapseBtn) collapseBtn.click();" +
+                "  }" +
                 "})();";
         sCachedWebView.evaluateJavascript(js, null);
     }
@@ -2024,21 +2070,29 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         com.deepseekharness.app.viewer.FileTypeClassifier.FileType ft =
                 com.deepseekharness.app.viewer.FileTypeClassifier.classify(file);
 
-        // 1. 顶栏切换至文档模式
+        // 1. 顶栏切换至文档模式（排版居中受限，绝不遮挡左右按钮）
         headerTitle.setText(file.getName());
+        if (headerSubTitle != null) {
+            headerSubTitle.setText(formatFileSize(file.length()) + " · " + ft.kind.name());
+            headerSubTitle.setVisibility(View.VISIBLE);
+        }
         btnClose.setIconType(ICON_BACK); // 切换为 ‹ 返回箭头
         btnSettings.setVisibility(View.GONE);
         btnFiles.setVisibility(View.GONE);
         btnNewChat.setVisibility(View.GONE);
         btnFullscreen.setVisibility(View.GONE);
 
-        // 2. 容器切换
+        // 2. 容器切换（背景设为透明，彻底透出抽屉原有的毛玻璃底色与壁纸）
         fileViewerContainer.removeAllViews();
+        fileViewerContainer.setBackgroundColor(Color.TRANSPARENT);
         fileViewerContainer.setVisibility(View.VISIBLE);
         if (sCachedWebView != null) sCachedWebView.setVisibility(View.GONE);
 
         // 3. 按照类型加载具体查看/编辑器
-        if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.TEXT && file.length() <= 5 * 1024 * 1024) {
+        if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.OFFICE) {
+            btnFileSave.setVisibility(View.GONE);
+            loadSheetOfficeViewer(file);
+        } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.TEXT && file.length() <= 5 * 1024 * 1024) {
             loadSheetTextEditor(file);
         } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.IMAGE) {
             btnFileSave.setVisibility(View.GONE);
@@ -2074,6 +2128,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         // 恢复顶栏为对话模式
         headerTitle.setText("DSHA 对话");
+        if (headerSubTitle != null) headerSubTitle.setVisibility(View.GONE);
         btnClose.setIconType(ICON_CLOSE);
         btnSettings.setVisibility(View.VISIBLE);
         btnFiles.setVisibility(View.VISIBLE);
@@ -2088,6 +2143,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         currentCodeEditor.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         currentCodeEditor.setColorScheme(new io.github.rosemoe.sora.widget.schemes.EditorColorScheme());
+        // 编辑器背景设为半透明透光，彻底融入抽屉毛玻璃
+        currentCodeEditor.setBackgroundColor(Color.parseColor("#15FFFFFF"));
         currentCodeEditor.setTextSize(13);
         currentCodeEditor.setLineNumberEnabled(true);
         currentCodeEditor.setWordwrap(true);
@@ -2102,6 +2159,33 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             Toast.makeText(this, "读取失败：" + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
         fileViewerContainer.addView(currentCodeEditor);
+    }
+
+    private void loadSheetOfficeViewer(File file) {
+        String content = null;
+        String name = file.getName().toLowerCase();
+        if (name.endsWith(".docx")) {
+            content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractDocx(file);
+        } else if (name.endsWith(".xlsx")) {
+            content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractXlsx(file);
+        }
+
+        if (content != null && !content.isEmpty()) {
+            io.github.rosemoe.sora.widget.CodeEditor editor = new io.github.rosemoe.sora.widget.CodeEditor(this);
+            editor.setLayoutParams(new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            editor.setColorScheme(new io.github.rosemoe.sora.widget.schemes.EditorColorScheme());
+            editor.setBackgroundColor(Color.parseColor("#15FFFFFF"));
+            editor.setTextSize(13);
+            editor.setLineNumberEnabled(false);
+            editor.setEditable(false); // Office 只读
+            editor.setWordwrap(true);
+            editor.setText(content);
+            fileViewerContainer.addView(editor);
+        } else {
+            Toast.makeText(this, "Office 结构复杂或未识别，已切换为十六进制数据视图", Toast.LENGTH_SHORT).show();
+            loadSheetHexViewer(file);
+        }
     }
 
     private void saveCurrentEditorText() {
@@ -2127,7 +2211,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         TouchImageView iv = new TouchImageView(this);
         iv.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        iv.setBackgroundColor(Color.BLACK);
+        // 图片底色设为透明，周围直接透出毛玻璃壁纸，绝不黑屏！
+        iv.setBackgroundColor(Color.TRANSPARENT);
         try {
             Bitmap bmp = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath());
             if (bmp != null) iv.setImageBitmap(bmp);
@@ -2143,6 +2228,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             android.widget.ListView listView = new android.widget.ListView(this);
             listView.setLayoutParams(new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            listView.setBackgroundColor(Color.TRANSPARENT);
             listView.setDivider(null);
             listView.setAdapter(new android.widget.BaseAdapter() {
                 @Override public int getCount() { return currentPdfRenderer.getPageCount(); }
@@ -2184,6 +2270,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         android.widget.ListView lv = new android.widget.ListView(this);
         lv.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        lv.setBackgroundColor(Color.TRANSPARENT);
         lv.setAdapter(new android.widget.BaseAdapter() {
             @Override public int getCount() { return entries.size(); }
             @Override public Object getItem(int position) { return entries.get(position); }
@@ -2240,7 +2327,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         android.widget.ListView lv = new android.widget.ListView(this);
         lv.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        lv.setBackgroundColor(Color.parseColor("#0D0D0D"));
+        lv.setBackgroundColor(Color.TRANSPARENT);
         lv.setDivider(null);
 
         lv.setAdapter(new android.widget.BaseAdapter() {
@@ -2280,6 +2367,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             }
         });
         fileViewerContainer.addView(lv);
+    }
+
+    private static String formatFileSize(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
+        if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
+        return String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
     }
 
     /** 支持手势缩放的双指 ImageView */
