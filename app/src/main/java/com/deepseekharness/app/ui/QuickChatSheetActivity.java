@@ -104,6 +104,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     public static final int ICON_NEW_CHAT = 3;
     public static final int ICON_FULLSCREEN = 4;
     public static final int ICON_FILES = 5;
+    public static final int ICON_BACK = 6;
 
     // 全局静态保活单例，彻底解决再次进入重新转圈加载问题
     @SuppressLint("StaticFieldLeak")
@@ -209,7 +210,15 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private HeaderIconButton btnFiles;
     private HeaderIconButton btnNewChat;
     private HeaderIconButton btnFullscreen;
+    private TextView btnFileSave;
     private View headerDivider;
+
+    // 抽屉内置万能查看器组件
+    private FrameLayout fileViewerContainer;
+    private File currentViewingFile;
+    private io.github.rosemoe.sora.widget.CodeEditor currentCodeEditor;
+    private android.graphics.pdf.PdfRenderer currentPdfRenderer;
+    private ParcelFileDescriptor currentPdfPfd;
 
     private int screenHeight = 0;
     private int defaultHeight = 0;
@@ -374,7 +383,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
-                if (sCachedWebView != null && sCachedWebView.canGoBack()) {
+                if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
+                    closeFileViewer();
+                } else if (sCachedWebView != null && sCachedWebView.canGoBack()) {
                     sCachedWebView.goBack();
                 } else {
                     dismissSheet();
@@ -608,7 +619,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         // [① ✕ 关闭按钮]
         btnClose = createHeaderIconButton(ICON_CLOSE, textColor, "关闭弹层");
-        btnClose.setOnClickListener(v -> dismissSheet());
+        btnClose.setOnClickListener(v -> {
+            if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
+                closeFileViewer();
+            } else {
+                dismissSheet();
+            }
+        });
         leftGroup.addView(btnClose);
 
         // [② >_ 容器终端按钮]
@@ -626,11 +643,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         leftGroup.addView(btnSettings);
 
         // [②+ 📁 工作区文件管理按钮]
-        btnFiles = createHeaderIconButton(ICON_FILES, textColor, "浏览工作区文件");
+        btnFiles = createHeaderIconButton(ICON_FILES, textColor, "切换工作区文件树");
         LinearLayout.LayoutParams filesLp = (LinearLayout.LayoutParams) btnFiles.getLayoutParams();
         filesLp.setMarginStart(dpToPx(4));
         btnFiles.setLayoutParams(filesLp);
-        btnFiles.setOnClickListener(v -> showWorkspaceDialog());
+        btnFiles.setOnClickListener(v -> toggleWorkspaceFileTree());
         leftGroup.addView(btnFiles);
 
         headerBar.addView(leftGroup);
@@ -719,6 +736,18 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             }, "sheet-expand-web").start();
         });
         rightGroup.addView(btnFullscreen);
+
+        // [⑤ 💾 保存按钮] 处于文本/代码查看模式时显示
+        btnFileSave = new TextView(this);
+        btnFileSave.setText("保存");
+        btnFileSave.setTextColor(Color.parseColor("#4C8DFF"));
+        btnFileSave.setTextSize(14);
+        btnFileSave.setTypeface(Typeface.DEFAULT_BOLD);
+        btnFileSave.setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6));
+        btnFileSave.setVisibility(View.GONE);
+        btnFileSave.setOnClickListener(v -> saveCurrentEditorText());
+        rightGroup.addView(btnFileSave);
+
         headerBar.addView(rightGroup);
 
         sheetCard.addView(headerBar);
@@ -757,6 +786,14 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         errorHint.setVisibility(View.GONE);
         webContainer.addView(errorHint);
 
+        // 抽屉内置万能查看器容器
+        fileViewerContainer = new FrameLayout(this);
+        fileViewerContainer.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        fileViewerContainer.setBackgroundColor(Color.parseColor("#121212"));
+        fileViewerContainer.setVisibility(View.GONE);
+        webContainer.addView(fileViewerContainer);
+
         sheetCard.addView(webContainer);
 
         // 7. 键盘底部占位底板（垫在键盘下方，具有与卡片一致的同色毛玻璃底色，绝不漏桌面壁纸）
@@ -792,7 +829,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     /** 4 按钮高精度矢量绘制 View（统一 36x36dp 容器、1.85dp 规范线宽、圆倒角与对称视觉） */
     private static class HeaderIconButton extends View {
-        private final int iconType;
+        private int iconType;
         private final Paint paint;
         private final RectF rectF = new RectF();
 
@@ -808,6 +845,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             paint.setStrokeWidth(strokeWidthPx);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
+        }
+
+        public void setIconType(int iconType) {
+            if (this.iconType != iconType) {
+                this.iconType = iconType;
+                invalidate();
+            }
         }
 
         public void setIconColor(int color) {
@@ -917,6 +961,15 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                     // 内部水平层叠线条（体现文件夹深度）
                     float lineY = topY + tabH + 2.8f * dp;
                     canvas.drawLine(cx - halfW + 3.0f * dp, lineY, cx + halfW - 3.0f * dp, lineY, paint);
+                    break;
+                }
+                case ICON_BACK: { // ⑥ [ ‹ 返回 ] (经典优雅返回箭头，与关闭/终端线宽一致)
+                    Path arrow = new Path();
+                    arrow.moveTo(cx + 2.0f * dp, cy - 6.0f * dp);
+                    arrow.lineTo(cx - 3.5f * dp, cy);
+                    arrow.lineTo(cx + 2.0f * dp, cy + 6.0f * dp);
+                    canvas.drawPath(arrow, paint);
+                    canvas.drawLine(cx - 3.5f * dp, cy, cx + 5.5f * dp, cy, paint);
                     break;
                 }
             }
@@ -1125,8 +1178,15 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             }
 
             sCachedWebView.setWebViewClient(createSheetWebViewClient());
-
             sCachedWebView.setWebChromeClient(new SheetChromeClient());
+
+            // 注入原生文件操作通道，打通网页文件树与附件的原生查看拦截
+            sCachedWebView.addJavascriptInterface(new Object() {
+                @android.webkit.JavascriptInterface
+                public void openWorkspaceFile(String path) {
+                    runOnUiThread(() -> openFileInSheet(path));
+                }
+            }, "DshaNativeBridge");
             sCachedWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
                 try {
                     android.app.DownloadManager.Request request = new android.app.DownloadManager.Request(Uri.parse(url));
@@ -1496,6 +1556,21 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + (dark
                                 ? "    document.body.setAttribute('data-ds-dark-theme', '');\n"
                                 : "    document.body.removeAttribute('data-ds-dark-theme');\n")
+                        + "  }\n"
+                        + "  /* 挂载原生工作区文件点击拦截：将只读报错拦截并升级为原生查看与编辑 */\n"
+                        + "  if (!window.__dsha_file_click_hooked) {\n"
+                        + "    window.__dsha_file_click_hooked = true;\n"
+                        + "    document.addEventListener('click', function(e) {\n"
+                        + "      var el = e.target && e.target.closest ? e.target.closest('[data-files-entry=\"file\"], [data-files-path]') : null;\n"
+                        + "      if (el) {\n"
+                        + "        var p = el.getAttribute('data-files-path');\n"
+                        + "        if (p && window.DshaNativeBridge && window.DshaNativeBridge.openWorkspaceFile) {\n"
+                        + "          e.preventDefault();\n"
+                        + "          e.stopPropagation();\n"
+                        + "          window.DshaNativeBridge.openWorkspaceFile(p);\n"
+                        + "        }\n"
+                        + "      }\n"
+                        + "    }, true);\n"
                         + "  }\n"
                         + "})();";
                 sCachedWebView.evaluateJavascript(js, null);
@@ -1905,61 +1980,364 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         }
     }
 
-    // ---------------- 工作区文件管理器弹窗 ----------------
-    private File currentBrowseDir = new File("/sdcard/Download/DSHA/工作区");
+    // ---------------- 抽屉顶栏 📁 按钮：平滑联动 DSH 官方自带工作区文件树 ----------------
+    private void toggleWorkspaceFileTree() {
+        if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
+            closeFileViewer();
+            return;
+        }
+        if (sCachedWebView == null) return;
+        // 执行前端联动：优先点击带有 data-tab="files" 的侧边栏按钮，若已在文件面板则执行刷新
+        String js = "(function() {" +
+                "  var reloadBtn = document.querySelector('[data-files-reload]');" +
+                "  if (reloadBtn) {" +
+                "    reloadBtn.click();" +
+                "    return;" +
+                "  }" +
+                "  var tab = document.querySelector('[data-tab=\"files\"], [aria-label*=\"文件\"], [title*=\"工作区\"], [title*=\"Files\"], [data-sidebar-tab=\"files\"]');" +
+                "  if (tab) {" +
+                "    tab.click();" +
+                "    return;" +
+                "  }" +
+                "  var rightToggle = document.querySelector('[data-sidebar-right-toggle], button[class*=\"sidebarRight\"]');" +
+                "  if (rightToggle) rightToggle.click();" +
+                "})();";
+        sCachedWebView.evaluateJavascript(js, null);
+    }
 
-    private void showWorkspaceDialog() {
-        if (!currentBrowseDir.exists()) currentBrowseDir.mkdirs();
-        File[] files = currentBrowseDir.listFiles();
-        if (files == null) files = new File[0];
-
-        // 排序：文件夹优先，其后按名称
-        java.util.Arrays.sort(files, (a, b) -> {
-            if (a.isDirectory() && !b.isDirectory()) return -1;
-            if (!a.isDirectory() && b.isDirectory()) return 1;
-            return a.getName().compareToIgnoreCase(b.getName());
-        });
-
-        final File[] sortedFiles = files;
-        List<String> displayList = new ArrayList<>();
-        boolean canGoUp = !currentBrowseDir.getAbsolutePath().equals("/sdcard/Download/DSHA/工作区")
-                && currentBrowseDir.getParentFile() != null;
-        if (canGoUp) {
-            displayList.add(".. ‹ 返回上一级");
+    // ---------------- 抽屉内置万能查看器核心引擎 ----------------
+    public void openFileInSheet(String path) {
+        if (path == null || path.isEmpty()) return;
+        File file = new File(path);
+        if (!file.exists() || !file.isFile()) {
+            Toast.makeText(this, "文件不存在：" + path, Toast.LENGTH_SHORT).show();
+            return;
         }
 
-        for (File f : sortedFiles) {
-            if (f.isDirectory()) {
-                displayList.add("📁 " + f.getName());
-            } else {
-                displayList.add("📄 " + f.getName());
+        currentViewingFile = file;
+        com.deepseekharness.app.viewer.FileTypeClassifier.FileType ft =
+                com.deepseekharness.app.viewer.FileTypeClassifier.classify(file);
+
+        // 1. 顶栏切换至文档模式
+        headerTitle.setText(file.getName());
+        btnClose.setIconType(ICON_BACK); // 切换为 ‹ 返回箭头
+        btnSettings.setVisibility(View.GONE);
+        btnFiles.setVisibility(View.GONE);
+        btnNewChat.setVisibility(View.GONE);
+        btnFullscreen.setVisibility(View.GONE);
+
+        // 2. 容器切换
+        fileViewerContainer.removeAllViews();
+        fileViewerContainer.setVisibility(View.VISIBLE);
+        if (sCachedWebView != null) sCachedWebView.setVisibility(View.GONE);
+
+        // 3. 按照类型加载具体查看/编辑器
+        if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.TEXT && file.length() <= 5 * 1024 * 1024) {
+            loadSheetTextEditor(file);
+        } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.IMAGE) {
+            btnFileSave.setVisibility(View.GONE);
+            loadSheetImageViewer(file);
+        } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.PDF) {
+            btnFileSave.setVisibility(View.GONE);
+            loadSheetPdfViewer(file);
+        } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.ARCHIVE) {
+            btnFileSave.setVisibility(View.GONE);
+            loadSheetArchiveViewer(file);
+        } else {
+            btnFileSave.setVisibility(View.GONE);
+            loadSheetHexViewer(file);
+        }
+    }
+
+    public void closeFileViewer() {
+        if (fileViewerContainer != null) {
+            fileViewerContainer.removeAllViews();
+            fileViewerContainer.setVisibility(View.GONE);
+        }
+        if (sCachedWebView != null) {
+            sCachedWebView.setVisibility(View.VISIBLE);
+        }
+        try {
+            if (currentPdfRenderer != null) currentPdfRenderer.close();
+            if (currentPdfPfd != null) currentPdfPfd.close();
+        } catch (Exception ignored) {}
+        currentPdfRenderer = null;
+        currentPdfPfd = null;
+        currentCodeEditor = null;
+        currentViewingFile = null;
+
+        // 恢复顶栏为对话模式
+        headerTitle.setText("DSHA 对话");
+        btnClose.setIconType(ICON_CLOSE);
+        btnSettings.setVisibility(View.VISIBLE);
+        btnFiles.setVisibility(View.VISIBLE);
+        btnNewChat.setVisibility(View.VISIBLE);
+        btnFullscreen.setVisibility(View.VISIBLE);
+        if (btnFileSave != null) btnFileSave.setVisibility(View.GONE);
+    }
+
+    private void loadSheetTextEditor(File file) {
+        if (btnFileSave != null) btnFileSave.setVisibility(View.VISIBLE);
+        currentCodeEditor = new io.github.rosemoe.sora.widget.CodeEditor(this);
+        currentCodeEditor.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        currentCodeEditor.setColorScheme(new io.github.rosemoe.sora.widget.schemes.EditorColorScheme());
+        currentCodeEditor.setTextSize(13);
+        currentCodeEditor.setLineNumberEnabled(true);
+        currentCodeEditor.setWordwrap(true);
+
+        try {
+            byte[] bytes = new byte[(int) file.length()];
+            try (FileInputStream fis = new FileInputStream(file)) {
+                fis.read(bytes);
             }
+            currentCodeEditor.setText(new String(bytes, StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            Toast.makeText(this, "读取失败：" + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+        fileViewerContainer.addView(currentCodeEditor);
+    }
+
+    private void saveCurrentEditorText() {
+        if (currentCodeEditor == null || currentViewingFile == null) return;
+        try {
+            String text = currentCodeEditor.getText().toString();
+            File tmp = new File(currentViewingFile.getParentFile(), "." + currentViewingFile.getName() + ".tmp");
+            try (FileOutputStream fos = new FileOutputStream(tmp)) {
+                fos.write(text.getBytes(StandardCharsets.UTF_8));
+                fos.flush();
+            }
+            if (tmp.renameTo(currentViewingFile) || (currentViewingFile.delete() && tmp.renameTo(currentViewingFile))) {
+                Toast.makeText(this, "✓ 已安全保存", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "保存覆盖失败", Toast.LENGTH_SHORT).show();
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "保存出错：" + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void loadSheetImageViewer(File file) {
+        TouchImageView iv = new TouchImageView(this);
+        iv.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        iv.setBackgroundColor(Color.BLACK);
+        try {
+            Bitmap bmp = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath());
+            if (bmp != null) iv.setImageBitmap(bmp);
+        } catch (Throwable ignored) {}
+        fileViewerContainer.addView(iv);
+    }
+
+    private void loadSheetPdfViewer(File file) {
+        try {
+            currentPdfPfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+            currentPdfRenderer = new android.graphics.pdf.PdfRenderer(currentPdfPfd);
+
+            android.widget.ListView listView = new android.widget.ListView(this);
+            listView.setLayoutParams(new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            listView.setDivider(null);
+            listView.setAdapter(new android.widget.BaseAdapter() {
+                @Override public int getCount() { return currentPdfRenderer.getPageCount(); }
+                @Override public Object getItem(int position) { return position; }
+                @Override public long getItemId(int position) { return position; }
+                @Override
+                public View getView(int position, View convertView, ViewGroup parent) {
+                    android.widget.ImageView pageView;
+                    if (convertView instanceof android.widget.ImageView) {
+                        pageView = (android.widget.ImageView) convertView;
+                    } else {
+                        pageView = new android.widget.ImageView(QuickChatSheetActivity.this);
+                        pageView.setLayoutParams(new android.widget.ListView.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                        pageView.setAdjustViewBounds(true);
+                        pageView.setPadding(0, 0, 0, dpToPx(8));
+                    }
+                    try {
+                        android.graphics.pdf.PdfRenderer.Page page = currentPdfRenderer.openPage(position);
+                        int width = getResources().getDisplayMetrics().widthPixels;
+                        int height = (int) ((float) width / page.getWidth() * page.getHeight());
+                        Bitmap bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                        page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                        pageView.setImageBitmap(bmp);
+                        page.close();
+                    } catch (Exception ignored) {}
+                    return pageView;
+                }
+            });
+            fileViewerContainer.addView(listView);
+        } catch (Exception e) {
+            loadSheetHexViewer(file);
+        }
+    }
+
+    private void loadSheetArchiveViewer(File file) {
+        java.util.List<com.deepseekharness.app.viewer.ArchiveBrowser.Entry> entries =
+                com.deepseekharness.app.viewer.ArchiveBrowser.listEntries(file);
+        android.widget.ListView lv = new android.widget.ListView(this);
+        lv.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        lv.setAdapter(new android.widget.BaseAdapter() {
+            @Override public int getCount() { return entries.size(); }
+            @Override public Object getItem(int position) { return entries.get(position); }
+            @Override public long getItemId(int position) { return position; }
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                LinearLayout row;
+                if (convertView instanceof LinearLayout) {
+                    row = (LinearLayout) convertView;
+                } else {
+                    row = new LinearLayout(QuickChatSheetActivity.this);
+                    row.setOrientation(LinearLayout.VERTICAL);
+                    row.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+                    TextView tvName = new TextView(QuickChatSheetActivity.this);
+                    tvName.setId(101);
+                    tvName.setTextColor(Color.WHITE);
+                    tvName.setTextSize(13);
+                    row.addView(tvName);
+
+                    TextView tvInfo = new TextView(QuickChatSheetActivity.this);
+                    tvInfo.setId(102);
+                    tvInfo.setTextColor(Color.parseColor("#888888"));
+                    tvInfo.setTextSize(11);
+                    row.addView(tvInfo);
+                }
+                com.deepseekharness.app.viewer.ArchiveBrowser.Entry e = entries.get(position);
+                TextView tvName = row.findViewById(101);
+                TextView tvInfo = row.findViewById(102);
+                tvName.setText((e.isDirectory ? "📁 " : "📄 ") + e.path);
+                tvInfo.setText(e.size < 1024 ? e.size + " B" : String.format("%.1f KB", e.size / 1024.0));
+                return row;
+            }
+        });
+        lv.setOnItemClickListener((parent, view, position, id) -> {
+            com.deepseekharness.app.viewer.ArchiveBrowser.Entry e = entries.get(position);
+            if (!e.isDirectory) {
+                String text = com.deepseekharness.app.viewer.ArchiveBrowser.readEntryText(file, e.path);
+                if (text != null) {
+                    new AlertDialog.Builder(this)
+                            .setTitle(e.name)
+                            .setMessage(text.length() > 3000 ? text.substring(0, 3000) + "\n\n(截断显示)" : text)
+                            .setPositiveButton("确定", null)
+                            .show();
+                } else {
+                    Toast.makeText(this, "该文件不支持直接预览文本", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+        fileViewerContainer.addView(lv);
+    }
+
+    private void loadSheetHexViewer(File file) {
+        int totalRows = com.deepseekharness.app.viewer.HexDumper.rowCount(file.length());
+        android.widget.ListView lv = new android.widget.ListView(this);
+        lv.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        lv.setBackgroundColor(Color.parseColor("#0D0D0D"));
+        lv.setDivider(null);
+
+        lv.setAdapter(new android.widget.BaseAdapter() {
+            private int cachedBlockIndex = -1;
+            private java.util.List<com.deepseekharness.app.viewer.HexDumper.HexRow> cachedRows = new ArrayList<>();
+
+            @Override public int getCount() { return totalRows; }
+            @Override public Object getItem(int position) { return position; }
+            @Override public long getItemId(int position) { return position; }
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                TextView tv;
+                if (convertView instanceof TextView) {
+                    tv = (TextView) convertView;
+                } else {
+                    tv = new TextView(QuickChatSheetActivity.this);
+                    tv.setTypeface(Typeface.MONOSPACE);
+                    tv.setTextSize(11);
+                    tv.setTextColor(Color.parseColor("#D4D4D4"));
+                    tv.setPadding(dpToPx(8), dpToPx(2), dpToPx(8), dpToPx(2));
+                }
+
+                long offset = com.deepseekharness.app.viewer.HexDumper.rowOffset(position);
+                int blockIdx = com.deepseekharness.app.viewer.HexDumper.blockOf(offset);
+                if (blockIdx != cachedBlockIndex) {
+                    cachedBlockIndex = blockIdx;
+                    byte[] blk = com.deepseekharness.app.viewer.HexDumper.readBlock(file, blockIdx);
+                    cachedRows = com.deepseekharness.app.viewer.HexDumper.formatBlock(blk, (long) blockIdx * com.deepseekharness.app.viewer.HexDumper.BLOCK_SIZE);
+                }
+
+                int localRow = position % (com.deepseekharness.app.viewer.HexDumper.BLOCK_SIZE / com.deepseekharness.app.viewer.HexDumper.ROW_BYTES);
+                if (localRow >= 0 && localRow < cachedRows.size()) {
+                    com.deepseekharness.app.viewer.HexDumper.HexRow r = cachedRows.get(localRow);
+                    tv.setText(String.format("%08X  %s  |%s|", r.offset, r.hex, r.ascii));
+                }
+                return tv;
+            }
+        });
+        fileViewerContainer.addView(lv);
+    }
+
+    /** 支持手势缩放的双指 ImageView */
+    private static class TouchImageView extends androidx.appcompat.widget.AppCompatImageView implements View.OnTouchListener {
+        private final android.graphics.Matrix matrix = new android.graphics.Matrix();
+        private final android.graphics.Matrix savedMatrix = new android.graphics.Matrix();
+        private int mode = 0;
+        private final PointF start = new PointF();
+        private final PointF mid = new PointF();
+        private float oldDist = 1f;
+
+        public TouchImageView(Context context) {
+            super(context);
+            setScaleType(ScaleType.MATRIX);
+            setOnTouchListener(this);
         }
 
-        String title = "工作区：" + currentBrowseDir.getName();
-        new AlertDialog.Builder(this)
-                .setTitle(title)
-                .setItems(displayList.toArray(new String[0]), (dialog, which) -> {
-                    int offset = canGoUp ? 1 : 0;
-                    if (canGoUp && which == 0) {
-                        currentBrowseDir = currentBrowseDir.getParentFile();
-                        showWorkspaceDialog();
-                        return;
+        @Override
+        public boolean onTouch(View v, MotionEvent event) {
+            switch (event.getAction() & MotionEvent.ACTION_MASK) {
+                case MotionEvent.ACTION_DOWN:
+                    savedMatrix.set(matrix);
+                    start.set(event.getX(), event.getY());
+                    mode = 1;
+                    break;
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    oldDist = spacing(event);
+                    if (oldDist > 10f) {
+                        savedMatrix.set(matrix);
+                        midPoint(mid, event);
+                        mode = 2;
                     }
-                    int fileIdx = which - offset;
-                    if (fileIdx >= 0 && fileIdx < sortedFiles.length) {
-                        File clicked = sortedFiles[fileIdx];
-                        if (clicked.isDirectory()) {
-                            currentBrowseDir = clicked;
-                            showWorkspaceDialog();
-                        } else {
-                            // 调用原生全功能查看/编辑器打开！
-                            com.deepseekharness.app.viewer.FileViewerActivity.open(this, clicked.getAbsolutePath());
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_POINTER_UP:
+                    mode = 0;
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    if (mode == 1) {
+                        matrix.set(savedMatrix);
+                        matrix.postTranslate(event.getX() - start.x, event.getY() - start.y);
+                    } else if (mode == 2) {
+                        float newDist = spacing(event);
+                        if (newDist > 10f) {
+                            matrix.set(savedMatrix);
+                            float scale = newDist / oldDist;
+                            matrix.postScale(scale, scale, mid.x, mid.y);
                         }
                     }
-                })
-                .setPositiveButton("关闭", null)
-                .show();
+                    break;
+            }
+            setImageMatrix(matrix);
+            return true;
+        }
+
+        private float spacing(MotionEvent event) {
+            float x = event.getX(0) - event.getX(1);
+            float y = event.getY(0) - event.getY(1);
+            return (float) Math.sqrt(x * x + y * y);
+        }
+
+        private void midPoint(PointF point, MotionEvent event) {
+            point.set((event.getX(0) + event.getX(1)) / 2, (event.getY(0) + event.getY(1)) / 2);
+        }
     }
 
     @Override
