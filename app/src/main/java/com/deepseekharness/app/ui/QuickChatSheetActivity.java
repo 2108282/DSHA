@@ -456,6 +456,10 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 webContainer.addView(sCachedWebView, new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
             }
+            // 若当前未在查看具体文件，确保 WebView 恢复显示，杜绝界面留空
+            if (fileViewerContainer == null || fileViewerContainer.getVisibility() != View.VISIBLE) {
+                sCachedWebView.setVisibility(View.VISIBLE);
+            }
             // 唤醒防白屏兜底：若上次未成功加载出界面，再次唤出时自动重载有效凭证
             if (!sWebLoaded) {
                 String authUrl = controller != null ? controller.getWebAuthUrl() : "";
@@ -859,7 +863,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         fileViewerContainer = new FrameLayout(this);
         fileViewerContainer.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        fileViewerContainer.setBackgroundColor(Color.parseColor("#121212"));
+        fileViewerContainer.setBackgroundColor(Color.TRANSPARENT);
         fileViewerContainer.setVisibility(View.GONE);
         webContainer.addView(fileViewerContainer);
 
@@ -1896,7 +1900,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
-        if (sCachedWebView != null && sCachedWebView.canGoBack()) {
+        if (currentActiveDialogMask != null) {
+            dismissActiveDialog();
+        } else if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
+            closeFileViewer();
+        } else if (sCachedWebView != null && sCachedWebView.canGoBack()) {
             sCachedWebView.goBack();
         } else {
             dismissSheet();
@@ -1906,7 +1914,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            if (sCachedWebView != null && sCachedWebView.canGoBack()) {
+            if (currentActiveDialogMask != null) {
+                dismissActiveDialog();
+            } else if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
+                closeFileViewer();
+            } else if (sCachedWebView != null && sCachedWebView.canGoBack()) {
                 sCachedWebView.goBack();
             } else {
                 dismissSheet();
