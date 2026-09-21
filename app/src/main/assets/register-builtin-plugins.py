@@ -327,15 +327,20 @@ def ensure_symlink(name, d):
     """保证 profiles/web/node_modules/<name> 是指向实体目录的链接。返回 True=改动了。"""
     link = os.path.join(local(NODE_MODULES), name)
     target = local(d)
-    os.makedirs(os.path.dirname(link), exist_ok=True)
+    parent_dir = os.path.dirname(link)
+    # 如果父级（如 @scope）被历史脚本错误做成了软链接，必须先拔除，换为物理目录
+    if os.path.islink(parent_dir):
+        try:
+            os.unlink(parent_dir)
+        except OSError:
+            pass
+    os.makedirs(parent_dir, exist_ok=True)
     if os.path.lexists(link):
         try:
             if os.path.islink(link) and os.path.realpath(link) == os.path.realpath(target):
                 return False
         except OSError:
             pass
-        # 已存在的非正确链接/实体：proot 下 islink 不可信，用 realpath 对比判断；
-        # 指向正确就当作好，指向别处才替换（绝不覆盖用户 pnpm 装的第三方实体）
         if os.path.isdir(link) and os.path.realpath(link) == os.path.realpath(target):
             return False
         if os.path.islink(link) or not os.path.isdir(link):
@@ -344,16 +349,11 @@ def ensure_symlink(name, d):
             except OSError:
                 return False
         else:
-            # 是实体目录但指向不对（几乎不可能是内置场景，保守起见不动）
             return False
     try:
-        # 目标是目录：Windows 上必须显式 target_is_directory（Linux 忽略该位），
-        # 容器内正常建链，传上对两边都安全
         os.symlink(target, link, target_is_directory=True)
         return True
     except OSError:
-        # 实体目录不能 symlink 的极端情况（SELinux/文件系统限制）：
-        # 退回软链到相对路径后仍失败则放弃，由 dsh 的 pnpm 链接兜底
         try:
             rel = os.path.relpath(target, os.path.dirname(link))
             os.symlink(rel, link, target_is_directory=True)

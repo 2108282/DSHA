@@ -4,17 +4,38 @@
 set -e
 TARGET="/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai"
 
-# 1. 修复 /root/.dsh/plugin-src/* 下的所有第三方插件 (如 dsh-agy)
+# 1. 修复 /root/.dsh/plugin-src/* 下的所有第三方插件 (如 dsh-agy, @easytz/dsh-git)
 if [ -d "/root/.dsh/plugin-src" ]; then
   for p in /root/.dsh/plugin-src/*; do
     [ -d "$p" ] || continue
     name=$(basename "$p")
-    # 全局顶层软链
+    
+    # 支持 @scope 组织命名空间包 (如 @easytz/dsh-git)
+    if [[ "$name" == @* ]]; then
+      # 如果父级是软链，必须先拔除，恢复为物理目录
+      [ -L "/usr/local/lib/node_modules/$name" ] && unlink "/usr/local/lib/node_modules/$name" 2>/dev/null || true
+      [ -L "/root/.dsh/profiles/web/node_modules/$name" ] && unlink "/root/.dsh/profiles/web/node_modules/$name" 2>/dev/null || true
+      mkdir -p "/usr/local/lib/node_modules/$name"
+      mkdir -p "/root/.dsh/profiles/web/node_modules/$name"
+      
+      for sub_p in "$p"/*; do
+        [ -d "$sub_p" ] || continue
+        sub_name=$(basename "$sub_p")
+        [ -f "$sub_p/package.json" ] || continue
+        ln -sfn "$sub_p" "/usr/local/lib/node_modules/$name/$sub_name"
+        ln -sfn "$sub_p" "/root/.dsh/profiles/web/node_modules/$name/$sub_name"
+        if [ -L "$sub_p/node_modules/@deepseek-ai" ]; then
+          unlink "$sub_p/node_modules/@deepseek-ai" 2>/dev/null || true
+        fi
+        echo "Fixed scoped plugin: $name/$sub_name"
+      done
+      continue
+    fi
+
+    # 普通非 scope 插件
     ln -sfn "$p" "/usr/local/lib/node_modules/$name"
-    # profile 局部软链
     mkdir -p "/root/.dsh/profiles/web/node_modules"
     ln -sfn "$p" "/root/.dsh/profiles/web/node_modules/$name"
-    # 彻底断开对全局 node_modules 的穿透软链，改由全局 NODE_PATH 寻址，防止包管理器逆向穿透破坏宿主
     if [ -L "$p/node_modules/@deepseek-ai" ]; then
       unlink "$p/node_modules/@deepseek-ai" 2>/dev/null || true
     fi
@@ -43,4 +64,5 @@ done
 if [ -f "/root/.dsh/dsha-plugin-compat.sh" ]; then
   /bin/bash /root/.dsh/dsha-plugin-compat.sh
 fi
+
 echo "HEAL_ALL_PLUGINS_OK"

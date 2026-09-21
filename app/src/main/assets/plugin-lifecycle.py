@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import time
 import urllib.parse
 import uuid
@@ -140,6 +141,11 @@ class Lifecycle:
         state = self.read(os.path.join(path, 'state.json'), {})
         return state if state.get('name') == name and os.path.isfile(os.path.join(path, 'package', 'package.json')) else {}
 
+    def clear_history(self, name):
+        path = self.history_path(name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+
     def dsh_version(self):
         for path in ('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json', '/root/dsh-src/package.json'):
             value = self.read(self.local(path), {})
@@ -191,6 +197,62 @@ class Lifecycle:
             path = self.preview_path(key)
             if os.path.isdir(path) and not os.path.islink(path) and time.time() - os.path.getmtime(path) > 7200:
                 shutil.rmtree(path)
+
+    def inspect_npm(self, spec, path, key, request):
+        if not shutil.which('npm'):
+            raise ValueError('npm 尚未就绪，请关闭终端后重新打开')
+        res = subprocess.run(['npm', 'view', spec, '--json'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+        if res.returncode != 0:
+            err = (res.stderr or res.stdout).strip()
+            raise ValueError('npm 插件查询失败：' + (err[-600:] if err else '包不存在或网络错误'))
+        try:
+            pkg = json.loads(res.stdout)
+            if isinstance(pkg, list) and pkg:
+                pkg = pkg[-1]
+        except Exception:
+            raise ValueError('npm 返回数据无法解析')
+        if not isinstance(pkg, dict) or not pkg.get('name'):
+            raise ValueError('npm 插件信息无效')
+        item = self.metadata_from_dict(pkg)
+        if request.get('name') and item['name'] != request['name']:
+            raise ValueError('下载包的名称与选中的插件不一致')
+        if request.get('version') and item['version'] != request['version']:
+            raise ValueError('下载包版本与网页说明不一致')
+        prepared = {
+            'previewId': key,
+            'type': 'npm',
+            'npmSpec': spec,
+            'source': 'npm:' + spec,
+            'sha256': hashlib.sha256(spec.encode('utf-8')).hexdigest(),
+            'items': [item],
+            'createdAt': int(time.time()),
+            'subdir': '',
+            'updateFor': request.get('updateFor', ''),
+            'fromVersion': request.get('fromVersion', '')
+        }
+        self.write(os.path.join(path, 'preview.json'), prepared)
+        return prepared
+
+    def metadata_from_dict(self, pkg):
+        author = pkg.get('author', '')
+        if isinstance(author, dict):
+            author = author.get('name', '')
+        requirement = (pkg.get('peerDependencies') or {}).get('@deepseek-ai/dsh') or (pkg.get('engines') or {}).get('dsh') or ''
+        if not isinstance(requirement, str):
+            requirement = ''
+        installed = self.dsh_version()
+        accepted = accepts_version(installed, requirement) if installed and requirement else None
+        state = 'compatible' if accepted is True else 'incompatible' if accepted is False else 'unknown'
+        text = ('适用 dsh：' + requirement if requirement else '作者未声明 dsh 兼容范围')
+        text += '；当前：' + (installed or '版本未知')
+        if accepted is False:
+            text += '。版本不匹配，安装前请确认作者说明'
+        elif accepted is None:
+            text += '。兼容性需要确认'
+        return {'name': pkg['name'], 'version': str(pkg.get('version', '')), 'author': str(author)[:200] or '未注明',
+                'description': str(pkg.get('description', ''))[:1500], 'requiredDsh': requirement,
+                'installedDsh': installed, 'compatibility': state, 'compatibilityMessage': text,
+                'repository': self.g['repository_url'](pkg)}
 
     def inspect(self, request, emit=True):
         if isinstance(request, str):
@@ -245,7 +307,8 @@ class Lifecycle:
             elif parts[0] == 'release' and len(parts) == 4:
                 self.g['cmd_release'](*parts[1:], consume=receive)
             elif parts[0] == 'npm' and len(parts) == 2:
-                self.g['cmd_npm'](parts[1], consume=receive)
+                spec = parts[1].removeprefix("npm:")
+                prepared = self.inspect_npm(spec, path, key, request)
             elif parts[0] == 'file' and len(parts) == 2:
                 receive(self.local(parts[1]))
             else:
@@ -279,6 +342,23 @@ class Lifecycle:
         preview = self.read(os.path.join(path, 'preview.json'), {})
         if not preview or time.time() - preview.get('createdAt', 0) > 3600:
             raise ValueError('安装预览已过期，请重新解析链接')
+
+        if preview.get('type') == 'npm':
+            spec = preview.get('npmSpec') or preview['items'][0]['name']
+            name = preview['items'][0]['name']
+            res = subprocess.run(["dsh", "plugin", "--profile", "web", "add", spec],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=300)
+            if res.returncode != 0:
+                raise ValueError("npm 插件安装失败：" + (res.stdout or "")[-1200:].strip())
+            sources = self.read(self.local(self.g['SOURCES']), {})
+            if not isinstance(sources, dict):
+                sources = {}
+            sources[name] = "npm:" + spec
+            self.write(self.local(self.g['SOURCES']), sources)
+            shutil.rmtree(path)
+            self.g['result']('ok', f"已安装 {name}；重启 Web 后生效。", installed=[name])
+            return 0
+
         archive = os.path.join(path, 'archive')
         if not os.path.isfile(archive) or self.digest(archive) != preview.get('sha256'):
             raise ValueError('暂存包已变化，请重新解析链接')

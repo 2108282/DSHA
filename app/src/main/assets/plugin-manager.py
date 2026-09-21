@@ -298,7 +298,13 @@ def register_plugin(root, source, expected_version=None):
                 if os.path.islink(link):
                     os.unlink(link)
                 if enabled:
-                    os.makedirs(os.path.dirname(link), exist_ok=True)
+                    parent_dir = os.path.dirname(link)
+                    if os.path.islink(parent_dir):
+                        try:
+                            os.unlink(parent_dir)
+                        except OSError:
+                            pass
+                    os.makedirs(parent_dir, exist_ok=True)
                     os.symlink(dest, link, target_is_directory=True)
                 bundles = doc.setdefault("dsh", {}).setdefault("profile", {}).setdefault("bundles", [])
                 if enabled and name not in bundles:
@@ -427,7 +433,7 @@ def cmd_export(names, out):
 
 
 def cmd_delete(name):
-    """只移除指定第三方插件；不追随链接去删除用户工作区或共享 pnpm 仓库。"""
+    """移除指定第三方插件：调用官方包管理器卸载依赖并清理本地源码，保持完全干净。"""
     if not builtin.valid_name(name):
         raise ValueError("无效的插件名称")
     if name in builtin.OFFICIAL_BUNDLES or name in builtin.builtin_names():
@@ -440,45 +446,60 @@ def cmd_delete(name):
         deps = doc.get("dependencies", {})
         if name not in deps and name not in bundles:
             raise ValueError("插件未安装或已经删除，请刷新列表")
-        sources = read_json(local(SOURCES), {})
-        if not isinstance(sources, dict):
-            sources = {}
-        previous_sources = dict(sources)
-        paths = [(local(PLUGIN_SRC), os.path.join(local(PLUGIN_SRC), name)),
-                 (local(builtin.NODE_MODULES), os.path.join(local(builtin.NODE_MODULES), name)),
-                 (local(builtin.NODE_MODULES), builtin.marker_path(name)),
-                 (local(DSH_HOME), lifecycle().history_path(name))]
-        for parent, path in paths:
-            # scope 目录本身可能被换成包外软链，不能只校验 npm 名称。
-            root = os.path.realpath(parent)
-            home = os.path.realpath(local(DSH_HOME))
-            if os.path.commonpath([home, root]) != home:
-                raise ValueError("插件目录指向安装目录以外，已取消删除：" + name)
-            actual_parent = os.path.realpath(os.path.dirname(path))
-            if os.path.commonpath([root, actual_parent]) != root:
-                raise ValueError("插件目录越界，已取消删除：" + name)
-        with tempfile.TemporaryDirectory(prefix=".plugin-delete-", dir=local(DSH_HOME)) as work:
-            moved = []
-            source_written = False
+
+        # 1. 如果在 profile 依赖中有声明，先调用官方 dsh 命令安全移除依赖与清理锁文件
+        if name in deps:
             try:
-                for index, (_, path) in enumerate(paths):
-                    if os.path.lexists(path):
-                        staged = os.path.join(work, str(index))
-                        os.replace(path, staged)
-                        moved.append((path, staged))
-                doc.setdefault("dependencies", {}).pop(name, None)
-                profile = doc.setdefault("dsh", {}).setdefault("profile", {})
-                profile["bundles"] = [bundle for bundle in bundles if bundle != name]
-                sources.pop(name, None)
-                write_json(local(SOURCES), sources)
-                source_written = True
-                builtin.write_manifest(doc)
+                subprocess.run(["dsh", "plugin", "--profile", "web", "remove", name],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
             except Exception:
-                for path, staged in reversed(moved):
-                    os.replace(staged, path)
-                if source_written:
-                    write_json(local(SOURCES), previous_sources)
-                raise
+                pass
+
+        # 2. 重新读取最新清单并从 bundles 剔除
+        doc = builtin.read_manifest() or doc
+        bundles = doc.get("dsh", {}).get("profile", {}).get("bundles", [])
+        if name in bundles:
+            bundles.remove(name)
+            doc.setdefault("dsh", {}).setdefault("profile", {})["bundles"] = bundles
+            builtin.write_manifest(doc)
+
+        # 3. 清理 plugin-src 下的物理源码与 node_modules 软链
+        src_path = os.path.join(local(PLUGIN_SRC), name)
+        if os.path.isdir(src_path) and not os.path.islink(src_path):
+            shutil.rmtree(src_path, ignore_errors=True)
+            # 若父级 scope 目录已空，一并清理
+            scope_dir = os.path.dirname(src_path)
+            if os.path.basename(scope_dir).startswith('@') and os.path.isdir(scope_dir) and not os.listdir(scope_dir):
+                try:
+                    os.rmdir(scope_dir)
+                except OSError:
+                    pass
+
+        link_path = os.path.join(local(builtin.NODE_MODULES), name)
+        if os.path.islink(link_path):
+            try:
+                os.unlink(link_path)
+            except OSError:
+                pass
+
+        # 4. 清理禁用标记、历史与来源记录
+        marker = builtin.marker_path(name)
+        if os.path.isfile(marker):
+            try:
+                os.remove(marker)
+            except OSError:
+                pass
+
+        try:
+            lifecycle().clear_history(name)
+        except Exception:
+            pass
+
+        sources = read_json(local(SOURCES), {})
+        if isinstance(sources, dict) and name in sources:
+            sources.pop(name, None)
+            write_json(local(SOURCES), sources)
+
     result("ok", "已删除 " + name + "；重启 Web 后停止加载。对话和其他插件保留。")
     return 0
 
