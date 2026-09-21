@@ -1226,12 +1226,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             sCachedWebView.addJavascriptInterface(new Object() {
                 @android.webkit.JavascriptInterface
                 public void openWorkspaceFile(String rawPath) {
-                    resolveAndHandleFile(rawPath, 0);
+                    resolveAndHandleFile(rawPath, 0, -1, -1);
                 }
 
                 @android.webkit.JavascriptInterface
                 public void openExternalFile(String rawPath) {
-                    resolveAndHandleFile(rawPath, 1);
+                    resolveAndHandleFile(rawPath, 1, -1, -1);
                 }
 
                 @android.webkit.JavascriptInterface
