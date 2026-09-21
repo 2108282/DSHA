@@ -93,6 +93,21 @@ DSHA 采用清晰的职责隔离架构，杜绝在单个分支内混合不同平
 
 ## 四、 本地一键打包指令（开发者自测）
 
+### 0. 从实机当前安装环境导出纯净脱敏底包 (export-rootfs.sh)
+若在真机容器中升级了官方核心（如 `pnpm install -g @deepseek-ai/dsh@latest`）或优化了环境，可直接一键导出为通用纯净底包：
+```bash
+# 方式 A：仅导出纯净脱敏底包 (自动排除后装插件与私密数据，动态修复 package.json 依赖)
+bash tools/export-rootfs.sh
+
+# 方式 B：导出底包并直接联动生成完整刷机包
+bash tools/export-rootfs.sh --full
+
+# 方式 C：整机克隆备份 (包含个人所有后装插件、会话与配置，换机专用)
+bash tools/export-rootfs.sh --clone
+```
+* **零破坏承诺**：当前运行的系统文件 100% 保持现状，不修改、不删除任何本地原文件；
+* **解耦修复**：打包纯净底包时动态排除 `plugin-src/*`，并自动注入纯净版 `profiles/web/package.json`，确保新设备刷入后无死软链、健康自愈启动。
+
 在 `dsh-magisk` 分支根目录下，执行 `scripts/build-module.sh`：
 
 ### 1. 单独打包极速热更新包 (Lite)
