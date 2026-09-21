@@ -628,6 +628,18 @@ def cmd_list():
                           deletable=not official and name not in builtin.builtin_names()))
         update = updates.get(name, {})
         previous = lifecycle().history_info(name) if not official and name not in builtin.builtin_names() else {}
+        if not previous and name in builtin.builtin_names():
+            imported = os.path.join(DSH_HOME, 'plugin-src', name)
+            if os.path.isdir(local(imported)):
+                orig_cands = ["/root/" + name, "/root/dsha-" + name]
+                if name.startswith("dsh-"):
+                    orig_cands.insert(0, "/root/dsha-" + name[4:])
+                for c in orig_cands:
+                    p_json = local(os.path.join(c, "package.json"))
+                    if os.path.isfile(p_json):
+                        orig_pkg = read_json(p_json, {})
+                        previous = {'version': orig_pkg.get('version', '') + ' (预装底包)'}
+                        break
         items[-1].update(latestVersion=update.get('latestVersion', ''), updateAvailable=bool(update.get('available'))
                          and update.get('installedVersion') == str(pkg.get('version', '')),
                          updatePreviewId=update.get('previewId', ''), updateMessage=update.get('message', '')
