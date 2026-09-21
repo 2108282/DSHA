@@ -6,15 +6,18 @@ import android.graphics.Typeface;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.BaseAdapter;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
-import android.widget.TableLayout;
-import android.widget.TableRow;
+import android.widget.ListView;
 import android.widget.TextView;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * 极简 Excel 电子表格网格控件：支持水平与垂直双向滚动、表头高亮与斑马纹交替底色。
+ * 高性能 Excel 电子表格网格控件：
+ * 基于 ListView 虚拟视图回收机制，百万单元格内存恒定，测量零延迟。
  */
 public final class SheetTableGrid {
 
@@ -27,71 +30,110 @@ public final class SheetTableGrid {
             return empty;
         }
 
-        float dp = context.getResources().getDisplayMetrics().density;
-        int cellPadH = (int) (12 * dp);
-        int cellPadV = (int) (8 * dp);
+        final float dp = context.getResources().getDisplayMetrics().density;
+        final int cellPadH = (int) (12 * dp);
+        final int cellPadV = (int) (8 * dp);
 
-        ScrollView vertScroll = new ScrollView(context);
-        vertScroll.setLayoutParams(new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        vertScroll.setBackgroundColor(Color.TRANSPARENT);
-
-        HorizontalScrollView horizScroll = new HorizontalScrollView(context);
-        horizScroll.setLayoutParams(new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        horizScroll.setBackgroundColor(Color.TRANSPARENT);
-
-        TableLayout table = new TableLayout(context);
-        table.setLayoutParams(new HorizontalScrollView.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        table.setBackgroundColor(Color.parseColor("#33888888")); // 细网格边框底色
-
-        String[] lines = tsvContent.split("\n");
-        boolean isHeader = true;
-
-        for (int rowIdx = 0; rowIdx < lines.length; rowIdx++) {
-            String line = lines[rowIdx];
-            if (line.trim().isEmpty()) continue;
-
-            if (line.startsWith("--- 工作表")) {
-                // 工作表分界行
-                TableRow sepRow = new TableRow(context);
-                TextView sepText = new TextView(context);
-                sepText.setText(line);
-                sepText.setTextColor(Color.parseColor("#4C8DFF"));
-                sepText.setTextSize(13);
-                sepText.setTypeface(Typeface.DEFAULT_BOLD);
-                sepText.setPadding(cellPadH, cellPadV, cellPadH, cellPadV);
-                sepRow.addView(sepText);
-                table.addView(sepRow);
-                isHeader = true;
-                continue;
-            }
-
-            TableRow row = new TableRow(context);
-            // 斑马纹交替行底色
-            int rowBg = isHeader ? Color.parseColor("#284C8DFF") :
-                    (rowIdx % 2 == 0 ? Color.parseColor("#1E1E1E") : Color.parseColor("#262626"));
-            row.setBackgroundColor(rowBg);
-
-            String[] cells = line.split("\t", -1);
-            for (String cellText : cells) {
-                TextView tv = new TextView(context);
-                tv.setText(cellText);
-                tv.setTextSize(isHeader ? 13 : 12);
-                tv.setTextColor(isHeader ? Color.WHITE : Color.parseColor("#E0E0E0"));
-                if (isHeader) tv.setTypeface(Typeface.DEFAULT_BOLD);
-                tv.setPadding(cellPadH, cellPadV, cellPadH, cellPadV);
-                tv.setGravity(Gravity.CENTER_VERTICAL);
-                row.addView(tv);
-            }
-
-            table.addView(row);
-            if (isHeader) isHeader = false;
+        // 解析行与列数据（纯内存字符串切分，极速）
+        String[] rawLines = tsvContent.split("\n");
+        final List<String[]> rowDataList = new ArrayList<>();
+        int maxCols = 0;
+        for (String l : rawLines) {
+            if (l.trim().isEmpty()) continue;
+            String[] cols = l.split("\t", -1);
+            if (cols.length > maxCols) maxCols = cols.length;
+            rowDataList.add(cols);
+            if (rowDataList.size() >= 2000) break; // 最多显示前 2000 行，防病态大表
         }
 
-        horizScroll.addView(table);
-        vertScroll.addView(horizScroll);
-        return vertScroll;
+        final int finalMaxCols = maxCols;
+
+        // 水平滚动包裹 ListView
+        HorizontalScrollView hsv = new HorizontalScrollView(context);
+        hsv.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        hsv.setBackgroundColor(Color.TRANSPARENT);
+
+        ListView lv = new ListView(context);
+        // 按最大列数估算宽度，确保横向可以滑出所有列（每列预留 120dp）
+        int estimatedWidth = Math.max((int) (finalMaxCols * 120 * dp), context.getResources().getDisplayMetrics().widthPixels);
+        lv.setLayoutParams(new HorizontalScrollView.LayoutParams(
+                estimatedWidth, ViewGroup.LayoutParams.MATCH_PARENT));
+        lv.setBackgroundColor(Color.TRANSPARENT);
+        lv.setDivider(null);
+
+        lv.setAdapter(new BaseAdapter() {
+            @Override public int getCount() { return rowDataList.size(); }
+            @Override public Object getItem(int position) { return rowDataList.get(position); }
+            @Override public long getItemId(int position) { return position; }
+
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                LinearLayout row;
+                if (convertView instanceof LinearLayout) {
+                    row = (LinearLayout) convertView;
+                } else {
+                    row = new LinearLayout(context);
+                    row.setOrientation(LinearLayout.HORIZONTAL);
+                    row.setGravity(Gravity.CENTER_VERTICAL);
+                }
+
+                String[] cells = rowDataList.get(position);
+                boolean isHeader = (position == 0);
+                boolean isSeparator = (cells.length == 1 && cells[0].startsWith("--- 工作表"));
+
+                int rowBg = isSeparator ? Color.parseColor("#334C8DFF") :
+                        (isHeader ? Color.parseColor("#284C8DFF") :
+                                (position % 2 == 0 ? Color.parseColor("#15FFFFFF") : Color.parseColor("#08FFFFFF")));
+                row.setBackgroundColor(rowBg);
+
+                // 动态调整子 TextView 数量（ViewHolder 复用）
+                int childCount = row.getChildCount();
+                int targetCount = Math.max(cells.length, finalMaxCols);
+
+                for (int i = 0; i < targetCount; i++) {
+                    TextView tv;
+                    if (i < childCount) {
+                        tv = (TextView) row.getChildAt(i);
+                        tv.setVisibility(View.VISIBLE);
+                    } else {
+                        tv = new TextView(context);
+                        tv.setPadding(cellPadH, cellPadV, cellPadH, cellPadV);
+                        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                                (int) (120 * dp), ViewGroup.LayoutParams.WRAP_CONTENT);
+                        tv.setLayoutParams(lp);
+                        tv.setGravity(Gravity.CENTER_VERTICAL);
+                        row.addView(tv);
+                    }
+
+                    if (isSeparator) {
+                        if (i == 0) {
+                            tv.setText(cells[0]);
+                            tv.setTextColor(Color.parseColor("#4C8DFF"));
+                            tv.setTypeface(Typeface.DEFAULT_BOLD);
+                            tv.setTextSize(13);
+                        } else {
+                            tv.setText("");
+                        }
+                    } else {
+                        String txt = (i < cells.length) ? cells[i] : "";
+                        tv.setText(txt);
+                        tv.setTextSize(isHeader ? 13 : 12);
+                        tv.setTextColor(isHeader ? Color.WHITE : Color.parseColor("#E0E0E0"));
+                        tv.setTypeface(isHeader ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+                    }
+                }
+
+                // 隐藏多余的子 View
+                for (int i = targetCount; i < row.getChildCount(); i++) {
+                    row.getChildAt(i).setVisibility(View.GONE);
+                }
+
+                return row;
+            }
+        });
+
+        hsv.addView(lv);
+        return hsv;
     }
 }

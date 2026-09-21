@@ -224,6 +224,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     // 抽屉内置万能查看器组件
     private FrameLayout fileViewerContainer;
     private File currentViewingFile;
+    private long currentFileLoadEpoch = 0;
     private io.github.rosemoe.sora.widget.CodeEditor currentCodeEditor;
     private android.graphics.pdf.PdfRenderer currentPdfRenderer;
     private ParcelFileDescriptor currentPdfPfd;
@@ -2135,7 +2136,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         sCachedWebView.evaluateJavascript(js, null);
     }
 
-    // ---------------- 抽屉内置万能查看器核心引擎 ----------------
+    // ---------------- 抽屉内置万能查看器核心引擎（异步化多线程加载架构） ----------------
     public void openFileInSheet(String path) {
         if (path == null || path.isEmpty()) return;
         File file = new File(path);
@@ -2145,13 +2146,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         }
 
         currentViewingFile = file;
-        com.deepseekharness.app.viewer.FileTypeClassifier.FileType ft =
-                com.deepseekharness.app.viewer.FileTypeClassifier.classify(file);
+        final long thisEpoch = ++currentFileLoadEpoch;
 
-        // 1. 顶栏切换至文档模式（排版居中受限，绝不遮挡左右按钮）
+        // 1. 顶栏瞬间切换至文档模式（排版居中受限，绝不遮挡左右按钮）
         headerTitle.setText(file.getName());
         if (headerSubTitle != null) {
-            headerSubTitle.setText(formatFileSize(file.length()) + " · " + ft.kind.name());
+            headerSubTitle.setText(formatFileSize(file.length()) + " · 加载中…");
             headerSubTitle.setVisibility(View.VISIBLE);
         }
         btnClose.setIconType(ICON_BACK); // 切换为 ‹ 返回箭头
@@ -2160,35 +2160,174 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         btnNewChat.setVisibility(View.GONE);
         btnFullscreen.setVisibility(View.GONE);
         if (btnFileOpenExternal != null) btnFileOpenExternal.setVisibility(View.VISIBLE);
+        if (btnFileSave != null) btnFileSave.setVisibility(View.GONE);
 
-        // 2. 容器切换（背景设为透明，彻底透出抽屉原有的毛玻璃底色与壁纸）
+        // 2. 容器瞬间切换，展示居中半透明加载圈，主线程 0 阻塞！
         fileViewerContainer.removeAllViews();
         fileViewerContainer.setBackgroundColor(Color.TRANSPARENT);
         fileViewerContainer.setVisibility(View.VISIBLE);
         if (sCachedWebView != null) sCachedWebView.setVisibility(View.GONE);
 
-        // 3. 按照类型加载具体查看/编辑器
-        if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.OFFICE) {
-            btnFileSave.setVisibility(View.GONE);
-            loadSheetOfficeViewer(file);
-        } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.TEXT && file.length() <= 5 * 1024 * 1024) {
-            loadSheetTextEditor(file);
-        } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.IMAGE) {
-            btnFileSave.setVisibility(View.GONE);
-            loadSheetImageViewer(file);
-        } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.PDF) {
-            btnFileSave.setVisibility(View.GONE);
-            loadSheetPdfViewer(file);
-        } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.ARCHIVE) {
-            btnFileSave.setVisibility(View.GONE);
-            loadSheetArchiveViewer(file);
-        } else {
-            btnFileSave.setVisibility(View.GONE);
-            loadSheetHexViewer(file);
-        }
+        ProgressBar loadingSpinner = new ProgressBar(this);
+        FrameLayout.LayoutParams spinLp = new FrameLayout.LayoutParams(dpToPx(36), dpToPx(36));
+        spinLp.gravity = Gravity.CENTER;
+        fileViewerContainer.addView(loadingSpinner, spinLp);
+
+        // 3. 异步后台工作线程：执行重度 I/O、XML解压解析与大图降采样解码
+        new Thread(() -> {
+            final com.deepseekharness.app.viewer.FileTypeClassifier.FileType ft =
+                    com.deepseekharness.app.viewer.FileTypeClassifier.classify(file);
+
+            if (thisEpoch != currentFileLoadEpoch) return;
+
+            if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.OFFICE) {
+                String content = null;
+                String name = file.getName().toLowerCase();
+                if (name.endsWith(".docx")) {
+                    content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractDocx(file);
+                } else if (name.endsWith(".doc")) {
+                    content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractDoc(file);
+                } else if (name.endsWith(".xlsx")) {
+                    content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractXlsx(file);
+                }
+                final String finalOfficeContent = content;
+                runOnUiThread(() -> {
+                    if (thisEpoch != currentFileLoadEpoch) return;
+                    fileViewerContainer.removeAllViews();
+                    if (headerSubTitle != null) {
+                        headerSubTitle.setText(formatFileSize(file.length()) + " · " + ft.kind.name());
+                    }
+                    if (finalOfficeContent != null && !finalOfficeContent.isEmpty()) {
+                        if (name.endsWith(".xlsx")) {
+                            View gridView = com.deepseekharness.app.viewer.SheetTableGrid.createGridView(this, finalOfficeContent);
+                            fileViewerContainer.addView(gridView);
+                        } else {
+                            io.github.rosemoe.sora.widget.CodeEditor editor = new io.github.rosemoe.sora.widget.CodeEditor(this);
+                            editor.setLayoutParams(new FrameLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                            editor.setColorScheme(createTransparentColorScheme());
+                            editor.setBackgroundColor(Color.TRANSPARENT);
+                            editor.setTextSize(13);
+                            editor.setLineNumberEnabled(false);
+                            editor.setEditable(false);
+                            editor.setWordwrap(true);
+                            editor.setText(finalOfficeContent);
+                            fileViewerContainer.addView(editor);
+                        }
+                    } else {
+                        Toast.makeText(this, "Office 结构复杂，已转为十六进制视图", Toast.LENGTH_SHORT).show();
+                        loadSheetHexViewer(file);
+                    }
+                });
+            } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.TEXT) {
+                String textData = null;
+                try {
+                    int maxRead = (int) Math.min(file.length(), 2 * 1024 * 1024);
+                    byte[] bytes = new byte[maxRead];
+                    try (FileInputStream fis = new FileInputStream(file)) {
+                        fis.read(bytes);
+                    }
+                    textData = new String(bytes, StandardCharsets.UTF_8);
+                    if (file.length() > maxRead) {
+                        textData += "\n\n/* ----- (文件过大，仅加载前 2MB 内容) ----- */";
+                    }
+                } catch (Exception ignored) {}
+                final String finalText = textData;
+                runOnUiThread(() -> {
+                    if (thisEpoch != currentFileLoadEpoch) return;
+                    fileViewerContainer.removeAllViews();
+                    if (headerSubTitle != null) {
+                        headerSubTitle.setText(formatFileSize(file.length()) + " · TEXT");
+                    }
+                    if (finalText != null) {
+                        if (btnFileSave != null) btnFileSave.setVisibility(View.VISIBLE);
+                        currentCodeEditor = new io.github.rosemoe.sora.widget.CodeEditor(this);
+                        currentCodeEditor.setLayoutParams(new FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                        currentCodeEditor.setColorScheme(createTransparentColorScheme());
+                        currentCodeEditor.setBackgroundColor(Color.TRANSPARENT);
+                        currentCodeEditor.setTextSize(13);
+                        currentCodeEditor.setLineNumberEnabled(true);
+                        currentCodeEditor.setWordwrap(true);
+                        currentCodeEditor.setText(finalText);
+                        fileViewerContainer.addView(currentCodeEditor);
+                    } else {
+                        loadSheetHexViewer(file);
+                    }
+                });
+            } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.IMAGE) {
+                Bitmap decoded = null;
+                try {
+                    android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+                    opts.inJustDecodeBounds = true;
+                    android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath(), opts);
+                    int reqW = getResources().getDisplayMetrics().widthPixels;
+                    int reqH = getResources().getDisplayMetrics().heightPixels;
+                    int sample = 1;
+                    if (opts.outHeight > reqH || opts.outWidth > reqW) {
+                        int halfH = opts.outHeight / 2;
+                        int halfW = opts.outWidth / 2;
+                        while ((halfH / sample) >= reqH && (halfW / sample) >= reqW) {
+                            sample *= 2;
+                        }
+                    }
+                    opts.inSampleSize = sample;
+                    opts.inJustDecodeBounds = false;
+                    decoded = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath(), opts);
+                } catch (Throwable ignored) {}
+                final Bitmap finalBmp = decoded;
+                runOnUiThread(() -> {
+                    if (thisEpoch != currentFileLoadEpoch) return;
+                    fileViewerContainer.removeAllViews();
+                    if (headerSubTitle != null) {
+                        headerSubTitle.setText(formatFileSize(file.length()) + " · IMAGE");
+                    }
+                    if (finalBmp != null) {
+                        TouchImageView iv = new TouchImageView(this);
+                        iv.setLayoutParams(new FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                        iv.setBackgroundColor(Color.TRANSPARENT);
+                        iv.setImageBitmap(finalBmp);
+                        fileViewerContainer.addView(iv);
+                    } else {
+                        loadSheetHexViewer(file);
+                    }
+                });
+            } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.PDF) {
+                runOnUiThread(() -> {
+                    if (thisEpoch != currentFileLoadEpoch) return;
+                    fileViewerContainer.removeAllViews();
+                    if (headerSubTitle != null) {
+                        headerSubTitle.setText(formatFileSize(file.length()) + " · PDF");
+                    }
+                    loadSheetPdfViewer(file);
+                });
+            } else if (ft.kind == com.deepseekharness.app.viewer.FileTypeClassifier.FileKind.ARCHIVE) {
+                final java.util.List<com.deepseekharness.app.viewer.ArchiveBrowser.Entry> entries =
+                        com.deepseekharness.app.viewer.ArchiveBrowser.listEntries(file);
+                runOnUiThread(() -> {
+                    if (thisEpoch != currentFileLoadEpoch) return;
+                    fileViewerContainer.removeAllViews();
+                    if (headerSubTitle != null) {
+                        headerSubTitle.setText(formatFileSize(file.length()) + " · ARCHIVE");
+                    }
+                    bindSheetArchiveListView(file, entries);
+                });
+            } else {
+                runOnUiThread(() -> {
+                    if (thisEpoch != currentFileLoadEpoch) return;
+                    fileViewerContainer.removeAllViews();
+                    if (headerSubTitle != null) {
+                        headerSubTitle.setText(formatFileSize(file.length()) + " · HEX");
+                    }
+                    loadSheetHexViewer(file);
+                });
+            }
+        }, "dsha-file-async-loader").start();
     }
 
     public void closeFileViewer() {
+        currentFileLoadEpoch++; // 立即作废未完成的后台加载任务
         if (fileViewerContainer != null) {
             fileViewerContainer.removeAllViews();
             fileViewerContainer.setVisibility(View.GONE);
@@ -2236,66 +2375,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         return scheme;
     }
 
-    private void loadSheetTextEditor(File file) {
-        if (btnFileSave != null) btnFileSave.setVisibility(View.VISIBLE);
-        currentCodeEditor = new io.github.rosemoe.sora.widget.CodeEditor(this);
-        currentCodeEditor.setLayoutParams(new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        currentCodeEditor.setColorScheme(createTransparentColorScheme());
-        currentCodeEditor.setBackgroundColor(Color.TRANSPARENT);
-        currentCodeEditor.setTextSize(13);
-        currentCodeEditor.setLineNumberEnabled(true);
-        currentCodeEditor.setWordwrap(true);
-
-        try {
-            byte[] bytes = new byte[(int) file.length()];
-            try (FileInputStream fis = new FileInputStream(file)) {
-                fis.read(bytes);
-            }
-            currentCodeEditor.setText(new String(bytes, StandardCharsets.UTF_8));
-        } catch (Exception e) {
-            Toast.makeText(this, "读取失败：" + e.getMessage(), Toast.LENGTH_SHORT).show();
-        }
-        fileViewerContainer.addView(currentCodeEditor);
-    }
-
-    private void loadSheetOfficeViewer(File file) {
-        String content = null;
-        String name = file.getName().toLowerCase();
-        if (name.endsWith(".docx")) {
-            content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractDocx(file);
-        } else if (name.endsWith(".doc")) {
-            // 方案 A：老旧二进制 doc 格式纯文本嗅探提取
-            content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractDoc(file);
-        } else if (name.endsWith(".xlsx")) {
-            content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractXlsx(file);
-            if (content != null && !content.isEmpty()) {
-                // 渲染为真实 Excel 电子表格网格视图！
-                View gridView = com.deepseekharness.app.viewer.SheetTableGrid.createGridView(this, content);
-                fileViewerContainer.addView(gridView);
-                return;
-            }
-        }
-
-        if (content != null && !content.isEmpty()) {
-            io.github.rosemoe.sora.widget.CodeEditor editor = new io.github.rosemoe.sora.widget.CodeEditor(this);
-            editor.setLayoutParams(new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            editor.setColorScheme(createTransparentColorScheme());
-            editor.setBackgroundColor(Color.TRANSPARENT);
-            editor.setTextSize(13);
-            editor.setLineNumberEnabled(false);
-            editor.setEditable(false);
-            editor.setWordwrap(true);
-            editor.setText(content);
-            fileViewerContainer.addView(editor);
-            return;
-        }
-
-        Toast.makeText(this, "Office 结构复杂或未识别，已切换为十六进制数据视图", Toast.LENGTH_SHORT).show();
-        loadSheetHexViewer(file);
-    }
-
     private void saveCurrentEditorText() {
         if (currentCodeEditor == null || currentViewingFile == null) return;
         try {
@@ -2313,19 +2392,6 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         } catch (Exception e) {
             Toast.makeText(this, "保存出错：" + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
-    }
-
-    private void loadSheetImageViewer(File file) {
-        TouchImageView iv = new TouchImageView(this);
-        iv.setLayoutParams(new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        // 图片底色设为透明，周围直接透出毛玻璃壁纸，绝不黑屏！
-        iv.setBackgroundColor(Color.TRANSPARENT);
-        try {
-            Bitmap bmp = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath());
-            if (bmp != null) iv.setImageBitmap(bmp);
-        } catch (Throwable ignored) {}
-        fileViewerContainer.addView(iv);
     }
 
     private void loadSheetPdfViewer(File file) {
@@ -2372,9 +2438,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         }
     }
 
-    private void loadSheetArchiveViewer(File file) {
-        java.util.List<com.deepseekharness.app.viewer.ArchiveBrowser.Entry> entries =
-                com.deepseekharness.app.viewer.ArchiveBrowser.listEntries(file);
+    private void bindSheetArchiveListView(File file, java.util.List<com.deepseekharness.app.viewer.ArchiveBrowser.Entry> entries) {
         android.widget.ListView lv = new android.widget.ListView(this);
         lv.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
