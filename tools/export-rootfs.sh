@@ -87,7 +87,7 @@ BASE_EXCLUDES=(
 # 压缩引擎选择 (优先多线程 pigz)
 COMPRESS_CMD="gzip -1"
 if command -v pigz >/dev/null 2>&1; then
-    COMPRESS_CMD="pigz -p 4 -1"
+    COMPRESS_CMD="pigz -p 6 -7"
 fi
 
 if [ "$MODE" = "clone" ]; then
@@ -190,6 +190,18 @@ EOF_PKG
         # 排除临时文件、缓存、日志与命令历史
         "--exclude=./root/.bash_history"
         "--exclude=./root/.cache/*"
+        # 排除 npm 与 pnpm 离线下载缓存与全局存储 (省下约 1GB 冗余死重)
+        "--exclude=./root/.local/*"
+        "--exclude=./root/.npm/*"
+        "--exclude=./root/.npmrc"
+        "--exclude=./root/.agents/*"
+        "--exclude=./root/.config/*"
+        "--exclude=./root/.dsha-backup*"
+        "--exclude=./root/.dsha-restore*"
+        "--exclude=./root/*.bak*"
+        "--exclude=./var/log/*"
+        "--exclude=./var/tmp/*"
+
         "--exclude=./root/*.log"
         "--exclude=./root/.*.pid"
         "--exclude=./root/.dsh.pre-restore*"
