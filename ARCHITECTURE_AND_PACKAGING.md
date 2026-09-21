@@ -48,7 +48,7 @@ dsh-magisk 分支仓库根目录
 
 引擎只做通用的 1:1 递归镜像映射与语法安全断言，**内部零硬编码业务文件名**：
 
-1. **原料解压**：下载并解压基准底包（`0.1.5rc.2-base/rootfs.tar.gz`）；
+1. **原料解压**：下载并解压基准底包（`rootfs/rootfs.tar.gz (0.1.6 原生底包)`）；
 2. **通用物理净化**：自动清理旧系统遗留标记、缓存与失效补丁；
 3. **动态反射镜像叠加**：
    - 遍历 `rootfs-overlay/` 下的所有文件与目录，**1:1 精准覆盖**到目标系统同名路径；
@@ -145,7 +145,7 @@ dsh-magisk 分支仓库根目录
   ```bash
   bash scripts/build-module.sh
   ```
-  *(若本地无底包，会自动从 Release `0.1.5rc.2-base` 下载纯净原料并自动动态熔铸)*
+  *(若本地无底包，会自动从 Release `rootfs` 下载纯净原料并自动动态熔铸)*
 - **打包 Lite 热更新包**（仅脚本与补丁，~15KB）：
   ```bash
   bash scripts/build-module.sh --lite
@@ -155,4 +155,4 @@ dsh-magisk 分支仓库根目录
 每次 push 到 `dsh-magisk` 分支，GitHub Actions（`.github/workflows/magisk-module-build.yml`）会自动并发产出：
 1. **`dsha_patch_updater_lite` (即 `dsha_ksu_native_lite.zip`)**：纯脚本增量热更新包；
 2. **`dsha_ksu_native_full` (`dsha_ksu_native_full.zip`)**：全内置完整刷机包；
-3. **底包 Release 与分支持久化**：自动同步更新 Release 直链与「0.1.5rc.2底包」分支分卷。
+3. **底包 Release 与分支持久化**：自动同步更新 Release 直链与「rootfs」分支分卷。

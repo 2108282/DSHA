@@ -9,7 +9,7 @@
 >   1. **面向 Full 完整包**：按 1:1 目录放入 `rootfs-overlay/`，编译底包时直接装进去；
 >   2. **面向 Lite 热更新包**：在 `magisk-module/scripts/` 下写一个现场执行的增量 `.sh` 脚本，用户刷 Lite 包时音量键选择现场执行！
 > * 打包机制请参阅：👉 **[ARCHITECTURE_AND_PACKAGING.md](./ARCHITECTURE_AND_PACKAGING.md)**；
-> * 底包发布至 Release [Tag: `0.1.5rc.2-base`](https://github.com/2108282/DSHA/releases/tag/0.1.5rc.2-base) 与 [0.1.5rc.2底包 分支](https://github.com/2108282/DSHA/tree/0.1.5rc.2底包)。
+> * 底包发布至 Release [Tag: `rootfs`](https://github.com/2108282/DSHA/releases/tag/rootfs) 与 [rootfs 分支](https://github.com/2108282/DSHA/tree/rootfs)。
 
 ---
 

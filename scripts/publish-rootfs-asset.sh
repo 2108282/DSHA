@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOTFS_TAR="${1:-magisk-module/rootfs.tar.gz}"
-TARGET_TAG="${2:-0.1.5rc.2-base}"
-BRANCH_NAME="${3:-0.1.5rc.2底包}"
+TARGET_TAG="${2:-rootfs}"
+BRANCH_NAME="${3:-rootfs}"
 REPO="${GITHUB_REPOSITORY:-2108282/DSHA}"
 TOKEN="${GH_TOKEN:-}"
 
