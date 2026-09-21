@@ -226,8 +226,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private File currentViewingFile;
     private long currentFileLoadEpoch = 0;
     private io.github.rosemoe.sora.widget.CodeEditor currentCodeEditor;
-    private android.graphics.pdf.PdfRenderer currentPdfRenderer;
-    private ParcelFileDescriptor currentPdfPfd;
+    private com.deepseekharness.app.viewer.SheetPdfAdapter currentPdfAdapter;
 
     private int screenHeight = 0;
     private int defaultHeight = 0;
@@ -2335,12 +2334,10 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         if (sCachedWebView != null) {
             sCachedWebView.setVisibility(View.VISIBLE);
         }
-        try {
-            if (currentPdfRenderer != null) currentPdfRenderer.close();
-            if (currentPdfPfd != null) currentPdfPfd.close();
-        } catch (Exception ignored) {}
-        currentPdfRenderer = null;
-        currentPdfPfd = null;
+        if (currentPdfAdapter != null) {
+            currentPdfAdapter.release();
+            currentPdfAdapter = null;
+        }
         currentCodeEditor = null;
         currentViewingFile = null;
 
@@ -2396,44 +2393,21 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     private void loadSheetPdfViewer(File file) {
         try {
-            currentPdfPfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
-            currentPdfRenderer = new android.graphics.pdf.PdfRenderer(currentPdfPfd);
+            if (currentPdfAdapter != null) {
+                currentPdfAdapter.release();
+                currentPdfAdapter = null;
+            }
+            currentPdfAdapter = new com.deepseekharness.app.viewer.SheetPdfAdapter(this, file);
 
             android.widget.ListView listView = new android.widget.ListView(this);
             listView.setLayoutParams(new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
             listView.setBackgroundColor(Color.TRANSPARENT);
             listView.setDivider(null);
-            listView.setAdapter(new android.widget.BaseAdapter() {
-                @Override public int getCount() { return currentPdfRenderer.getPageCount(); }
-                @Override public Object getItem(int position) { return position; }
-                @Override public long getItemId(int position) { return position; }
-                @Override
-                public View getView(int position, View convertView, ViewGroup parent) {
-                    android.widget.ImageView pageView;
-                    if (convertView instanceof android.widget.ImageView) {
-                        pageView = (android.widget.ImageView) convertView;
-                    } else {
-                        pageView = new android.widget.ImageView(QuickChatSheetActivity.this);
-                        pageView.setLayoutParams(new android.widget.ListView.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-                        pageView.setAdjustViewBounds(true);
-                        pageView.setPadding(0, 0, 0, dpToPx(8));
-                    }
-                    try {
-                        android.graphics.pdf.PdfRenderer.Page page = currentPdfRenderer.openPage(position);
-                        int width = getResources().getDisplayMetrics().widthPixels;
-                        int height = (int) ((float) width / page.getWidth() * page.getHeight());
-                        Bitmap bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-                        page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-                        pageView.setImageBitmap(bmp);
-                        page.close();
-                    } catch (Exception ignored) {}
-                    return pageView;
-                }
-            });
+            listView.setAdapter(currentPdfAdapter);
             fileViewerContainer.addView(listView);
         } catch (Exception e) {
+            Toast.makeText(this, "PDF打开异常，已切为十六进制", Toast.LENGTH_SHORT).show();
             loadSheetHexViewer(file);
         }
     }
