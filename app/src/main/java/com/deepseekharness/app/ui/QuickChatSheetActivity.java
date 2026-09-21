@@ -1222,19 +1222,24 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             sCachedWebView.setWebViewClient(createSheetWebViewClient());
             sCachedWebView.setWebChromeClient(new SheetChromeClient());
 
-            // 注入原生文件操作通道，打通网页文件树与附件的原生查看拦截及长按外部打开
+            // 注入原生文件操作通道，打通网页文件树与附件的原生查看拦截及长按三合一操作菜单
             sCachedWebView.addJavascriptInterface(new Object() {
                 @android.webkit.JavascriptInterface
                 public void openWorkspaceFile(String rawPath) {
-                    resolveAndHandleFile(rawPath, false);
+                    resolveAndHandleFile(rawPath, 0);
                 }
 
                 @android.webkit.JavascriptInterface
                 public void openExternalFile(String rawPath) {
-                    resolveAndHandleFile(rawPath, true);
+                    resolveAndHandleFile(rawPath, 1);
                 }
 
-                private void resolveAndHandleFile(String rawPath, boolean external) {
+                @android.webkit.JavascriptInterface
+                public void showFileActionMenu(String rawPath) {
+                    resolveAndHandleFile(rawPath, 2);
+                }
+
+                private void resolveAndHandleFile(String rawPath, int action) {
                     if (rawPath == null || rawPath.isEmpty()) return;
                     String path = rawPath;
                     try {
@@ -1256,8 +1261,10 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
                     final String finalPath = path;
                     runOnUiThread(() -> {
-                        if (external) {
-                            File f = new File(finalPath);
+                        File f = new File(finalPath);
+                        if (action == 2) {
+                            showWorkspaceFileActionMenu(f);
+                        } else if (action == 1) {
                             com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(QuickChatSheetActivity.this, f);
                         } else {
                             openFileInSheet(finalPath);
@@ -1642,26 +1649,26 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "    var touchStartX = 0, touchStartY = 0;\n"
                         + "    var isLongPressTriggered = false;\n"
                         + "\n"
-                        + "    function findTargetFile(e) {\n"
+                        + "    function findTargetFile(e, allowDirectory) {\n"
                         + "      var el = e.target && e.target.closest ? e.target.closest('[data-files-entry], a[href*=\"/sdcard/Download/DSHA/工作区/\"], a[href*=\"dsh-resource://file\"]') : null;\n"
                         + "      if (!el) return null;\n"
                         + "      var entryType = el.getAttribute('data-files-entry');\n"
-                        + "      if (entryType === 'directory') return null; /* 文件夹绝对不拦截，放行让网页折叠与展开 */\n"
+                        + "      if (!allowDirectory && entryType === 'directory') return null; /* 短按：文件夹绝对不拦截，放行让网页折叠与展开 */\n"
                         + "      var p = el.getAttribute('data-files-path') || el.getAttribute('href');\n"
                         + "      return p;\n"
                         + "    }\n"
                         + "\n"
                         + "    document.addEventListener('touchstart', function(e) {\n"
                         + "      isLongPressTriggered = false;\n"
-                        + "      var p = findTargetFile(e);\n"
+                        + "      var p = findTargetFile(e, true); /* 长按：文件与文件夹均支持呼出操作菜单 */\n"
                         + "      if (!p) return;\n"
                         + "      touchStartX = e.touches[0].clientX;\n"
                         + "      touchStartY = e.touches[0].clientY;\n"
                         + "      clearTimeout(longPressTimer);\n"
                         + "      longPressTimer = setTimeout(function() {\n"
                         + "        isLongPressTriggered = true;\n"
-                        + "        if (window.DshaNativeBridge && window.DshaNativeBridge.openExternalFile) {\n"
-                        + "          window.DshaNativeBridge.openExternalFile(p);\n"
+                        + "        if (window.DshaNativeBridge && window.DshaNativeBridge.showFileActionMenu) {\n"
+                        + "          window.DshaNativeBridge.showFileActionMenu(p);\n"
                         + "        }\n"
                         + "      }, 480);\n"
                         + "    }, { passive: true, capture: true });\n"
@@ -1691,7 +1698,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "        e.stopPropagation();\n"
                         + "        return;\n"
                         + "      }\n"
-                        + "      var p = findTargetFile(e);\n"
+                        + "      var p = findTargetFile(e, false);\n"
                         + "      if (p && window.DshaNativeBridge && window.DshaNativeBridge.openWorkspaceFile) {\n"
                         + "        e.preventDefault();\n"
                         + "        e.stopPropagation();\n"
@@ -2133,6 +2140,105 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 "  }" +
                 "})();";
         sCachedWebView.evaluateJavascript(js, null);
+    }
+
+    private void reloadWorkspaceFileTree() {
+        if (sCachedWebView == null) return;
+        sCachedWebView.evaluateJavascript("var btn = document.querySelector('[data-files-reload]'); if (btn) btn.click();", null);
+    }
+
+    // ---------------- 长按三合一文件操作菜单：外部打开 · 重命名 · 删除 ----------------
+    private void showWorkspaceFileActionMenu(final File file) {
+        if (file == null || !file.exists()) {
+            Toast.makeText(this, "目标不存在", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        final boolean isDir = file.isDirectory();
+        String[] options = new String[]{
+                "↗  调用系统打开方式",
+                "✏️  重命名",
+                "🗑️  删除" + (isDir ? "文件夹" : "")
+        };
+
+        new AlertDialog.Builder(this)
+                .setTitle((isDir ? "📁 " : "📄 ") + file.getName())
+                .setItems(options, (dialog, which) -> {
+                    if (which == 0) {
+                        // 1. 外部打开
+                        com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(this, file);
+                    } else if (which == 1) {
+                        // 2. 重命名
+                        promptRenameFile(file);
+                    } else if (which == 2) {
+                        // 3. 删除
+                        confirmDeleteFile(file);
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void promptRenameFile(final File file) {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setText(file.getName());
+        input.setSingleLine(true);
+        input.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
+        input.setTextColor(isDarkMode ? Color.WHITE : Color.BLACK);
+
+        new AlertDialog.Builder(this)
+                .setTitle("重命名 " + (file.isDirectory() ? "文件夹" : "文件"))
+                .setView(input)
+                .setPositiveButton("确定", (d, w) -> {
+                    String newName = input.getText().toString().trim();
+                    if (newName.isEmpty() || newName.equals(file.getName())) return;
+                    File target = new File(file.getParentFile(), newName);
+                    if (target.exists()) {
+                        Toast.makeText(this, "同名目标已存在", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (file.renameTo(target)) {
+                        Toast.makeText(this, "✓ 重命名成功", Toast.LENGTH_SHORT).show();
+                        reloadWorkspaceFileTree();
+                    } else {
+                        Toast.makeText(this, "重命名失败", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void confirmDeleteFile(final File file) {
+        new AlertDialog.Builder(this)
+                .setTitle("删除确认")
+                .setMessage("确定要彻底删除 " + (file.isDirectory() ? "文件夹" : "文件") + "「" + file.getName() + "」吗？\n此操作不可撤销。")
+                .setPositiveButton("删除", (d, w) -> {
+                    boolean ok;
+                    if (file.isDirectory()) {
+                        ok = deleteRecursively(file);
+                    } else {
+                        ok = file.delete();
+                    }
+                    if (ok) {
+                        Toast.makeText(this, "✓ 已删除", Toast.LENGTH_SHORT).show();
+                        reloadWorkspaceFileTree();
+                    } else {
+                        Toast.makeText(this, "删除失败", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private boolean deleteRecursively(File dir) {
+        if (dir == null) return false;
+        if (dir.isDirectory()) {
+            File[] subs = dir.listFiles();
+            if (subs != null) {
+                for (File s : subs) deleteRecursively(s);
+            }
+        }
+        return dir.delete();
     }
 
     // ---------------- 抽屉内置万能查看器核心引擎（异步化多线程加载架构） ----------------
