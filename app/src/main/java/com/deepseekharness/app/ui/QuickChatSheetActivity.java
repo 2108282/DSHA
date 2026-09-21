@@ -38,6 +38,7 @@ import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
@@ -201,6 +202,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     }
 
     private FrameLayout rootOverlay;
+    private FrameLayout currentActiveDialogMask = null;
     private LinearLayout sheetCard;
     private FrameLayout webContainer;
     private View keyboardSpacer;
@@ -387,11 +389,34 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         animateIn();
     }
 
+    private void dismissActiveDialog() {
+        if (currentActiveDialogMask != null) {
+            if (rootOverlay != null && currentActiveDialogMask.getParent() == rootOverlay) {
+                rootOverlay.removeView(currentActiveDialogMask);
+            }
+            currentActiveDialogMask = null;
+        }
+    }
+
+    private void showDialogLayer(FrameLayout mask) {
+        if (mask == null || rootOverlay == null) return;
+        dismissActiveDialog();
+        mask.setElevation(dpToPx(60));
+        mask.setOutlineProvider(null);
+        mask.setClickable(true);
+        mask.setFocusable(true);
+        currentActiveDialogMask = mask;
+        rootOverlay.addView(mask);
+        mask.bringToFront();
+    }
+
     private void setupBackDispatcher() {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
-                if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
+                if (currentActiveDialogMask != null) {
+                    dismissActiveDialog();
+                } else if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
                     closeFileViewer();
                 } else if (sCachedWebView != null && sCachedWebView.canGoBack()) {
                     sCachedWebView.goBack();
@@ -1672,8 +1697,12 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "      clearTimeout(longPressTimer);\n"
                         + "      longPressTimer = setTimeout(function() {\n"
                         + "        isLongPressTriggered = true;\n"
-                        + "        if (window.DshaNativeBridge && window.DshaNativeBridge.showFileActionMenu) {\n"
-                        + "          window.DshaNativeBridge.showFileActionMenu(p);\n"
+                        + "        if (window.DshaNativeBridge) {\n"
+                        + "          if (window.DshaNativeBridge.showFileActionMenuAt) {\n"
+                        + "            window.DshaNativeBridge.showFileActionMenuAt(p, touchStartX, touchStartY);\n"
+                        + "          } else if (window.DshaNativeBridge.showFileActionMenu) {\n"
+                        + "            window.DshaNativeBridge.showFileActionMenu(p);\n"
+                        + "          }\n"
                         + "        }\n"
                         + "      }, 480);\n"
                         + "    }, { passive: true, capture: true });\n"
@@ -1782,6 +1811,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private void dismissSheet() {
         if (isDismissing) return;
         isDismissing = true;
+        dismissActiveDialog();
         cancelFileSelection();
 
         // 退出前顺带隐藏键盘
@@ -2178,6 +2208,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             return;
         }
 
+        // 触觉反馈：长按成功呼出气泡菜单
+        try {
+            rootOverlay.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        } catch (Throwable ignored) {}
+
         final boolean isDir = file.isDirectory();
         final MonetThemeHelper.Palette palette = MonetThemeHelper.resolve(
                 this, isDarkMode, new ConfigStore(this).isSheetMonetColor(),
@@ -2188,38 +2223,80 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         mask.setBackgroundColor(Color.TRANSPARENT);
         mask.setClickable(true);
+        mask.setFocusable(true);
 
         final LinearLayout menuCard = new LinearLayout(this);
         menuCard.setOrientation(LinearLayout.VERTICAL);
         int cardWidth = dpToPx(210);
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(cardWidth, ViewGroup.LayoutParams.WRAP_CONTENT);
 
-        // 智能定位：紧跟长按手指点击位置（防出界防遮挡）
+        // 智能定位：紧跟长按手指点击位置（根据 WebView 在当前窗口的物理坐标精确换算）
         int screenW = getResources().getDisplayMetrics().widthPixels;
         int screenH = getResources().getDisplayMetrics().heightPixels;
+        float density = getResources().getDisplayMetrics().density;
 
-        float posX = (touchX > 0) ? touchX - dpToPx(24) : (screenW - cardWidth) / 2f;
-        if (posX + cardWidth > screenW - dpToPx(16)) {
-            posX = screenW - cardWidth - dpToPx(16);
-        }
-        if (posX < dpToPx(16)) posX = dpToPx(16);
+        float posX;
+        float posY;
+        int estimatedCardH = dpToPx(175);
 
-        float posY = (touchY > 0) ? touchY : screenH * 0.4f;
-        if (posY > screenH * 0.65f) {
-            posY = posY - dpToPx(160); // 靠近底部时向上浮现
+        if (touchX >= 0 && touchY >= 0 && sCachedWebView != null) {
+            // 计算 WebView 相对 rootOverlay 的实际物理像素偏移
+            int[] rootLoc = new int[2];
+            rootOverlay.getLocationInWindow(rootLoc);
+            int[] webLoc = new int[2];
+            sCachedWebView.getLocationInWindow(webLoc);
+
+            float offsetX = webLoc[0] - rootLoc[0];
+            float offsetY = webLoc[1] - rootLoc[1];
+
+            // 触摸点在 rootOverlay 坐标系下的真实像素坐标
+            float realTouchX = offsetX + (touchX * density);
+            float realTouchY = offsetY + (touchY * density);
+
+            // 水平对齐：以手指为锚点微调，左右保留安全边距
+            posX = realTouchX - dpToPx(36);
+            if (posX + cardWidth > screenW - dpToPx(16)) {
+                posX = screenW - cardWidth - dpToPx(16);
+            }
+            if (posX < dpToPx(16)) {
+                posX = dpToPx(16);
+            }
+
+            // 垂直对齐：靠近底部时向上浮现（在手指上方 8dp），否则在手指下方 8dp 浮现
+            float bottomLimit = screenH - dpToPx(24);
+            if (realTouchY + estimatedCardH > bottomLimit) {
+                posY = realTouchY - estimatedCardH - dpToPx(8);
+            } else {
+                posY = realTouchY + dpToPx(8);
+            }
+
+            // 垂直防出界：顶部至少保留 60dp
+            if (posY < dpToPx(60)) {
+                posY = dpToPx(60);
+            }
+        } else {
+            // 兜底居中
+            posX = (screenW - cardWidth) / 2f;
+            posY = (screenH - estimatedCardH) / 2f;
         }
-        if (posY < dpToPx(60)) posY = dpToPx(60);
 
         cardLp.leftMargin = (int) posX;
         cardLp.topMargin = (int) posY;
         menuCard.setLayoutParams(cardLp);
-        menuCard.setElevation(dpToPx(18));
+        menuCard.setElevation(dpToPx(20));
 
-        // 样式 100% 继承抽屉：毛玻璃底色、圆角与微光描边
+        // 样式 100% 继承抽屉：高不透明度底色隔绝底层文字穿透，圆角与微光描边
         GradientDrawable cardBg = new GradientDrawable();
         cardBg.setShape(GradientDrawable.RECTANGLE);
         cardBg.setCornerRadius(dpToPx(16));
-        cardBg.setColor(palette.cardBgColor);
+        int menuBgColor;
+        if (isDarkMode) {
+            menuBgColor = Color.argb(0xFA, 0x1A, 0x22, 0x30);
+        } else {
+            int raw = palette.cardBgColor;
+            menuBgColor = Color.argb(0xF8, Color.red(raw), Color.green(raw), Color.blue(raw));
+        }
+        cardBg.setColor(menuBgColor);
         cardBg.setStroke(dpToPx(1), palette.borderColor);
         menuCard.setBackground(cardBg);
         menuCard.setPadding(dpToPx(4), dpToPx(6), dpToPx(4), dpToPx(6));
@@ -2239,35 +2316,28 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         sep.setBackgroundColor(palette.lineColor);
         menuCard.addView(sep);
 
-        // 菜单项构造器
-        Runnable dismissMenu = () -> {
-            if (mask.getParent() == rootOverlay) {
-                rootOverlay.removeView(mask);
-            }
-        };
-
-        mask.setOnClickListener(v -> dismissMenu.run());
+        mask.setOnClickListener(v -> dismissActiveDialog());
 
         // 1. 外部打开
         menuCard.addView(createMenuItem("↗   调用系统打开方式", palette.textColor, v -> {
-            dismissMenu.run();
+            dismissActiveDialog();
             com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(QuickChatSheetActivity.this, file);
         }));
 
         // 2. 重命名
         menuCard.addView(createMenuItem("✏️   重命名", palette.textColor, v -> {
-            dismissMenu.run();
+            dismissActiveDialog();
             promptRenameFileCustom(file, palette);
         }));
 
         // 3. 删除（警示红）
         menuCard.addView(createMenuItem("🗑️   删除" + (isDir ? "文件夹" : ""), Color.parseColor("#FF5252"), v -> {
-            dismissMenu.run();
+            dismissActiveDialog();
             confirmDeleteFileCustom(file, palette);
         }));
 
         mask.addView(menuCard);
-        rootOverlay.addView(mask);
+        showDialogLayer(mask);
     }
 
     private TextView createMenuItem(String text, int textColor, View.OnClickListener click) {
@@ -2299,19 +2369,29 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         mask.setBackgroundColor(Color.parseColor("#33000000"));
         mask.setClickable(true);
+        mask.setFocusable(true);
 
         final LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        int w = (int) (getResources().getDisplayMetrics().widthPixels * 0.82f);
+        int w = (int) (getResources().getDisplayMetrics().widthPixels * 0.84f);
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cardLp.gravity = Gravity.CENTER;
+        // 居中靠上（距顶 26%），给软键盘留出充足展示空间，彻底防止输入法遮挡
+        cardLp.gravity = Gravity.CENTER_HORIZONTAL;
+        cardLp.topMargin = (int) (getResources().getDisplayMetrics().heightPixels * 0.26f);
         card.setLayoutParams(cardLp);
-        card.setElevation(dpToPx(20));
+        card.setElevation(dpToPx(24));
 
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.RECTANGLE);
         bg.setCornerRadius(dpToPx(20));
-        bg.setColor(palette.cardBgColor);
+        int dialogBgColor;
+        if (isDarkMode) {
+            dialogBgColor = Color.argb(0xFA, 0x1A, 0x22, 0x30);
+        } else {
+            int raw = palette.cardBgColor;
+            dialogBgColor = Color.argb(0xF8, Color.red(raw), Color.green(raw), Color.blue(raw));
+        }
+        bg.setColor(dialogBgColor);
         bg.setStroke(dpToPx(1), palette.borderColor);
         card.setBackground(bg);
         card.setPadding(dpToPx(20), dpToPx(18), dpToPx(20), dpToPx(16));
@@ -2326,6 +2406,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         final android.widget.EditText input = new android.widget.EditText(this);
         input.setText(file.getName());
         input.setSingleLine(true);
+        input.setSelectAllOnFocus(true);
         input.setTextColor(palette.textColor);
         input.setTextSize(14);
         LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(
@@ -2349,7 +2430,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         btnBar.setGravity(Gravity.END);
 
         Runnable dismiss = () -> {
-            if (mask.getParent() == rootOverlay) rootOverlay.removeView(mask);
+            try {
+                InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) imm.hideSoftInputFromWindow(input.getWindowToken(), 0);
+            } catch (Throwable ignored) {}
+            dismissActiveDialog();
         };
         mask.setOnClickListener(v -> dismiss.run());
 
@@ -2390,8 +2475,15 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         card.addView(btnBar);
         mask.addView(card);
-        rootOverlay.addView(mask);
-        input.requestFocus();
+        showDialogLayer(mask);
+
+        input.postDelayed(() -> {
+            input.requestFocus();
+            try {
+                InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
+            } catch (Throwable ignored) {}
+        }, 120);
     }
 
     // ---------------- 抽屉同款毛玻璃 UI 删除确认弹窗 ----------------
@@ -2401,6 +2493,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         mask.setBackgroundColor(Color.parseColor("#33000000"));
         mask.setClickable(true);
+        mask.setFocusable(true);
 
         final LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -2408,12 +2501,19 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT);
         cardLp.gravity = Gravity.CENTER;
         card.setLayoutParams(cardLp);
-        card.setElevation(dpToPx(20));
+        card.setElevation(dpToPx(24));
 
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.RECTANGLE);
         bg.setCornerRadius(dpToPx(20));
-        bg.setColor(palette.cardBgColor);
+        int dialogBgColor;
+        if (isDarkMode) {
+            dialogBgColor = Color.argb(0xFA, 0x1A, 0x22, 0x30);
+        } else {
+            int raw = palette.cardBgColor;
+            dialogBgColor = Color.argb(0xF8, Color.red(raw), Color.green(raw), Color.blue(raw));
+        }
+        bg.setColor(dialogBgColor);
         bg.setStroke(dpToPx(1), palette.borderColor);
         card.setBackground(bg);
         card.setPadding(dpToPx(20), dpToPx(18), dpToPx(20), dpToPx(16));
@@ -2439,9 +2539,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         btnBar.setOrientation(LinearLayout.HORIZONTAL);
         btnBar.setGravity(Gravity.END);
 
-        Runnable dismiss = () -> {
-            if (mask.getParent() == rootOverlay) rootOverlay.removeView(mask);
-        };
+        Runnable dismiss = () -> dismissActiveDialog();
         mask.setOnClickListener(v -> dismiss.run());
 
         TextView btnCancel = new TextView(this);
@@ -2477,7 +2575,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         card.addView(btnBar);
         mask.addView(card);
-        rootOverlay.addView(mask);
+        showDialogLayer(mask);
     }
 
     private boolean deleteRecursively(File dir) {
