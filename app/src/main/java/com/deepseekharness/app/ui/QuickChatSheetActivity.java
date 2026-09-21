@@ -218,6 +218,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private HeaderIconButton btnNewChat;
     private HeaderIconButton btnFullscreen;
     private TextView btnFileSave;
+    private TextView btnFileOpenExternal;
     private View headerDivider;
 
     // 抽屉内置万能查看器组件
@@ -742,6 +743,20 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         btnFileSave.setOnClickListener(v -> saveCurrentEditorText());
         rightGroup.addView(btnFileSave);
 
+        // [⑥ ↗ 外部打开按钮] 处于查看文件时显示，随时调用系统「打开方式」
+        btnFileOpenExternal = new TextView(this);
+        btnFileOpenExternal.setText("↗ 外部");
+        btnFileOpenExternal.setTextColor(Color.parseColor("#4C8DFF"));
+        btnFileOpenExternal.setTextSize(14);
+        btnFileOpenExternal.setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6));
+        btnFileOpenExternal.setVisibility(View.GONE);
+        btnFileOpenExternal.setOnClickListener(v -> {
+            if (currentViewingFile != null) {
+                com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(this, currentViewingFile);
+            }
+        });
+        rightGroup.addView(btnFileOpenExternal);
+
         headerBar.addView(rightGroup);
 
         // 中间标题容器（严格被限制在左侧与右侧按钮组之间，永远不挤压也不遮挡按钮）
@@ -1207,10 +1222,19 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             sCachedWebView.setWebViewClient(createSheetWebViewClient());
             sCachedWebView.setWebChromeClient(new SheetChromeClient());
 
-            // 注入原生文件操作通道，打通网页文件树与附件的原生查看拦截
+            // 注入原生文件操作通道，打通网页文件树与附件的原生查看拦截及长按外部打开
             sCachedWebView.addJavascriptInterface(new Object() {
                 @android.webkit.JavascriptInterface
                 public void openWorkspaceFile(String rawPath) {
+                    resolveAndHandleFile(rawPath, false);
+                }
+
+                @android.webkit.JavascriptInterface
+                public void openExternalFile(String rawPath) {
+                    resolveAndHandleFile(rawPath, true);
+                }
+
+                private void resolveAndHandleFile(String rawPath, boolean external) {
                     if (rawPath == null || rawPath.isEmpty()) return;
                     String path = rawPath;
                     try {
@@ -1231,7 +1255,14 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                     }
 
                     final String finalPath = path;
-                    runOnUiThread(() -> openFileInSheet(finalPath));
+                    runOnUiThread(() -> {
+                        if (external) {
+                            File f = new File(finalPath);
+                            com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(QuickChatSheetActivity.this, f);
+                        } else {
+                            openFileInSheet(finalPath);
+                        }
+                    });
                 }
             }, "DshaNativeBridge");
             sCachedWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
@@ -1604,22 +1635,69 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                                 ? "    document.body.setAttribute('data-ds-dark-theme', '');\n"
                                 : "    document.body.removeAttribute('data-ds-dark-theme');\n")
                         + "  }\n"
-                        + "  /* 挂载原生工作区文件点击拦截：将只读报错拦截并升级为原生查看与编辑 */\n"
+                        + "  /* 挂载原生工作区文件点击拦截与长按外部打开：短按原生抽屉预览，长按调用系统打开方式 */\n"
                         + "  if (!window.__dsha_file_click_hooked) {\n"
                         + "    window.__dsha_file_click_hooked = true;\n"
-                        + "    function handleDshaFileClick(e) {\n"
-                        + "      var el = e.target && e.target.closest ? e.target.closest('[data-files-entry=\"file\"], [data-files-path], a[href*=\"/sdcard/Download/DSHA/工作区/\"], a[href*=\"dsh-resource://file\"]') : null;\n"
-                        + "      if (el) {\n"
-                        + "        var p = el.getAttribute('data-files-path') || el.getAttribute('href');\n"
-                        + "        if (p && window.DshaNativeBridge && window.DshaNativeBridge.openWorkspaceFile) {\n"
-                        + "          e.preventDefault();\n"
-                        + "          e.stopPropagation();\n"
-                        + "          window.DshaNativeBridge.openWorkspaceFile(p);\n"
-                        + "        }\n"
-                        + "      }\n"
+                        + "    var longPressTimer = null;\n"
+                        + "    var touchStartX = 0, touchStartY = 0;\n"
+                        + "    var isLongPressTriggered = false;\n"
+                        + "\n"
+                        + "    function findTargetFile(e) {\n"
+                        + "      var el = e.target && e.target.closest ? e.target.closest('[data-files-entry], a[href*=\"/sdcard/Download/DSHA/工作区/\"], a[href*=\"dsh-resource://file\"]') : null;\n"
+                        + "      if (!el) return null;\n"
+                        + "      var entryType = el.getAttribute('data-files-entry');\n"
+                        + "      if (entryType === 'directory') return null; /* 文件夹绝对不拦截，放行让网页折叠与展开 */\n"
+                        + "      var p = el.getAttribute('data-files-path') || el.getAttribute('href');\n"
+                        + "      return p;\n"
                         + "    }\n"
-                        + "    document.addEventListener('click', handleDshaFileClick, true);\n"
-                        + "    document.addEventListener('touchend', handleDshaFileClick, true);\n"
+                        + "\n"
+                        + "    document.addEventListener('touchstart', function(e) {\n"
+                        + "      isLongPressTriggered = false;\n"
+                        + "      var p = findTargetFile(e);\n"
+                        + "      if (!p) return;\n"
+                        + "      touchStartX = e.touches[0].clientX;\n"
+                        + "      touchStartY = e.touches[0].clientY;\n"
+                        + "      clearTimeout(longPressTimer);\n"
+                        + "      longPressTimer = setTimeout(function() {\n"
+                        + "        isLongPressTriggered = true;\n"
+                        + "        if (window.DshaNativeBridge && window.DshaNativeBridge.openExternalFile) {\n"
+                        + "          window.DshaNativeBridge.openExternalFile(p);\n"
+                        + "        }\n"
+                        + "      }, 480);\n"
+                        + "    }, { passive: true, capture: true });\n"
+                        + "\n"
+                        + "    document.addEventListener('touchmove', function(e) {\n"
+                        + "      if (!longPressTimer) return;\n"
+                        + "      var dx = Math.abs(e.touches[0].clientX - touchStartX);\n"
+                        + "      var dy = Math.abs(e.touches[0].clientY - touchStartY);\n"
+                        + "      if (dx > 10 || dy > 10) {\n"
+                        + "        clearTimeout(longPressTimer);\n"
+                        + "        longPressTimer = null;\n"
+                        + "      }\n"
+                        + "    }, { passive: true, capture: true });\n"
+                        + "\n"
+                        + "    document.addEventListener('touchend', function(e) {\n"
+                        + "      clearTimeout(longPressTimer);\n"
+                        + "      if (isLongPressTriggered) {\n"
+                        + "        e.preventDefault();\n"
+                        + "        e.stopPropagation();\n"
+                        + "      }\n"
+                        + "    }, true);\n"
+                        + "\n"
+                        + "    document.addEventListener('click', function(e) {\n"
+                        + "      if (isLongPressTriggered) {\n"
+                        + "        isLongPressTriggered = false;\n"
+                        + "        e.preventDefault();\n"
+                        + "        e.stopPropagation();\n"
+                        + "        return;\n"
+                        + "      }\n"
+                        + "      var p = findTargetFile(e);\n"
+                        + "      if (p && window.DshaNativeBridge && window.DshaNativeBridge.openWorkspaceFile) {\n"
+                        + "        e.preventDefault();\n"
+                        + "        e.stopPropagation();\n"
+                        + "        window.DshaNativeBridge.openWorkspaceFile(p);\n"
+                        + "      }\n"
+                        + "    }, true);\n"
                         + "  }\n"
                         + "})();";
                 sCachedWebView.evaluateJavascript(js, null);
@@ -2081,6 +2159,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         btnFiles.setVisibility(View.GONE);
         btnNewChat.setVisibility(View.GONE);
         btnFullscreen.setVisibility(View.GONE);
+        if (btnFileOpenExternal != null) btnFileOpenExternal.setVisibility(View.VISIBLE);
 
         // 2. 容器切换（背景设为透明，彻底透出抽屉原有的毛玻璃底色与壁纸）
         fileViewerContainer.removeAllViews();
@@ -2135,6 +2214,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         btnNewChat.setVisibility(View.VISIBLE);
         btnFullscreen.setVisibility(View.VISIBLE);
         if (btnFileSave != null) btnFileSave.setVisibility(View.GONE);
+        if (btnFileOpenExternal != null) btnFileOpenExternal.setVisibility(View.GONE);
     }
 
     private void loadSheetTextEditor(File file) {
@@ -2166,26 +2246,32 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         String name = file.getName().toLowerCase();
         if (name.endsWith(".docx")) {
             content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractDocx(file);
+            if (content != null && !content.isEmpty()) {
+                io.github.rosemoe.sora.widget.CodeEditor editor = new io.github.rosemoe.sora.widget.CodeEditor(this);
+                editor.setLayoutParams(new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                editor.setColorScheme(new io.github.rosemoe.sora.widget.schemes.EditorColorScheme());
+                editor.setBackgroundColor(Color.parseColor("#15FFFFFF"));
+                editor.setTextSize(13);
+                editor.setLineNumberEnabled(false);
+                editor.setEditable(false);
+                editor.setWordwrap(true);
+                editor.setText(content);
+                fileViewerContainer.addView(editor);
+                return;
+            }
         } else if (name.endsWith(".xlsx")) {
             content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractXlsx(file);
+            if (content != null && !content.isEmpty()) {
+                // 渲染为真实 Excel 电子表格网格视图！
+                View gridView = com.deepseekharness.app.viewer.SheetTableGrid.createGridView(this, content);
+                fileViewerContainer.addView(gridView);
+                return;
+            }
         }
 
-        if (content != null && !content.isEmpty()) {
-            io.github.rosemoe.sora.widget.CodeEditor editor = new io.github.rosemoe.sora.widget.CodeEditor(this);
-            editor.setLayoutParams(new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            editor.setColorScheme(new io.github.rosemoe.sora.widget.schemes.EditorColorScheme());
-            editor.setBackgroundColor(Color.parseColor("#15FFFFFF"));
-            editor.setTextSize(13);
-            editor.setLineNumberEnabled(false);
-            editor.setEditable(false); // Office 只读
-            editor.setWordwrap(true);
-            editor.setText(content);
-            fileViewerContainer.addView(editor);
-        } else {
-            Toast.makeText(this, "Office 结构复杂或未识别，已切换为十六进制数据视图", Toast.LENGTH_SHORT).show();
-            loadSheetHexViewer(file);
-        }
+        Toast.makeText(this, "Office 结构复杂或未识别，已切换为十六进制数据视图", Toast.LENGTH_SHORT).show();
+        loadSheetHexViewer(file);
     }
 
     private void saveCurrentEditorText() {
