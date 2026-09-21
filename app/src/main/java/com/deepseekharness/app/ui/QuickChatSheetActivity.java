@@ -1236,10 +1236,15 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
                 @android.webkit.JavascriptInterface
                 public void showFileActionMenu(String rawPath) {
-                    resolveAndHandleFile(rawPath, 2);
+                    resolveAndHandleFile(rawPath, 2, -1, -1);
                 }
 
-                private void resolveAndHandleFile(String rawPath, int action) {
+                @android.webkit.JavascriptInterface
+                public void showFileActionMenuAt(String rawPath, float touchX, float touchY) {
+                    resolveAndHandleFile(rawPath, 2, touchX, touchY);
+                }
+
+                private void resolveAndHandleFile(String rawPath, int action, float touchX, float touchY) {
                     if (rawPath == null || rawPath.isEmpty()) return;
                     String path = rawPath;
                     try {
@@ -1263,7 +1268,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                     runOnUiThread(() -> {
                         File f = new File(finalPath);
                         if (action == 2) {
-                            showWorkspaceFileActionMenu(f);
+                            showWorkspaceFileActionMenu(f, touchX, touchY);
                         } else if (action == 1) {
                             com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(QuickChatSheetActivity.this, f);
                         } else {
@@ -2144,90 +2149,335 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
     private void reloadWorkspaceFileTree() {
         if (sCachedWebView == null) return;
-        sCachedWebView.evaluateJavascript("var btn = document.querySelector('[data-files-reload]'); if (btn) btn.click();", null);
+        // 深度穿透真实指针点击事件，确保 React 内部 actions.reset 真正执行重载
+        String js = "(function() {" +
+                "  function fireClick(el) {" +
+                "    if (!el) return false;" +
+                "    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));" +
+                "    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));" +
+                "    el.click();" +
+                "    return true;" +
+                "  }" +
+                "  var reloadBtn = document.querySelector('[data-files-reload]');" +
+                "  if (reloadBtn && fireClick(reloadBtn)) return;" +
+                "  var panel = document.querySelector('[data-sidebar-right-panel]');" +
+                "  if (panel) {" +
+                "    var r = panel.querySelector('button[title*=\"刷新\"], button[aria-label*=\"刷新\"], [data-files-reload]');" +
+                "    if (r && fireClick(r)) return;" +
+                "  }" +
+                "  var filesTab = document.querySelector('[data-tab=\"files\"], [data-sidebar-tab=\"files\"]');" +
+                "  if (filesTab) fireClick(filesTab);" +
+                "})();";
+        sCachedWebView.evaluateJavascript(js, null);
     }
 
-    // ---------------- 长按三合一文件操作菜单：外部打开 · 重命名 · 删除 ----------------
-    private void showWorkspaceFileActionMenu(final File file) {
-        if (file == null || !file.exists()) {
+    // ---------------- 手势位置跟随的悬浮气泡微菜单（100% 继承抽屉毛玻璃与莫奈主题） ----------------
+    private void showWorkspaceFileActionMenu(final File file, float touchX, float touchY) {
+        if (file == null || !file.exists() || rootOverlay == null) {
             Toast.makeText(this, "目标不存在", Toast.LENGTH_SHORT).show();
             return;
         }
 
         final boolean isDir = file.isDirectory();
-        String[] options = new String[]{
-                "↗  调用系统打开方式",
-                "✏️  重命名",
-                "🗑️  删除" + (isDir ? "文件夹" : "")
+        final MonetThemeHelper.Palette palette = MonetThemeHelper.resolve(
+                this, isDarkMode, new ConfigStore(this).isSheetMonetColor(),
+                isDarkMode ? new ConfigStore(this).getSheetOpacityNight() : new ConfigStore(this).getSheetOpacityDay());
+
+        final FrameLayout mask = new FrameLayout(this);
+        mask.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        mask.setBackgroundColor(Color.TRANSPARENT);
+        mask.setClickable(true);
+
+        final LinearLayout menuCard = new LinearLayout(this);
+        menuCard.setOrientation(LinearLayout.VERTICAL);
+        int cardWidth = dpToPx(210);
+        FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(cardWidth, ViewGroup.LayoutParams.WRAP_CONTENT);
+
+        // 智能定位：紧跟长按手指点击位置（防出界防遮挡）
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int screenH = getResources().getDisplayMetrics().heightPixels;
+
+        float posX = (touchX > 0) ? touchX - dpToPx(24) : (screenW - cardWidth) / 2f;
+        if (posX + cardWidth > screenW - dpToPx(16)) {
+            posX = screenW - cardWidth - dpToPx(16);
+        }
+        if (posX < dpToPx(16)) posX = dpToPx(16);
+
+        float posY = (touchY > 0) ? touchY : screenH * 0.4f;
+        if (posY > screenH * 0.65f) {
+            posY = posY - dpToPx(160); // 靠近底部时向上浮现
+        }
+        if (posY < dpToPx(60)) posY = dpToPx(60);
+
+        cardLp.leftMargin = (int) posX;
+        cardLp.topMargin = (int) posY;
+        menuCard.setLayoutParams(cardLp);
+        menuCard.setElevation(dpToPx(18));
+
+        // 样式 100% 继承抽屉：毛玻璃底色、圆角与微光描边
+        GradientDrawable cardBg = new GradientDrawable();
+        cardBg.setShape(GradientDrawable.RECTANGLE);
+        cardBg.setCornerRadius(dpToPx(16));
+        cardBg.setColor(palette.cardBgColor);
+        cardBg.setStroke(dpToPx(1), palette.borderColor);
+        menuCard.setBackground(cardBg);
+        menuCard.setPadding(dpToPx(4), dpToPx(6), dpToPx(4), dpToPx(6));
+
+        // 标题条（紧凑展示选中的文件名）
+        TextView titleTv = new TextView(this);
+        titleTv.setText((isDir ? "📁 " : "📄 ") + file.getName());
+        titleTv.setTextColor(palette.textSecondaryColor);
+        titleTv.setTextSize(11);
+        titleTv.setSingleLine(true);
+        titleTv.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        titleTv.setPadding(dpToPx(14), dpToPx(6), dpToPx(14), dpToPx(6));
+        menuCard.addView(titleTv);
+
+        View sep = new View(this);
+        sep.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(1)));
+        sep.setBackgroundColor(palette.lineColor);
+        menuCard.addView(sep);
+
+        // 菜单项构造器
+        Runnable dismissMenu = () -> {
+            if (mask.getParent() == rootOverlay) {
+                rootOverlay.removeView(mask);
+            }
         };
 
-        new AlertDialog.Builder(this)
-                .setTitle((isDir ? "📁 " : "📄 ") + file.getName())
-                .setItems(options, (dialog, which) -> {
-                    if (which == 0) {
-                        // 1. 外部打开
-                        com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(this, file);
-                    } else if (which == 1) {
-                        // 2. 重命名
-                        promptRenameFile(file);
-                    } else if (which == 2) {
-                        // 3. 删除
-                        confirmDeleteFile(file);
-                    }
-                })
-                .setNegativeButton("取消", null)
-                .show();
+        mask.setOnClickListener(v -> dismissMenu.run());
+
+        // 1. 外部打开
+        menuCard.addView(createMenuItem("↗   调用系统打开方式", palette.textColor, v -> {
+            dismissMenu.run();
+            com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(QuickChatSheetActivity.this, file);
+        }));
+
+        // 2. 重命名
+        menuCard.addView(createMenuItem("✏️   重命名", palette.textColor, v -> {
+            dismissMenu.run();
+            promptRenameFileCustom(file, palette);
+        }));
+
+        // 3. 删除（警示红）
+        menuCard.addView(createMenuItem("🗑️   删除" + (isDir ? "文件夹" : ""), Color.parseColor("#FF5252"), v -> {
+            dismissMenu.run();
+            confirmDeleteFileCustom(file, palette);
+        }));
+
+        mask.addView(menuCard);
+        rootOverlay.addView(mask);
     }
 
-    private void promptRenameFile(final File file) {
+    private TextView createMenuItem(String text, int textColor, View.OnClickListener click) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(textColor);
+        tv.setTextSize(13);
+        tv.setGravity(Gravity.CENTER_VERTICAL);
+        tv.setPadding(dpToPx(14), dpToPx(10), dpToPx(14), dpToPx(10));
+        tv.setClickable(true);
+        tv.setFocusable(true);
+
+        // 优雅条目圆角按下反馈
+        GradientDrawable mask = new GradientDrawable();
+        mask.setShape(GradientDrawable.RECTANGLE);
+        mask.setCornerRadius(dpToPx(10));
+        mask.setColor(Color.WHITE);
+        RippleDrawable ripple = new RippleDrawable(
+                ColorStateList.valueOf(Color.parseColor("#253D6FD4")), null, mask);
+        tv.setBackground(ripple);
+        tv.setOnClickListener(click);
+        return tv;
+    }
+
+    // ---------------- 抽屉同款毛玻璃 UI 重命名弹窗 ----------------
+    private void promptRenameFileCustom(final File file, final MonetThemeHelper.Palette palette) {
+        final FrameLayout mask = new FrameLayout(this);
+        mask.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        mask.setBackgroundColor(Color.parseColor("#33000000"));
+        mask.setClickable(true);
+
+        final LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        int w = (int) (getResources().getDisplayMetrics().widthPixels * 0.82f);
+        FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cardLp.gravity = Gravity.CENTER;
+        card.setLayoutParams(cardLp);
+        card.setElevation(dpToPx(20));
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.RECTANGLE);
+        bg.setCornerRadius(dpToPx(20));
+        bg.setColor(palette.cardBgColor);
+        bg.setStroke(dpToPx(1), palette.borderColor);
+        card.setBackground(bg);
+        card.setPadding(dpToPx(20), dpToPx(18), dpToPx(20), dpToPx(16));
+
+        TextView tvTitle = new TextView(this);
+        tvTitle.setText("重命名 " + (file.isDirectory() ? "文件夹" : "文件"));
+        tvTitle.setTextColor(palette.textColor);
+        tvTitle.setTextSize(16);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(tvTitle);
+
         final android.widget.EditText input = new android.widget.EditText(this);
         input.setText(file.getName());
         input.setSingleLine(true);
-        input.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
-        input.setTextColor(isDarkMode ? Color.WHITE : Color.BLACK);
+        input.setTextColor(palette.textColor);
+        input.setTextSize(14);
+        LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        inputLp.setMargins(0, dpToPx(14), 0, dpToPx(18));
+        input.setLayoutParams(inputLp);
+        input.setPadding(dpToPx(12), dpToPx(10), dpToPx(12), dpToPx(10));
 
-        new AlertDialog.Builder(this)
-                .setTitle("重命名 " + (file.isDirectory() ? "文件夹" : "文件"))
-                .setView(input)
-                .setPositiveButton("确定", (d, w) -> {
-                    String newName = input.getText().toString().trim();
-                    if (newName.isEmpty() || newName.equals(file.getName())) return;
-                    File target = new File(file.getParentFile(), newName);
-                    if (target.exists()) {
-                        Toast.makeText(this, "同名目标已存在", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    if (file.renameTo(target)) {
-                        Toast.makeText(this, "✓ 重命名成功", Toast.LENGTH_SHORT).show();
-                        reloadWorkspaceFileTree();
-                    } else {
-                        Toast.makeText(this, "重命名失败", Toast.LENGTH_SHORT).show();
-                    }
-                })
-                .setNegativeButton("取消", null)
-                .show();
+        // 半透明输入框底板
+        GradientDrawable inputBg = new GradientDrawable();
+        inputBg.setShape(GradientDrawable.RECTANGLE);
+        inputBg.setCornerRadius(dpToPx(10));
+        inputBg.setColor(isDarkMode ? Color.parseColor("#20FFFFFF") : Color.parseColor("#10000000"));
+        inputBg.setStroke(dpToPx(1), palette.borderColor);
+        input.setBackground(inputBg);
+        card.addView(input);
+
+        // 按钮栏
+        LinearLayout btnBar = new LinearLayout(this);
+        btnBar.setOrientation(LinearLayout.HORIZONTAL);
+        btnBar.setGravity(Gravity.END);
+
+        Runnable dismiss = () -> {
+            if (mask.getParent() == rootOverlay) rootOverlay.removeView(mask);
+        };
+        mask.setOnClickListener(v -> dismiss.run());
+
+        TextView btnCancel = new TextView(this);
+        btnCancel.setText("取消");
+        btnCancel.setTextColor(palette.textSecondaryColor);
+        btnCancel.setTextSize(14);
+        btnCancel.setPadding(dpToPx(14), dpToPx(8), dpToPx(14), dpToPx(8));
+        btnCancel.setOnClickListener(v -> dismiss.run());
+        btnBar.addView(btnCancel);
+
+        TextView btnOk = new TextView(this);
+        btnOk.setText("确定");
+        btnOk.setTextColor(Color.parseColor("#4C8DFF"));
+        btnOk.setTextSize(14);
+        btnOk.setTypeface(Typeface.DEFAULT_BOLD);
+        btnOk.setPadding(dpToPx(14), dpToPx(8), dpToPx(14), dpToPx(8));
+        btnOk.setOnClickListener(v -> {
+            String newName = input.getText().toString().trim();
+            if (newName.isEmpty() || newName.equals(file.getName())) {
+                dismiss.run();
+                return;
+            }
+            File target = new File(file.getParentFile(), newName);
+            if (target.exists()) {
+                Toast.makeText(this, "同名目标已存在", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (file.renameTo(target)) {
+                Toast.makeText(this, "✓ 重命名成功", Toast.LENGTH_SHORT).show();
+                dismiss.run();
+                reloadWorkspaceFileTree();
+            } else {
+                Toast.makeText(this, "重命名失败", Toast.LENGTH_SHORT).show();
+            }
+        });
+        btnBar.addView(btnOk);
+
+        card.addView(btnBar);
+        mask.addView(card);
+        rootOverlay.addView(mask);
+        input.requestFocus();
     }
 
-    private void confirmDeleteFile(final File file) {
-        new AlertDialog.Builder(this)
-                .setTitle("删除确认")
-                .setMessage("确定要彻底删除 " + (file.isDirectory() ? "文件夹" : "文件") + "「" + file.getName() + "」吗？\n此操作不可撤销。")
-                .setPositiveButton("删除", (d, w) -> {
-                    boolean ok;
-                    if (file.isDirectory()) {
-                        ok = deleteRecursively(file);
-                    } else {
-                        ok = file.delete();
-                    }
-                    if (ok) {
-                        Toast.makeText(this, "✓ 已删除", Toast.LENGTH_SHORT).show();
-                        reloadWorkspaceFileTree();
-                    } else {
-                        Toast.makeText(this, "删除失败", Toast.LENGTH_SHORT).show();
-                    }
-                })
-                .setNegativeButton("取消", null)
-                .show();
+    // ---------------- 抽屉同款毛玻璃 UI 删除确认弹窗 ----------------
+    private void confirmDeleteFileCustom(final File file, final MonetThemeHelper.Palette palette) {
+        final FrameLayout mask = new FrameLayout(this);
+        mask.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        mask.setBackgroundColor(Color.parseColor("#33000000"));
+        mask.setClickable(true);
+
+        final LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        int w = (int) (getResources().getDisplayMetrics().widthPixels * 0.82f);
+        FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cardLp.gravity = Gravity.CENTER;
+        card.setLayoutParams(cardLp);
+        card.setElevation(dpToPx(20));
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.RECTANGLE);
+        bg.setCornerRadius(dpToPx(20));
+        bg.setColor(palette.cardBgColor);
+        bg.setStroke(dpToPx(1), palette.borderColor);
+        card.setBackground(bg);
+        card.setPadding(dpToPx(20), dpToPx(18), dpToPx(20), dpToPx(16));
+
+        TextView tvTitle = new TextView(this);
+        tvTitle.setText("删除确认");
+        tvTitle.setTextColor(palette.textColor);
+        tvTitle.setTextSize(16);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(tvTitle);
+
+        TextView tvMsg = new TextView(this);
+        tvMsg.setText("确定彻底删除 " + (file.isDirectory() ? "文件夹" : "文件") + "「" + file.getName() + "」吗？\n此操作不可撤销。");
+        tvMsg.setTextColor(palette.textColor);
+        tvMsg.setTextSize(13);
+        LinearLayout.LayoutParams msgLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        msgLp.setMargins(0, dpToPx(12), 0, dpToPx(18));
+        tvMsg.setLayoutParams(msgLp);
+        card.addView(tvMsg);
+
+        LinearLayout btnBar = new LinearLayout(this);
+        btnBar.setOrientation(LinearLayout.HORIZONTAL);
+        btnBar.setGravity(Gravity.END);
+
+        Runnable dismiss = () -> {
+            if (mask.getParent() == rootOverlay) rootOverlay.removeView(mask);
+        };
+        mask.setOnClickListener(v -> dismiss.run());
+
+        TextView btnCancel = new TextView(this);
+        btnCancel.setText("取消");
+        btnCancel.setTextColor(palette.textSecondaryColor);
+        btnCancel.setTextSize(14);
+        btnCancel.setPadding(dpToPx(14), dpToPx(8), dpToPx(14), dpToPx(8));
+        btnCancel.setOnClickListener(v -> dismiss.run());
+        btnBar.addView(btnCancel);
+
+        TextView btnDelete = new TextView(this);
+        btnDelete.setText("删除");
+        btnDelete.setTextColor(Color.parseColor("#FF5252"));
+        btnDelete.setTextSize(14);
+        btnDelete.setTypeface(Typeface.DEFAULT_BOLD);
+        btnDelete.setPadding(dpToPx(14), dpToPx(8), dpToPx(14), dpToPx(8));
+        btnDelete.setOnClickListener(v -> {
+            boolean ok;
+            if (file.isDirectory()) {
+                ok = deleteRecursively(file);
+            } else {
+                ok = file.delete();
+            }
+            if (ok) {
+                Toast.makeText(this, "✓ 已删除", Toast.LENGTH_SHORT).show();
+                dismiss.run();
+                reloadWorkspaceFileTree();
+            } else {
+                Toast.makeText(this, "删除失败", Toast.LENGTH_SHORT).show();
+            }
+        });
+        btnBar.addView(btnDelete);
+
+        card.addView(btnBar);
+        mask.addView(card);
+        rootOverlay.addView(mask);
     }
 
     private boolean deleteRecursively(File dir) {
