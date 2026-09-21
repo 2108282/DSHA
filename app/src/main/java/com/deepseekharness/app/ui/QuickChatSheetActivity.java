@@ -862,23 +862,44 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         headerBar.addView(rightGroup);
 
-        // 中间标题容器（严格被限制在左侧与右侧按钮组之间，永远不挤压也不遮挡按钮）
+        // 中间标题容器（物理绝对对称居中，两端动态对称避让，永不挤压遮挡按钮）
         LinearLayout titleBox = new LinearLayout(this);
         titleBox.setOrientation(LinearLayout.VERTICAL);
         titleBox.setGravity(Gravity.CENTER);
         RelativeLayout.LayoutParams titleBoxLp = new RelativeLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        titleBoxLp.addRule(RelativeLayout.RIGHT_OF, leftGroup.getId());
-        titleBoxLp.addRule(RelativeLayout.LEFT_OF, rightGroup.getId());
-        titleBoxLp.addRule(RelativeLayout.CENTER_VERTICAL);
-        titleBoxLp.setMarginStart(dpToPx(8));
-        titleBoxLp.setMarginEnd(dpToPx(8));
+        titleBoxLp.addRule(RelativeLayout.CENTER_IN_PARENT);
+        // 初始对称安全边距：对话模式下左侧为3按钮（宽116dp），预留 max(左, 右) + 8dp = 124dp 对称外边距，首帧渲染即绝对居中
+        int initialMargin = dpToPx(124);
+        titleBoxLp.leftMargin = initialMargin;
+        titleBoxLp.rightMargin = initialMargin;
+        titleBoxLp.setMarginStart(initialMargin);
+        titleBoxLp.setMarginEnd(initialMargin);
         titleBox.setLayoutParams(titleBoxLp);
+
+        // 动态对称安全边距：无论哪侧增减或显示/隐藏按钮，左右两端始终等距约束，保证标题永远在中轴线上
+        Runnable updateTitleMargin = () -> {
+            int leftW = leftGroup.getWidth();
+            int rightW = rightGroup.getWidth();
+            if (leftW <= 0 && rightW <= 0) return;
+            int maxSide = Math.max(leftW, rightW);
+            int safeMargin = maxSide + dpToPx(8);
+            RelativeLayout.LayoutParams lp = (RelativeLayout.LayoutParams) titleBox.getLayoutParams();
+            if (lp.leftMargin != safeMargin || lp.rightMargin != safeMargin) {
+                lp.leftMargin = safeMargin;
+                lp.rightMargin = safeMargin;
+                lp.setMarginStart(safeMargin);
+                lp.setMarginEnd(safeMargin);
+                titleBox.setLayoutParams(lp);
+            }
+        };
+        leftGroup.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateTitleMargin.run());
+        rightGroup.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateTitleMargin.run());
 
         headerTitle = new TextView(this);
         headerTitle.setText("DSHA 对话");
         headerTitle.setTextColor(textColor);
-        headerTitle.setTextSize(15);
+        headerTitle.setTextSize(17);
         headerTitle.setTypeface(Typeface.DEFAULT_BOLD);
         headerTitle.setSingleLine(true);
         headerTitle.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
@@ -2756,6 +2777,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         // 1. 顶栏瞬间切换至文档模式（排版居中受限，绝不遮挡左右按钮）
         headerTitle.setText(file.getName());
+        headerTitle.setTextSize(16);
         if (headerSubTitle != null) {
             headerSubTitle.setText(formatFileSize(file.length()) + " · 加载中…");
             headerSubTitle.setVisibility(View.VISIBLE);
@@ -2958,6 +2980,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         // 恢复顶栏为对话模式
         headerTitle.setText("DSHA 对话");
+        headerTitle.setTextSize(17);
         if (headerSubTitle != null) headerSubTitle.setVisibility(View.GONE);
         btnClose.setIconType(ICON_CLOSE);
         btnSettings.setVisibility(View.VISIBLE);
