@@ -25,7 +25,7 @@ mkdir -p "$DSH_DIR"
 # 1. 优先从模块外部 rootfs-overlay 同步加固脚本
 SRC_OVERLAY="$(dirname "$0")/../rootfs-overlay/root/.dsh"
 if [ -d "$SRC_OVERLAY" ]; then
-    for f in register-builtin-plugins.py plugin-manager.py plugin-lifecycle.py dsha-plugin-heal.sh; do
+    for f in register-builtin-plugins.py plugin-manager.py plugin-lifecycle.py dsha-plugin-compat.sh dsha-plugin-heal.sh; do
         if [ -f "$SRC_OVERLAY/$f" ]; then
             cp -f "$SRC_OVERLAY/$f" "$DSH_DIR/$f"
             chmod 755 "$DSH_DIR/$f"

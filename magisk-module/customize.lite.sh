@@ -91,7 +91,7 @@ if choose_step "【第 1 步】：是否应用增量补丁与容器更新？" "�
         mkdir -p "$ROOTFS_DIR"
         cp -af "$TMP_STAGE/rootfs-overlay/." "$ROOTFS_DIR/"
         # 自动保障权限：脚本与可执行组件自动赋予 755
-        find "$TMP_STAGE/rootfs-overlay" -type f \( -name "*.sh" -o -name "*.js" \) 2>/dev/null | while read -r f; do
+        find "$TMP_STAGE/rootfs-overlay" -type f \( -name "*.sh" -o -name "*.js" -o -name "*.py" \) 2>/dev/null | while read -r f; do
             rel_path="${f#$TMP_STAGE/rootfs-overlay/}"
             [ -f "$ROOTFS_DIR/$rel_path" ] && chmod 755 "$ROOTFS_DIR/$rel_path" 2>/dev/null || true
         done
