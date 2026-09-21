@@ -99,6 +99,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     public static final int ICON_SETTINGS = 2;
     public static final int ICON_NEW_CHAT = 3;
     public static final int ICON_FULLSCREEN = 4;
+    public static final int ICON_FILES = 5;
 
     // 全局静态保活单例，彻底解决再次进入重新转圈加载问题
     @SuppressLint("StaticFieldLeak")
@@ -201,6 +202,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private TextView headerTitle;
     private HeaderIconButton btnClose;
     private HeaderIconButton btnSettings;
+    private HeaderIconButton btnFiles;
     private HeaderIconButton btnNewChat;
     private HeaderIconButton btnFullscreen;
     private View headerDivider;
@@ -482,9 +484,10 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             headerTitle.setTextColor(textColor);
         }
 
-        // 4. 顶部操作栏 4 个矢量图标按钮（图片）颜色
+        // 4. 顶部操作栏矢量图标按钮（图片）颜色
         if (btnClose != null) btnClose.setIconColor(textColor);
         if (btnSettings != null) btnSettings.setIconColor(textColor);
+        if (btnFiles != null) btnFiles.setIconColor(textColor);
         if (btnNewChat != null) btnNewChat.setIconColor(textColor);
         if (btnFullscreen != null) btnFullscreen.setIconColor(textColor);
 
@@ -617,6 +620,15 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             dismissSheet();
         });
         leftGroup.addView(btnSettings);
+
+        // [②+ 📁 工作区文件管理按钮]
+        btnFiles = createHeaderIconButton(ICON_FILES, textColor, "浏览工作区文件");
+        LinearLayout.LayoutParams filesLp = (LinearLayout.LayoutParams) btnFiles.getLayoutParams();
+        filesLp.setMarginStart(dpToPx(4));
+        btnFiles.setLayoutParams(filesLp);
+        btnFiles.setOnClickListener(v -> showWorkspaceDialog());
+        leftGroup.addView(btnFiles);
+
         headerBar.addView(leftGroup);
 
         // 中间标题（物理绝对对称居中）
@@ -864,6 +876,43 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                     // 顶栏水平分割线
                     float dividerY = cy - 2.8f * dp;
                     canvas.drawLine(cx - halfW, dividerY, cx + halfW, dividerY, paint);
+                    break;
+                }
+                case ICON_FILES: { // ⑤ [ 📁 工作区文件 ] (矢量圆角文件夹轮廓，与终端框光学一致)
+                    float halfW = 8.5f * dp;
+                    float topY = cy - 6.2f * dp;
+                    float botY = cy + 6.2f * dp;
+                    float tabW = 6.2f * dp;
+                    float tabH = 2.4f * dp;
+                    float r = 2.2f * dp;
+
+                    // 文件夹轮廓 Path
+                    Path folderPath = new Path();
+                    folderPath.moveTo(cx - halfW + r, topY);
+                    // 顶部标签 Tab
+                    folderPath.lineTo(cx - halfW + tabW, topY);
+                    folderPath.lineTo(cx - halfW + tabW + 1.8f * dp, topY + tabH);
+                    folderPath.lineTo(cx + halfW - r, topY + tabH);
+                    // 右上圆角
+                    folderPath.quadTo(cx + halfW, topY + tabH, cx + halfW, topY + tabH + r);
+                    // 右侧垂直线至底部
+                    folderPath.lineTo(cx + halfW, botY - r);
+                    // 右下圆角
+                    folderPath.quadTo(cx + halfW, botY, cx + halfW - r, botY);
+                    // 底部水平线
+                    folderPath.lineTo(cx - halfW + r, botY);
+                    // 左下圆角
+                    folderPath.quadTo(cx - halfW, botY, cx - halfW, botY - r);
+                    // 左侧垂直线至顶部
+                    folderPath.lineTo(cx - halfW, topY + r);
+                    // 左上圆角
+                    folderPath.quadTo(cx - halfW, topY, cx - halfW + r, topY);
+                    folderPath.close();
+                    canvas.drawPath(folderPath, paint);
+
+                    // 内部水平层叠线条（体现文件夹深度）
+                    float lineY = topY + tabH + 2.8f * dp;
+                    canvas.drawLine(cx - halfW + 3.0f * dp, lineY, cx + halfW - 3.0f * dp, lineY, paint);
                     break;
                 }
             }
@@ -1580,6 +1629,22 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         return super.onKeyDown(keyCode, event);
     }
 
+    private boolean tryInterceptLocalFile(String url) {
+        if (url == null || url.isEmpty()) return false;
+        // 若指向本地工作区文件路径
+        if (url.contains("/sdcard/Download/DSHA/工作区/") || url.startsWith("file:///sdcard/Download/DSHA/工作区/")) {
+            String path = url.replace("file://", "");
+            int queryIdx = path.indexOf('?');
+            if (queryIdx >= 0) path = path.substring(0, queryIdx);
+            File f = new File(path);
+            if (f.exists() && f.isFile()) {
+                com.deepseekharness.app.viewer.FileViewerActivity.open(this, f.getAbsolutePath());
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void openExternal(String url) {
         if (url == null) return;
         Uri uri = Uri.parse(url);
@@ -1620,6 +1685,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                if (tryInterceptLocalFile(url)) return true;
                 if (url != null && (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:"))) {
                     return false;
                 }
@@ -1630,8 +1696,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (request == null || request.getUrl() == null) return false;
-                if (!request.isForMainFrame()) return false;
                 String url = request.getUrl().toString();
+                if (tryInterceptLocalFile(url)) return true;
+                if (!request.isForMainFrame()) return false;
                 if (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:")) {
                     return false;
                 }
@@ -1832,6 +1899,63 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 reloadWithLatestToken();
             }
         }
+    }
+
+    // ---------------- 工作区文件管理器弹窗 ----------------
+    private File currentBrowseDir = new File("/sdcard/Download/DSHA/工作区");
+
+    private void showWorkspaceDialog() {
+        if (!currentBrowseDir.exists()) currentBrowseDir.mkdirs();
+        File[] files = currentBrowseDir.listFiles();
+        if (files == null) files = new File[0];
+
+        // 排序：文件夹优先，其后按名称
+        java.util.Arrays.sort(files, (a, b) -> {
+            if (a.isDirectory() && !b.isDirectory()) return -1;
+            if (!a.isDirectory() && b.isDirectory()) return 1;
+            return a.getName().compareToIgnoreCase(b.getName());
+        });
+
+        final File[] sortedFiles = files;
+        List<String> displayList = new ArrayList<>();
+        boolean canGoUp = !currentBrowseDir.getAbsolutePath().equals("/sdcard/Download/DSHA/工作区")
+                && currentBrowseDir.getParentFile() != null;
+        if (canGoUp) {
+            displayList.add(".. ‹ 返回上一级");
+        }
+
+        for (File f : sortedFiles) {
+            if (f.isDirectory()) {
+                displayList.add("📁 " + f.getName());
+            } else {
+                displayList.add("📄 " + f.getName());
+            }
+        }
+
+        String title = "工作区：" + currentBrowseDir.getName();
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setItems(displayList.toArray(new String[0]), (dialog, which) -> {
+                    int offset = canGoUp ? 1 : 0;
+                    if (canGoUp && which == 0) {
+                        currentBrowseDir = currentBrowseDir.getParentFile();
+                        showWorkspaceDialog();
+                        return;
+                    }
+                    int fileIdx = which - offset;
+                    if (fileIdx >= 0 && fileIdx < sortedFiles.length) {
+                        File clicked = sortedFiles[fileIdx];
+                        if (clicked.isDirectory()) {
+                            currentBrowseDir = clicked;
+                            showWorkspaceDialog();
+                        } else {
+                            // 调用原生全功能查看/编辑器打开！
+                            com.deepseekharness.app.viewer.FileViewerActivity.open(this, clicked.getAbsolutePath());
+                        }
+                    }
+                })
+                .setPositiveButton("关闭", null)
+                .show();
     }
 
     @Override

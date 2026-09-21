@@ -130,6 +130,11 @@
             android:exported="false"
             android:theme="@style/Theme.DeepseekHarness" />
 
+        <activity
+            android:name="com.deepseekharness.app.viewer.FileViewerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DeepseekHarness" />
+
         <!-- 前台保活：dsh Web UI 后台常驻 -->
         <service
             android:name=".HarnessService"
