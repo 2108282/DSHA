@@ -4,6 +4,7 @@ import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserFactory;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
@@ -11,8 +12,9 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * Office OOXML (docx / xlsx) 纯文本与表格数据极速抽取器：
- * 基于 Android 原生 XmlPullParser，零体积膨胀，极速解析。
+ * Office (docx / xlsx / doc) 纯文本与表格数据极速抽取器：
+ * 1. docx / xlsx：基于 Android 原生 XmlPullParser 抽取 XML；
+ * 2. doc (OLE2 二进制)：基于二进制流扫描与 UTF-16LE / ASCII 嗅探，毫秒级提取正文。
  */
 public final class OfficeTextExtractor {
 
@@ -30,6 +32,76 @@ public final class OfficeTextExtractor {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    /** 提取老旧二进制 doc 格式文本（方案 A：纯原生 OLE2 二进制流字符嗅探） */
+    public static String extractDoc(File file) {
+        if (file == null || !file.isFile() || file.length() <= 512) return null;
+        try (FileInputStream fis = new FileInputStream(file)) {
+            int len = (int) Math.min(file.length(), 4 * 1024 * 1024); // 最多读取前 4MB
+            byte[] bytes = new byte[len];
+            int read = 0;
+            while (read < len) {
+                int n = fis.read(bytes, read, len - read);
+                if (n <= 0) break;
+                read += n;
+            }
+
+            StringBuilder sb = new StringBuilder();
+            // 双字节 UTF-16LE 扫描（中文与现代 Word 正文最常用编码）
+            StringBuilder segment = new StringBuilder();
+            for (int i = 512; i < read - 1; i += 2) {
+                char c = (char) ((bytes[i] & 0xFF) | ((bytes[i + 1] & 0xFF) << 8));
+                if (isReadableChar(c)) {
+                    segment.append(c);
+                } else {
+                    if (segment.length() >= 3) {
+                        sb.append(segment).append("\n");
+                    }
+                    segment.setLength(0);
+                }
+                if (sb.length() >= MAX_TEXT_CHARS) break;
+            }
+            if (segment.length() >= 3) {
+                sb.append(segment).append("\n");
+            }
+
+            // 若 UTF-16LE 提取内容较少，尝试单字节 ASCII 扫描兜底（针对纯英文老旧文档）
+            if (sb.length() < 20) {
+                sb.setLength(0);
+                segment.setLength(0);
+                for (int i = 512; i < read; i++) {
+                    int b = bytes[i] & 0xFF;
+                    if ((b >= 32 && b <= 126) || b == 10 || b == 13 || b == 9) {
+                        segment.append((char) b);
+                    } else {
+                        if (segment.length() >= 4) {
+                            sb.append(segment).append("\n");
+                        }
+                        segment.setLength(0);
+                    }
+                    if (sb.length() >= MAX_TEXT_CHARS) break;
+                }
+                if (segment.length() >= 4) {
+                    sb.append(segment).append("\n");
+                }
+            }
+
+            return sb.length() > 0 ? sb.toString().trim() : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static boolean isReadableChar(char c) {
+        // 中文汉字区 (0x4E00 - 0x9FA5) 与常用全角标点
+        if (c >= 0x4E00 && c <= 0x9FA5) return true;
+        if (c >= 0x3000 && c <= 0x303F) return true;
+        if (c >= 0xFF01 && c <= 0xFF5E) return true;
+        // 常用 ASCII 可见字符与换行空格
+        if (c >= 0x20 && c <= 0x7E) return true;
+        if (c == '\n' || c == '\r' || c == '\t') return true;
+        return false;
     }
 
     /** 提取 xlsx 工作表与单元格数据 */
@@ -146,7 +218,6 @@ public final class OfficeTextExtractor {
                     String val = parser.nextText();
                     if (val != null) {
                         if ("s".equals(cellType)) {
-                            // 引用共享字符串索引
                             try {
                                 int idx = Integer.parseInt(val.trim());
                                 if (idx >= 0 && idx < sst.size()) {

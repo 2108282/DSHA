@@ -2217,14 +2217,32 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         if (btnFileOpenExternal != null) btnFileOpenExternal.setVisibility(View.GONE);
     }
 
+    private io.github.rosemoe.sora.widget.schemes.EditorColorScheme createTransparentColorScheme() {
+        io.github.rosemoe.sora.widget.schemes.EditorColorScheme scheme =
+                new io.github.rosemoe.sora.widget.schemes.EditorColorScheme();
+        // 彻底消除白底画刷，使 Sora Editor 全画幅透明，完美透出抽屉毛玻璃与桌面壁纸
+        scheme.setColor(io.github.rosemoe.sora.widget.schemes.EditorColorScheme.WHOLE_BACKGROUND, Color.TRANSPARENT);
+        scheme.setColor(io.github.rosemoe.sora.widget.schemes.EditorColorScheme.LINE_NUMBER_BACKGROUND, Color.TRANSPARENT);
+        scheme.setColor(io.github.rosemoe.sora.widget.schemes.EditorColorScheme.CURRENT_LINE, Color.parseColor("#08FFFFFF"));
+        scheme.setColor(io.github.rosemoe.sora.widget.schemes.EditorColorScheme.SELECTION_INSERT, Color.parseColor("#4C8DFF"));
+        scheme.setColor(io.github.rosemoe.sora.widget.schemes.EditorColorScheme.SELECTION_HANDLE, Color.parseColor("#4C8DFF"));
+        scheme.setColor(io.github.rosemoe.sora.widget.schemes.EditorColorScheme.SELECTED_TEXT_BACKGROUND, Color.parseColor("#334C8DFF"));
+
+        // 根据当前抽屉的深浅色/反色状态适配文字与行号颜色
+        int normalTextColor = isDarkMode ? Color.parseColor("#E8E8E8") : Color.parseColor("#1C1C1C");
+        int lineNumColor = isDarkMode ? Color.parseColor("#777777") : Color.parseColor("#999999");
+        scheme.setColor(io.github.rosemoe.sora.widget.schemes.EditorColorScheme.TEXT_NORMAL, normalTextColor);
+        scheme.setColor(io.github.rosemoe.sora.widget.schemes.EditorColorScheme.LINE_NUMBER, lineNumColor);
+        return scheme;
+    }
+
     private void loadSheetTextEditor(File file) {
         if (btnFileSave != null) btnFileSave.setVisibility(View.VISIBLE);
         currentCodeEditor = new io.github.rosemoe.sora.widget.CodeEditor(this);
         currentCodeEditor.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        currentCodeEditor.setColorScheme(new io.github.rosemoe.sora.widget.schemes.EditorColorScheme());
-        // 编辑器背景设为半透明透光，彻底融入抽屉毛玻璃
-        currentCodeEditor.setBackgroundColor(Color.parseColor("#15FFFFFF"));
+        currentCodeEditor.setColorScheme(createTransparentColorScheme());
+        currentCodeEditor.setBackgroundColor(Color.TRANSPARENT);
         currentCodeEditor.setTextSize(13);
         currentCodeEditor.setLineNumberEnabled(true);
         currentCodeEditor.setWordwrap(true);
@@ -2246,20 +2264,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         String name = file.getName().toLowerCase();
         if (name.endsWith(".docx")) {
             content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractDocx(file);
-            if (content != null && !content.isEmpty()) {
-                io.github.rosemoe.sora.widget.CodeEditor editor = new io.github.rosemoe.sora.widget.CodeEditor(this);
-                editor.setLayoutParams(new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-                editor.setColorScheme(new io.github.rosemoe.sora.widget.schemes.EditorColorScheme());
-                editor.setBackgroundColor(Color.parseColor("#15FFFFFF"));
-                editor.setTextSize(13);
-                editor.setLineNumberEnabled(false);
-                editor.setEditable(false);
-                editor.setWordwrap(true);
-                editor.setText(content);
-                fileViewerContainer.addView(editor);
-                return;
-            }
+        } else if (name.endsWith(".doc")) {
+            // 方案 A：老旧二进制 doc 格式纯文本嗅探提取
+            content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractDoc(file);
         } else if (name.endsWith(".xlsx")) {
             content = com.deepseekharness.app.viewer.OfficeTextExtractor.extractXlsx(file);
             if (content != null && !content.isEmpty()) {
@@ -2268,6 +2275,21 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 fileViewerContainer.addView(gridView);
                 return;
             }
+        }
+
+        if (content != null && !content.isEmpty()) {
+            io.github.rosemoe.sora.widget.CodeEditor editor = new io.github.rosemoe.sora.widget.CodeEditor(this);
+            editor.setLayoutParams(new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            editor.setColorScheme(createTransparentColorScheme());
+            editor.setBackgroundColor(Color.TRANSPARENT);
+            editor.setTextSize(13);
+            editor.setLineNumberEnabled(false);
+            editor.setEditable(false);
+            editor.setWordwrap(true);
+            editor.setText(content);
+            fileViewerContainer.addView(editor);
+            return;
         }
 
         Toast.makeText(this, "Office 结构复杂或未识别，已切换为十六进制数据视图", Toast.LENGTH_SHORT).show();

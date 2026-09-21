@@ -100,6 +100,11 @@ public final class FileTypeClassifier {
         // PDF: %PDF-
         if (starts(head, 0x25, 0x50, 0x44, 0x46, 0x2D)) return new FileType(FileKind.PDF, "pdf", ext);
 
+        // Office 97-2003 OLE2 复合二进制魔数: D0 CF 11 E0 A1 B1 1A E1 (doc, xls, ppt)
+        if (starts(head, 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1)) {
+            return new FileType(FileKind.OFFICE, ext.isEmpty() ? "doc" : ext, ext);
+        }
+
         // ZIP 族: PK\x03\x04
         if (starts(head, 0x50, 0x4B, 0x03, 0x04)) {
             // 二级区分 Office 文档 (docx, xlsx, pptx)
