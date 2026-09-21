@@ -2265,31 +2265,100 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     }
 
     // ---------------- 抽屉顶栏 📁 按钮：平滑联动 DSH 官方自带工作区文件树 ----------------
+    private static final String SCRIPT_TOGGLE_WORKSPACE_FILE_TREE =
+            "(function() {\n" +
+            "    try {\n" +
+            "        // 1. 判定当前文件树是否处于展开显示状态\n" +
+            "        var rightOpen = document.querySelector('[data-sidebar-right-open=\"true\"], [data-sidebar-right-open], [data-mobile-nav-files-open]');\n" +
+            "        var isPanelOpen = rightOpen && (rightOpen.offsetWidth > 0 || rightOpen.getAttribute('aria-hidden') !== 'true');\n" +
+            "        if (isPanelOpen) {\n" +
+            "            // 已打开 -> 执行收起（Toggle Off）\n" +
+            "            var closer = document.querySelector('[data-sidebar-right-toggle], [data-sidebar-right-panel] button[aria-label*=\"Collapse\" i], [data-sidebar-right-panel] button[aria-label*=\"收起\" i], [data-sidebar-right-panel] button[aria-label*=\"折叠\" i]');\n" +
+            "            if (closer && typeof closer.click === 'function') {\n" +
+            "                closer.click();\n" +
+            "                return true;\n" +
+            "            }\n" +
+            "            var iconBtn = rightOpen.querySelector('button[class*=\"iconButton\"]');\n" +
+            "            if (iconBtn && typeof iconBtn.click === 'function') {\n" +
+            "                iconBtn.click();\n" +
+            "                return true;\n" +
+            "            }\n" +
+            "            return false;\n" +
+            "        }\n" +
+            "\n" +
+            "        // 2. 未打开 -> 执行打开（Toggle On），多路径保障冷启动初次点击 100% 成功唤起\n" +
+            "        // 路径 1：移动端顶部的文件夹按钮（内置 openFilesPanel / ctx.sidebarRight.openTab('files')）\n" +
+            "        var mobileFilesBtn = document.querySelector('button[data-mobile-nav=\"files\"]');\n" +
+            "        if (mobileFilesBtn && typeof mobileFilesBtn.click === 'function') {\n" +
+            "            mobileFilesBtn.click();\n" +
+            "            return true;\n" +
+            "        }\n" +
+            "\n" +
+            "        // 路径 2：全局插件函数直接调用\n" +
+            "        if (typeof window.__dsha_toggle_files === 'function') {\n" +
+            "            var res = window.__dsha_toggle_files();\n" +
+            "            if (res !== false) return true;\n" +
+            "        }\n" +
+            "\n" +
+            "        // 路径 3：官方右侧边栏展开按钮（desktop / expand control）\n" +
+            "        var expandBtn = document.querySelector('button[data-sidebar-right-expand]');\n" +
+            "        if (expandBtn && typeof expandBtn.click === 'function') {\n" +
+            "            expandBtn.click();\n" +
+            "            return true;\n" +
+            "        }\n" +
+            "\n" +
+            "        // 路径 4：移动端左侧抽屉底部的“文件浏览”按钮（冷启动加载完毕后常驻于 DOM 中）\n" +
+            "        var explorerBtn = document.querySelector('button[data-mobile-nav=\"explorer\"]');\n" +
+            "        if (explorerBtn && typeof explorerBtn.click === 'function') {\n" +
+            "            explorerBtn.click();\n" +
+            "            var frame = document.querySelector('[data-mobile-nav=\"frame\"]');\n" +
+            "            if (frame && !frame.hasAttribute('data-sidebar-collapsed')) {\n" +
+            "                frame.setAttribute('data-sidebar-collapsed', '');\n" +
+            "            }\n" +
+            "            return true;\n" +
+            "        }\n" +
+            "\n" +
+            "        // 路径 5：右侧 Tab 栏直接点击 files tab\n" +
+            "        var filesTab = document.querySelector('button[data-tab=\"files\"], button[data-sidebar-tab=\"files\"]');\n" +
+            "        if (filesTab && typeof filesTab.click === 'function') {\n" +
+            "            filesTab.click();\n" +
+            "            return true;\n" +
+            "        }\n" +
+            "\n" +
+            "        // 路径 6：通用语义属性模糊匹配\n" +
+            "        var anyFilesBtn = document.querySelector('button[aria-label*=\"Files\" i], button[aria-label*=\"文件\" i]');\n" +
+            "        if (anyFilesBtn && typeof anyFilesBtn.click === 'function') {\n" +
+            "            anyFilesBtn.click();\n" +
+            "            return true;\n" +
+            "        }\n" +
+            "    } catch (e) {\n" +
+            "        console.error('toggle file tree error:', e);\n" +
+            "    }\n" +
+            "    return false;\n" +
+            "})()";
+
     private void toggleWorkspaceFileTree() {
         if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
             closeFileViewer();
             return;
         }
         if (sCachedWebView == null) return;
-        // 彻底精确化：只操作官方右侧边栏（sidebar-right），严禁任何模糊选择器误伤左抽屉！
-        String js = "(function() {" +
-                "  var reloadBtn = document.querySelector('[data-files-reload]');" +
-                "  if (reloadBtn) {" +
-                "    reloadBtn.click();" +
-                "    return;" +
-                "  }" +
-                "  var expandBtn = document.querySelector('button[data-sidebar-right-expand]');" +
-                "  if (expandBtn) {" +
-                "    expandBtn.click();" +
-                "    return;" +
-                "  }" +
-                "  var panel = document.querySelector('[data-sidebar-right-panel]');" +
-                "  if (panel && panel.hasAttribute('data-sidebar-right-open')) {" +
-                "    var collapseBtn = panel.querySelector('button[class*=\"iconButton\"]');" +
-                "    if (collapseBtn) collapseBtn.click();" +
-                "  }" +
-                "})();";
-        sCachedWebView.evaluateJavascript(js, null);
+        executeToggleWorkspaceFileTreeWithRetry(0);
+    }
+
+    private void executeToggleWorkspaceFileTreeWithRetry(int retryCount) {
+        if (sCachedWebView == null || isFinishing() || isDestroyed()) return;
+        sCachedWebView.evaluateJavascript(SCRIPT_TOGGLE_WORKSPACE_FILE_TREE, value -> {
+            if ("true".equals(value)) {
+                return;
+            }
+            // 若初次进入、DOM 尚未挂载完毕（返回 false），在 150ms 后自动重试，最多 2 次（覆盖初次渲染 300ms 窗口）
+            if (retryCount < 2) {
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    executeToggleWorkspaceFileTreeWithRetry(retryCount + 1);
+                }, 150);
+            }
+        });
     }
 
     private void reloadWorkspaceFileTree() {
