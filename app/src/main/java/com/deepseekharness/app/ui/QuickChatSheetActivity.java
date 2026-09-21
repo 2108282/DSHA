@@ -506,6 +506,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         enforceExcludeFromRecents();
         super.onNewIntent(intent);
         setIntent(intent);
+        sCurrentInstance = this;
         boolean dark = new ConfigStore(this).isSheetInvertColor();
         boolean monet = new ConfigStore(this).isSheetMonetColor();
         isDarkMode = dark;
@@ -1325,60 +1326,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             sCachedWebView.setWebChromeClient(new SheetChromeClient());
 
             // 注入原生文件操作通道，打通网页文件树与附件的原生查看拦截及长按三合一操作菜单
-            sCachedWebView.addJavascriptInterface(new Object() {
-                @android.webkit.JavascriptInterface
-                public void openWorkspaceFile(String rawPath) {
-                    resolveAndHandleFile(rawPath, 0, -1, -1);
-                }
-
-                @android.webkit.JavascriptInterface
-                public void openExternalFile(String rawPath) {
-                    resolveAndHandleFile(rawPath, 1, -1, -1);
-                }
-
-                @android.webkit.JavascriptInterface
-                public void showFileActionMenu(String rawPath) {
-                    resolveAndHandleFile(rawPath, 2, -1, -1);
-                }
-
-                @android.webkit.JavascriptInterface
-                public void showFileActionMenuAt(String rawPath, float touchX, float touchY) {
-                    resolveAndHandleFile(rawPath, 2, touchX, touchY);
-                }
-
-                private void resolveAndHandleFile(String rawPath, int action, float touchX, float touchY) {
-                    if (rawPath == null || rawPath.isEmpty()) return;
-                    String path = rawPath;
-                    try {
-                        path = java.net.URLDecoder.decode(rawPath, "UTF-8");
-                    } catch (Exception ignored) {}
-
-                    if (path.contains("dsh-resource://file/session/")) {
-                        int idx = path.indexOf("/session/");
-                        if (idx >= 0) {
-                            String sub = path.substring(idx + 9);
-                            int slash = sub.indexOf('/');
-                            if (slash >= 0) {
-                                path = "/sdcard/Download/DSHA/工作区/" + sub.substring(slash + 1);
-                            }
-                        }
-                    } else if (!path.startsWith("/")) {
-                        path = "/sdcard/Download/DSHA/工作区/" + path;
-                    }
-
-                    final String finalPath = path;
-                    runOnUiThread(() -> {
-                        File f = new File(finalPath);
-                        if (action == 2) {
-                            showWorkspaceFileActionMenu(f, touchX, touchY);
-                        } else if (action == 1) {
-                            com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(QuickChatSheetActivity.this, f);
-                        } else {
-                            openFileInSheet(finalPath);
-                        }
-                    });
-                }
-            }, "DshaNativeBridge");
+            sCachedWebView.addJavascriptInterface(new NativeBridgeInterface(), "DshaNativeBridge");
             sCachedWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
                 try {
                     android.app.DownloadManager.Request request = new android.app.DownloadManager.Request(Uri.parse(url));
@@ -1470,6 +1418,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             sCachedWebView.getSettings().setAllowContentAccess(true);
             sCachedWebView.setWebViewClient(createSheetWebViewClient());
             sCachedWebView.setWebChromeClient(new SheetChromeClient());
+            sCachedWebView.addJavascriptInterface(new NativeBridgeInterface(), "DshaNativeBridge");
             if (progressBar != null) {
                 progressBar.setVisibility(sWebLoaded ? View.GONE : View.VISIBLE);
             }
@@ -1478,6 +1427,65 @@ public class QuickChatSheetActivity extends AppCompatActivity {
 
         webContainer.addView(sCachedWebView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private static void dispatchNativeBridgeFileAction(String rawPath, int action, float touchX, float touchY) {
+        if (rawPath == null || rawPath.isEmpty()) return;
+        String path = rawPath;
+        try {
+            path = java.net.URLDecoder.decode(rawPath, "UTF-8");
+        } catch (Exception ignored) {}
+
+        if (path.contains("dsh-resource://file/session/")) {
+            int idx = path.indexOf("/session/");
+            if (idx >= 0) {
+                String sub = path.substring(idx + 9);
+                int slash = sub.indexOf('/');
+                if (slash >= 0) {
+                    path = "/sdcard/Download/DSHA/工作区/" + sub.substring(slash + 1);
+                }
+            }
+        } else if (!path.startsWith("/")) {
+            path = "/sdcard/Download/DSHA/工作区/" + path;
+        }
+
+        final String finalPath = path;
+        QuickChatSheetActivity act = sCurrentInstance;
+        if (act == null || act.isFinishing() || act.isDestroyed()) return;
+        act.runOnUiThread(() -> {
+            QuickChatSheetActivity currentAct = sCurrentInstance;
+            if (currentAct == null || currentAct.isFinishing() || currentAct.isDestroyed()) return;
+            File f = new File(finalPath);
+            if (action == 2) {
+                currentAct.showWorkspaceFileActionMenu(f, touchX, touchY);
+            } else if (action == 1) {
+                com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(currentAct, f);
+            } else {
+                currentAct.openFileInSheet(finalPath);
+            }
+        });
+    }
+
+    public static class NativeBridgeInterface {
+        @android.webkit.JavascriptInterface
+        public void openWorkspaceFile(String rawPath) {
+            dispatchNativeBridgeFileAction(rawPath, 0, -1, -1);
+        }
+
+        @android.webkit.JavascriptInterface
+        public void openExternalFile(String rawPath) {
+            dispatchNativeBridgeFileAction(rawPath, 1, -1, -1);
+        }
+
+        @android.webkit.JavascriptInterface
+        public void showFileActionMenu(String rawPath) {
+            dispatchNativeBridgeFileAction(rawPath, 2, -1, -1);
+        }
+
+        @android.webkit.JavascriptInterface
+        public void showFileActionMenuAt(String rawPath, float touchX, float touchY) {
+            dispatchNativeBridgeFileAction(rawPath, 2, touchX, touchY);
+        }
     }
 
     /** 设置页「抽屉反色开关」与「莫奈取色开关」变动时即时刷新活动中的抽屉及缓存的 WebView */
@@ -1728,13 +1736,14 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "}\n";
 
                 String js = "(function() {"
+                        + "  var head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;\n"
                         + "  var style = document.getElementById('dsh-transparent-style');\n"
                         + "  if (!style) {\n"
                         + "    style = document.createElement('style');\n"
                         + "    style.id = 'dsh-transparent-style';\n"
-                        + "    document.head.appendChild(style);\n"
+                        + "    if (head) head.appendChild(style);\n"
                         + "  } else {\n"
-                        + "    document.head.appendChild(style);\n"
+                        + "    if (head && style.parentNode !== head) head.appendChild(style);\n"
                         + "  }\n"
                         + (immersive
                             ? "  style.innerHTML = " + org.json.JSONObject.quote(cssImmersive) + ";\n"
@@ -1766,11 +1775,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "    var isLongPressTriggered = false;\n"
                         + "\n"
                         + "    function findTargetFile(e, allowDirectory) {\n"
-                        + "      var el = e.target && e.target.closest ? e.target.closest('[data-files-entry], a[href*=\"/sdcard/Download/DSHA/工作区/\"], a[href*=\"dsh-resource://file\"]') : null;\n"
+                        + "      var el = e.target && e.target.closest ? e.target.closest('[data-files-entry], [data-files-path], [data-file-path], a[href*=\"/sdcard/Download/DSHA/工作区/\"], a[href*=\"dsh-resource://file\"]') : null;\n"
                         + "      if (!el) return null;\n"
                         + "      var entryType = el.getAttribute('data-files-entry');\n"
                         + "      if (!allowDirectory && entryType === 'directory') return null; /* 短按：文件夹绝对不拦截，放行让网页折叠与展开 */\n"
-                        + "      var p = el.getAttribute('data-files-path') || el.getAttribute('href');\n"
+                        + "      var p = el.getAttribute('data-files-path') || el.getAttribute('data-file-path') || el.getAttribute('href');\n"
                         + "      return p;\n"
                         + "    }\n"
                         + "\n"
