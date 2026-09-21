@@ -460,6 +460,47 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             "            var toggleBtn2 = document.querySelector('[data-sidebar-right-toggle]');\n" +
             "            if (toggleBtn2) { toggleBtn2.click(); return true; }\n" +
             "        }\n" +
+            "        // 6. 优先消费：插件二级/三级配置详情页的面包屑导航返回\n" +
+            "        var pluginCrumb = document.querySelector('[data-plugin-panel] button[class*=\"crumb\"], [data-plugin-panel] button[aria-label*=\"返回\" i], [data-plugin-panel] button[aria-label*=\"Back to\" i]');\n" +
+            "        if (pluginCrumb) {\n" +
+            "            pluginCrumb.click();\n" +
+            "            return true;\n" +
+            "        }\n" +
+            "        // 7. 优先消费：插件管理主页面（或其它非会话全局面板），平滑返回上层会话界面\n" +
+            "        var pluginPanel = document.querySelector('[data-plugin-panel]');\n" +
+            "        var activePanel = document.querySelector('[class*=\"panelRow\"][class*=\"panelActive\"], [class*=\"panelRow\"][aria-current=\"page\"]');\n" +
+            "        if (pluginPanel || activePanel) {\n" +
+            "            var panelItem = document.querySelector('[class*=\"panelRow\"], button[aria-current=\"page\"]');\n" +
+            "            if (panelItem) {\n" +
+            "                var rKey = Object.keys(panelItem).find(function(k) { return k.startsWith('__reactProps') || k.startsWith('__reactFiber'); });\n" +
+            "                if (rKey && panelItem[rKey]) {\n" +
+            "                    var curr = panelItem[rKey];\n" +
+            "                    for (var d = 0; curr && d < 20; d++) {\n" +
+            "                        var p = curr.memoizedProps || curr.pendingProps || curr;\n" +
+            "                        if (p && typeof p.selectPanel === 'function') {\n" +
+            "                            p.selectPanel(null);\n" +
+            "                            return true;\n" +
+            "                        }\n" +
+            "                        curr = curr.return;\n" +
+            "                    }\n" +
+            "                }\n" +
+            "            }\n" +
+            "            var curSession = document.querySelector('[class*=\"sessionRow\"][class*=\"selected\"], [class*=\"sessionRow\"][aria-selected=\"true\"], [class*=\"sessionRow\"][aria-current=\"true\"]');\n" +
+            "            if (curSession) {\n" +
+            "                curSession.click();\n" +
+            "                return true;\n" +
+            "            }\n" +
+            "            var anySession = document.querySelector('[class*=\"sessionRow\"]');\n" +
+            "            if (anySession) {\n" +
+            "                anySession.click();\n" +
+            "                return true;\n" +
+            "            }\n" +
+            "            var newChat = document.querySelector('[class*=\"newSession\"], [aria-label*=\"新会话\"], [aria-label*=\"新建\"], button[title*=\"新会话\"], button[title*=\"New session\"]');\n" +
+            "            if (newChat) {\n" +
+            "                newChat.click();\n" +
+            "                return true;\n" +
+            "            }\n" +
+            "        }\n" +
             "    } catch (e) {\n" +
             "        console.error('dsha consume back error:', e);\n" +
             "    }\n" +
