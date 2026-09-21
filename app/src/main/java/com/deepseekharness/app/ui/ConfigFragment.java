@@ -456,19 +456,25 @@ public class ConfigFragment extends Fragment {
     private void applyTasksetImmediately(String cpus) {
         new Thread(() -> {
             try {
+                String cleanCpus = cpus != null ? cpus.trim().replaceAll("[^0-9,-]", "") : "";
                 String writeCmd = "mkdir -p /data/adb/dsha/run /data/adb/dsha/rootfs/root/.dsh 2>/dev/null; "
-                        + "echo '" + cpus + "' > /data/adb/dsha/run/taskset 2>/dev/null; "
-                        + "echo '" + cpus + "' > /data/adb/dsha/rootfs/root/.dsh/taskset 2>/dev/null; ";
+                        + "echo '" + cleanCpus + "' > /data/adb/dsha/run/taskset 2>/dev/null; "
+                        + "echo '" + cleanCpus + "' > /data/adb/dsha/rootfs/root/.dsh/taskset 2>/dev/null; ";
                 String applyCmd = "PID=$(cat /data/adb/dsha/run/dsh.pid 2>/dev/null); "
                         + "if [ -n \"$PID\" ] && kill -0 \"$PID\" 2>/dev/null; then "
-                        + "if [ -f /dev/cpuset/cgroup.procs ]; then echo \"$PID\" > /dev/cpuset/cgroup.procs 2>/dev/null || true; fi; "
-                        + (cpus.isEmpty()
-                            ? "chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p -c 0-7 \"$PID\" >/dev/null 2>&1 || true; "
-                            : "chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p -c '" + cpus + "' \"$PID\" >/dev/null 2>&1 || true; ")
-                        + "if [ -d /dev/cpuctl/background ]; then echo \"$PID\" > /dev/cpuctl/background/cgroup.procs 2>/dev/null || true; fi; "
+                        + "  if [ -f /dev/cpuset/cgroup.procs ]; then echo \"$PID\" > /dev/cpuset/cgroup.procs 2>/dev/null || true; fi; "
+                        + "  TOTAL_CPUS=$(cat /sys/devices/system/cpu/online 2>/dev/null || echo '0-7'); "
+                        + "  TARGET_CPUS=\"" + (cleanCpus.isEmpty() ? "$TOTAL_CPUS" : cleanCpus) + "\"; "
+                        + "  if [ -x /system/bin/taskset ]; then "
+                        + "    /system/bin/taskset -a -p -c \"$TARGET_CPUS\" \"$PID\" >/dev/null 2>&1 || true; "
+                        + "  else "
+                        + "    chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p -c \"$TARGET_CPUS\" \"$PID\" >/dev/null 2>&1 || true; "
+                        + "  fi; "
                         + "fi";
-                Runtime.getRuntime().exec(new String[]{"su", "-c", writeCmd + applyCmd}).waitFor();
-            } catch (Throwable ignored) {}
+                Runtime.getRuntime().exec(new String[]{"su", "-mm", "-c", writeCmd + applyCmd}).waitFor();
+            } catch (Throwable e) {
+                android.util.Log.w("DSHA", "动态应用 CPU 亲和度异常: " + e.getMessage());
+            }
         }, "apply-taskset").start();
     }
 }

@@ -415,8 +415,14 @@ public class CtsModuleMain extends XposedModule {
                             "com.deepseekharness.app.ui.AssistGatewayActivity"));
                     intent.setAction(Intent.ACTION_ASSIST);
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-                    context.startActivity(intent);
-                    log(Log.INFO, TAG, "VIMS showSession pre-intercepted cleanly -> redirected to DSHA");
+
+                    final long origId = android.os.Binder.clearCallingIdentity();
+                    try {
+                        context.startActivity(intent);
+                        log(Log.INFO, TAG, "VIMS showSession pre-intercepted cleanly -> redirected to DSHA");
+                    } finally {
+                        android.os.Binder.restoreCallingIdentity(origId);
+                    }
                 }
             } catch (Throwable t) {
                 log(Log.WARN, TAG, "VIMS pre-intercept redirect fail", t);

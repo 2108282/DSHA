@@ -58,7 +58,11 @@ src = src.replace('HttpOnly; SameSite=Strict', 'HttpOnly; SameSite=Lax')
 target_auth = '\t\tconst tokens = url.searchParams.getAll(TOKEN_QUERY);'
 replacement_auth = '''\t\t// [DSHA_LAN_AND_BRIDGE_AUTH] 识别局域网代理发来的 X-Dsha-Token 与 dsha_t
 \t\ttry {
-\t\t\tconst expected = readFileSync("/root/.dsh/.bridge_token", "utf8").trim();
+\t\t\tlet expected = "";
+\t\t\ttry { expected = readFileSync("/root/.dsh/.lan_token", "utf8").trim(); } catch(e) {}
+\t\t\tif (!expected) {
+\t\t\t\ttry { expected = readFileSync("/root/.dsh/.bridge_token", "utf8").trim(); } catch(e) {}
+\t\t\t}
 \t\t\tconst headerTok = header(req.headers, "x-dsha-token");
 \t\t\tconst dshaT = url.searchParams.get("dsha_t");
 \t\t\tif (expected && ((headerTok && headerTok === expected) || (dshaT && dshaT === expected))) {
@@ -83,7 +87,11 @@ if 'DSHA_LAN_AND_BRIDGE_AUTH' not in src and target_auth in src:
 # 7. 【核心！打通局域网代理后续 /api 请求与 WebSocket】在 isAuthenticated 识别 X-Dsha-Token
 target_is_auth = '\t\tconst authority = requestAuthority(request.headers);'
 replacement_is_auth = '''\t\ttry {
-\t\t\tconst expected = readFileSync("/root/.dsh/.bridge_token", "utf8").trim();
+\t\t\tlet expected = "";
+\t\t\ttry { expected = readFileSync("/root/.dsh/.lan_token", "utf8").trim(); } catch(e) {}
+\t\t\tif (!expected) {
+\t\t\t\ttry { expected = readFileSync("/root/.dsh/.bridge_token", "utf8").trim(); } catch(e) {}
+\t\t\t}
 \t\t\tif (expected) {
 \t\t\t\tconst headerTok = header(request.headers, "x-dsha-token");
 \t\t\t\tif (headerTok === expected) return true; // 局域网代理 Header 放行！

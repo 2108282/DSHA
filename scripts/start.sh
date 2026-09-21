@@ -329,7 +329,11 @@ if [ -z "$TASKSET_CPUS" ]; then
     fi
 fi
 if [ -n "$TASKSET_CPUS" ]; then
-    chroot "$ROOTFS" /usr/bin/taskset -a -p -c "$TASKSET_CPUS" "$NEW_PID" >/dev/null 2>&1 || true
+    if [ -x /system/bin/taskset ]; then
+        /system/bin/taskset -a -p -c "$TASKSET_CPUS" "$NEW_PID" >/dev/null 2>&1 || true
+    else
+        chroot "$ROOTFS" /usr/bin/taskset -a -p -c "$TASKSET_CPUS" "$NEW_PID" >/dev/null 2>&1 || true
+    fi
 fi
 
 # 7. 等待服务启动并提取鉴权 Token 链接（150ms 浮点微步轮询，就绪即刻返回）
@@ -338,6 +342,8 @@ for i in $(seq 1 15); do
     AUTH_URL=$(grep -o "http://127\.0\.0\.1:${PORT}/?token=[^ ]*" "$LOG_FILE" 2>/dev/null | tail -n 1)
     [ -z "$AUTH_URL" ] && AUTH_URL=$(grep -o 'http://127\.0\.0\.1:[0-9]*/?token=[^ ]*' "$LOG_FILE" 2>/dev/null | tail -n 1)
     if [ -n "$AUTH_URL" ]; then
+        LAUNCH_TOK=$(echo "$AUTH_URL" | sed -n 's/.*token=\([A-Za-z0-9_-]\{43\}\).*/\1/p')
+        [ -n "$LAUNCH_TOK" ] && echo -n "$LAUNCH_TOK" > "$ROOTFS/root/.dsh/.launch_token" 2>/dev/null || true
         break
     fi
     if ! kill -0 "$NEW_PID" 2>/dev/null; then
