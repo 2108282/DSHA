@@ -138,6 +138,118 @@ function isGestureConsumed(target) {
     return true;
 }
 };
+__modules["effects/session-row-fiber.js"] = function (require, module, exports) {
+"use strict";
+// session-row-fiber.ts — DOM-free core behind the drawer session-row tap
+// fallback (#49 / PR #49): on some WebKit/iOS builds a tap on a session row
+// never produces a `click`, so the row's own React onClick never runs and
+// navigation silently does nothing. The runtime half resolves the tapped
+// element's fiber with `reactFiberOf`, walks it with `findSessionIdInFiber`,
+// and hands the id to the host. This file is the PURE half, so the walk is
+// unit-testable with no DOM, no renderer and no DSH runtime.
+//
+// Deliberately has ZERO import statements, like reconciler-core.ts: node:test
+// loads it directly through Node's native type stripping, and the client bundle
+// has nothing to resolve. Nothing here touches `document` or `window`.
+//
+// Two measured facts from the live 0.1.5-rc.2 host shaped the walk:
+//  - the row ITEM fiber is 3 hops above the tapped element and carries the
+//    session id at `props.node.id`;
+//  - hop 32 is a `ScopeProvider` ancestor whose `props.scope` is the literal
+//    string 'session-maybe'. Anything trusting the SHAPE of an id
+//    (/^session[-_]/) would hand that string to `ctx.sessions.open(id)`, and
+//    that contract fails loud on unknown ids. So a value counts only when the
+//    caller's `isKnownId` accepts it — there is no shape-based fallback, and a
+//    "plausible looking id" must never be guessed.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.FIBER_WALK_LIMIT = void 0;
+exports.findSessionIdInFiber = findSessionIdInFiber;
+exports.reactFiberOf = reactFiberOf;
+exports.isTapWithinSlop = isTapWithinSlop;
+/**
+ * Hop budget for one walk. The measured row item fiber is 3 hops up and the
+ * whole chain is well under this; the bound exists so an unexpectedly deep or
+ * malformed chain cannot spin.
+ */
+exports.FIBER_WALK_LIMIT = 60;
+/** Props keys holding an OBJECT with an `.id` (row items, session records). */
+const OBJECT_KEYS = ['node', 'session', 'summary', 'result'];
+/** Props keys holding the id STRING directly. */
+const ID_KEYS = ['sessionId', 'id'];
+/** React stamps a fiber on a node under a per-renderer random suffix. */
+const FIBER_KEY_PREFIXES = ['__reactFiber$', '__reactInternalInstance$'];
+/** `value.id` when `value` is an object carrying a string id, else null. */
+function objectIdOf(value) {
+    if (typeof value !== 'object' || value === null)
+        return null;
+    const id = value.id;
+    return typeof id === 'string' ? id : null;
+}
+/** The first id this hop's props offer that `isKnownId` accepts. */
+function acceptedIdInProps(props, isKnownId) {
+    if (props === null || props === undefined)
+        return null;
+    for (const key of OBJECT_KEYS) {
+        const candidate = objectIdOf(props[key]);
+        if (candidate !== null && isKnownId(candidate))
+            return candidate;
+    }
+    for (const key of ID_KEYS) {
+        const candidate = props[key];
+        if (typeof candidate === 'string' && isKnownId(candidate))
+            return candidate;
+    }
+    return null;
+}
+/**
+ * Walk from `fiber` towards the root (`.return`) and return the session id of
+ * the NEAREST hop offering one the caller knows. A hop whose candidate is
+ * rejected does not stop the walk, so an outer row item fiber still wins over
+ * an inner fiber carrying an unrelated or stale id. Returns null when nothing
+ * within `limit` hops (the starting fiber counts as the first) is accepted.
+ */
+function findSessionIdInFiber(fiber, isKnownId, limit = exports.FIBER_WALK_LIMIT) {
+    let hop = fiber;
+    for (let walked = 0; walked < limit && hop !== null && hop !== undefined; walked += 1) {
+        const found = acceptedIdInProps(hop.memoizedProps, isKnownId);
+        if (found !== null)
+            return found;
+        hop = hop.return;
+    }
+    return null;
+}
+/**
+ * The React fiber a DOM node (or any renderer-stamped object) carries: React
+ * assigns it under `__reactFiber$<rendererKey>` and keeps the legacy
+ * `__reactInternalInstance$<rendererKey>` alias. First stamp wins; null when
+ * the value is not a stamped object.
+ */
+function reactFiberOf(instance) {
+    if (instance === null || instance === undefined)
+        return null;
+    if (typeof instance !== 'object')
+        return null;
+    const record = instance;
+    for (const prefix of FIBER_KEY_PREFIXES) {
+        for (const key of Object.keys(record)) {
+            if (!key.startsWith(prefix))
+                continue;
+            const fiber = record[key];
+            if (typeof fiber === 'object' && fiber !== null)
+                return fiber;
+        }
+    }
+    return null;
+}
+/**
+ * Whether a pointer release still counts as a tap: it stayed within `slopPx` on
+ * BOTH axes (max-norm, not Euclidean). The drawer list scrolls vertically, so a
+ * 60px vertical drift must not navigate.
+ */
+function isTapWithinSlop(from, to, slopPx) {
+    return Math.abs(to.x - from.x) <= slopPx && Math.abs(to.y - from.y) <= slopPx;
+}
+};
 __modules["core/reconciler-core.js"] = function (require, module, exports) {
 "use strict";
 // reconciler-core.ts — DOM-free reconciler engine shared by every mobile DOM
@@ -263,6 +375,49 @@ function createReconcilerCore(options) {
         },
         flush,
     };
+}
+};
+__modules["core/sessions-compat.js"] = function (require, module, exports) {
+"use strict";
+// Sessions service shape drifted in 0.1.6-alpha.2 (audit doc §10.1): a2
+// removed `ISessions.open`/`clear` and `SessionListState.current` /
+// `currentAddress`, moving selection to per-session `retainedBy` counters
+// (upstream reads it as
+// `Object.values(byId).find(s => (s.retainedBy.mainView ?? 0) > 0)?.id`).
+// These helpers let call sites stay compile-green against rc.2 typings while
+// degrading explicitly on an a2 host instead of throwing or silently dying.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.currentSessionIdOf = currentSessionIdOf;
+exports.sessionsCanClear = sessionsCanClear;
+exports.sessionsCanOpen = sessionsCanOpen;
+/** The current session id: rc.2's `current` field when present, else the a2
+ *  main-view-retained session. Undefined when the shape matches neither. */
+function currentSessionIdOf(list) {
+    if (typeof list !== 'object' || list === null)
+        return undefined;
+    const snapshot = list;
+    if (typeof snapshot.current === 'string')
+        return snapshot.current;
+    for (const key in snapshot.byId) {
+        const summary = snapshot.byId[key];
+        // for-in guarantees the key exists, not the value — an explicitly
+        // undefined property still reaches the guard below.
+        if (summary === undefined)
+            continue;
+        const mainView = summary.retainedBy?.mainView;
+        if (typeof mainView === 'number' && mainView > 0 && typeof summary.id === 'string')
+            return summary.id;
+    }
+    return undefined;
+}
+/** a2 removed `clear()` (selection lifecycle moved to the retain model). */
+function sessionsCanClear(sessions) {
+    return typeof sessions?.clear === 'function';
+}
+/** a2 removed `open()`; callers must degrade (armNav fallback in
+ *  phone-chrome) instead of throwing inside the capture pointerup listener. */
+function sessionsCanOpen(sessions) {
+    return typeof sessions?.open === 'function';
 }
 };
 __modules["effects/aionui-compat.js"] = function (require, module, exports) {
@@ -436,6 +591,11 @@ function statsAnchorAlive(el) {
         return false;
     if (el.closest('[data-phase]') === null)
         return false;
+    // The strip must stay inside the composer stack, but it need not be a
+    // DIRECT child of it: 0.1.5 nests the status row (bOPqQW_root) under the
+    // composer card wrapper (uV2eYG_root), so the marked element sits one level
+    // deeper than on rc.2 hosts. Ancestry is still the right test — only the
+    // marker's own subtree position changed, not its container relationship.
     return el.closest('[class*="_composerStack"]') !== null;
 }
 function createStatsLineTask() {
@@ -483,18 +643,40 @@ function createStatsLineTask() {
         // Stale marker on a node that left the composer stack/phase context:
         // drop it so the slow path can re-anchor cleanly.
         anchor?.removeAttribute('data-mobile-nav');
-        for (const root of document.querySelectorAll('[data-phase] [class*="_root"]')) {
-            // The status row lives inside the composer stack; message-area
-            // blocks can also mention turns/steps and must be skipped.
-            if (root.closest('[class*="_composerStack"]') === null)
-                continue;
+        // Scope decision: the status row is a DESCENDANT of the composer stack,
+        // not necessarily its child. On rc.2 hosts it is a direct child (its own
+        // `_root`); on 0.1.5 the composer card wrapper (uV2eYG_root) sits between
+        // the stack and the row (bOPqQW_root), so requiring a direct child made
+        // the hunt permanently miss and the strip was never marked (measured: row
+        // present at 16,814 carrying "8 turns 582 steps · 103 tok/s" while
+        // [data-mobile-nav="stats"] was absent). Body blocks outside the stack are
+        // still skipped by the containment test below.
+        const stack = document.querySelector('[class*="_composerStack"]');
+        if (stack === null)
+            return;
+        for (const root of stack.querySelectorAll('[class*="_root"]')) {
+            // The status row lives inside the composer stack. The query is already
+            // scoped to the stack, so every candidate is inside it by construction —
+            // message-area blocks that mention turns/steps never enter this loop. (A
+            // `stack.contains(root)` guard stood here and its comment claimed to skip
+            // those blocks; it was unreachable.)
             // The todo plan strip also lives in the composer stack and its root
             // ends in _root. Its items may legitimately contain "步"/"steps" in
             // their text, so never mistake it (or any interactive dock panel)
             // for the stats strip.
             if (root.matches('[data-testid="todo-panel"]'))
                 continue;
-            if (root.querySelector('button') !== null)
+            // Dock panels are skipped by never marking a candidate whose buttons are
+            // actionable controls. 0.1.5 renders the status row ITSELF as two
+            // popover buttons (bOPqQW_pill, aria-haspopup="dialog"), so an
+            // "any button" guard excluded the one row this task exists to mark
+            // (measured: bOPqQW_root rejected solely by hasButton, marker count 0).
+            // Every popover button counts as a status widget: the composer's real
+            // controls (model bar, context meter) carry no metrics text and are
+            // filtered by the text test above, and a panel with an actionable button
+            // still fails here.
+            const buttons = root.querySelectorAll('button');
+            if (buttons.length > 0 && ![...buttons].every((button) => button.getAttribute('aria-haspopup') !== null))
                 continue;
             const text = root.textContent ?? '';
             if (!/(turns|steps|\bLLM\b|轮|步)/.test(text))
@@ -678,7 +860,23 @@ let fadeHook = null;
  * snapping (user request 2026-08-29 「背景黑色遮罩进行渐变动画」; the fade-IN
  * already existed as a mount animation). */
 const BACKDROP_FADE_MS = 200;
-function createOverlayTask(t, toggleSidebar) {
+/** The FAB's second face: an arrow, shown while a sidebar panel owns the main
+ * area (see the panelViewOpen note in the task body). */
+const FAB_BACK_ICON = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true" width="18" height="18">' +
+    '<path d="M9.8 3.4 5.2 8l4.6 4.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>' +
+    '</svg>';
+const FAB_DRAWER_ICON = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true" width="18" height="18">' +
+    '<path fill-rule="evenodd" clip-rule="evenodd" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C4.29683 14.1164 5.13612 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C5.13612 1.88307 4.29683 1.88358 3.65076 1.95353C3.47672 1.97129 3.30027 1.98546 3.10872 1.9954L4.1828 1.91166Z" fill="currentColor"/>' +
+    '</svg>';
+/**
+ * @param t - `mobileNav` dictionary.
+ * @param toggleSidebar - opens/closes the drawer.
+ * @param panelExit - the sidebar-panel exit face (panel-exit.ts). The FAB is the
+ *   screen's only control while a panel owns the main area — the header toggle
+ *   does not render there — so it doubles as 「返回会话」. Null on a host that
+ *   cannot select panels (rc.6), where it stays a plain drawer button.
+ */
+function createOverlayTask(t, toggleSidebar, panelExit) {
     let backdrop = null;
     let fab = null;
     let backdropRemoveTimer = null;
@@ -688,20 +886,66 @@ function createOverlayTask(t, toggleSidebar) {
     let faded = false;
     const drawerOpen = () => {
         const frame = (0, phone_chrome_ts_1.getFrame)();
-        return frame !== null && !frame.hasAttribute('data-sidebar-collapsed');
+        if (frame === null)
+            return false;
+        // The user's call (2026-09-13): our drawer is the one users get, even on
+        // hosts that ship their own overlay drawer. The host's version measures
+        // 321px wide with z-index:1100 and, notably, NO full-screen backdrop at all
+        // (measured: the conversation stays hit-testable beside it), which is the
+        // behaviour the phone owner rejected as unusable. So the legacy column
+        // rules stay armed and this backdrop keeps being created.
+        return !frame.hasAttribute('data-sidebar-collapsed');
     };
     const heroPhase = () => document.querySelector('[data-phase="active"]') === null;
-    fadeHook = () => {
-        if (backdrop === null)
+    /**
+     * The FAB has two faces. While a sidebar panel owns the main area it reads as
+     * 「返回会话」 and leaves the panel; everywhere else it opens the drawer.
+     *
+     * It matters because the FAB is the ONLY control on screen there: the panel
+     * replaces the conversation, so the header (and with it the drawer toggle)
+     * does not render, and a panel's own page head carries no way back either.
+     * Same button, same corner — only its meaning follows the view.
+     */
+    const onFabClick = (event) => {
+        if (panelExit !== null && panelExit.panelOpen()) {
+            event.preventDefault();
+            event.stopPropagation();
+            panelExit.exit();
             return;
-        faded = true;
-        backdrop.style.pointerEvents = 'none';
-        backdrop.style.opacity = '0';
+        }
+        toggleSidebar();
+    };
+    /** Icon and accessible name follow the view so the button never reads as a
+     * mystery control. Idempotent: ensure() runs on every mutation burst. */
+    const syncFab = () => {
+        if (fab === null)
+            return;
+        const exiting = panelExit !== null && panelExit.panelOpen();
+        const mode = exiting ? 'exit-panel' : 'open-drawer';
+        if (fab.dataset.mobileNavFabMode === mode)
+            return;
+        fab.dataset.mobileNavFabMode = mode;
+        const label = t(exiting ? 'backToConversation' : 'open');
+        fab.setAttribute('aria-label', label);
+        fab.title = label;
+        fab.innerHTML = exiting ? FAB_BACK_ICON : FAB_DRAWER_ICON;
     };
     return {
         name: 'overlay-backdrop-fab',
         scopes: ['*', 'data-sidebar-collapsed', 'data-phase'],
         ensure: () => {
+            // Re-armed on every ensure, not once in the factory: core.deactivate()
+            // runs dispose() on every MOBILE_QUERY flip (reconciler-core.ts), and
+            // reactivation only re-runs ensure() - a hook assigned in the factory
+            // body stayed null from the first breakpoint flip onwards, silently
+            // killing the backdrop fade.
+            fadeHook = () => {
+                if (backdrop === null)
+                    return;
+                faded = true;
+                backdrop.style.pointerEvents = 'none';
+                backdrop.style.opacity = '0';
+            };
             const frame = (0, phone_chrome_ts_1.getFrame)();
             if (frame === null)
                 return;
@@ -711,7 +955,10 @@ function createOverlayTask(t, toggleSidebar) {
                     backdrop.dataset.mobileNav = 'backdrop';
                     backdrop.setAttribute('role', 'button');
                     backdrop.setAttribute('aria-label', t('backdrop'));
-                    backdrop.addEventListener('click', toggleSidebar);
+                    // No element-level click listener: phone-chrome's capture-phase click
+                    // handler owns the backdrop tap. The third-party mobile shim stops
+                    // click propagation at the frame for anything outside the drawer, so
+                    // a listener down here never sees the tap (2026-09-14).
                     frame.appendChild(backdrop);
                     faded = false;
                 }
@@ -743,17 +990,14 @@ function createOverlayTask(t, toggleSidebar) {
                 fab.dataset.mobileNav = 'fab';
                 fab.setAttribute('aria-label', t('open'));
                 fab.title = t('open');
-                fab.innerHTML =
-                    '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true" width="18" height="18">' +
-                        '<path fill-rule="evenodd" clip-rule="evenodd" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C4.29683 14.1164 5.13612 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C5.13612 1.88307 4.29683 1.88358 3.65076 1.95353C3.47672 1.97129 3.30027 1.98546 3.10872 1.9954L4.1828 1.91166Z" fill="currentColor"/>' +
-                        '</svg>';
-                fab.addEventListener('click', toggleSidebar);
+                fab.addEventListener('click', onFabClick);
                 frame.appendChild(fab);
             }
             else if ((!heroPhase() || drawerOpen()) && fab !== null) {
                 fab.remove();
                 fab = null;
             }
+            syncFab();
         },
         dispose: () => {
             if (backdropRemoveTimer !== null) {
@@ -815,13 +1059,1503 @@ function createFileViewerMarkerTask() {
     };
 }
 };
+__modules["effects/sidebar-swipe.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.startZonePxFor = startZonePxFor;
+exports.classifySwipe = classifySwipe;
+exports.classifyFilesSwipe = classifyFilesSwipe;
+exports.slidingVelocity = slidingVelocity;
+exports.hitTestStart = hitTestStart;
+exports.filesZoneHit = filesZoneHit;
+exports.openStateStartMode = openStateStartMode;
+exports.followTranslate = followTranslate;
+exports.followOpenTransform = followOpenTransform;
+exports.findHorizontalScroller = findHorizontalScroller;
+exports.selectionOwnsStroke = selectionOwnsStroke;
+exports.closeDrawerAnimated = closeDrawerAnimated;
+exports.installSidebarSwipe = installSidebarSwipe;
+const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
+const gesture_guard_ts_1 = require("./effects/gesture-guard.js");
+const overlay_backdrop_fab_ts_1 = require("./effects/overlay-backdrop-fab.js");
+/**
+ * Sidebar drawer swipe gestures (B 档 hybrid follow, per the 2026-08-29
+ * controlled upgrade of docs/specs/2026-08-27-sidebar-swipe-gestures.md).
+ *
+ * Three gestures:
+ * - edge swipe-in: the pointer goes down within the start zone (45% of the
+ *   left edge) and the drawer is closed → the host state is flipped AT
+ *   AXIS-LOCK (early commit) while the drawer is pinned in its closed slot,
+ *   so the REAL open subtree mounts off-screen and then follows the finger
+ *   out of the slot (see startFollow for why the flip has to come first);
+ * - content swipe-toward-slot: the pointer goes down inside the open drawer
+ *   and drags LEFT (LTR) → the drawer FOLLOWS the finger (inline translateX,
+ *   transition:none) and releases into the host's transition;
+ * - content swipe-out (legacy): drag RIGHT inside the open drawer → no
+ *   follow (A 档 semantics preserved verbatim), release classifies.
+ *
+ * The release decision is UNCHANGED from A 档: classifySwipe (distance ratio
+ * OR recent-window velocity) — after a follow stroke, dx IS the followed
+ * position, so the same function decides complete vs spring-back. The commit
+ * is still just `ctx.layout.toggleSidebar()`. The follow mechanics ride the
+ * host transition instead of fighting it: during the stroke the drawer gets
+ * inline `transition: none` + translateX; on release the inline styles are
+ * dropped and the commit retargets the host transition IN THE SAME TASK (no
+ * paint in between), so the drawer animates from the finger position to the
+ * final state with zero custom animation code.
+ *
+ * Review constraints honored (spec 2026-08-27 second review): the backdrop
+ * stays binary (appears at commit — never opacity-followed, 缺陷 2); a modal
+ * rising mid-stroke reverts the drawer every move event (缺陷 1's per-frame
+ * guard); the OPEN final state must end with transform:none (the containing
+ * block invariant for fixed descendants) — a transitionend-free cleanup pair
+ * (inline clear + host value) guarantees it because the host open rule is
+ * transform:none. No gesture-layer DOM, no setPointerCapture. Zero transform
+ * writes remain true for the LEGACY rightward-close path.
+ *
+ * Coexistence with the host's overlay interactions (document capture click /
+ * pointerup) is two-layered via gesture-guard.ts: (1) tryLock publishes an
+ * axis-lock flag the instant the stroke locks horizontal — during
+ * pointermove, strictly before any pointerup — and the host handlers yield
+ * on it first, because they are registered EARLIER and the post-release
+ * consume marks do not exist yet on the stroke's own release event (audit
+ * S0: the host toggled first and the gesture toggled back, net zero);
+ * (2) a classified swipe additionally marks its target chain consumed so
+ * the synthetic click after the stroke can never toggle twice or navigate
+ * a row.
+ */
+/**
+ * Start-zone width as a FRACTION of the viewport width: the pointer counts
+ * as "from the left edge" anywhere inside the left (RTL: right) strip this
+ * wide. The zone STAYS at 45% (2026-09-11 user decision): a brief seventh
+ * pass shrank it to 0.25 for the draggable-widget conflict and was rolled
+ * back the same day — the user keeps the "anywhere in the left half" feel
+ * and the conflict is handled by yield signals instead (the
+ * data-mobile-nav-dragging cooperation mark + the floating-widget positional
+ * heuristic, see dragMarkYields/findFloatingWidget).
+ * History of the constant: 24px (hotspot era) → 48px (third pass, fixed
+ * "识别成对话内容滚动") → 96px (fourth pass — at that point the zone also
+ * finally cleared Chrome Android's EDGE_WIDTH_DP=48dp history-navigation
+ * trigger strip, whose strokes the browser claims and pointercancels; the
+ * browser gesture itself is suppressed by the root overscroll-behavior-x:
+ * none rule in layout.css.ts) → 0.45×viewport (fifth pass; brief 0.25
+ * experiment rolled back) — this value.
+ * Safety at this width: the release classification (0.16×w travel OR
+ * 0.45px/ms velocity) still gates the commit, so widening cannot open on a
+ * tap; vertical strokes reset at axis lock (≤8px of prevented movement) and
+ * hand scrolling back; strokes beginning inside genuinely horizontally
+ * scrollable containers are excluded from the zone entirely — see
+ * findHorizontalScroller (at 45% the stats line / message code blocks sit
+ * well inside the strip, so that guard is load-bearing).
+ */
+const START_ZONE_RATIO = 0.45;
+/**
+ * The zone in pixels for a given viewport width (pure, exported for the
+ * decision-table tests). Rounded so the probe boundary assertions stay
+ * integral (390px → Math.round(175.5) = 176).
+ */
+function startZonePxFor(viewportWidthPx, ratio = START_ZONE_RATIO) {
+    return Math.round(viewportWidthPx * ratio);
+}
+/**
+ * Axis-lock threshold: once the stroke's dominant axis has moved this far,
+ * the axis is decided. Horizontal-dominant (|dx| > |dy|) locks the stroke
+ * to X (a swipe); vertical-dominant abandons it to native scrolling.
+ * Replaces the old 4px slop + 1.5× direction-bias pair — a 1.5× bias
+ * rejected natural ~45° diagonal swipes (the other half of the
+ * "识别成滚动" report). MUI uses a 3px uncertainty threshold; 8px is a
+ * comfortable margin against tap jitter while still deciding in the first
+ * ~16ms of movement.
+ */
+const LOCK_PX = 8;
+/** Distance thresholds as a fraction of the viewport width.
+ *  Second tuning pass (2026-08-27, "识别成滚动" feedback): 0.16 open = ~62px
+ *  on a 390px phone, 0.13 close = ~51px. Keep the open threshold above the
+ *  close threshold so an accidental reverse swipe cannot re-open. */
+const OPEN_DISTANCE_RATIO = 0.16;
+const CLOSE_DISTANCE_RATIO = 0.13;
+/** Velocity window: most-recent-60ms instantaneous speed (end-segment slope). */
+const VELOCITY_WINDOW_MS = 60;
+/** px/ms speed thresholds for open / close (MUI uses 0.45). */
+const OPEN_VELOCITY = 0.45;
+const CLOSE_VELOCITY = 0.45;
+/** Covers the .28s CSS transition; prevents reverse-gesture double-toggles. */
+const COOLDOWN_MS = 350;
+/** How long a consumed gesture mark stays live (covers the synthetic click).
+ * Short by design: browsers dispatch the synthetic click within tens of ms,
+ * while iOS shells suppress it entirely — a long window with no delivery
+ * would let the marks swallow the user's next genuine tap (dead-tap bug).
+ * When upTo is absent from the release chain (edge swipe-in releases over
+ * the main content) the mark walk reaches the document root, so this short
+ * window is also the bound on how long any tap can be suppressed. */
+const CONSUME_WINDOW_MS = 300;
+/**
+ * Rightward travel (from the stroke start) that arms the OPEN follow, i.e.
+ * flips the host state early so the real drawer subtree mounts. Slightly
+ * above LOCK_PX so an 8px horizontal twitch inside the wide start zone does
+ * not mount-and-unmount 389 nodes; small enough that the dead zone before
+ * the drawer's edge appears is imperceptible.
+ */
+/** The open follow arms at the AXIS LOCK itself: tryLock already demanded
+ * 8px of horizontal-dominant travel, so no extra twitch margin is needed —
+ * every pixel between lock and arm was dead drag (user report 2026-08-29
+ * 「右滑的过程中最开始有真空期,有一段卡的地方」). The release verdict still
+ * decides the outcome, so arming early cannot commit a false open. */
+const OPEN_FOLLOW_ARM_PX = 8;
+/**
+ * The host's closed-slot offset as a PERCENTAGE of the drawer's own width
+ * (`transform: translateX(-110%)` — the 10% overshoot hides the drawer's
+ * shadow). Percentages are load-bearing for the open follow: the element
+ * width changes mid-stroke when React swaps the collapsed rail for the real
+ * drawer, and a percentage re-resolves against the current width while a
+ * cached px value would not.
+ */
+const CLOSED_SLOT_PCT = 110;
+/** Duration of the self-run terminal close animation. Matches the host's
+ * .28s drawer transition so the handoff feels identical. */
+const COMMIT_ANIM_MS = 280;
+/** Percentage baseline of the OPEN-direction follow. The host's closed slot
+ * is -110%, but following from -110% hides the first 28px of travel (the
+ * 10% overshoot of the 280px drawer): the drawer stayed invisible until
+ * ~dx=28 — user report 「刚开始会卡一下，之后才会拖出来」(measured: first
+ * paint at dx=12 was left=-296, edge reached the viewport only at dx=28).
+ * 101% keeps a small hidden margin (subpixel safety, would-be sliver at
+ * exactly -100%) so the drawer edge answers the finger right after the
+ * axis lock: at the 8px arm the edge is already ~5px on-screen (-102% left
+ * only 2.4px and read as a vacuum; -110% hid the first 28px entirely).
+ * The closed slot itself is only ever needed at TERMINAL states,
+ * where CLOSED_SLOT_PCT is used verbatim. */
+const OPEN_FOLLOW_BASE_PCT = 101;
+/**
+ * Files-panel (host right sidebar) gesture constants — the right-edge mirror
+ * of the drawer layer (spec 2026-09-13-files-swipe-gesture-design.md).
+ *
+ * FILES_ZONE_RATIO mirrors the drawer's START_ZONE_RATIO: a narrow strip
+ * cannot be used because Chrome Android's history-nav edge strip (~48dp)
+ * pointercancels strokes starting inside it — the same reason the drawer
+ * zone grew to 45% of the viewport.
+ */
+const FILES_ZONE_RATIO = 0.45;
+/**
+ * Distance threshold as a fraction of the viewport width for BOTH files
+ * directions (≈62px on a 390px phone). The drawer's separate close ratio
+ * (0.13) exists because the close stroke follows into its slot; files
+ * strokes have no follow, so one ratio serves both directions.
+ */
+const FILES_DISTANCE_RATIO = 0.16;
+/** px/ms velocity threshold for both files directions (drawer parity). */
+const FILES_VELOCITY = 0.45;
+/** Pointer id we are tracking (multi-touch is ignored). */
+let trackingPointer = 0;
+/** True once the stroke is axis-locked (direction bias passed). */
+let tracking = false;
+/** Stroke samples (x + timestamp) for the recent-window velocity. */
+let samples = [];
+/** Stroke origin (for the direction-bias check). */
+let startX = 0;
+let startY = 0;
+/** Drawer visibility at lock time. */
+let lockDrawerOpen = false;
+/** Expiry of the post-release cooldown (performance.now()). */
+let cooldownUntil = 0;
+/** Element whose stroke was marked consumed (null = no live mark). */
+let consumedEl = null;
+/** B 档 follow state — one cache per stroke, set once at lock time so the
+ * per-move writes never read layout (the spec review's rAF-contention
+ * constraint). followDrawer stays bound for the whole stroke so a
+ * released-then-re-engaged stroke (direction wobble) reuses the cache. */
+let followDrawer = null;
+let followEngaged = false;
+let strokeClosedTx = 0;
+let strokeRtl = false;
+/** True while an OPEN stroke has early-committed the host state (the drawer
+ * subtree is mounted but pinned in its slot, following the finger). The
+ * release must then either keep it open or toggle it back. */
+let openFollowArmed = false;
+/** True once an open stroke has decided NOT to arm the follow (aborted arm:
+ * a modal/takeover veto, a missing drawer) so it never retries mid-stroke. */
+let openFollowRefused = false;
+/**
+ * Which gesture family owns the current stroke: 'drawer' = the sidebar
+ * gestures (every pre-existing behavior, untouched); 'files' = the
+ * right-edge files-panel gesture (no follow painting, host-panel commit).
+ * Written by beginStroke only; a fresh beginStroke always routes it.
+ */
+let strokeMode = 'drawer';
+/** Files-panel visibility at lock time (the mirror of lockDrawerOpen). */
+let lockFilesOpen = false;
+/**
+ * The files-panel toggle injected at install (openFilesPanel: it toggles by
+ * the host's own control state, so open and close share one function).
+ * Module-level because endStroke is a module-level function; the default is
+ * a no-op so the node:test suite can import the module without a DOM.
+ */
+let filesToggleFn = () => false;
+/**
+ * Pure decision: what does this stroke do, given the drawer state?
+ * `dx`/`dy` are raw pointer deltas (RTL mirrors X through `rtl`), `velX` is
+ * the raw recent-window X velocity. The stroke must be locked horizontal
+ * (|dx| > |dy| and past the lock slop) and direction-consistent; then
+ * distance OR velocity wins, with the drawer-state-specific threshold.
+ */
+function classifySwipe(t, m, rtl) {
+    // RTL mirrors the X axis: a rightward stroke (positive dx in LTR) is
+    // leftward in RTL. Normalize to the logical direction before judging.
+    const dx = rtl ? -m.dx : m.dx;
+    if (Math.abs(dx) <= t.lockPx)
+        return 'none';
+    if (Math.abs(dx) <= Math.abs(m.dy))
+        return 'none';
+    if (t.drawerOpen) {
+        // BOTH horizontal directions close (2026-08-29 sixth round, user report
+        // 「根本没法左滑关闭」). Leftward is the natural "push it back into its
+        // slot" gesture — and the only one the follow animation actually paints
+        // (followTranslate's close branch follows leftward), so refusing it made
+        // the drawer track the finger and then spring back, i.e. the animation
+        // promised a close the classifier would not honor. Rightward stays
+        // accepted verbatim: four tuning rounds of muscle memory ride on it and
+        // failure scenarios B0/B1/B2 assert it. Nothing else competes for a
+        // horizontal stroke while the drawer is open, so accepting both costs no
+        // ambiguity.
+        const travel = Math.abs(dx);
+        if (travel / t.viewportWidthPx >= t.closeDistanceRatio)
+            return 'close';
+        const velX = rtl ? -m.velX : m.velX;
+        // A fling only counts when it agrees with the stroke's own direction
+        // (same contradiction guard the open branch applies).
+        if (velX > 0 !== dx > 0)
+            return 'none';
+        return Math.abs(velX) >= t.closeVelocity ? 'close' : 'none';
+    }
+    if (dx <= 0)
+        return 'none';
+    if (dx / t.viewportWidthPx >= t.openDistanceRatio)
+        return 'open';
+    const velX = rtl ? -m.velX : m.velX;
+    return velX >= t.openVelocity ? 'open' : 'none';
+}
+/**
+ * Pure decision for the FILES gesture (right-edge zone), the mirror twin of
+ * classifySwipe. RTL mirrors the X axis exactly like classifySwipe. The
+ * verdict space extends the drawer's with `files` (the files-panel commit:
+ * open the panel on a leftward stroke when everything is closed, close it on
+ * a rightward stroke when it is open):
+ * - leftward-logical strokes only ever mean "open the panel" and fire ONLY
+ *   when panel and drawer are BOTH closed — the panel would mount under the
+ *   open drawer (z-1100) and be invisible, so the stroke is 'none' (the
+ *   2026-09-13 narrowing: a leftward stroke NEVER collapses anything);
+ * - rightward-logical strokes close the VISIBLE TOP: drawer open → 'close'
+ *   (the animated commitFollowClose path, gated on the drawer's own
+ *   distance/velocity thresholds so both families judge a stroke alike);
+ *   else panel open → 'files'; else 'none'.
+ */
+function classifyFilesSwipe(t, m, rtl) {
+    const dx = rtl ? -m.dx : m.dx;
+    if (Math.abs(dx) <= t.lockPx)
+        return 'none';
+    if (Math.abs(dx) <= Math.abs(m.dy))
+        return 'none';
+    const velX = rtl ? -m.velX : m.velX;
+    if (dx < 0) {
+        if (t.panelOpen || t.drawerOpen)
+            return 'none';
+        if (-dx / t.viewportWidthPx >= t.distanceRatio)
+            return 'files';
+        // A fling only counts when it agrees with the stroke's own direction
+        // (the same contradiction guard classifySwipe applies).
+        if (velX > 0 !== dx > 0)
+            return 'none';
+        return -velX >= t.velocity ? 'files' : 'none';
+    }
+    if (t.drawerOpen) {
+        // Same gates as the drawer family's close (classifySwipe), including its
+        // CLOSE_DISTANCE_RATIO: this cell IS the drawer-close commit path, so the
+        // two families must judge one physical stroke alike. Without the gate the
+        // files zone's 45% reaches ~66px into the open drawer column at 390px,
+        // where a thumb resting on a row drifts ~8px sideways while scrolling —
+        // that closed the drawer AND consumed the tap. The leftward cell beside the
+        // drawer is already 'none', so this is what makes the families agree.
+        const closeRatio = t.drawerCloseDistanceRatio ?? t.distanceRatio;
+        if (dx / t.viewportWidthPx >= closeRatio)
+            return 'close';
+        if (velX <= 0)
+            return 'none';
+        return velX >= t.velocity ? 'close' : 'none';
+    }
+    if (t.panelOpen) {
+        if (dx / t.viewportWidthPx >= t.distanceRatio)
+            return 'files';
+        if (velX > 0 !== dx > 0)
+            return 'none';
+        return velX >= t.velocity ? 'files' : 'none';
+    }
+    return 'none';
+}
+/**
+ * Recent-window instantaneous velocity (px/ms) from the tail of the last
+ * `windowMs` milliseconds of samples, up to `now`. Sliding X per ms between
+ * the LAST TWO in-window samples — the end-of-stroke slope — so a long slow
+ * drag then a quick flick reports the flick, not the drag average. Samples
+ * older than the window are ignored. Fewer than two in-window samples → 0.
+ */
+function slidingVelocity(samples, windowMs, now) {
+    const cutoff = now - windowMs;
+    const inWindow = samples.filter((s) => s.t >= cutoff);
+    if (inWindow.length < 2)
+        return 0;
+    const a = inWindow[inWindow.length - 2];
+    const b = inWindow[inWindow.length - 1];
+    const dt = b.t - a.t;
+    if (dt <= 0)
+        return 0;
+    return (b.x - a.x) / dt;
+}
+/**
+ * Geometric start-hit test: the pointer went down in the left edge start
+ * zone (when the drawer is closed) or inside the drawer content area (when
+ * open). Pure and viewport-relative so it is unit-testable; the runtime
+ * variant additionally checks the drawer geometry via the DOM.
+ */
+function hitTestStart(clientX, viewportWidthPx, rtl, t) {
+    const edge = rtl ? viewportWidthPx - clientX : clientX;
+    return edge >= 0 && edge <= t.startZonePx;
+}
+/**
+ * Geometric start-hit test for the FILES gesture: the pointer went down in
+ * the RIGHT edge zone (RTL: LEFT) — the exact mirror of hitTestStart. Pure
+ * and viewport-relative.
+ */
+function filesZoneHit(clientX, viewportWidthPx, rtl, zonePx) {
+    const edge = rtl ? clientX : viewportWidthPx - clientX;
+    return edge >= 0 && edge <= zonePx;
+}
+/** Which gesture family owns a stroke that begins while the drawer is OPEN.
+ * Inside the drawer body the drawer family always wins (owner's rule
+ * 2026-09-17: the drawer's own surface must answer a leftward drag, whether or
+ * not the viewport-ratio files zone overlaps it — at 390px that zone starts at
+ * x=214, inside the 280px drawer); outside the body the right zone keeps its
+ * files routing and its deliberate leftward 'none' verdict (2026-09-13
+ * narrowing). */
+function openStateStartMode(insideDrawer, inFilesZone) {
+    return insideDrawer || !inFilesZone ? 'drawer' : 'files';
+}
+/**
+ * Pure follow mapping (B 档): the translateX (px) to paint for a stroke
+ * sample, or null when THIS sample has no follow. `closedTx` is the signed
+ * closed-slot translateX (negative LTR, positive RTL — the drawer slides
+ * off the anchored edge); `dx` is the RAW pointer delta; normalization
+ * mirrors classifySwipe (`d = rtl ? -dx : dx`, rightward-logical positive =
+ * toward open).
+ *
+ * Decision table (C3 hybrid, 2026-08-29 user decision):
+ * - close stroke (drawer open): LEFTWARD-logical travel drags the drawer
+ *   toward its closed slot, clamped at the slot; rightward-logical → null
+ *   (the legacy A 档 close owns that direction — no follow, momentum-honest);
+ * - open stroke (drawer closed): NOT used at runtime — the open direction
+ *   follows through `followOpenTransform` instead, because its baseline has
+ *   to stay a percentage across the subtree swap (see that function). The px
+ *   mapping is kept pure and tested as the reference semantics;
+ * - a zero closed slot (degenerate host without a closed transform) yields
+ *   a constant 0 — the follow degrades to a no-op instead of inventing
+ *   travel.
+ */
+function followTranslate(closedTx, dx, rtl, drawerOpen) {
+    const dir = closedTx <= 0 ? -1 : 1;
+    const slot = Math.abs(closedTx);
+    const d = rtl ? -dx : dx;
+    if (drawerOpen) {
+        if (d >= 0)
+            return null;
+        // + 0 normalizes -0 (dir=-1 times a clamped 0) so strict equality in the
+        // decision table and in probe comparisons sees a plain zero.
+        return dir * Math.min(slot, -d) + 0;
+    }
+    if (d <= 0)
+        return null;
+    return dir * (slot - Math.min(slot, d)) + 0;
+}
+/**
+ * Pure follow mapping for the OPEN direction (B 档, 2026-08-29 second pass).
+ * Returns the CSS transform to paint for a stroke that has already
+ * early-committed the host state, or null when this sample has no follow
+ * (leftward-logical travel, i.e. pulled back past the stroke origin).
+ *
+ * The baseline is the host's own PERCENTAGE slot (`translateX(-110%)`), kept
+ * symbolic on purpose: at arm time the element is still the ~206px collapsed
+ * rail and a frame later React has swapped in the ~280px drawer. A px
+ * baseline captured before the swap would leave the wider drawer 74px
+ * off-position (its slot is -308px, not -227px); `-110%` re-resolves against
+ * the element's current width on every frame, so the same declaration is
+ * correct across the mount. `min()`/`max()` clamp the open end so overshoot
+ * cannot drag the drawer past its resting position.
+ */
+function followOpenTransform(travelPx, rtl) {
+    const t = rtl ? -travelPx : travelPx;
+    if (t <= 0)
+        return null;
+    return rtl
+        ? `translateX(max(0px, calc(${OPEN_FOLLOW_BASE_PCT}% - ${t}px)))`
+        : `translateX(min(0px, calc(-${OPEN_FOLLOW_BASE_PCT}% + ${t}px)))`;
+}
+/**
+ * Pure walk: the innermost element of the chain (self included) that is a
+ * GENUINELY horizontally scrollable container — overflow-x auto/scroll AND
+ * content actually overflowing (scrollWidth > clientWidth + 1; the +1
+ * absorbs subpixel rounding). A stroke beginning inside one belongs to that
+ * scroller: the browser claims the horizontal pan (pointercancel on real
+ * devices) and the release classification must neither compete with it nor
+ * preventDefault it away — prevention is what would break the strip's native
+ * scrolling near the left edge once the start zone grew to 45% of the
+ * viewport (the stats
+ * line spans the full width; message code blocks are overflow-x:auto too).
+ * CDP failure scenario C1 pins this contract. overflow-x:hidden/clip never
+ * match: clipped content cannot pan, so a horizontal stroke there stays free
+ * for the gesture layer.
+ */
+function findHorizontalScroller(node) {
+    let cur = node;
+    while (cur !== null) {
+        if ((cur.overflowX === 'auto' || cur.overflowX === 'scroll') &&
+            cur.scrollWidth > cur.clientWidth + 1) {
+            return cur;
+        }
+        cur = cur.parent;
+    }
+    return null;
+}
+/** The open drawer element: first child of the plugin frame. */
+function findDrawer() {
+    const frame = (0, phone_chrome_ts_1.getFrame)();
+    return frame !== null && frame.firstElementChild instanceof HTMLElement
+        ? frame.firstElementChild
+        : null;
+}
+/** True when the drawer is currently open (per the collapsed marker). */
+function drawerOpen() {
+    const frame = (0, phone_chrome_ts_1.getFrame)();
+    return frame !== null && !frame.hasAttribute('data-sidebar-collapsed');
+}
+/**
+ * True when the host's right sidebar files panel is currently VISIBLE (any
+ * form: fullscreen on phones, docked on tablets). Measured on 0.1.5: the
+ * panel element is persistent — the closed fullscreen form stays in the DOM
+ * at `visibility: hidden` with its rect pushed to x=viewport-width — so
+ * presence alone is not the panel-state read. Detect the open state by the
+ * three ways the host can hide it (visibility / display / pushed-off rect);
+ * a host without this panel keeps returning false and the explorer fallback
+ * applies.
+ */
+function filesPanelOpen() {
+    const panel = document.querySelector('[data-sidebar-right-panel]');
+    if (panel === null)
+        return false;
+    const cs = getComputedStyle(panel);
+    if (cs.visibility === 'hidden' || cs.display === 'none')
+        return false;
+    return panel.getBoundingClientRect().left < window.innerWidth;
+}
+/**
+ * Map the real DOM ancestor chain (target first, root last) onto the plain
+ * SwipeChainNode shape findHorizontalScroller walks. Bounded by the document
+ * depth (~15 nodes in this app) and run once per pointerdown, so the
+ * getComputedStyle calls are not a per-frame cost.
+ */
+function chainFrom(target) {
+    let node = null;
+    let el = target;
+    while (el !== null) {
+        node = {
+            parent: node,
+            scrollWidth: el.scrollWidth,
+            clientWidth: el.clientWidth,
+            overflowX: getComputedStyle(el).overflowX,
+        };
+        el = el.parentElement;
+    }
+    return node;
+}
+/** Whether a modal dialog owns the screen (gestures must yield to it). */
+function modalOpen() {
+    return document.querySelector('[aria-modal="true"]') !== null;
+}
+/** True when a full-screen takeover (taskboard / ssh) owns the frame, or any
+ *  host conversation.view overlay (trajectory tab, dsh-file-viewer, or a
+ *  future third-party view — they all set the generic
+ *  `data-conversation-composer-overlay` attribute on their root) is open.
+ *  In both cases the drawer edge-swipe gestures yield so horizontal content
+ *  scrolling (kanban columns, trajectory tables, CSV/code panes) wins the
+ *  left-edge start zone; the FAB still opens the drawer. This reads the
+ *  generic overlay attribute directly — deliberately decoupled from the
+ *  file-viewer marker, which keys on `.dsfv-panel` only (design
+ *  2026-09-06-conversation-overlay-takeover-design.md §4.2). */
+function takeoverActive() {
+    return (document.documentElement.hasAttribute('data-dsh-taskboard-active') ||
+        document.documentElement.hasAttribute('data-dsh-ssh-active') ||
+        document.querySelector('[data-conversation-composer-overlay]') !== null);
+}
+/**
+ * Whether a live, non-collapsed text selection owns the pointer stroke.
+ * A selection-handle drag (and a long-press selection that appears between
+ * pointerdown and the axis lock) is horizontally dominant and geometrically
+ * indistinguishable from a drawer swipe — the browser must keep it (#43,
+ * iPad WebKit). Feature-detected so the node:test suite can import the
+ * predicate without a DOM.
+ *
+ * TWO selection models must be read, because they are disjoint:
+ * - the DOCUMENT selection (window.getSelection) covers message-flow text
+ *   and contenteditable hosts;
+ * - a selection inside a text control lives on the ELEMENT as
+ *   selectionStart/selectionEnd and is INVISIBLE to window.getSelection —
+ *   measured on the composer during a hijacked stroke (#44, real iPad):
+ *   taStart=0 taEnd=20 while the document selection reported isCollapsed.
+ *   Reading only the document selection let the swipe layer arm, lock, and
+ *   collapse the composer selection the user was extending.
+ * document.activeElement is the right anchor for the element model: a handle
+ * drag keeps focus inside the control, and it also covers strokes whose
+ * points land outside the control's own box.
+ */
+function selectionOwnsStroke() {
+    if (typeof window === 'undefined')
+        return false;
+    const sel = window.getSelection();
+    if (sel !== null && !sel.isCollapsed)
+        return true;
+    if (typeof document === 'undefined')
+        return false;
+    const el = document.activeElement;
+    if (el === null)
+        return false;
+    const tag = el.tagName;
+    if (tag !== 'TEXTAREA' && tag !== 'INPUT')
+        return false;
+    // Input types without a text selection (checkbox, number, email, …) report
+    // null here — measured in Chromium — and older WebKit/Gecko throw
+    // InvalidStateError instead. Both mean "no text selection is being
+    // dragged", never "the control owns this stroke", so neither may be
+    // allowed to escape from a pointer handler.
+    try {
+        const { selectionStart: start, selectionEnd: end } = el;
+        return typeof start === 'number' && typeof end === 'number' && start !== end;
+    }
+    catch {
+        return false;
+    }
+}
+/** Whether the swipe layer is on cooldown (animation in flight). */
+function onCooldown() {
+    return performance.now() < cooldownUntil;
+}
+/**
+ * Draggable-element yield mark (2026-09-11, 桌宠拖动冲突 D 方案的 C 侧):
+ * a dragging component (desktop pet, floating ball, drag-to-reorder, …)
+ * marks itself with `data-mobile-nav-dragging` while its drag is live — on
+ * the element the pointer is holding (or any ancestor), or on
+ * documentElement/body as a global mark when the dragged node moves around
+ * or the dragger prefers not to touch the node tree. The gesture layer
+ * reads the mark at pointerdown AND at every axis-lock attempt before the
+ * stroke locks: a mark present at either point yields the whole stroke (no
+ * drawer arm, no touchmove preventDefault) because the two layers would
+ * otherwise both answer the same pointer stream — the exact bug the probe
+ * reproduces (draggable-conflict-probe pet.t1: a 56px floating ball dragged
+ * rightward inside the fifth-pass 45% zone opened the drawer mid-drag).
+ * Semantics mirror selectionOwnsStroke: the mark must be up by the first
+ * few move events (a pointerdown handler is the natural place); once the
+ * stroke axis-locks the gesture stays committed — a mark appearing
+ * mid-locked-stroke does not unwind an already-armed open follow.
+ */
+function dragMarkYields(event) {
+    if (document.documentElement.hasAttribute('data-mobile-nav-dragging'))
+        return true;
+    if (document.body.hasAttribute('data-mobile-nav-dragging'))
+        return true;
+    return (event.target instanceof Element &&
+        event.target.closest('[data-mobile-nav-dragging]') !== null);
+}
+/** Upper bound (px) of the "small floating widget" positional heuristic.
+ * The real-world reference is dsh-pet's floating ball (kz2Bea_float,
+ * position:fixed, measured 148x160 on the live profile page) — 160 would
+ * sit exactly on that widget's edge; 200 leaves headroom for sibling
+ * plugin widgets while a full-screen overlay (backdrop, sheets, dialogs)
+ * still cannot pass. */
+const FLOATING_WIDGET_MAX_PX = 200;
+/**
+ * Floating-widget positional yield (2026-09-11, 悬浮窗拖动冲突 B 侧): plugins
+ * ship draggable floating widgets (desktop-pet / floating-ball / draggable
+ * panel shapes) that carry NO standard "draggable" DOM mark, yet the user
+ * presses the widget itself — so the stroke's start target sits inside that
+ * widget's layer. Draggable widgets almost always live in a SMALL
+ * freely-positioned layer (position: fixed | absolute, own box ≤ 160px)
+ * hovering above the page, so walk the ancestor chain from the event target:
+ * the first small positioned ancestor counts as a floating widget and the
+ * stroke yields (no arm, no touchmove preventDefault). Pairs with
+ * dragMarkYields (cooperation mark) which needs no shape guessing.
+ * Excluded: anything inside our own frame subtree — the FAB / backdrop /
+ * drawer content carry their own gesture semantics and must never be
+ * misread as floating widgets (the closed-state FAB sits in the start zone).
+ * ponytail: no DOM-standard draggable signal exists; shape ≈ draggable is an
+ * approximation with a known ceiling — a STATIC small positioned element
+ * (e.g. a message badge) also yields, costing a stroke start under a
+ * ≤160px dot; a REAL widget that misses (bigger layer, static positioning)
+ * upgrades via the data-mobile-nav-dragging mark or by raising the cap.
+ */
+function findFloatingWidget(target) {
+    if (target.closest('[data-mobile-nav="frame"]') !== null)
+        return null;
+    let el = target;
+    while (el !== null) {
+        if (el instanceof HTMLElement) {
+            const cs = getComputedStyle(el);
+            if ((cs.position === 'fixed' || cs.position === 'absolute') &&
+                el.offsetWidth <= FLOATING_WIDGET_MAX_PX &&
+                el.offsetHeight <= FLOATING_WIDGET_MAX_PX) {
+                return el;
+            }
+        }
+        el = el.parentElement;
+    }
+    return null;
+}
+function floatingWidgetYields(event) {
+    return (event.target instanceof Element &&
+        findFloatingWidget(event.target) !== null);
+}
+/**
+ * Cache the follow geometry for a freshly locked stroke. Runs ONCE per
+ * stroke (one getComputedStyle, plus one getBoundingClientRect only for the
+ * cold-start fallback); the per-move path afterwards is write-only.
+ *
+ * CLOSE strokes follow from a px baseline read here. OPEN strokes cannot:
+ * the host renders TWO different subtrees in the same sidebar column —
+ * collapsed it is a ~206px rail holding only Task Board / SSH / Files /
+ * Session log (79 nodes, ZERO `role=treeitem`), open it is the ~280px drawer
+ * with the session tree and footer (389 nodes, 15 treeitems). Dragging the
+ * closed column would only reveal the rail (measured 2026-08-29, the user's
+ * "完全不同的 UI、没有真实会话、位置全乱" report). The open direction therefore
+ * commits FIRST and follows AFTER (armOpenFollow), which is also why its
+ * baseline must stay a percentage rather than a px value cached here.
+ */
+function startFollow() {
+    // Unbind first: followDrawer survives across strokes (endStroke releases
+    // the styles AFTER reset(), so reset must not clear it). Without this an
+    // open stroke would inherit the binding left by the previous close-follow
+    // and start following after all — exactly what the probe assertion
+    // swipe.open-stroke-no-follow catches.
+    followDrawer = null;
+    followEngaged = false;
+    openFollowArmed = false;
+    openFollowRefused = false;
+    // strokeRtl is read by the OPEN branch of applyFollow BEFORE it arms, so it
+    // must be refreshed for every locked stroke — not only the close branch —
+    // or an open stroke would inherit the previous stroke's reading direction.
+    strokeRtl = frameRtl();
+    const drawer = findDrawer();
+    if (drawer === null)
+        return;
+    // A closed stroke binds nothing here: the OPEN direction early-commits and
+    // binds inside armOpenFollow, using a percentage baseline (the element's
+    // width changes when React swaps the rail for the real drawer).
+    if (!lockDrawerOpen)
+        return;
+    followDrawer = drawer;
+    // The slot is 110% of the element's OWN width (the host's closed rule is
+    // translateX(-110%), the extra 10% covering any shadow).
+    //
+    // Measuring the OPEN drawer is load-bearing (2026-08-29 seventh round,
+    // user report 「左滑的时候会卡一下…会突然有出现半开不开的样子」 →
+    // 「UI 会停在我最终滑动的地方，之后消失」). The previous baseline was a
+    // slot observed on the CLOSED host, i.e. on the ~206px nav rail
+    // (~-226.7px) — but the drawer being dragged is ~280px and parks at
+    // ~-308px. followTranslate clamps at the slot, so the drag froze 81px
+    // short of the edge: the drawer stopped under a still-moving finger
+    // (「半开不开」), and the release then had to travel that remainder,
+    // reading as a stall followed by a disappearance.
+    //
+    // Width is stable for the duration of a close stroke (no subtree swap
+    // until the release commits), so a px baseline is safe here — unlike the
+    // open direction, which must stay percentage-based because React swaps the
+    // rail for the real drawer mid-stroke.
+    const slot = (drawer.getBoundingClientRect().width * CLOSED_SLOT_PCT) / 100;
+    strokeClosedTx = strokeRtl ? slot : -slot;
+}
+/**
+ * Arm the OPEN follow: pin the drawer in its closed slot with an important
+ * inline pair, THEN flip the host state in the same task. React mounts the
+ * real ~280px drawer subtree while our inline transform holds it off-screen,
+ * so the next move samples slide the genuine drawer — session tree and all —
+ * out of the slot under the finger. Ordering matters: pin before the flip,
+ * or the host's open rule (`transform: none`) paints the drawer at rest for
+ * one frame and the user sees it snap into place before the follow starts.
+ *
+ * The backdrop and the FAB swap at the flip, which is the documented binary
+ * behavior (spec review 缺陷 2: no opacity-following backdrop).
+ */
+/** True while the drawer subtree layout+paint is deliberately deferred by
+ * the arm-time content-visibility split (see armOpenFollow). */
+let cvDeferred = false;
+/** Re-materialize the drawer contents after the mount-frame split. */
+function revealDrawerContent() {
+    if (!cvDeferred)
+        return;
+    cvDeferred = false;
+    followDrawer?.style.removeProperty('content-visibility');
+    const el = findDrawer();
+    if (el !== null && el !== followDrawer)
+        el.style.removeProperty('content-visibility');
+}
+function armOpenFollow(ctx) {
+    if (openFollowArmed || openFollowRefused)
+        return;
+    const drawer = findDrawer();
+    if (drawer === null || modalOpen() || takeoverActive()) {
+        openFollowRefused = true;
+        return;
+    }
+    followDrawer = drawer;
+    followEngaged = true;
+    drawer.style.setProperty('transition', 'none', 'important');
+    const pinned = followOpenTransform(0.0001, strokeRtl);
+    drawer.style.setProperty('transform', pinned ?? `translateX(-${CLOSED_SLOT_PCT}%)`, 'important');
+    // Split the mount cost (2026-08-29, user report 「滑动不会立刻生效，而是卡
+    // 那么零点几秒」): the toggle below synchronously mounts the 389-node
+    // drawer subtree, and reconcile + style + layout + paint all land in ONE
+    // long task — measured 308ms at 4x CPU throttle, a quarter-second of
+    // frozen screen on a phone. content-visibility:hidden (set BEFORE the
+    // flip, on the column that survives the subtree swap) makes the mount
+    // frame skip subtree layout+paint — the panel BOX still paints and the
+    // compositor keeps following the finger — and the contents materialize
+    // two frames later via revealDrawerContent(), where the motion masks the
+    // second (smaller) block. Ignored by browsers without support (no-op).
+    drawer.style.setProperty('content-visibility', 'hidden', 'important');
+    cvDeferred = true;
+    openFollowArmed = true;
+    ctx.layout.toggleSidebar();
+    requestAnimationFrame(() => {
+        requestAnimationFrame(revealDrawerContent);
+    });
+}
+/**
+ * Paint this move sample's follow position. Null mapping (legacy direction
+ * or pulled back past the stroke origin) releases the inline styles so the
+ * host transition is live again — the drawer springs to wherever the host
+ * state puts it and the classification still owns the release. Re-engaging
+ * after a null sample rewrites both inline properties, which also
+ * self-heals anything that restored them mid-stroke (React re-render).
+ *
+ * Both properties MUST be written with `important` priority. The open state
+ * is styled by our own `transform: none !important` (layout.css.ts — the
+ * containing-block rule for the settings overlay), which outranks a plain
+ * inline declaration: a normal `style.transform = ...` leaves the computed
+ * transform at `none` and the drawer never moves. That is exactly how the
+ * first follow implementation shipped invisible while every inline-string
+ * assertion passed (2026-08-29) — assert COMPUTED transform, never
+ * `element.style.transform`.
+ */
+function applyFollow(ctx, dx) {
+    if (!tracking || strokeMode !== 'drawer')
+        return;
+    if (!lockDrawerOpen) {
+        // OPEN direction: arm past the twitch threshold, then follow with the
+        // percentage baseline (the element's width changes across the mount).
+        const travel = strokeRtl ? -dx : dx;
+        if (!openFollowArmed) {
+            if (travel < OPEN_FOLLOW_ARM_PX)
+                return;
+            armOpenFollow(ctx);
+            if (!openFollowArmed)
+                return;
+        }
+        const value = followOpenTransform(dx, strokeRtl);
+        if (value === null) {
+            // Pulled back past the origin: hold the drawer parked in its slot
+            // rather than releasing (releasing would let the host animate it open
+            // behind the finger). The release still classifies and may revert.
+            followDrawer?.style.setProperty('transform', `translateX(-${CLOSED_SLOT_PCT}%)`, 'important');
+            return;
+        }
+        followDrawer?.style.setProperty('transform', value, 'important');
+        return;
+    }
+    if (followDrawer === null)
+        return;
+    const tx = followTranslate(strokeClosedTx, dx, strokeRtl, lockDrawerOpen);
+    if (tx === null) {
+        // Pulled back past the origin. Hold the drawer at rest instead of
+        // releasing the inline pair: releasing would restore the host's .28s
+        // transition mid-stroke, so a direction wobble would animate the drawer
+        // and then jump when the finger crosses back — the same reason the open
+        // branch pins instead of releasing.
+        followEngaged = true;
+        followDrawer.style.setProperty('transition', 'none', 'important');
+        followDrawer.style.setProperty('transform', 'translateX(0px)', 'important');
+        return;
+    }
+    followEngaged = true;
+    followDrawer.style.setProperty('transition', 'none', 'important');
+    followDrawer.style.setProperty('transform', `translateX(${tx}px)`, 'important');
+}
+/**
+ * Drop the inline follow styles. The host stylesheet retakes control: with
+ * the transition restored, clearing the transform animates the drawer from
+ * the finger position to whatever the CURRENT host state says. Called on
+ * every end-stroke branch (revert: this IS the spring-back; commit: the
+ * same-task retarget below overrides the initial leg before any paint).
+ */
+function releaseFollowStyles() {
+    const el = followDrawer;
+    if (!followEngaged || el === null)
+        return;
+    followEngaged = false;
+    el.style.removeProperty('transition');
+    el.style.removeProperty('transform');
+}
+/** A close commit that is still animating to the closed slot before the host
+ * state flips. The flip MUST wait: the sidebar column renders two mutually
+ * exclusive subtrees (280px drawer when open, 206px nav rail when closed),
+ * and React swaps them some ~200ms after the marker flips — measured
+ * mid-animation at t≈200ms of a 280ms transition (width 280→206, tx jumped
+ * -207.6→-181.9 as -110% re-resolved against the narrower rail). Flipping
+ * first therefore replaces the drawer's content and retargets its transition
+ * IN FLIGHT — user report 「最后抽屉样式突然消失,不是自然的动画收起」.
+ * Late commit: animate the inline transform to the slot, flip only when the
+ * drawer is already off-screen, then drop the inline pair. */
+let pendingCommit = null;
+function finishPendingCommit() {
+    const pending = pendingCommit;
+    if (pending === null)
+        return;
+    pendingCommit = null;
+    window.clearTimeout(pending.timer);
+    // The element may already be unmounted (React swaps the subtree at the
+    // flip); stripping inline from a detached node is a harmless no-op.
+    pending.el.style.removeProperty('transition');
+    pending.el.style.removeProperty('transform');
+    // If the host already closed while our animation ran (e.g. a genuine
+    // backdrop tap inside the 280ms window), the flip already happened and a
+    // blind toggle would RE-OPEN the drawer — skip it.
+    const frame = (0, phone_chrome_ts_1.getFrame)();
+    if (frame !== null && !frame.hasAttribute('data-sidebar-collapsed')) {
+        pending.ctx.layout.toggleSidebar();
+    }
+}
+/** Animate `el` to `targetTx` with our own transition, flip the host when it
+ * lands. One-shot: a second call settles the previous commit first. */
+function commitWithAnimation(ctx, el, targetTx) {
+    finishPendingCommit();
+    el.style.setProperty('transition', `transform ${COMMIT_ANIM_MS}ms ease-in-out`, 'important');
+    // Flush the before-change style so the transition provably starts from the
+    // current (finger) position instead of risking a coalesced recalc that
+    // would jump straight to the target.
+    void el.getBoundingClientRect();
+    el.style.setProperty('transform', targetTx, 'important');
+    // Fade the dimming in step with the slide-out: the marker flips only when
+    // the drawer lands, so without this the screen would go drawer-then-dark
+    // (backdrop snapping away ~260ms AFTER the drawer already left).
+    (0, overlay_backdrop_fab_ts_1.fadeOverlayOut)();
+    cooldownUntil = performance.now() + COOLDOWN_MS;
+    pendingCommit = {
+        el,
+        ctx,
+        timer: window.setTimeout(finishPendingCommit, COMMIT_ANIM_MS + 40),
+    };
+}
+/** Terminal close commit: animate the drawer into the closed slot, then flip
+ * the host. The slot must be the host's REAL closed rule (-110%), because
+ * after the flip the closed host paints exactly this value — dropping the
+ * inline pair must be a no-op, not a jump. */
+function commitFollowClose(ctx) {
+    const el = followDrawer;
+    followDrawer = null;
+    followEngaged = false;
+    if (el === null) {
+        // No follow binding (defensive): fall back to the immediate flip.
+        releaseFollowStyles();
+        ctx.layout.toggleSidebar();
+        cooldownUntil = performance.now() + COOLDOWN_MS;
+        return;
+    }
+    const target = strokeRtl
+        ? `translateX(${CLOSED_SLOT_PCT}%)`
+        : `translateX(-${CLOSED_SLOT_PCT}%)`;
+    commitWithAnimation(ctx, el, target);
+}
+/** Animate an OPEN drawer into its closed slot and flip the host state once it
+ * has landed. Every non-gesture closer (backdrop tap, Escape, navigation taps)
+ * routes through this, so a click close animates exactly like a swipe close:
+ * the host swaps the pane's subtree AND drops its surface (transparent,
+ * borderless, content display:none) at the marker flip, so a plain CSS
+ * transition would slide out an invisible shell - the same reason the gesture
+ * close uses a late commit (eighth round, 2026-08-29). The OPEN direction needs
+ * none of this: the host keeps the pane's visuals until the marker flips, so
+ * its own transform transition plays (spec 2026-08-27, A 档).
+ * Returns false when the caller must fall back to a plain toggleSidebar(): the
+ * drawer is already closed (that call would OPEN it) or the user asked for
+ * reduced motion, where the spec degrades the animation instead of adding one. */
+function closeDrawerAnimated(ctx) {
+    if (!drawerOpen())
+        return false;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+        return false;
+    const drawer = findDrawer();
+    if (drawer === null)
+        return false;
+    const target = frameRtl()
+        ? `translateX(${CLOSED_SLOT_PCT}%)`
+        : `translateX(-${CLOSED_SLOT_PCT}%)`;
+    commitWithAnimation(ctx, drawer, target);
+    return true;
+}
+/** Cancel paths: styles back to the host, pointer state to idle. An armed
+ * open follow has already flipped the host state, so a cancel must also
+ * toggle it back — release the inline pair first so the host transition
+ * animates home from the finger position within the same task. */
+function abortStroke(ctx, immediate = false) {
+    if (pendingCommit !== null) {
+        // A terminal commit is animating: this stroke already ended. Only a
+        // teardown (dispose) must settle it synchronously; otherwise let the
+        // timer land the flip.
+        if (immediate)
+            finishPendingCommit();
+        return;
+    }
+    const wasArmed = openFollowArmed;
+    openFollowArmed = false;
+    openFollowRefused = false;
+    revealDrawerContent();
+    if (wasArmed && ctx !== null && followDrawer !== null && !immediate) {
+        // Armed open stroke aborted mid-follow: the host is already open, and
+        // flipping now would swap the subtree mid-motion — same artifact as the
+        // close release. Animate back into the slot, then flip.
+        reset();
+        commitFollowClose(ctx);
+        return;
+    }
+    releaseFollowStyles();
+    reset();
+    if (wasArmed && ctx !== null) {
+        ctx.layout.toggleSidebar();
+        cooldownUntil = performance.now() + COOLDOWN_MS;
+    }
+}
+/** Start a stroke; returns true when it may be tracked. */
+function beginStroke(event, rtl, viewportWidthPx) {
+    if (onCooldown())
+        return false;
+    if (modalOpen())
+        return false;
+    if (takeoverActive())
+        return false;
+    // A live text selection owns the stroke (a selection-handle drag is
+    // horizontally dominant and geometrically identical to a swipe — #43,
+    // iPad WebKit): yield before any geometric test. This also blocks
+    // swipe-open while a stale selection is alive; one tap collapses the
+    // selection everywhere, and backdrop tap-to-close is unaffected (a tap
+    // never reaches tryLock).
+    if (selectionOwnsStroke())
+        return false;
+    // A live draggable (data-mobile-nav-dragging, see dragMarkYields) owns the
+    // stroke: yield before any geometric test so the drawer cannot arm for a
+    // drag that starts inside the start zone.
+    if (dragMarkYields(event))
+        return false;
+    // Plugin-shipped draggable floating widgets (pet / floating-ball shapes
+    // without any cooperation mark) yield the same way, via the positional
+    // heuristic — the user pressed the widget itself.
+    if (floatingWidgetYields(event))
+        return false;
+    if (!(event.target instanceof Element))
+        return false;
+    // A stroke beginning inside a genuinely horizontally scrollable container
+    // belongs to that scroller (the stats line, a message code block, any
+    // carousel): yield it so its native horizontal pan survives — and so the
+    // wide 45%-of-viewport start zone cannot turn a strip scroll into a
+    // drawer open (failure scenario C1). Applies to both branches: inside the
+    // drawer the same "scroller owns horizontal" semantics should hold.
+    if (findHorizontalScroller(chainFrom(event.target)) !== null)
+        return false;
+    const open = drawerOpen();
+    const filesZonePx = startZonePxFor(viewportWidthPx, FILES_ZONE_RATIO);
+    if (open) {
+        // Close strokes may start ANYWHERE over the frame (2026-08-29 sixth
+        // round, user report 「希望打开抽屉之后以外的部分可以进行左滑」). The
+        // previous gate required the start point inside the drawer's own
+        // geometry and explicitly rejected the backdrop, so the ~28% of the
+        // screen beside the drawer swallowed every swipe — combined with the
+        // leftward verdict being refused, closing felt impossible. Nothing else
+        // owns a horizontal stroke while the drawer is open (the conversation is
+        // behind the backdrop), so the whole frame is fair game.
+        //
+        // 2026-09-13 narrowing (user decision): the RIGHT zone beside the drawer
+        // now belongs to the files gesture. Its leftward stroke must NOT close
+        // the drawer (the files panel would mount UNDER the drawer — z-1100 —
+        // and be invisible); its rightward stroke keeps the animated close via
+        // classifyFilesSwipe's 'close' verdict. The left zone / drawer content
+        // keeps every pre-existing drawer behavior. Drawer-mode follow painting
+        // only ever maps LEFTWARD (followTranslate's close branch), which is
+        // exactly the direction the narrowing removes from this zone — no close
+        // follow is lost by the routing (probe swipe.close-follow-reaches-slot
+        // was relocated into the drawer family accordingly).
+        //
+        // Tap-to-close on the backdrop is unaffected: a tap never reaches
+        // tryLock, so endStroke returns on !wasTracking without writing a
+        // consume mark, and the document-capture click handler passes backdrop /
+        // FAB clicks through unconditionally anyway.
+        const frame = (0, phone_chrome_ts_1.getFrame)();
+        if (frame === null)
+            return false;
+        const rect = frame.getBoundingClientRect();
+        if (event.clientX < rect.left || event.clientX > rect.right)
+            return false;
+        if (event.clientY < rect.top || event.clientY > rect.bottom)
+            return false;
+        // A session-row action menu (kebab) owns its own tap.
+        if (event.target.closest('[class*="sessionRow"] button') !== null)
+            return false;
+        //
+        // 2026-09-17 (owner: the judgment zone must end at the drawer's right
+        // edge): inside the drawer BODY the drawer family always wins. The files
+        // zone is viewport-relative (0.45 from the right edge = x >= 214 at 390px)
+        // and overlaps the 280px drawer by 66px, so that sliver of the drawer's own
+        // surface used to answer 'none' to a leftward drag - touching the drawer and
+        // dragging left did nothing. Routing on the drawer's live rect (not a
+        // hardcoded width) keeps the rule true at every viewport: at >= 509px the
+        // 0.45 zone starts right of the drawer and nothing changes. Outside the
+        // body the files routing, including its leftward no-op, is untouched.
+        const drawer = findDrawer();
+        const drawerRect = drawer === null ? null : drawer.getBoundingClientRect();
+        const insideDrawer = drawerRect !== null && event.clientX >= drawerRect.left && event.clientX <= drawerRect.right;
+        strokeMode = openStateStartMode(insideDrawer, filesZoneHit(event.clientX, viewportWidthPx, rtl, filesZonePx));
+    }
+    else if (hitTestStart(event.clientX, viewportWidthPx, rtl, { startZonePx: startZonePxFor(viewportWidthPx) })) {
+        strokeMode = 'drawer';
+    }
+    else if (filesZoneHit(event.clientX, viewportWidthPx, rtl, filesZonePx)) {
+        strokeMode = 'files';
+    }
+    else {
+        return false;
+    }
+    trackingPointer = event.pointerId;
+    tracking = false;
+    startX = event.clientX;
+    startY = event.clientY;
+    samples = [{ t: event.timeStamp, x: event.clientX }];
+    return true;
+}
+/**
+ * Axis-lock the stroke once its dominant axis has moved LOCK_PX. Horizontal
+ * dominance (|dx| > |dy|) locks to X and is tracked; vertical dominance
+ * abandons the stroke back to native scrolling (browser takes over, no
+ * further preventDefault). Once locked the axis never re-decides — matching
+ * MUI's UNCERTAINTY_THRESHOLD semantics.
+ */
+function tryLock(event) {
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < LOCK_PX)
+        return false;
+    // Second timing window for the drag mark (same pattern as the selection
+    // check in onPointerMove): the dragger often raises the mark in its own
+    // pointerdown/move handler, i.e. AFTER our beginStroke ran. Re-check at
+    // every lock attempt so the stroke yields before the axis locks.
+    if (dragMarkYields(event) || floatingWidgetYields(event)) {
+        reset();
+        return false;
+    }
+    if (Math.abs(dx) <= Math.abs(dy)) {
+        // Vertical-dominant: hand the touch back to scrolling.
+        reset();
+        return false;
+    }
+    tracking = true;
+    lockDrawerOpen = drawerOpen();
+    if (strokeMode === 'files') {
+        lockFilesOpen = filesPanelOpen();
+        // An OPEN drawer shares this stroke (the right-edge rightward close):
+        // bind the drawer's close follow so the commit animates exactly like
+        // today's right-zone close. applyFollow stays mode-guarded, so no follow
+        // ever paints for files strokes — the LEFTWARD narrowing stroke gets no
+        // painting either, which is the point (it must not drag the drawer).
+        if (lockDrawerOpen)
+            startFollow();
+        (0, gesture_guard_ts_1.markStrokeLocked)();
+        return true;
+    }
+    // Publish the lock to the host handlers (see gesture-guard.ts): they run
+    // EARLIER in this release event's capture phase, before endStroke writes
+    // any consume mark — the flag is their only ordering-proof yield signal
+    // (audit S0/S1).
+    (0, gesture_guard_ts_1.markStrokeLocked)();
+    startFollow();
+    return true;
+}
+/** Append a sample and prune the window. */
+function pushSample(event) {
+    samples.push({ t: event.timeStamp, x: event.clientX });
+    const cutoff = event.timeStamp - VELOCITY_WINDOW_MS;
+    let i = 0;
+    while (i < samples.length - 1 && samples[i].t < cutoff)
+        i += 1;
+    if (i > 0)
+        samples = samples.slice(i);
+}
+/**
+ * Release the stroke: classify, then either commit or spring back.
+ *
+ * B 档 ordering is load-bearing: the verdict is computed FIRST (the follow
+ * position IS dx, so classifySwipe decides complete-vs-revert exactly as in
+ * A 档), then the inline follow styles are dropped — restoring the host
+ * transition and clearing the transform starts an animation toward the
+ * drawer's CURRENT host state — and only then does the commit flip the host
+ * state, retargeting that transition within the SAME task. No paint happens
+ * between the two, so the user sees one continuous motion from the finger
+ * position into the final state; a reverted stroke simply animates home.
+ *
+ * An ARMED OPEN follow inverts the commit: the host state was already
+ * flipped at arm time, so a positive verdict must NOT toggle again (that
+ * would close the drawer the user just pulled out) and a negative verdict
+ * must toggle BACK. Either way the inline release comes first, so the host
+ * transition animates from the finger position to whichever state wins.
+ */
+function endStroke(ctx, event, rtl, viewportWidthPx) {
+    const wasTracking = tracking;
+    const armedOpen = openFollowArmed;
+    openFollowArmed = false;
+    openFollowRefused = false;
+    // The stroke's mode and panel flag must be captured BEFORE reset(): reset()
+    // rewrites strokeMode to 'drawer' and clears lockFilesOpen, and the verdict
+    // below branches on them. Harmless for drawer strokes (whose mode already
+    // reads 'drawer'), fatal for files strokes — the verdict silently degraded
+    // to the drawer classifier and every files commit turned into 'none'.
+    const filesMode = strokeMode === 'files';
+    const filesOpenAtLock = lockFilesOpen;
+    // Velocity must be computed before reset() clears the samples.
+    const vel = slidingVelocity(samples, VELOCITY_WINDOW_MS, event.timeStamp);
+    // Distance is measured from the stroke START (not the axis-lock point):
+    // the slop is an activation gate, not travel that should consume the
+    // user's swipe distance. Measuring from the lock point made the effective
+    // travel = slop + threshold (e.g. 4px + 78px), so a 78px threshold
+    // actually needed ~82px+ of finger travel — the "feels like half the
+    // screen" complaint. From the start, a 78px threshold is a 78px swipe.
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    reset();
+    if (!wasTracking) {
+        // A stroke that armed the follow is by definition locked, so this branch
+        // cannot leave the host state flipped — but keep the invariant explicit.
+        if (armedOpen) {
+            commitFollowClose(ctx);
+        }
+        return;
+    }
+    const modal = modalOpen();
+    // An armed open follow has already flipped the marker, so classifySwipe
+    // must still be asked the question the USER answered: it was a closed
+    // drawer when the stroke began (lockDrawerOpen), which is what the stored
+    // flag holds — never re-read drawerOpen() here.
+    const verdict = modal || (!armedOpen && onCooldown())
+        ? 'none'
+        : filesMode
+            ? classifyFilesSwipe({
+                distanceRatio: FILES_DISTANCE_RATIO,
+                velocity: FILES_VELOCITY,
+                lockPx: LOCK_PX,
+                viewportWidthPx,
+                panelOpen: filesOpenAtLock,
+                drawerOpen: lockDrawerOpen,
+                // The drawer-open cell commits a drawer close, so it keeps the
+                // drawer's own close distance (the spec's "┍ identical to
+                // today's close").
+                drawerCloseDistanceRatio: CLOSE_DISTANCE_RATIO,
+            }, { dx, dy, velX: vel }, rtl)
+            : classifySwipe({
+                openDistanceRatio: OPEN_DISTANCE_RATIO,
+                closeDistanceRatio: CLOSE_DISTANCE_RATIO,
+                velocityWindowMs: VELOCITY_WINDOW_MS,
+                openVelocity: OPEN_VELOCITY,
+                closeVelocity: CLOSE_VELOCITY,
+                lockPx: LOCK_PX,
+                cooldownMs: COOLDOWN_MS,
+                startZonePx: startZonePxFor(viewportWidthPx),
+                viewportWidthPx,
+                drawerOpen: lockDrawerOpen,
+            }, { dx, dy, velX: vel }, rtl);
+    // The mount-frame split must never survive into a terminal state: reveal
+    // the contents (no-op unless armed this stroke) before any release or
+    // commit animation.
+    revealDrawerContent();
+    // Terminal styles, per verdict. CLOSE commits are LATE: animate the inline
+    // transform into the closed slot and flip the host only when the drawer is
+    // already off-screen (commitFollowClose → commitWithAnimation) — flipping
+    // first swaps the sidebar subtree mid-animation (measured: width 280→206
+    // at t≈200ms of the 280ms transition, tx jumped backward). OPEN verdicts
+    // and the revert/modal/cooldown paths keep the plain release: the host
+    // stays in its current state, so its own transition finishes the motion
+    // and no subtree swap can be in flight. Every path either releases or
+    // hands the inline pair to the pending commit — it can never leak.
+    if (armedOpen) {
+        // The host is already open (early commit). Keep it on 'open', otherwise
+        // animate back into the slot and flip closed.
+        if (verdict === 'open') {
+            releaseFollowStyles();
+            cooldownUntil = performance.now() + COOLDOWN_MS;
+        }
+        else {
+            commitFollowClose(ctx);
+        }
+        if (event.target instanceof Element)
+            markStrokeConsumed(event.target);
+        return;
+    }
+    if (!(event.target instanceof Element))
+        return;
+    if (verdict === 'close') {
+        // Mark the stroke consumed so the tap's synthetic click cannot
+        // double-toggle or navigate a row. The mark walks the ancestor chain up
+        // to the DRAWER (not the frame): the synthetic click always lands on the
+        // stroke's own start target (left-edge start zone / drawer content), never
+        // on the backdrop — but the backdrop is a frame child, so marking up to
+        // the frame would make the host treat a genuine backdrop tap within the
+        // 300ms window as consumed and swallow the close (the "tap twice to close"
+        // bug). Marking stays IMMEDIATE even though the flip is late: the mark
+        // snapshots the chain now, and the synthetic click arrives within ~10ms.
+        markStrokeConsumed(event.target);
+        commitFollowClose(ctx);
+        return;
+    }
+    releaseFollowStyles();
+    if (verdict === 'open') {
+        // Unreachable for a tracked stroke (an unarmed stroke is by definition
+        // drawer-open at start), but keep the host-service commit symmetric.
+        markStrokeConsumed(event.target);
+        ctx.layout.toggleSidebar();
+        cooldownUntil = performance.now() + COOLDOWN_MS;
+    }
+    if (verdict === 'files') {
+        // The files-panel commit: open (both closed + leftward) or close (panel
+        // open + rightward). Toggle FIRST, then mark: the consume mark walks the
+        // stroke-start target's ancestors up to the FRAME, and the frame is also
+        // an ancestor of the host control the toggle clicks programmatically —
+        // marking first matches that very click through the shared upper chain
+        // segments and swallows it, so the panel never opens (0.1.5 live
+        // observation). The mark still covers the browser's own synthetic click,
+        // which is dispatched asynchronously after the release (the send button,
+        // a row button, … sit under the release point).
+        filesToggleFn();
+        markStrokeConsumed(event.target);
+        cooldownUntil = performance.now() + COOLDOWN_MS;
+    }
+    if (filesMode && verdict === 'none') {
+        // A 'none' files release is still a gesture (panel open + leftward, or
+        // too short): consume its synthetic click so it cannot flip the panel
+        // through the host toggle under the release point. This must run AFTER
+        // the commit branches above, never before a programmatic toggle click.
+        markStrokeConsumed(event.target);
+    }
+}
+/**
+ * Mark the released stroke so its synthetic click cannot re-toggle the drawer
+ * or activate a row.
+ *
+ * The mark walks the ancestor chain up to the DRAWER when the stroke started
+ * inside it: the backdrop is a frame child, so stopping at the frame would
+ * make the host treat a genuine backdrop tap within the window as consumed
+ * and swallow the close (the "tap twice to close" bug). A stroke that started
+ * OUTSIDE the drawer (the left-edge start zone, or — since closing accepts
+ * the whole frame — the backdrop itself) has no drawer in its chain, so the
+ * walk would otherwise run all the way to the document root and briefly
+ * shadow every tap on the page; the frame is the tightest correct stop for
+ * those, and it is what must be marked anyway, because a backdrop-started
+ * close stroke needs its own overlay click consumed.
+ */
+function markStrokeConsumed(target) {
+    const drawer = findDrawer();
+    const upTo = drawer !== null && drawer.contains(target) ? drawer : (0, phone_chrome_ts_1.getFrame)() ?? null;
+    (0, gesture_guard_ts_1.markGestureConsumed)(target, CONSUME_WINDOW_MS, upTo);
+    consumedEl = target;
+}
+/** Forget stroke state (called on cancel / visibility change / blur). */
+function reset() {
+    trackingPointer = 0;
+    tracking = false;
+    samples = [];
+    strokeMode = 'drawer';
+    lockFilesOpen = false;
+    (0, gesture_guard_ts_1.clearStrokeLocked)();
+}
+/** The logical reading direction of the frame (RTL support). */
+function frameRtl() {
+    const frame = (0, phone_chrome_ts_1.getFrame)();
+    return frame !== null && getComputedStyle(frame).direction === 'rtl';
+}
+/** Install the gesture layer for the current mobile breakpoint. */
+function installSidebarSwipe(ctx, filesToggle) {
+    (0, phone_chrome_ts_1.installMobileEffect)(ctx, 'dsh-web-mobile: sidebar swipe gestures', () => {
+        filesToggleFn = filesToggle;
+        const viewportWidth = () => window.innerWidth || document.documentElement.clientWidth || 0;
+        const onPointerDown = (event) => {
+            // A new pointer starts a new interaction epoch: drop the previous
+            // stroke's click gate. When the browser never delivers the synthetic
+            // click (iOS shells suppress it after a swipe), this — together with
+            // the short CONSUME_WINDOW_MS — keeps the next genuine tap alive
+            // instead of eating it at the document-capture click handler.
+            consumedEl = null;
+            (0, gesture_guard_ts_1.clearStrokeLocked)(); // belt-and-suspenders: a lost stroke must not leak its lock into this epoch
+            if (event.pointerType !== 'touch' && event.pointerType !== 'pen')
+                return;
+            // A second finger means the browser owns this interaction (pinch zoom),
+            // and a two-finger drag is never a drawer swipe. Merely ignoring the
+            // extra pointer would keep the stroke alive — and with it the
+            // touchmove preventDefault below, which cancels the native pinch. On
+            // iOS that pinch is the only way back out of a zoom, so fighting it
+            // recreates exactly the trap #45 reported. Hand the whole interaction
+            // back instead.
+            if (trackingPointer !== 0 && trackingPointer !== event.pointerId) {
+                abortStroke(ctx);
+                return;
+            }
+            beginStroke(event, frameRtl(), viewportWidth());
+        };
+        const onPointerMove = (event) => {
+            if (event.pointerId !== trackingPointer)
+                return;
+            // A modal may rise mid-stroke (e.g. an a11y trap opening) — spec review
+            // 缺陷 1's guard, now per-MOVE because B 档 paints a transform the
+            // modal must not inherit: abandon and spring the drawer back.
+            if (modalOpen() || takeoverActive()) {
+                abortStroke(ctx);
+                return;
+            }
+            if (!tracking) {
+                // A long-press selection can appear AFTER pointerdown but BEFORE the
+                // axis lock (#43 second timing window): abandon the stroke and hand
+                // the touch back so the handles become draggable (reset() also lifts
+                // the touchmove preventDefault). Once locked the gesture stays
+                // committed — a selection never appears mid-swipe.
+                if (selectionOwnsStroke()) {
+                    reset();
+                    return;
+                }
+                if (tryLock(event)) {
+                    pushSample(event);
+                    applyFollow(ctx, event.clientX - startX);
+                }
+            }
+            else {
+                pushSample(event);
+                applyFollow(ctx, event.clientX - startX);
+            }
+        };
+        const onPointerUp = (event) => {
+            if (event.pointerId !== trackingPointer)
+                return;
+            endStroke(ctx, event, frameRtl(), viewportWidth());
+        };
+        const onPointerCancel = (event) => {
+            if (event.pointerId !== trackingPointer)
+                return;
+            abortStroke(ctx);
+        };
+        // The browser may synthesize a click a few ms after the stroke's
+        // pointerup. The host overlay handlers and the FAB / backdrop element
+        // listeners would treat it as a tap; swallow it at document capture so
+        // a swipe can never toggle twice or navigate a row. Non-gesture taps
+        // (no live mark) pass through untouched.
+        //
+        // A click whose target is (or is inside) the backdrop or the FAB is
+        // NEVER a gesture's synthetic click: the stroke start is always the
+        // left-edge start zone or the drawer content, never the backdrop (outside
+        // the drawer, on the right) or the FAB. The mark chain can reach them
+        // in degenerate hit-test cases (e.g. a stroke starting on a point where
+        // the empty drawer does not register as the event target), and
+        // swallowing that click would break the "tap the backdrop to close"
+        // path — the "tap twice to close" bug. Let those clicks through.
+        const onClick = (event) => {
+            if (consumedEl === null)
+                return;
+            if (!(event.target instanceof Element))
+                return;
+            // A genuine backdrop / FAB tap is always let through: their own click
+            // listeners toggle the drawer, and a consume mark that walked to the
+            // document root would otherwise swallow it ("tap twice to close").
+            // The one exception is a click on the overlay element that STARTED the
+            // just-committed stroke — since close strokes may begin anywhere over
+            // the frame, the backdrop can now be the stroke's own start target,
+            // and letting its synthetic click through would re-toggle the drawer
+            // straight back open.
+            const overlay = event.target.closest('[data-mobile-nav="backdrop"], [data-mobile-nav="fab"]');
+            if (overlay !== null && !overlay.contains(consumedEl))
+                return;
+            if (!(0, gesture_guard_ts_1.consumeIfGestured)(event))
+                return;
+            event.stopPropagation();
+            event.preventDefault();
+            consumedEl = null;
+        };
+        const onVisibility = () => {
+            if (document.hidden)
+                abortStroke(ctx);
+        };
+        // Edge-touch priority (iOS UIScreenEdgePanGestureRecognizer semantics):
+        // a stroke that began inside the left-edge start zone must never be
+        // claimed by native scrolling. touch-action: pan-y already forbids the
+        // browser from panning it horizontally; this preventDefault (passive:
+        // false) additionally stops the vertical-scroll claim, so the pointer
+        // event stream reaches the gesture layer intact on browsers where the
+        // scroller wins the race (iOS Safari in particular — headless cannot
+        // reproduce that behavior). Vertical-dominant strokes abandon the
+        // gesture (reset() clears trackingPointer), so scrolling resumes for
+        // touches that were never swipes. Strokes starting inside a genuinely
+        // horizontally scrollable container never reach this state at all
+        // (beginStroke rejects them via findHorizontalScroller), so their
+        // native horizontal pan is never prevented.
+        //
+        // Multi-touch is the one case that must never be prevented: two fingers
+        // on the screen mean a pinch, and preventDefault on those touchmoves
+        // cancels the browser's zoom gesture. The pointerdown guard above
+        // already abandons the stroke when a second finger lands; this is the
+        // belt-and-braces path for engines that hand the gesture to the
+        // compositor without delivering a second pointerdown (#46 real-device
+        // report: pinch-out zoomed but pinch-in would not zoom back).
+        const onTouchMove = (event) => {
+            if (trackingPointer === 0)
+                return;
+            if (event.touches.length > 1) {
+                abortStroke(ctx);
+                return;
+            }
+            event.preventDefault();
+        };
+        document.addEventListener('pointerdown', onPointerDown, true);
+        document.addEventListener('pointermove', onPointerMove, true);
+        document.addEventListener('pointerup', onPointerUp, true);
+        document.addEventListener('pointercancel', onPointerCancel, true);
+        document.addEventListener('click', onClick, true);
+        document.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
+        const onBlur = () => abortStroke(ctx);
+        document.addEventListener('visibilitychange', onVisibility);
+        window.addEventListener('blur', onBlur);
+        return () => {
+            document.removeEventListener('pointerdown', onPointerDown, true);
+            document.removeEventListener('pointermove', onPointerMove, true);
+            document.removeEventListener('pointerup', onPointerUp, true);
+            document.removeEventListener('pointercancel', onPointerCancel, true);
+            document.removeEventListener('click', onClick, true);
+            document.removeEventListener('touchmove', onTouchMove, { capture: true });
+            document.removeEventListener('visibilitychange', onVisibility);
+            window.removeEventListener('blur', onBlur);
+            abortStroke(ctx, true);
+        };
+    });
+}
+};
 __modules["effects/phone-chrome.js"] = function (require, module, exports) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DESKTOP_QUERY = exports.MOBILE_QUERY = void 0;
+exports.TAP_CLOSE_NAV_SELECTOR = exports.TOUCH_QUERY = exports.DESKTOP_QUERY = exports.MOBILE_QUERY = void 0;
 exports.installMobileEffect = installMobileEffect;
 exports.findFrame = findFrame;
 exports.getFrame = getFrame;
+exports.ensureDismissShadow = ensureDismissShadow;
 exports.installFrameController = installFrameController;
 exports.installReconciler = installReconciler;
 exports.addReconcilerTask = addReconcilerTask;
@@ -830,7 +2564,9 @@ exports.installPhoneChrome = installPhoneChrome;
 exports.installOverlayInteractions = installOverlayInteractions;
 exports.registerReconcileTasks = registerReconcileTasks;
 const gesture_guard_ts_1 = require("./effects/gesture-guard.js");
+const session_row_fiber_ts_1 = require("./effects/session-row-fiber.js");
 const reconciler_core_ts_1 = require("./core/reconciler-core.js");
+const sessions_compat_ts_1 = require("./core/sessions-compat.js");
 const aionui_compat_ts_1 = require("./effects/aionui-compat.js");
 const stats_line_ts_1 = require("./effects/stats-line.js");
 const preview_fullscreen_ts_1 = require("./effects/preview-fullscreen.js");
@@ -838,6 +2574,7 @@ const git_chip_reparent_ts_1 = require("./effects/git-chip-reparent.js");
 const settings_toolbar_reparent_ts_1 = require("./effects/settings-toolbar-reparent.js");
 const overlay_backdrop_fab_ts_1 = require("./effects/overlay-backdrop-fab.js");
 const file_viewer_compat_ts_1 = require("./effects/file-viewer-compat.js");
+const sidebar_swipe_ts_1 = require("./effects/sidebar-swipe.js");
 // The custom client bundler cannot resolve `../` requires from src/client/effects,
 // so this mirrors the namespace id from src/client/locales.ts. Keep in sync.
 const NS = 'mobileNav';
@@ -855,14 +2592,47 @@ exports.MOBILE_QUERY = '(max-width: 1023px) and (pointer: coarse)';
  *  guard is the CSS hide block in misc.css.ts — the exact complement of
  *  MOBILE_QUERY — because slot-rendered controls exist at every width. */
 exports.DESKTOP_QUERY = '(min-width: 1024px)';
+/** Pointer-only guard for the ONE feature that has no desktop equivalent:
+ *  the session-delete menu injection. Armed on touch-primary devices at
+ *  EVERY width — a large tablet in landscape (e.g. 1238px) keeps the desktop
+ *  layout but still gets the 「删除会话」 item. Mouse-driven or pointer-less
+ *  windows never arm it, at any width. */
+exports.TOUCH_QUERY = '(pointer: coarse)';
+/** Long press on a session row opens its ⋯ menu — the phone equivalent of the
+ *  desktop hover that reveals the row actions (the host renders them with
+ *  `display: none` until `:hover` or `menuOpen`, neither of which touch ever
+ *  reaches). Long enough to be deliberate, short enough to read as a context
+ *  menu. */
+const LONG_PRESS_MS = 500;
+/** Pointer travel that cancels a long press (the swipe layer locks at 8px). */
+const LONG_PRESS_MOVE_PX = 10;
+/** How long the lift may not close the menu the press opened: the host menu
+ *  closes on pointerleave, and the finger lift itself fires one. */
+const LONG_PRESS_MENU_GUARD_MS = 1200;
+/** Window in which the press's own synthesized click is swallowed, so the lift
+ *  neither navigates the row nor collapses the drawer. */
+const LONG_PRESS_CLICK_SWALLOW_MS = 800;
+/** Finger-down to finger-up travel that still counts as a tap on a session row
+ *  (#49). Per-axis (`isTapWithinSlop` is max-norm, not Euclidean): the drawer
+ *  list scrolls vertically, so a 60px vertical drift must not navigate while a
+ *  diagonal wobble still reads as a tap. */
+const TAP_NAV_SLOP_PX = 12;
+/** Where the current touch started (null for a mouse, and between touches).
+ *  The no-click row-tap fallback resolves the row's session id at pointerup and
+ *  only when the finger stayed put, so every touch pointerdown records this
+ *  BEFORE any early return — a missed record silently disables the whole
+ *  fallback. Cleared by the effect's disposer. */
+let touchDownAt = null;
 /**
- * Re-arm a mobile-only DOM effect on every width change. Replaces the
+ * Re-arm a mobile-only DOM effect on every query change. Replaces the
  * repeated matchMedia + change-listener scaffold so all breakpoint strings
- * live in one place.
+ * live in one place. `query` defaults to MOBILE_QUERY; effects that arm on a
+ * different condition (e.g. TOUCH_QUERY) pass their own string instead of
+ * building a private matchMedia scaffold.
  */
-function installMobileEffect(ctx, label, install) {
+function installMobileEffect(ctx, label, install, query = exports.MOBILE_QUERY) {
     ctx.effect(() => {
-        const narrow = window.matchMedia(exports.MOBILE_QUERY);
+        const narrow = window.matchMedia(query);
         let cleanup;
         const arm = () => {
             cleanup?.();
@@ -884,12 +2654,55 @@ function findFrame() {
 function getFrame() {
     return document.querySelector('[data-mobile-nav="frame"]') ?? findFrame();
 }
+/** The third-party mobile compat shim shipped inside `@linxin666/dsh-web-all`
+ *  collapses the drawer on ANY click inside `[role="treeitem"]` at ≤768px by
+ *  clicking the host's logo-row toggle — with no `_rowActions` exemption, so a
+ *  tap on a row's ⋯ closed the drawer instead of opening its menu (2026-09-14;
+ *  its sibling implementation inside `@linxin666/dsh-remote-web-ui` does exempt
+ *  the row actions). It resolves that toggle with
+ *  `frame.querySelector('[data-dsh-responsive-part="sidebar-toggle"]')`, so an
+ *  inert element carrying the same stamp EARLIER in tree order turns every one
+ *  of its dismiss calls into a no-op and leaves dismiss ownership to us (row
+ *  taps close through the navigation observer, backdrop taps through the
+ *  capture click path). Gated on the shim's own stamp: hosts without it stay
+ *  untouched. */
+const HOST_TOGGLE_SELECTOR = '[data-dsh-responsive-part="sidebar-toggle"]:not([data-mobile-nav])';
+const DISMISS_SHADOW_SELECTOR = '[data-mobile-nav="dismiss-shadow"]';
+function ensureDismissShadow() {
+    if (typeof document === 'undefined')
+        return;
+    const shadow = document.querySelector(DISMISS_SHADOW_SELECTOR);
+    const real = document.querySelector(HOST_TOGGLE_SELECTOR);
+    const pane = real?.closest('[data-pane="sidebar"]') ?? null;
+    if (real === null || pane === null) {
+        shadow?.remove();
+        return;
+    }
+    // Must stay a no-op once in place: the reconciler observes the whole tree and
+    // a task that mutates on every flush would re-trigger itself forever.
+    if (shadow !== null && shadow.parentElement === pane && pane.firstElementChild === shadow)
+        return;
+    const element = shadow ?? document.createElement('span');
+    if (shadow === null) {
+        element.setAttribute('data-mobile-nav', 'dismiss-shadow');
+        element.setAttribute('data-dsh-responsive-part', 'sidebar-toggle');
+        element.setAttribute('aria-hidden', 'true');
+        // The shim's collapsed-rail rule forces `display: inline-flex !important`
+        // on anything carrying the stamp; only an inline !important outranks it.
+        element.style.setProperty('display', 'none', 'important');
+    }
+    pane.insertBefore(element, pane.firstElementChild);
+}
 /**
  * Frame marker controller: owns `data-mobile-nav="frame"` and every plugin
  * marker that can survive on the shell-owned frame. Installed once at apply
  * time so effects no longer each need to find/set/clear the frame. Returns a
  * disposer that unregisters the task and resets the installed flag, so a
  * same-environment plugin reload can rebuild the reconciler from scratch.
+ * (The host-generation probe this controller used to call was dead code —
+ * nothing ever read `data-mobile-nav-gen`, and the plugin deliberately does
+ * not yield the drawer to the host's one: see docs/maintenance/pitfalls.md
+ * §0.1.5 抽屉 z 与遮罩.)
  */
 function installFrameController() {
     if (frameControllerInstalled)
@@ -904,6 +2717,7 @@ function installFrameController() {
             if (frame !== null && !frame.hasAttribute('data-mobile-nav')) {
                 frame.setAttribute('data-mobile-nav', 'frame');
             }
+            ensureDismissShadow();
         },
         dispose: () => {
             if (frame !== null) {
@@ -911,6 +2725,9 @@ function installFrameController() {
                 frame.removeAttribute('data-mobile-preview-full');
                 frame.removeAttribute('data-aionui-explorer-open');
                 frame.removeAttribute('data-aionui-preview-open');
+            }
+            if (typeof document !== 'undefined') {
+                document.querySelector(DISMISS_SHADOW_SELECTOR)?.remove();
             }
             frame = null;
         },
@@ -1029,7 +2846,7 @@ const IOS_MARKER = 'data-mobile-nav-ios';
  * zoom away from Android/DSHA; the iOS focus-zoom fix is the >=16px field
  * floor (data-mobile-nav-ios), not a zoom ban (#45).
  */
-const VIEWPORT_CONTENT = 'width=device-width, initial-scale=1';
+const VIEWPORT_CONTENT = 'width=device-width, initial-scale=1, viewport-fit=cover';
 const findViewportMeta = () => document.querySelector('meta[name="viewport"]');
 /**
  * Phone chrome: KEEP the system status bar (no fullscreen) and make it
@@ -1135,14 +2952,29 @@ function installPhoneChrome(ctx) {
  * reconciliation:
  * - Escape closes the drawer (yielding to any open modal dialog, which owns
  *   its own Escape handling).
- * - Tapping a navigation target inside the drawer (session row, task board /
- *   ssh takeover entries, search results) closes the drawer so the content
- *   it opened gets the whole screen. Session-row action buttons (kebab) are
- *   excluded — they open a menu that must survive the tap.
+ * - Tapping a navigation target inside the drawer (session row, sidebar panel
+ *   row, task board / ssh takeover entries, search results) closes the drawer
+ *   so the content it opened gets the whole screen. Session-row action buttons
+ *   (kebab) are excluded — they open a menu that must survive the tap.
+ *
+ * The touch close always rides the synthesized click. Closing a non-row
+ * target from pointerup collapsed the drawer before that click existed, and
+ * a collapsed drawer no longer owns the touch point, so the browser
+ * dispatched no click at all and the target's own onClick never ran (「新会话」
+ * did nothing but retract the drawer, 2026-09-13).
  */
+exports.TAP_CLOSE_NAV_SELECTOR = 'button[data-dsh-taskboard-entry], button[data-dsh-ssh-entry], [class*="newSession"], [class*="sessionRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"], [class*="panelRow"]';
 function installOverlayInteractions(ctx) {
     installMobileEffect(ctx, 'dsh-web-mobile: drawer close (Escape + navigate)', () => {
-        const toggleSidebar = () => ctx.layout.toggleSidebar();
+        // Every non-gesture close funnels through here (backdrop tap, Escape, the
+        // nav observers, navigation taps). A close animates first - the host tears
+        // the pane's subtree and surface at the marker flip, so the slide has to
+        // land before it (closeDrawerAnimated) - while opening stays a plain toggle
+        // so the host's own .28s transform transition plays.
+        const toggleSidebar = () => {
+            if (!(0, sidebar_swipe_ts_1.closeDrawerAnimated)(ctx))
+                ctx.layout.toggleSidebar();
+        };
         const drawerOpen = () => {
             const frame = getFrame();
             return frame !== null && !frame.hasAttribute('data-sidebar-collapsed');
@@ -1170,7 +3002,7 @@ function installOverlayInteractions(ctx) {
                 return false;
             if (target.closest('[class*="sessionRow"] button') !== null)
                 return false;
-            return target.closest('button[data-dsh-taskboard-entry], button[data-dsh-ssh-entry], [class*="newSession"], [class*="sessionRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"]') !== null;
+            return target.closest(exports.TAP_CLOSE_NAV_SELECTOR) !== null;
         };
         // Touch path for session/search rows: never close the drawer from pointer
         // events. Closing at pointerup (or deferring the close) races the browser's
@@ -1182,6 +3014,38 @@ function installOverlayInteractions(ctx) {
         let navSignatureAtArm = '';
         let navObserver = null;
         let navTimer = null;
+        // Touch has no hover, so the host's `_rowActions` — the ⋯ menu anchor —
+        // never shows up: only `:hover` and `menuOpen` reveal it. Long press is the
+        // phone gesture for "row actions", so we drive the host's own ⋯ button and
+        // hold the drawer open around it. The host menu closes on pointerleave,
+        // which the finger lift itself fires, and that lift still synthesizes a
+        // click on the row: both need guarding.
+        let pressTimer = null;
+        let pressOrigin = null;
+        let pressRow = null;
+        let pressFired = false;
+        let menuGuardUntil = 0;
+        let swallowClickUntil = 0;
+        let swallowClickRow = null;
+        const clearPress = () => {
+            if (pressTimer !== null)
+                window.clearTimeout(pressTimer);
+            pressTimer = null;
+            pressOrigin = null;
+            pressRow = null;
+            pressFired = false;
+        };
+        const openRowMenu = (row) => {
+            // A menu already on screen owns the gesture (host touch path, another
+            // plugin's long press); clicking the anchor again would close it.
+            if (document.querySelector('[role="menu"]') !== null)
+                return;
+            const button = row.querySelector('[class*="_rowActions"] button');
+            if (button === null)
+                return;
+            menuGuardUntil = performance.now() + LONG_PRESS_MENU_GUARD_MS;
+            button.click();
+        };
         const selectedRowSignature = () => {
             const selected = drawerRoot()?.querySelector('[role="treeitem"][aria-selected="true"]');
             const title = selected?.querySelector('[class*="_title"]');
@@ -1220,7 +3084,126 @@ function installOverlayInteractions(ctx) {
             });
             navTimer = window.setTimeout(disarmNav, 2000);
         };
+        /** Whether the session list really knows an id. The fiber walk has no
+         *  shape heuristic on purpose: hop 32 of a row's chain is a ScopeProvider
+         *  whose `props.scope` is the literal 'session-maybe', and
+         *  `ctx.sessions.open` fails loud on unknown ids — membership is the only
+         *  filter that can never hand the host a guess. */
+        const isKnownSessionId = (id) => {
+            const snapshot = ctx.sessions.list.getSnapshot();
+            return snapshot.byId[id] !== undefined;
+        };
+        /** The session a finished tap on `row` should open, or null to fall back to
+         *  the DOM observer: no finger-down record, a release that travelled (a
+         *  scroll or a swipe, not a tap), a fiber chain offering no known id, or a
+         *  row that is already the current session. */
+        const tappedRowSessionId = (row, event) => {
+            if (touchDownAt === null)
+                return null;
+            if (!(0, session_row_fiber_ts_1.isTapWithinSlop)(touchDownAt, { x: event.clientX, y: event.clientY }, TAP_NAV_SLOP_PX))
+                return null;
+            const id = (0, session_row_fiber_ts_1.findSessionIdInFiber)((0, session_row_fiber_ts_1.reactFiberOf)(row), isKnownSessionId);
+            if (id === null)
+                return null;
+            return (0, sessions_compat_ts_1.currentSessionIdOf)(ctx.sessions.list.getSnapshot()) === id ? null : id;
+        };
+        // Close the drawer once the navigation we started ourselves lands (#49).
+        // `armNav` watched the drawer's *selected row* change, but when WebKit drops
+        // the tap's click the row's own onClick never runs, so that signal never
+        // arrives — the store is the honest source of "navigation happened".
+        let closeOnNavUnsub = null;
+        let closeOnNavDone = false;
+        /** Disarming means spent: mark the close done before dropping the
+         *  subscription, so a `fire` a subscription tick already queued cannot
+         *  toggle the drawer after the close was handed to the other closer. */
+        const disarmCloseOnNav = () => {
+            closeOnNavDone = true;
+            closeOnNavUnsub?.();
+            closeOnNavUnsub = null;
+        };
+        const closeOnNavigation = (id) => {
+            disarmCloseOnNav();
+            closeOnNavDone = false;
+            const fire = () => {
+                if (closeOnNavDone)
+                    return;
+                disarmCloseOnNav();
+                if (drawerOpen())
+                    toggleSidebar();
+            };
+            closeOnNavUnsub = ctx.sessions.list.subscribe(() => {
+                if ((0, sessions_compat_ts_1.currentSessionIdOf)(ctx.sessions.list.getSnapshot()) !== id)
+                    return;
+                window.setTimeout(fire, 0);
+            });
+        };
+        const onDrawerPointerDown = (event) => {
+            touchDownAt = event.pointerType === 'touch' || event.pointerType === 'pen'
+                ? { x: event.clientX, y: event.clientY }
+                : null;
+            clearPress();
+            if (event.pointerType !== 'touch' && event.pointerType !== 'pen')
+                return;
+            if ((0, gesture_guard_ts_1.isStrokeLocked)())
+                return;
+            const target = event.target;
+            // shouldCloseOnTapInsideDrawer already means "inside the drawer, on a row
+            // navigation target, and not on one of its buttons".
+            if (!shouldCloseOnTapInsideDrawer(target) || !(target instanceof Element))
+                return;
+            const row = target.closest('[class*="_sessionRow"]');
+            if (row === null || target.closest('[class*="_rowActions"]') !== null)
+                return;
+            pressOrigin = { x: event.clientX, y: event.clientY };
+            pressRow = row;
+            pressTimer = window.setTimeout(() => {
+                pressTimer = null;
+                if (pressRow === null)
+                    return;
+                pressFired = true;
+                openRowMenu(pressRow);
+            }, LONG_PRESS_MS);
+        };
+        const onDrawerPointerMove = (event) => {
+            if (pressOrigin === null)
+                return;
+            if ((0, gesture_guard_ts_1.isStrokeLocked)()) {
+                clearPress();
+                return;
+            }
+            if (Math.abs(event.clientX - pressOrigin.x) > LONG_PRESS_MOVE_PX
+                || Math.abs(event.clientY - pressOrigin.y) > LONG_PRESS_MOVE_PX) {
+                clearPress();
+            }
+        };
+        // The host menu closes on pointerleave of its anchor; the finger lift fires
+        // one right after the press opened the menu, so stay out of the way until
+        // the finger is long gone.
+        const onDrawerPointerLeave = (event) => {
+            if (performance.now() > menuGuardUntil)
+                return;
+            const target = event.target;
+            if (!(target instanceof Element))
+                return;
+            if (target.closest('[class*="_rowActions"]') === null
+                && target.closest('[class*="_sessionRow"]') === null)
+                return;
+            event.stopPropagation();
+        };
         const onDrawerClick = (event) => {
+            // The long press's own synthesized click is the one click that must not
+            // act: the row was not tapped, and the menu it opened must survive. One
+            // click only — a later tap on the ⋯ reaches React normally.
+            const target = event.target;
+            if (swallowClickRow !== null && performance.now() <= swallowClickUntil) {
+                if (target instanceof Element && (target === swallowClickRow || swallowClickRow.contains(target))) {
+                    swallowClickUntil = 0;
+                    swallowClickRow = null;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return;
+                }
+            }
             // A classified swipe already toggled the drawer; never let its
             // synthetic tap also close it / navigate a row (gesture-guard).
             // isStrokeLocked: a stroke axis-locked mid-swipe (audit S0) — the
@@ -1228,11 +3211,20 @@ function installOverlayInteractions(ctx) {
             // which runs AFTER this handler on the same release event.
             if ((0, gesture_guard_ts_1.isStrokeLocked)() || (0, gesture_guard_ts_1.consumeIfGestured)(event))
                 return;
+            // The backdrop keeps its own listener, but the third-party mobile shim
+            // stops click propagation at the frame for anything outside the drawer
+            // (its own dismiss path), so that listener never sees the tap. Decide
+            // here instead — before both the shim and the element handler.
+            if (target instanceof Element && target.closest('[data-mobile-nav="backdrop"]') !== null) {
+                if (drawerOpen())
+                    toggleSidebar();
+                return;
+            }
             // A touch row-tap owns the close (pointerup or the navigation observer);
             // let the row's click reach React without toggling the drawer twice.
             if (performance.now() - lastTouchNavAt < 500)
                 return;
-            if (shouldCloseOnTapInsideDrawer(event.target))
+            if (shouldCloseOnTapInsideDrawer(target))
                 toggleSidebar();
         };
         const onDrawerPointerUp = (event) => {
@@ -1246,6 +3238,16 @@ function installOverlayInteractions(ctx) {
                 return;
             if (event.pointerType !== 'touch' && event.pointerType !== 'pen')
                 return;
+            const pressed = pressFired;
+            const pressedRow = pressRow;
+            clearPress();
+            if (pressed && pressedRow !== null) {
+                // The press already opened the menu: the lift must not also navigate
+                // or close the drawer.
+                swallowClickUntil = performance.now() + LONG_PRESS_CLICK_SWALLOW_MS;
+                swallowClickRow = pressedRow;
+                return;
+            }
             const target = event.target;
             if (!(target instanceof Element))
                 return;
@@ -1259,22 +3261,64 @@ function installOverlayInteractions(ctx) {
                     toggleSidebar();
                 }
                 else {
-                    // Unselected row: let navigation land, then close via the observer.
-                    armNav();
+                    // Unselected row: navigate from the id we resolved at the touch point
+                    // when this tap can supply one — on WebKit the row's own click may
+                    // never come, and then nothing else would open the session. Fall back
+                    // to closing once the DOM shows a navigation landed when it cannot.
+                    const tappedId = tappedRowSessionId(row, event);
+                    if (tappedId === null) {
+                        // Exactly one closer at a time: this tap closes through the DOM
+                        // observer, so drop the store subscription an earlier resolved tap
+                        // armed — its stale id would toggle the drawer again on landing.
+                        disarmCloseOnNav();
+                        armNav();
+                    }
+                    else {
+                        // The mirror case: this tap closes through the store, so drop the
+                        // observer an earlier fallback tap armed — otherwise both fire on
+                        // this one navigation (the observer on the selected-title change,
+                        // the subscription on the landing) and race to toggle twice.
+                        disarmNav();
+                        if ((0, sessions_compat_ts_1.sessionsCanOpen)(ctx.sessions)) {
+                            closeOnNavigation(tappedId);
+                            ctx.sessions.open(tappedId);
+                        }
+                        else {
+                            // a2 removed sessions.open (retain-model navigation) — the
+                            // store-subscription closer above watches `current`, which a2
+                            // no longer publishes, so arming it would only leak a
+                            // subscription that can never fire. Degrade to the DOM
+                            // observer: the row's own onClick still navigates where the
+                            // browser dispatches it (audit doc §10.1 / F1).
+                            disarmCloseOnNav();
+                            armNav();
+                        }
+                    }
                 }
                 return;
             }
             // Non-row nav targets (newSession / taskboard / ssh / search rows that
-            // are not treeitems): the pointerup close path is still correct.
-            toggleSidebar();
+            // are not treeitems) are closed by the capture click handler below:
+            // closing here would retract the drawer before the browser dispatches
+            // the tap's click, and the target's onClick would never run.
         };
         document.addEventListener('keydown', onKeyDown, true);
         document.addEventListener('click', onDrawerClick, true);
+        document.addEventListener('pointerdown', onDrawerPointerDown, true);
+        document.addEventListener('pointermove', onDrawerPointerMove, true);
+        document.addEventListener('pointerleave', onDrawerPointerLeave, true);
         document.addEventListener('pointerup', onDrawerPointerUp, true);
         return () => {
             disarmNav();
+            // Also marks the close spent, so a queued `fire` cannot outlive the effect.
+            disarmCloseOnNav();
+            touchDownAt = null;
+            clearPress();
             document.removeEventListener('keydown', onKeyDown, true);
             document.removeEventListener('click', onDrawerClick, true);
+            document.removeEventListener('pointerdown', onDrawerPointerDown, true);
+            document.removeEventListener('pointermove', onDrawerPointerMove, true);
+            document.removeEventListener('pointerleave', onDrawerPointerLeave, true);
             document.removeEventListener('pointerup', onDrawerPointerUp, true);
         };
     });
@@ -1283,8 +3327,12 @@ function installOverlayInteractions(ctx) {
  * Register the shared DOM reconciler tasks. Returns a disposer that
  * unregisters every task and resets the flag, so a same-environment plugin
  * reload can rebuild the reconciler from scratch.
+ *
+ * @param panelExit - the sidebar-panel exit face (panel-exit.ts): its system-back
+ *   route is registered here so it shares this reconciler, and the FAB reads it
+ *   to switch its meaning while a panel owns the main area.
  */
-function registerReconcileTasks(ctx) {
+function registerReconcileTasks(ctx, panelExit) {
     if (reconcileTasksRegistered)
         return () => { };
     reconcileTasksRegistered = true;
@@ -1296,7 +3344,8 @@ function registerReconcileTasks(ctx) {
         addReconcilerTask((0, aionui_compat_ts_1.createPreviewCloseTask)()),
         addReconcilerTask((0, aionui_compat_ts_1.createSheetRiseTask)()),
         addReconcilerTask((0, stats_line_ts_1.createStatsLineTask)()),
-        addReconcilerTask((0, overlay_backdrop_fab_ts_1.createOverlayTask)(t, () => ctx.layout.toggleSidebar())),
+        addReconcilerTask((0, overlay_backdrop_fab_ts_1.createOverlayTask)(t, () => ctx.layout.toggleSidebar(), panelExit)),
+        addReconcilerTask(panelExit.task),
         addReconcilerTask((0, file_viewer_compat_ts_1.createFileViewerMarkerTask)()),
     ];
     return () => {
@@ -1306,51 +3355,261 @@ function registerReconcileTasks(ctx) {
     };
 }
 };
+__modules["components/open-files-panel.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.HOST_FILES_CLOSER = exports.HOST_FILES_OPENER = void 0;
+exports.openFilesPanel = openFilesPanel;
+const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
+/** The host's own right-sidebar opener (ui-sidebar-right: ExpandButton). */
+exports.HOST_FILES_OPENER = '[data-sidebar-right-expand]';
+/** The host's collapse control, mounted while the right sidebar is open. */
+exports.HOST_FILES_CLOSER = '[data-sidebar-right-toggle]';
+/**
+ * Open the file browser from a mobile control, preferring the surface the user
+ * actually has.
+ *
+ * 1. The host's own right sidebar (`data-sidebar-right-expand`) is the current
+ *    file browser: on 0.1.5 it holds the workspace tree (Files tab). The host
+ *    renders its opener inside `headerCorner`, which the desktop layout hides
+ *    with `display: none`, so the control exists and its click handler runs
+ *    while it has no painted size — acting on it programmatically is the
+ *    supported path, and forcing the corner visible would fight the very
+ *    layout that hides it.
+ * 2. Only when that surface is absent (hosts without ui-sidebar-right) do we
+ *    fall back to the third-party explorer column, which needs its
+ *    `data-aionui-explorer-open` marker; the preview sheet is yielded first
+ *    because compat.css gives preview precedence over explorer.
+ *
+ * Returns true when the official sidebar took the action, so callers can skip
+ * their own layout work (the host panel covers the frame on its own).
+ */
+function openFilesPanel(doc = document, frame = (0, phone_chrome_ts_1.getFrame)()) {
+    // Toggle semantics, because the host swaps controls with the panel state
+    // (measured on 0.1.5): while the panel is CLOSED the only opener is
+    // `data-sidebar-right-expand`; once it is OPEN that element is unmounted and
+    // only `data-sidebar-right-toggle` (Collapse right sidebar) remains. Acting
+    // on the expand button alone was a no-op whenever the panel happened to be
+    // already open — the exact "tap does nothing / position looks wrong" report.
+    // Closing first also keeps the control reachable: the full-screen panel
+    // covers the header, so a second tap could never reach our button.
+    const closer = doc.querySelector(exports.HOST_FILES_CLOSER);
+    const opener = doc.querySelector(exports.HOST_FILES_OPENER);
+    const hostControl = typeof opener?.click === 'function' ? opener : closer;
+    // Duck-typed on purpose: any element exposing click() acts as the control.
+    if (typeof hostControl?.click === 'function') {
+        hostControl.click();
+        return true;
+    }
+    if (frame === null)
+        return false;
+    frame.removeAttribute('data-aionui-preview-open');
+    frame.setAttribute('data-aionui-explorer-open', '');
+    return false;
+}
+};
 __modules["components/MobileNavToggle.js"] = function (require, module, exports) {
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MobileNavToggle = MobileNavToggle;
 const jsx_runtime_1 = require("react/jsx-runtime");
-const dsh_client_ui_primitives_1 = require("@deepseek-ai/dsh-client-ui-primitives");
-const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
+const Primitives = __importStar(require("@deepseek-ai/dsh-client-ui-primitives"));
+const open_files_panel_ts_1 = require("./components/open-files-panel.js");
+const IconFolderOpen = Primitives.IconFolderOpenOutlineMedium ||
+    Primitives.IconFolderOpenOutlineRegular ||
+    Primitives.IconFolderOpenOutline16;
+const IconPanelLeft = Primitives.IconPanelLeftOutlineMedium ||
+    Primitives.IconPanelLeftOutlineRegular ||
+    Primitives.IconPanelLeftOutline16;
 /**
- * Mobile-only icon buttons next to the session title:
- * - toggle: opens the directory drawer on narrow screens.
- * - files: toggles the dsh-web-ui explorer sheet directly — one tap opens,
- *   a second tap closes it, no drawer round-trip. (The drawer footer keeps
- *   a Files entry for the hero/blank phases where this header does not
- *   exist.)
- * Hidden entirely on wide screens (CSS media query).
+ * Mobile-only header controls:
+ * - toggle: opens the directory drawer (sidebar) on narrow screens.
+ * - jobs-placeholder: persistent background jobs button in the top bar.
+ * - files: opens the file browser directly without drawer round-trip.
  */
-function MobileNavToggle({ toggleSidebar, openFiles, t }) {
-    const toggleExplorer = () => openFiles();
-    return ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsx)("button", { type: "button", "data-mobile-nav": "toggle", "aria-label": t('open'), title: t('open'), onClick: () => toggleSidebar(), children: (0, jsx_runtime_1.jsx)(dsh_client_ui_primitives_1.IconPanelLeftOutline16, { size: 16 }) }), (0, jsx_runtime_1.jsx)("button", { type: "button", "data-mobile-nav": "files", "aria-label": t('files'), title: t('files'), onClick: toggleExplorer, children: (0, jsx_runtime_1.jsx)(dsh_client_ui_primitives_1.IconFolderOpenOutline16, { size: 16 }) })] }));
+function MobileNavToggle({ toggleSidebar, t }) {
+    const toggleExplorer = () => {
+        (0, open_files_panel_ts_1.openFilesPanel)();
+    };
+    const handleJobsClick = () => {
+        // If official job trigger is present, proxy click
+        const officialTrigger = document.querySelector('[class*="QsffPG_trigger"], [class*="_trigger"]:has([class*="triggerDot"]), [data-jobs-trigger]');
+        if (officialTrigger) {
+            officialTrigger.click();
+            return;
+        }
+        // Friendly floating toast if no active jobs running
+        const existing = document.querySelector('[data-mobile-jobs-toast]');
+        if (existing)
+            return;
+        const toast = document.createElement('div');
+        toast.setAttribute('data-mobile-jobs-toast', '');
+        toast.textContent = '暂无正在执行的后台任务';
+        Object.assign(toast.style, {
+            position: 'fixed',
+            top: 'calc(env(safe-area-inset-top, 0px) + 62px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'var(--dsw-alias-bg-elevated, #242528)',
+            color: 'var(--dsw-alias-label-primary, #ffffff)',
+            border: '1px solid var(--dsw-alias-border-base, rgba(127,127,127,0.25))',
+            borderRadius: '8px',
+            padding: '6px 14px',
+            fontSize: '12px',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+            zIndex: '99999',
+            pointerEvents: 'none',
+            transition: 'opacity 0.25s ease',
+            whiteSpace: 'nowrap',
+        });
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 250);
+        }, 1600);
+    };
+    return ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsx)("button", { type: "button", "data-mobile-nav": "toggle", "aria-label": t ? t('open') : '菜单', title: t ? t('open') : '菜单', onClick: () => toggleSidebar(), children: IconPanelLeft ? (0, jsx_runtime_1.jsx)(IconPanelLeft, { size: 16 }) : (0, jsx_runtime_1.jsx)("span", { children: "\u2630" }) }), (0, jsx_runtime_1.jsx)("button", { type: "button", "data-mobile-nav": "jobs-placeholder", "aria-label": "\u540E\u53F0\u4EFB\u52A1", title: "\u540E\u53F0\u4EFB\u52A1", onClick: handleJobsClick, children: (0, jsx_runtime_1.jsxs)("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round", children: [(0, jsx_runtime_1.jsx)("polyline", { points: "3 5 7 8 3 11" }), (0, jsx_runtime_1.jsx)("line", { x1: "9", y1: "11", x2: "13", y2: "11" })] }) }), (0, jsx_runtime_1.jsx)("button", { type: "button", "data-mobile-nav": "files", "aria-label": t ? t('files') : '文件树', title: t ? t('files') : '文件树', onClick: toggleExplorer, children: IconFolderOpen ? (0, jsx_runtime_1.jsx)(IconFolderOpen, { size: 16 }) : (0, jsx_runtime_1.jsx)("span", { children: "\uD83D\uDCC1" }) })] }));
 }
 };
 __modules["components/MobileDrawerFooter.js"] = function (require, module, exports) {
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MobileDrawerFooter = MobileDrawerFooter;
 const jsx_runtime_1 = require("react/jsx-runtime");
-const dsh_client_ui_primitives_1 = require("@deepseek-ai/dsh-client-ui-primitives");
-const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
-/**
- * Mobile-only drawer footer actions, relocated from the session header to the
- * drawer footer (beside Settings):
- * - Files: opens the dsh-web-ui aionui explorer as a floating bottom sheet
- *   (the explorer column is hidden on mobile until this marker is set, so
- *   the suite's own persisted-expanded state can never cover the UI on load).
- * - Session log: the official session-log-export controller, so the
- *   progress/result dialog is shared with the desktop flow.
- * Hidden entirely on wide screens (CSS media query).
- */
-function MobileDrawerFooter({ useSessions, downloadSessionLog, toggleSidebar, openFiles, t }) {
-    const sessionId = useSessions((state) => state.current);
-    const openExplorer = () => { openFiles(); toggleSidebar(); };
-    return ((0, jsx_runtime_1.jsxs)("div", { "data-mobile-nav": "drawer-actions", children: [(0, jsx_runtime_1.jsxs)("button", { type: "button", "data-mobile-nav": "explorer", "aria-label": t('files'), title: t('files'), onClick: openExplorer, children: [(0, jsx_runtime_1.jsx)(dsh_client_ui_primitives_1.IconPanelLeftOutline16, { size: 14 }), (0, jsx_runtime_1.jsx)("span", { children: t('files') })] }), (0, jsx_runtime_1.jsxs)("button", { type: "button", "data-mobile-nav": "session-log", "aria-label": t('sessionLog'), title: t('sessionLog'), disabled: sessionId === undefined, onClick: () => {
-                    if (sessionId !== undefined)
-                        downloadSessionLog(sessionId);
-                }, children: [(0, jsx_runtime_1.jsx)(dsh_client_ui_primitives_1.IconDownloadOutline16, { size: 14 }), (0, jsx_runtime_1.jsx)("span", { children: t('sessionLog') })] })] }));
+const Primitives = __importStar(require("@deepseek-ai/dsh-client-ui-primitives"));
+const sessions_compat_ts_1 = require("./core/sessions-compat.js");
+const IconDownload = Primitives.IconDownloadOutlineMedium ||
+    Primitives.IconDownloadOutlineRegular ||
+    Primitives.IconDownloadOutline16;
+function MobileDrawerFooter({ useSessions, downloadSessionLog, t }) {
+    const sessionId = useSessions((state) => (0, sessions_compat_ts_1.currentSessionIdOf)(state));
+    return ((0, jsx_runtime_1.jsx)("div", { "data-mobile-nav": "drawer-actions", children: (0, jsx_runtime_1.jsxs)("button", { type: "button", "data-mobile-nav": "session-log", "aria-label": t ? t('sessionLog') : '会话日志', title: t ? t('sessionLog') : '会话日志', disabled: sessionId === undefined, onClick: () => {
+                if (sessionId !== undefined)
+                    downloadSessionLog(sessionId);
+            }, children: [IconDownload ? (0, jsx_runtime_1.jsx)(IconDownload, { size: 14 }) : (0, jsx_runtime_1.jsx)("span", { children: "\uD83D\uDCE5" }), (0, jsx_runtime_1.jsx)("span", { children: t ? t('sessionLog') : '会话日志' })] }) }));
+}
+};
+__modules["components/ComposerFileButton.js"] = function (require, module, exports) {
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ComposerFileButton = ComposerFileButton;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const Primitives = __importStar(require("@deepseek-ai/dsh-client-ui-primitives"));
+const IconPaperclip = Primitives.IconPaperclipOutlineMedium ||
+    Primitives.IconPaperclipOutlineRegular ||
+    Primitives.IconPaperclipOutline16;
+function ComposerFileButton({ useInput, useSession, t }) {
+    const busy = useInput((state) => state.phase !== 'plain');
+    const subagent = useSession((state) => state.subagent !== null);
+    const disabled = busy || subagent;
+    const openPicker = (event) => {
+        if (disabled)
+            return;
+        const card = event.currentTarget.closest('[data-composer-card]');
+        const input = card === null ? null : card.querySelector('input[type=file]');
+        if (input !== null)
+            input.click();
+    };
+    return ((0, jsx_runtime_1.jsx)("button", { type: "button", "data-mobile-nav": "file-upload", "aria-label": t('fileUpload'), title: t('fileUpload'), disabled: disabled, onClick: openPicker, children: IconPaperclip ? (0, jsx_runtime_1.jsx)(IconPaperclip, { size: 14 }) : (0, jsx_runtime_1.jsx)("span", { children: "\uD83D\uDCCE" }) }));
 }
 };
 __modules["styles/base.css.js"] = function (require, module, exports) {
@@ -1388,15 +3647,15 @@ exports.BASE_CSS = `
   outline-offset: 1px;
 }
 
-/* Drawer footer actions: the relocated Session log download plus the Files
-   action that opens the dsh-web-ui explorer sheet. */
+/* Drawer footer action: the relocated Session log download. The Files entry
+   was removed on 2026-09-17 (see
+   docs/specs/2026-09-17-sidebar-files-coexistence-design.md). */
 [data-mobile-nav="drawer-actions"] {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
-[data-mobile-nav="session-log"],
-[data-mobile-nav="explorer"] {
+[data-mobile-nav="session-log"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1413,8 +3672,7 @@ exports.BASE_CSS = `
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-[data-mobile-nav="session-log"]:hover:not(:disabled),
-[data-mobile-nav="explorer"]:hover {
+[data-mobile-nav="session-log"]:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, .06));
 }
 [data-mobile-nav="session-log"]:disabled {
@@ -1422,20 +3680,6 @@ exports.BASE_CSS = `
   cursor: default;
 }
 
-/* Session-delete confirm / error cards (shown as a bottom overlay, see the
-   delete-dialog wrapper below). Danger-tinted card with a description and
-   two actions. */
-[data-mobile-nav="delete-confirm"] {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-state-error-secondary, rgba(220, 38, 38, .35));
-  border-radius: 12px;
-  background: var(--dsw-alias-interactive-bg-hover-danger, rgba(220, 38, 38, .06));
-}
 [data-mobile-nav="delete-confirm-title"] {
   font-size: 13px;
   font-weight: 600;
@@ -1508,6 +3752,17 @@ exports.BASE_CSS = `
   box-shadow: 0 8px 30px rgba(0, 0, 0, .22);
   animation: dsh-web-mobile-sheet-in .22s var(--ds-ease-out, ease-in-out);
 }
+/* Wide touch (tablet landscape ≥1024px, pointer coarse): the card would
+   otherwise span the full desktop viewport. Cap and center it with margins
+   (not transform, which the entry animation would override mid-play). */
+@media (min-width: 1024px) and (pointer: coarse) {
+  [data-mobile-nav="delete-dialog"] {
+    left: 0;
+    right: 0;
+    width: 420px;
+    margin-inline: auto;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   [data-mobile-nav="delete-dialog-backdrop"],
   [data-mobile-nav="delete-dialog"] {
@@ -1515,12 +3770,58 @@ exports.BASE_CSS = `
   }
 }
 
+/* ---------- popover band above the open drawer (mobile only) ----------
+   The host portals its menus to <body> as position: fixed with z-index 1100,
+   while the drawer column carries 1300 and our backdrop 1250. A menu opened
+   from inside the drawer therefore painted UNDER both: measured 2026-09-14 at
+   390px on the session row's ⋯ menu — menu rect [160,454,218,168] z1100, and
+   elementFromPoint at its centre AND at both of its ends returned drawer
+   elements, so the whole menu was unreachable and the row could not be
+   renamed/forked/archived/deleted from the phone (the second half of the
+   owner's report: the popup the ⋯ opens is pressed under the drawer).
+   The raise is gated on the open drawer: our backdrop makes that the only
+   state in which a menu can be opened from the drawer, so the closed-drawer
+   and desktop stacks keep the host's own ordering.
+   The plugin's own confirm card sits in the same band: it mounts on
+   document.body (NOT in the frame — see session-menu.ts, which appends the
+   backdrop and the card there so the third-party dismiss shim's capture-phase
+   click chain cannot swallow its buttons) and carried the base z 55/56, so the
+   drawer covered its left 272px (measured: elementFromPoint inside that band hit
+   the drawer's own button, and the confirm card is 358px wide starting at x=8). */
+@media (max-width: 1023px) and (pointer: coarse) {
+  body:has([data-mobile-nav="frame"]:not([data-sidebar-collapsed])) [role="menu"] {
+    z-index: 1400 !important;
+  }
+  /* Host modal dialogs (workspace rename, and any future dialog of the same
+     shape) portal to a direct body child that carries the stacking context:
+     body > div._root_w1urq_2 { position: fixed; z-index: 1000 } wrapping
+     [role="dialog"][aria-modal="true"] (_dialog_w1urq_22, inner z-index: 1 —
+     raising the dialog itself is useless, it only sorts inside that root).
+     Measured 2026-09-19: with the drawer open (column z 1300) the workspace
+     Rename dialog sat entirely under it and needed the drawer closed first.
+     Raise the portal root, not the dialog, and only while the drawer is open —
+     the closed-drawer and desktop stacks keep the host's own ordering. Our own
+     delete card is untouched: its role sits on the body child itself, so
+     :has(>) never matches it. */
+  body:has([data-mobile-nav="frame"]:not([data-sidebar-collapsed]))
+    > div:has(> [role="dialog"][aria-modal="true"]) {
+    z-index: 1400 !important;
+  }
+  [data-mobile-nav="delete-dialog-backdrop"] {
+    z-index: 1400 !important;
+  }
+  [data-mobile-nav="delete-dialog"] {
+    z-index: 1401 !important;
+  }
+}
+
 /* Floating fallback button (hero / blank phases without a session header).
-   The top clears the camera band below the status bar; when the client has
-   set viewport-fit=cover the safe-area inset moves it below the notch too. */
+   Top aligns with the session header's toggle row (that row sits 12px below
+   the frame's safe-area padding); when the client has set viewport-fit=cover
+   the safe-area inset moves it below the notch too. */
 [data-mobile-nav="fab"] {
   position: absolute;
-  top: calc(env(safe-area-inset-top, 0px) + 72px);
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
   left: 10px;
   z-index: 21;
   display: inline-flex;
@@ -1545,11 +3846,15 @@ exports.BASE_CSS = `
   outline-offset: 2px;
 }
 
-/* Dimmed backdrop under the open drawer; above every column, below the drawer. */
+/* Dimmed backdrop under the open drawer; above every column, below the drawer.
+   z 1250: 0.1.5 pins its native sidebarCol at z-index:1100 and paints mid
+   layers up to that band; the backdrop must sit above the host stack
+   (below the drawer's 1300) so the dim covers the content area on every
+   host generation. Keep in sync with the drawer z in layout.css.ts. */
 [data-mobile-nav="backdrop"] {
   position: absolute;
   inset: 0;
-  z-index: 30;
+  z-index: 1250;
   background: rgba(0, 0, 0, .45);
   cursor: pointer;
   animation: dsh-web-mobile-fade .2s var(--ds-ease-in-out, ease-in-out);
@@ -1631,8 +3936,8 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
        html/body count for this (Chromium issue 41483088: inner containers
        are ignored by the navigation path). iOS Safari's edge back-swipe has
        no CSS opt-out (WebKit bug 240183) — there the widened gesture start
-       zone (96px, beyond every browser's edge-claim strip) is the
-       mitigation.
+       zone (START_ZONE_RATIO 0.45 of the viewport width, ~176px at 390px,
+       past every browser's edge-claim strip) is the mitigation.
      - With the client's viewport-fit=cover, env(safe-area-inset-top) is the
        status bar / notch height; the rules below push the app content below
        it so the status bar never covers anything. Off notched phones (or in
@@ -1660,12 +3965,20 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      and the newest message sits under the composer because the host's
      at-bottom follow scrolls its own scroll body, not the document. With
      border-box the padding is taken out of the 100% height instead, so the
-     frame is exactly one viewport tall and the document never scrolls. */
-  [data-mobile-nav="frame"] {
+     frame is exactly one viewport tall and the document never scrolls.
+
+     The leading html element selector is load-bearing, not decoration: the
+     third-party @linxin666/dsh-web-all sheet ships an equal-specificity
+     !important grid-template-columns for this same element under
+     (max-width: 768px), so without the extra element the winner is decided by
+     which sheet happens to be injected later. Measured before and after with
+     scripts/probes/cascade-conflict-probe.mjs: no computed value moves, the
+     rule only stops depending on sheet order (audit D-5 option A). */
+  html [data-mobile-nav="frame"] {
     box-sizing: border-box !important;
     position: relative !important;
     grid-template-columns: minmax(0, 1fr) 0 0 !important;
-    padding-top: 0px !important;
+    padding-top: env(safe-area-inset-top, 0px) !important;
   }
 
   /* The sidebar column (first grid child) becomes a left drawer. The drawer
@@ -1678,21 +3991,103 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      before) left 14px of the drawer plus a long 32px-blur shadow gradient
      visible along the left edge of the main UI. No box-shadow at all: the
      dimmed backdrop already separates drawer from content. */
+  /* These legacy column rules stay armed on every host generation: the phone
+     owner prefers this drawer over the official overlay one (2026-09-13). The
+     host's own drawer ships NO full-screen backdrop, so the conversation beside
+     it stays hit-testable - the rejection reason.
+     Layering contract: this column is 1300 and the backdrop 1250 (base.css),
+     both deliberately above the host's native sidebarCol at 1100. The earlier
+     value of 40 sat BELOW that 1100: because this same rule also forces
+     position/inset/width on the element, the column kept a correct-looking box
+     while neither painting nor hit-testing, which is the "all black, click
+     anywhere closes" root cause. The backdrop we append carries the dimming. */
   [data-mobile-nav="frame"] > :first-child {
     position: absolute !important;
     inset: 0 auto 0 0 !important;
-    width: max-content;
-    max-width: 92vw;
-    z-index: 40 !important;
+    /* !important is load-bearing: the host ships
+       [data-dsh-frame] [data-pane="sidebar"] { width: min(88vw, 320px) !important }
+       under (max-width: 768px), which at 390px resolves to a flat 320px and
+       BEATS a plain declaration here - measured: our max-content never applied
+       and the column stayed 320px.
+       280 is the drawer's hard floor, measured by sweeping the column width from
+       304 down to 264: the inner surface is a FIXED 280px box and never
+       reflows, so every pixel below 280 is simply clipped off its right edge
+       (the list stays 270px at every width and its right edge sits at 278, so
+       270 and below cut into the list itself). At exactly 280 the panel is fully
+       intact - only the 12px of its right-hand padding is given up - which is
+       what the owner asked for over the previous 304. Going narrower is a
+       one-line change, but it starts eating content. */
+    width: min(88vw, 280px) !important;
+    /* 1300 is a contract with base.css: the host pins its native sidebarCol at
+       z-index:1100 and paints its mid layers up to that band, so the drawer must
+       sit above the host stack AND above our own backdrop at 1250 (which dims
+       the content area). At 40 the backdrop covered the drawer itself, so
+       opening it showed a full-screen dim with no drawer (measured 2026-09-13
+       at 390px: backdrop [0,0,390,844] z1250 over column [0,0,320,844] z40, and
+       elementFromPoint(40,300) returned the backdrop). Keep in sync with the
+       backdrop z in base.css. */
+    z-index: 1300 !important;
     transform: translateX(-110%);
     transition: transform .28s var(--ds-ease-in-out, ease-in-out);
-    background: var(--dsw-alias-bg-base, #ffffff);
-    /* Keep the drawer flush with top: drawer spans full frame height */
-    padding-top: 0px !important;
+    /* Keep the drawer's own content below the status bar / notch: the drawer
+       spans the full frame height (its absolute containing block is the
+       frame's padding box, so the frame's own safe-area padding does NOT
+       reach it). The drawer background paints the status-bar strip, which
+       the client's theme-color meta matches, so the strip reads seamless. */
+    padding-top: env(safe-area-inset-top, 0px) !important;
     /* Kill the official sidebarCol right border: with the backdrop the edge
        reads cleanly, and the settings dialog (width:100% of this box) stays
        pixel-flush with the drawer. */
     border-right: none !important;
+
+    /* The drawer's inner surface is 280px wide while the column is 88vw/320px, so
+     the remaining 40px showed our own column background as a vertical strip
+     along the right edge (measured: content right edge 280, column 320; the
+     owner reported a white bar). The inner surface owns that band instead, so
+     the strip is filled by the drawer's real surface colour. */
+    /* The 40px band is a STACKING result, not a colour one: the drawer's inner
+     surface is only 280px wide (host markup), while our column is 320px and
+     carries z-index 1300 - so the column's own background paints OVER the
+     surface's right 40px. Pixel-verified from a screenshot with the drawer open:
+     x=10..270 rgb(249,250,251) (the surface) against x=285..315 rgb(255,255,255)
+     (our white column). Repainting the column with the surface's own value makes
+     the seam invisible whatever the theme does; the surface underneath keeps its
+     own colour for the 280px it does cover. */
+    background: var(--dsw-alias-bg-surface, #f9fafb);
+    /* Drawer swipe gestures (edge swipe-in / content swipe-out, see
+     docs/specs/2026-08-27-sidebar-swipe-gestures.md).
+     One rule is load-bearing for the gesture layer: dropping pan-x on the
+     drawer lets horizontal pointermove events reach the gesture code —
+     WITHOUT it the browser treats a horizontal stroke as a pan, fires
+     pointercancel and the gesture never classifies (vertical panning stays
+     intact). Start-hit is decided purely by geometry on the document
+     capture listener (START_ZONE_RATIO = 0.45 of the viewport width, ~176px
+     at 390px); there is no hotspot element (removed per audit C2,
+     2026-08-27). pinch-zoom rides along with the
+     root value so a browser-applied zoom stays undoable inside the drawer
+     too (#45); touch-action intersects down the ancestor chain, so a bare
+     pan-y here would cancel the root's pinch permission. */
+    touch-action: pan-y pinch-zoom !important;
+  }
+
+  /* Closed slot, at the host's OWN specificity. 0.1.5 added a narrow-branch
+     rule [data-dsh-frame][data-sidebar-collapsed] [data-pane="sidebar"]
+     { width:52px !important; transform:none; pointer-events:none;
+     background:transparent !important } - specificity (0,3,0), one class above
+     the rule above, so it won BOTH width and transform: the closed drawer
+     stayed a 52px transparent shell at x=0 and the only state delta left was
+     the width (52<->280), which "transition: transform" cannot animate.
+     Measured 2026-09-17: closed pane transform:none / width:52 /
+     rect [0,0,52,844], and every frame sampled across a toggle click stayed
+     transform:none - the owner's "no slide animation on click" report.
+     Matching that specificity (plus !important, since the host declaration is
+     important) restores the design's own slot (spec 2026-08-27, drawer DOM):
+     a min(88vw, 280px) column translated -110% of its own width, i.e. -308px
+     at 390px. The gesture layer never depended on this rule - it writes an
+     inline transform !important - so only the CSS-driven click paths regressed. */
+  [data-mobile-nav="frame"][data-sidebar-collapsed] > :first-child {
+    width: min(88vw, 280px) !important;
+    transform: translateX(-110%) !important;
   }
 
   /* Expanded state (frame without data-sidebar-collapsed) slides the drawer in.
@@ -1708,20 +4103,64 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     transform: none !important;
   }
 
-  /* Drawer swipe gestures (edge swipe-in / content swipe-out, see
-     docs/specs/2026-08-27-sidebar-swipe-gestures.md).
-     One rule is load-bearing for the gesture layer: dropping pan-x on the
-     drawer lets horizontal pointermove events reach the gesture code —
-     WITHOUT it the browser treats a horizontal stroke as a pan, fires
-     pointercancel and the gesture never classifies (vertical panning stays
-     intact). Start-hit is decided purely by geometry on the document
-     capture listener (START_ZONE_PX = 48px); there is no hotspot element
-     (removed per audit C2, 2026-08-27). pinch-zoom rides along with the
-     root value so a browser-applied zoom stays undoable inside the drawer
-     too (#45); touch-action intersects down the ancestor chain, so a bare
-     pan-y here would cancel the root's pinch permission. */
-  [data-mobile-nav="frame"] > :first-child {
-    touch-action: pan-y pinch-zoom !important;
+
+  /* The host's own drawer handle. It renders the branded fish glyph (a 24x17
+     path in a 23.16x17.04 viewBox) and the phone owner reads it as a stray
+     "whale" sitting at the very top-left of the header: measured [10,14,44,44]
+     against our own toggle at [8,12,28,28], i.e. the two overlap in the same
+     corner. It also duplicates what our toggle already does, so on the mobile
+     branch it is removed. The selector keys on the host's own label - the
+     element carries no distinguishing class (hHd-Xa_iconButton is shared with
+     every other icon button, and the label flips to "Collapse sidebar" when the
+     drawer is open, which is why the attribute prefix matches both states and
+     both get removed). Nothing in this plugin queries that element; the drawer
+     still opens from our toggle, the edge swipe, and closes by tapping the
+     backdrop or swiping it away. */
+  /* Two selectors and both are needed. The competitor is NOT the host's own
+     CSS: @linxin666/dsh-web-all injects, under (max-width: 768px),
+     [data-dsh-frame][data-sidebar-collapsed] [data-pane="sidebar"]
+     [data-dsh-responsive-part="sidebar-toggle"] { pointer-events: auto;
+     display: inline-flex !important }. That is 4 attribute selectors AND
+     !important - exactly what the first selector below is - so this is NOT an
+     out-specify, it is a TIE decided by sheet order, and it holds only because
+     our sheet is injected after theirs. Measured twice, not inferred:
+     scripts/probes/cascade-conflict-probe.mjs reports both sides imp=true at
+     (0,4,0) and lists this as a reviewed order-tie; if the injection order
+     flips, the dismiss shadow returns as a visible inline-flex box with
+     pointer-events restored. Done (audit D-5 option A, 2026-09-16): every
+     selector below carries a leading html, which lifts the first one to
+     (0,4,1) and ends the tie - the outcome no longer depends on which sheet is
+     injected later. The hash class and the label stay as fallbacks for hosts
+     without that hook. */
+  html [data-mobile-nav="frame"][data-sidebar-collapsed] [data-pane="sidebar"] [data-dsh-responsive-part="sidebar-toggle"],
+  html [data-mobile-nav="frame"] [data-dsh-responsive-part="sidebar-toggle"],
+  html [data-mobile-nav="frame"] [class*="hHd-Xa_toggle"]:is([aria-label*="sidebar" i], [aria-label*="侧边栏"]),
+  html [data-mobile-nav="frame"] button[aria-label*="sidebar" i],
+  html [data-mobile-nav="frame"] button[aria-label*="侧边栏"] {
+    display: none !important;
+  }
+
+  /* The host's own right sidebar IS the Files panel on phones, and the host
+     pins it as a fixed full-bleed sheet: [data-sidebar-right-panel=fullscreen]
+     carries position:fixed; inset:0 and no inset of its own (the host CSS
+     never mentions safe-area at all). Its top row - the tab strip holding the
+     tab label, the + button and the Split / Exit-fullscreen pair at the right
+     edge - therefore sat UNDER the status bar: measured at 390x844 with the
+     panel open, the strip is [0,0,390,38] and the phone's status bar owns the
+     top of the screen. The frame's own safe-area padding cannot reach it: a
+     fixed element's containing block is the viewport, not the frame's padding
+     box. Taking the inset as padding keeps the panel's own --dsw-alias-bg-base
+     covering the whole viewport (no seam behind the status bar) and drops the
+     entire row below it, with the right-hand buttons still on the right edge.
+     ONLY the fullscreen form: the host's docked form (measured at 820x1180 -
+     form=push, position:absolute, 365px right-anchored) has the frame's
+     padding box as its containing block, so it already starts below the
+     status bar; padding it too would add the inset a second time. A host
+     generation that renames the form value should fail the probe loudly
+     instead of silently double-padding. The rule lives in the mobile branch,
+     so desktop keeps the host layout. */
+  [data-sidebar-right-panel="fullscreen"] {
+    padding-top: env(safe-area-inset-top, 0px) !important;
   }
 
   /* prefers-reduced-motion: the drawer's .28s slide is motion; drop it
@@ -1781,7 +4220,8 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      Suppress only inside the actions row — the fork's original scope. On
      this host (0.1.1-rc.2) NO tooltip renders as a visible bubble: the copy
      label is a visuallyHidden span and no client-ui package emits
-     role="tooltip". The user message bubble (gdEzaW_bubble) and the goal
+     role="tooltip". The user message bubble (Sixlwa_bubble since the host moved
+     it to dsh-client-ui-chat) and the goal
      bubble (oRe1gG_bubble) live in _userStack/_row, NOT in _actions — the
      previously unscoped selector hid every user message on touch devices
      (2026-09-06 live regression). role="tooltip" stays globally suppressed:
@@ -1803,12 +4243,21 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     [class*="_scroll"]:not([class*="_scrollBody"]):not(:has([data-composer-input])):has(p) {
     padding-left: 20px;
     padding-right: 20px;
-    font-size: 15px !important;
+    /* Message text follows the host's own font-size axis (Settings -> 字号大小)
+       instead of a frozen phone constant. The host writes the user's choice to
+       <body> as --dsh-content-font-size and derives the longhand token
+       --dsw-font-markdown-base-font-size from it; the previous 15px !important
+       cut that chain at the container, so settings 12-17 did nothing for message
+       text while the host's own markdown blocks still moved — two sizes mixed in
+       one column (#52). Read the longhand token only: the other token ending in
+       -base is the font shorthand, an invalid font-size value that the parser
+       drops and the cascade silently falls back on. The fallback chain ends at
+       the host's own default axis value. */
+    font-size: var(--dsw-font-markdown-base-font-size, var(--dsh-content-font-size, 14px)) !important;
   }
-  /* The official markdown styles set an explicit 16px on paragraphs and
-     list items, so the container's inherited 15px is not enough. User
-     messages render their text in a div whose class carries _text_
-     (16px too) — cover it as well. */
+  /* Descendants only inherit: the host already resolves the same token on its
+     own markdown blocks (and its styles pin 16px on paragraphs / list items),
+     so a rule per p / li / user-message text would cut the axis a second time. */
   [data-phase]
     [class*="_scroll"]:not([class*="_scrollBody"]):not(:has([data-composer-input])):has(p) p,
   [data-phase]
@@ -1817,7 +4266,7 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     [class*="_scroll"]:not([class*="_scrollBody"]):not(:has([data-composer-input])):has(p) [
       class*="_text_"
     ] {
-    font-size: 15px !important;
+    font-size: inherit !important;
   }
 
   /* Markdown tables: the official table uses width:max-content, so on a phone
@@ -1908,10 +4357,17 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     /* Must not clip the model dropdown; the model trigger clips its own label. */
     overflow: visible;
   }
-  /* PermissionSelect / plan controls share the tools lane. Let the
-     permission label use the remaining tools width, while the lower-priority
-     plan slot keeps an icon-sized target instead of stealing model width. */
-  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > [class*="_modes"] {
+  /* Permission / plan controls share the tools lane inside the a2-style
+     'div.modes' container (class survives as 'css.modes'; audit doc §10.1 /
+     E-1). The positional anchor '> :first-child > :nth-child(2)' was already
+     off-target on rc.2 and dies entirely on a2, so the series re-anchors on
+     the tools lane's modes container: '[class*="_tools"] > [class*="_modes"]'
+     (live-verified on the rc.2 host: the modes div is a direct child of the
+     tools lane, a grandchild of the row — a row-direct-child anchor matches
+     nothing on either generation). The permission label uses the remaining
+     tools width, while the lower-priority plan slot keeps an icon-sized
+     target instead of stealing model width. */
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_tools"] > [class*="_modes"] {
     flex: 0 1 auto;
     min-width: 0;
     max-width: none;
@@ -1920,14 +4376,14 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
        overflow hidden crops it. The trigger label clips its own text. */
     overflow: visible;
   }
-  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > [class*="_modes"] > [class*="_trigger"] {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_tools"] > [class*="_modes"] > [class*="_trigger"] {
     flex: 1 1 auto;
     min-width: 28px;
     max-width: 100%;
     display: flex !important;
     overflow: hidden;
   }
-  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > [class*="_modes"] > [class*="_trigger"] > [class*="_triggerLabel"] {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_tools"] > [class*="_modes"] > [class*="_trigger"] > [class*="_triggerLabel"] {
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
@@ -1938,20 +4394,20 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      not force them into an icon-sized box: their child button would overflow
      that wrapper and paint over PermissionSelect. Keep the wrapper intrinsic;
      the model lane below is the one that sacrifices width. */
-  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > [class*="_modes"] > :not([class*="_trigger"]) {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_tools"] > [class*="_modes"] > :not([class*="_trigger"]) {
     flex: 0 1 auto;
     min-width: 34px;
     max-width: max-content;
     overflow: visible;
   }
-  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > [class*="_modes"] > [class*="_wrap"] > [class*="_chip"] {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_tools"] > [class*="_modes"] > [class*="_wrap"] > [class*="_chip"] {
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap !important;
   }
   @container dsh-mobile-composer (max-width: 359px) {
-    [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > [class*="_modes"] > [class*="_trigger"] > [class*="_triggerLabel"] {
+    [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_tools"] > [class*="_modes"] > [class*="_trigger"] > [class*="_triggerLabel"] {
       display: none !important;
     }
   }
@@ -2025,15 +4481,21 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     flex: none;
     min-width: 0;
   }
-  /* ContextMeter (JObwrW_ hash family) right-cluster pinning: keep the meter
-     at its official size (28x28 trigger, 14px ring -- enlarging the ring made
-     it steal attention) and glue it to the send button. A small negative
-     right margin trims the 6px lane gap to 2px against send. Anchor on the
-     unique aria-haspopup="dialog" trigger (no other composer control uses
-     it), not the hashed class, so an upstream hash bump cannot silently
-     unhook us. Knob: margin-right trim (-4px). */
+  /* ContextMeter (JObwrW_ hash family) hugging the primary key. This single
+     value is the whole spacing knob, and because the trigger box is centred on
+     the ring ink it doubles as the ink offset:
+       6px + margin-right = the sliver before the primary key = the ink's
+       leftward shift. 0px (current) therefore shifts the ink 6px -- exactly the
+       official lane gap, with no negative-margin trick left in the chain --
+       while -6px pins the ink perfectly still and +8px was vetoed on
+       2026-09-17 as "too much" (14px). The phone owner asked for a visible
+       shift after 1px (-5px) proved imperceptible, and will re-tune this number
+       by eye: change it and nothing else moves.
+     Anchor on the unique aria-haspopup="dialog" trigger (no other composer
+     control uses it), not the hashed class, so an upstream hash bump cannot
+     silently unhook us. */
   [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] > [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="dialog"]) {
-    margin-right: -4px;
+    margin-right: 0px;
   }
   /* The model pill joins the same right cluster: its margin-left:auto absorbs
      ALL trailing slack, so the adaptive void sits between the tools lane and
@@ -2046,14 +4508,22 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     margin-left: auto;
     margin-right: -4px;
   }
-  /* Shrink only the trigger BOX (28 -> 24, padding zeroed) while the ring
-     ink stays at its official 14px: the dead inset per side drops from 7px
-     to 5px so the small ring no longer floats in its own button. 24x24 keeps
-     the WCAG 2.2 minimum target size. Ring size itself is intentionally
-     untouched -- enlarging it was rejected as attention-grabbing. */
+  /* Grow only the invisible trigger BOX, never the ring ink: 24x24 -> 28x34.
+     The WIDTH is capped at 28 by pure geometry, not by taste: the box is
+     centred on the ink, and the primary key's hit box begins 14px right of the
+     ink's centre, so 28 is the widest box that can reach that boundary without
+     stealing a single pixel from the destructive key (the current 1px sliver
+     is the spacing knob on the root rule above); the same arithmetic puts the
+     left edge on the model pill's edge. The 34px HEIGHT is free: the primary
+     key is already the tallest control in the lane, so the box cannot overlap
+     anything vertically and the row height does not move. Hit area 576 -> 952
+     square px (+65%) with the ink within 1px of its old spot (probe-asserted),
+     and the ring's ink stays at its official 14px -- enlarging it is rejected
+     as attention-grabbing. Knob: height can drop to 28 if the tap halo should
+     be a circle rather than a stadium. */
   [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] > [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="dialog"]) > [class*="_trigger"] {
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 34px;
     padding: 0;
   }
   /* Slack-absorber priority in the trailing lane: model pill > meter > send.
@@ -2077,14 +4547,157 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     margin-left: 0;
   }
 
+  /* --- Composer file entry (0.1.6 host) ---
+     The 0.1.6-alpha.2 host deleted the composer's paperclip attach button, so
+     the only file entry left is the 文件 row inside the "+" listbox. The
+     control is contributed to the host-declared conversation.input.left list
+     slot ("Compact controls at the left of the composer tool row"), inside the
+     tools lane beside the plus button, so only its own box is needed here:
+     28x28 like the plus button and fixed — one of the row's hit targets, never
+     part of the adaptive shrink. Its click handler triggers the host's own
+     hidden input[type=file], so intake validation and upload stay host-owned. */
+  [data-composer-card] [data-mobile-nav="file-upload"] {
+    flex: 0 0 auto !important;
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: grid !important;
+    place-items: center;
+    border: 0 !important;
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* A busy submit phase or a subagent session refuses attachments. The host
+     gates intake on canAcceptDrop (package-private), so this reads the closest
+     observable facts — input phase and subagent — and keeps the control from
+     opening a dialog the host would then reject. */
+  [data-composer-card] [data-mobile-nav="file-upload"]:disabled {
+    opacity: 0.38;
+    cursor: default;
+  }
+  /* The hidden input[type=file] this control triggers only exists on
+     0.1.6-alpha.2+ hosts (the rc generation's intake is paste/drop only),
+     while the host renders the input.left seat on both generations. Hide the
+     control wherever the host has no file input for it to trigger — its click
+     would otherwise be a permanent silent no-op there (review 2026-09-19). */
+  [data-composer-card]:not(:has(input[type=file])) [data-mobile-nav="file-upload"] {
+    display: none !important;
+  }
+
+  /* --- Composer vertical slack on mobile (0.1.6 host) ---
+     The host's own .card padding-top:8px + gap:12px and .row padding leave 29px of pure
+     blank space in a 98px single-line card (measured). Only the vertical slack is trimmed;
+     horizontal padding and both hit targets stay untouched. Scoped to the active phase on
+     purpose: the hero composer's input carries the host's own min-height floor, and trimming
+     it there re-creates the clip/scrollbar defect recorded under Pitfalls「hero 输入框下限」. */
+  /* DSHA：输入卡片自身留白偏大。宿主那两声明全出自它自己的
+     dsh-client-ui-conversation（.uV2eYG_card 是 padding-top:8px + gap:12px，
+     .uV2eYG_row 再吃 padding:2px 8px 6px），单行输入时卡片 98px 里有 29px
+     是纯空白。手机上只压纵向留白（真机实测 moderate 档）：
+       卡片 98 -> 78、编辑器 36 -> 32、按钮行 42 -> 36、文字底到按钮顶 29 -> 19px。
+     横向 padding（8px）与两个按钮尺寸（28/34px）一律不动，触控目标不变；
+     编辑器仍是可增长的多行框（max-height 336px），只是单行时不再垫高。 */
+  [data-mobile-nav="frame"] [data-phase="active"] [data-composer-card] {
+    padding-top: 2px !important;
+    gap: 4px !important;
+  }
+  [data-mobile-nav="frame"] [data-phase="active"] [data-composer-card] [class*="_row"] {
+    padding: 0 8px !important;
+  }
+  [data-mobile-nav="frame"] [data-phase="active"] [data-composer-card] [data-composer-input],
+  [data-mobile-nav="frame"] [data-phase="active"] [data-composer-card] [class*="_scroll"] {
+    min-height: 28px !important;
+    padding-top: 2px !important;
+  }
   /* --- Session header on mobile ---
      Keep the host-owned metadata in one responsive row. The conversation
-     title and running/subagent status keep their lanes; the mode text is the
-     first to ellipsize when space runs out, while Files keeps its hit area. */
+     title, the mode text and the running/subagent status all keep their
+     words; the one tenant that yields width when a phone runs out of it is
+     the background-job trigger's verbose label ("1 background job running"),
+     while Files keeps its hit area. */
+  /* Both !important flags are load-bearing. The host's session-controller sheet
+     ships [data-dsh-frame] [data-dsh-responsive-part="conversation-header"] with
+     padding-left: 60px !important under (max-width: 768px), so a plain
+     declaration here loses however specific it is: measured 2026-09-13 at
+     390px, the computed padding-left stayed 60px and the title still began at
+     x=100 with our rule present, matching and later in source order. The value
+     is 0 because our own toggle already occupies that left seat (painted at
+     x=8-36), so the host reservation is pure dead space on a phone. */
   [data-mobile-nav="frame"] [data-phase] header {
-    padding-left: 16px;
-    padding-right: 8px;
+    padding-left: 0 !important;
+    padding-right: 8px !important;
+    position: relative !important;
   }
+  /* The hero phase's empty header must stay hidden on phones. The host hides
+     it via the headerHidden class at (0,1,0), but its own session-controller
+     sheet re-shows the conversation header as a grid at <=768px —
+     [data-dsh-frame] [data-dsh-responsive-part="conversation-header"] with
+     display grid at (0,2,0) — and that beats the hide on the very element
+     carrying both classes. Result measured 2026-09-19 at 390px: an empty 85px
+     header paints only its 1px border-bottom (--dsw-alias-border-l3) as a stray
+     gray hairline under the status bar (pixel-scanned at y=84-85,
+     rgb(224,224,224)); desktop keeps display none and no line. Our (0,3,1)
+     re-hide needs no !important: the grid rule's display is a normal
+     declaration and our style tag loads last. The header carries no children in
+     hero (drawer entry is the FAB), so hiding it frees the dead 85px too. */
+  [data-mobile-nav="frame"] [data-phase] header[class*="_headerHidden"] {
+    display: none;
+  }
+  /* 0.1.6-alpha.2 renamed the hero-empty marker: headerHidden -> headerBlank
+     (audit §1 row 3), so the rule above is a dead needle on alpha.2 and this
+     one is dead on rc hosts — together they cover both generations. Same
+     (0,3,1) shape, same no-!important reasoning as above. */
+  [data-mobile-nav="frame"] [data-phase] header[class*="headerBlank"] {
+    display: none;
+  }
+  /* Header popovers resolve against the header, not against their 28px flow
+     box. 0.1.5's background-job chip anchors its menu with
+     position:absolute; top:calc(100% + 5px) inside .QsffPG_root
+     {position:relative} — a 28px-tall chip — so the menu was laid out at
+     x=-16 (our right:8px resolved against that 156px chip root) and then
+     clipped twice: by our own overflow:hidden on the chip root and by the
+     host's [data-dsh-responsive-part="session-title-cluster"]
+     {overflow:hidden}. The chip still reported aria-expanded=true with
+     nothing painted and nothing hit-testable: measured 2026-09-14 at 390px,
+     menu rect [-16,49,336,40], elementFromPoint at its centre returned the
+     view tabs row. A positioned header plus a static chip root puts the same
+     menu at [46,77,336,73] — inside the viewport, its rows hit-testable, and
+     an outside tap still dismisses it (menus 1 -> 0). On 0.1.6-alpha.2 the
+     chip leaves the flow entirely (absolute, in the gated block below), and
+     this rule's higher specificity ((0,6,2) vs the new (0,4,1)) would pin it
+     static there too — so it is excluded on alpha.2 hosts via :not(:has(...))
+     and keeps governing rc hosts (review 2026-09-19).
+     BOTH halves are load-bearing: forcing the chip root static without
+     positioning the header moves the containing block out to the frame, and
+     the menu lands at x=8 y=849 — past the 844px viewport (A/B 2026-09-13).
+     Scoped to the header actions slot, so the subagent lineage root inside
+     the crumbs keeps its own anchored, fixed-position menu. */
+  [data-mobile-nav="frame"] [data-phase] header:not(:has([class*="_headerLeading"])) [class*="_headerActions"] [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) {
+    position: static !important;
+  }
+  /* The tab strip is a separate grid item from the title row and does not
+     inherit the title row's inset, so after the header padding above went to 0
+     it sat flush against the bezel (measured: tablist x=0, first tab 0..30
+     while the title starts at 40). Give it the same left inset as the toggle so
+     the two rows read as one column. */
+  [data-mobile-nav="frame"] [data-phase] header > [class*="wSkVaW_tabs"] {
+    padding-left: 8px !important;
+  }
+  /* NOTHING extra here on purpose. The header's own padding is already forced
+     to 0 above, and the title row carries padding-left:40px of its own, so the
+     title lands at x=40 - the toggle's right edge (36) plus 4px. A negative
+     margin added on top of that over-corrected and pulled the title off the
+     left edge (measured 2026-09-13: crumb x=20, and the string's first glyph
+     painted partially outside the viewport), so the reclaim lives in exactly
+     one place: the header padding. */
+
   [data-mobile-nav="frame"] [data-phase] header > :first-child {
     display: flex !important;
     align-items: center;
@@ -2092,7 +4705,9 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     width: 100%;
     min-width: 0;
     gap: 2px;
-    padding-left: 20px;
+    /* Just enough for the toggle (28px at left:8 -> right edge 36) plus 4px of
+       breathing room; the host's 60px rail reservation is neutralised above. */
+    padding-left: 40px;
   }
   [data-mobile-nav="frame"] [data-phase] header > :first-child > :first-child {
     display: flex !important;
@@ -2105,16 +4720,16 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
   [data-mobile-nav="toggle"] {
     position: absolute !important;
     left: 8px !important;
-    top: 12px !important;
+    top: 8px !important;
     z-index: 2 !important;
   }
-  /* Files remains in flow and is ordered as the rightmost plugin action. */
+  /* Files and jobs buttons flow naturally inside the header toolbar */
   [data-mobile-nav="files"] {
     position: static !important;
-    left: auto !important;
-    right: auto !important;
-    top: auto !important;
-    z-index: auto !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    z-index: 2 !important;
   }
   [data-mobile-nav="frame"] [data-phase] header [class*="_headerActions"] {
     display: flex !important;
@@ -2129,22 +4744,34 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
   }
   /* The title takes the remaining width and never paints outside it; the
      metadata lane's mode text is what shrinks first. */
+  /* min-width is a readable floor (2026-09-13 phone report: the title showed a
+     single glyph then an ellipsis). This lane has flex basis 0, so it is the
+     first thing every crowding neighbour eats: measured at 320px with a lineage
+     chip in the row, the crumb client width collapsed to 16px and NOTHING of
+     the title was painted. 30% of the row keeps 2-4 CJK glyphs plus the host's
+     own ellipsis whatever else is pinned next to it. */
   [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] {
     flex: 1 1 0;
-    min-width: 0;
+    min-width: 30%;
     max-width: none;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap !important;
   }
-  /* Mode label: preserve its icon and scale with the viewport — it yields
-     space to the title and subagent status first, but can use more width on
-     wider screens up to 220px before ellipsizing. */
+  /* Mode label: keep the icon AND the words. On a phone this chip is the only
+     mode switcher there is, so its text is not the surplus it was once
+     treated as: the longest preset name measured needs 121px including the
+     18px icon seat, while the old cap min(22vw, 220px) allowed just 85.8px at
+     390px — the text was clipped at every phone width even before the
+     crowding rules below pinned it to the icon alone (2026-09-14 phone
+     report: the mode label showed only its glyph). 38vw keeps the label whole
+     from 320px up and still lets it ellipsize before the title on wider
+     screens. */
   [data-mobile-nav="frame"] [data-phase] header [class*="_label"]:has(> svg) {
     order: 1;
     flex: 0 1 auto;
     min-width: 0;
-    max-width: min(22vw, 220px);
+    max-width: min(38vw, 220px);
     display: block;
     position: relative;
     box-sizing: border-box;
@@ -2163,17 +4790,40 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
   /* Running/subagent controls keep their full status text and hit area; they
      do not give up width to the mode label. NOTE: the real subagent lineage
      root has class="ZKlsPq_root " — a TRAILING SPACE from the plugin's
-     template-literal className — so [class*="_root"] never matches it. Use
+     template-literal className — so [class$="_root"] never matches it. Use
      [class*="_root"] and exclude the switcher root ([class*="_switcherRoot"])
      so only the count/job roots get pinned (the switcher must stay shrinkable
      so its own title can ellipsize). */
+  /* Pinned (flex 0 0 auto) with a max-width cap. A shrinkable chip is squeezed
+     below its content and the count reads as clipped or overwritten (the
+     2026-08-22 report), while a bare max-content pin eats the session title,
+     whose flex basis is 0: measured 2026-09-13 at 320px, the crumb went 68px
+     -> 16px and the painted title was EMPTY while the chip kept its full text.
+     Pinned + capped + the crumbs min-width floor above is what holds both —
+     the title ellipsizes, the count keeps its words, and the hit area stays
+     one inline-flex button.
+     NOTE: the popover containment lives with the header rules above, which
+     force this root position:static. That only works together with the
+     positioned header: static on its own moved the containing block out to
+     the frame and the menu landed at x=8 y=849, past the 844px viewport
+     (A/B 2026-09-13). */
   [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) {
     order: 2;
     flex: 0 0 auto;
-    min-width: max-content;
-    max-width: max-content;
+    min-width: 0;
+    max-width: min(40vw, 180px);
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap !important;
-    position: static;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) > button {
+    min-width: 0;
+    max-width: 100%;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) > button > * {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) > button,
   [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) > button * {
@@ -2187,9 +4837,31 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
   [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] [class*="_separator"] {
     display: none !important;
   }
+  /* The header's right-hand slot clips its own dropdown away (0.1.5 host bug).
+     wSkVaW_headerUtilities is a 44x44 grid cell with overflow:auto, and the host
+     mounts its "More actions" menu INSIDE it: the menu is 218x52, so the cell
+     clipped it to 44x44 and the menu was never painted and never hit-testable
+     (measured: menu rect 156,56 218x52, computed flex/visible/opacity 1, yet
+     elementsFromPoint at the item centre returned the view tabs row and nothing
+     from the menu). Raising the menu z-index cannot help - the cell's own
+     stacking context traps it. Releasing the overflow paints the menu where the
+     host positioned it, and the item then works (verified: a real tap opening
+     the session-log export dialog, menus 1 -> 0 dialogs 1). Scoped to the mobile
+     branch and to this one cell, so desktop keeps the host layout. The section
+     is hidden on mobile anyway - the drawer footer carries the same action - but
+     the release stays for any plugin that registers a header dropdown here. */
+  [data-mobile-nav="frame"] [data-phase] header [class*="wSkVaW_headerUtilities"] {
+    overflow: visible !important;
+    /* The seat is empty on a phone (its only button is hidden just below) yet
+       still 44px tall, which floors the whole title row — see the compact-rows
+       block after the tab strip. */
+    height: 30px !important;
+    min-height: 0 !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [class*="wSkVaW_headerUtilities"] [class*="nL4_yW_moreButton"] {
+    display: none !important;
+  }
   [data-mobile-nav="frame"] [data-phase] header [data-mobile-nav="files"] {
-    order: 3;
-    flex: 0 0 28px;
     width: 28px;
   }
   /* Session log download: gone from the header row on mobile (the utilities
@@ -2232,37 +4904,73 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     white-space: nowrap;
     scroll-snap-align: start;
   }
+  /* Compact session header rows (2026-09-14 phone report: the top is very
+     empty). The host's own mobile sheet lays the header out as
+     grid-template-rows: minmax(32px, auto) minmax(44px, auto) with
+     [role="tab"] { min-height: 44px }, and both rows then grow to 44: the
+     title row is floored by the empty utilities seat above, the tab row by the
+     buttons' own floor. Measured at 390px: header 97px = 8 padding + 44 + 44 +
+     1 border, for 36px of painted content. Capping the rows at 36/32 and the
+     tabs at their own content height gives 77px, with nothing else degraded —
+     title, mode text, status chips, chevrons and both pinned corner buttons
+     keep their measured geometry, and the tab strip keeps its #41 contract
+     (horizontal scroll, 16px gap, whole labels, pan-x).
+     The host's 8px padding-top is deliberately kept: the title row's 28px
+     content then centres at y=26, exactly the centre of the pinned corner
+     controls (toggle and Files opener both sit at top:12, 28px tall). Trimming
+     that padding to 4 shaved 4 more px but left the text row visibly riding
+     above both buttons (2026-09-14 phone report: the text row sits too high
+     against the drawer and Files controls), so the row height is what pays for
+     the compaction, not the alignment.
+     :has(> *) guards the hero header: it is an EMPTY, host-hidden grid that
+     still occupies 85px while the composer is laid out under it. In the hero
+     the header has 0 element children, so the guard leaves it at its official
+     height — measured, the hero composer rect [0,349,388,231] is identical
+     with and without this block. */
+  [data-mobile-nav="frame"] [data-phase] header:has(> *) {
+    min-height: 0 !important;
+    grid-template-rows: minmax(36px, auto) minmax(32px, auto) !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [role="tab"] {
+    min-height: 32px !important;
+  }
+  /* The title cluster reserves its last 44px for that empty utilities seat,
+     while our Files opener only paints a 28px band at right:8 — so 18px of the
+     reservation is dead space the title lane can have. Trimming it to 26px
+     hands the title 18px back (measured at 390px with a lineage chip present:
+     crumb 64 -> 82px) and still clears the opener by 8px (actions right edge
+     346 against button left edge 354, with the button keeping its hit test). */
+  [data-mobile-nav="frame"] [data-phase] header [class*="wSkVaW_titleCluster"] {
+    padding-right: 26px !important;
+  }
   /* Header crowding on narrow phones.
-     A background-job trigger in the header actions, or the subagent lineage
-     count ("N 个子代理") living inside the crumbs nav, consumes the width the
-     mode label would otherwise use. This squeezes the crumbs nav so hard that
-     the subagent count is clipped by the nav's overflow:hidden — the text
-     looks overwritten and the trigger's right edge stops being reliably
-     tappable. Mode text is the lowest-priority item, so it is compressed
-     first. The lineage root (dsh-client-ui-subagent) sits in the crumbs for
-     BOTH running and idle descendants, so we key the guards on that root
-     rather than the transient running-state dot — otherwise the count gets
-     clipped again the moment agents go idle. Match roots with
-     [class*="_root"] (the real class carries a trailing space; [class*="_root"]
-     matches nothing). */
+     Three tenants want the same row: the session title, the mode chip and the
+     status chips. The status chips are the only ones whose words are
+     redundant — the background-job chip keeps its state dot, its chevron and
+     its aria-label, and the popover above now lists the jobs — so the job
+     trigger's verbose label ("1 background job running") is what yields. The
+     mode chip is the only mode switcher a phone has and the title is the only
+     session identity, so both keep their words and the title ellipsizes
+     instead (measured 2026-09-14 at 390px with a lineage chip present: after
+     this the mode label keeps 101px of text and the crumb 135px).
+     The lineage root (dsh-client-ui-subagent) sits in the crumbs for BOTH
+     running and idle descendants, so the guards below key on that root rather
+     than the transient running-state dot — otherwise the row would reflow the
+     moment agents go idle. Match roots with [class*="_root"] (the real class
+     carries a trailing space; [class$="_root"] matches nothing). */
   @media (max-width: 440px) {
-    [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] {
-      padding-right: 8px;
-    }
-    [data-mobile-nav="frame"] [data-phase] header [class*="_headerActions"]:has([class*="_root"]) [class*="_label"]:has(> svg),
-    [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]) [class*="_label"]:has(> svg) {
-      max-width: 18px;
-      min-width: 18px;
-      padding-left: 18px;
-      padding-right: 0 !important;
+    /* The job label is the single widest tenant of the actions lane and the
+       only one whose text is already carried elsewhere (aria-label + popover).
+       Truncating it to a number instead would print the wrong count for a
+       double-digit job list, so it is dropped whole — dot, chevron and tap
+       target stay. */
+    [data-mobile-nav="frame"] [data-phase] header [class*="_headerActions"] [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) [class*="_count"] {
+      display: none !important;
     }
   }
-  /* When the subagent lineage (any state) AND a background job are present
-     together, even the mode icon is not enough room by itself. Keep the full
-     subagent count (the reported-overwritten text) by compacting the job
-     trigger to its dot/chevron, and keep mode icon-only so the crumbs nav can
-     also hold a small right-hand gap — the subagent text should never sit
-     flush against the mode component. */
+  /* With the subagent lineage (any state) AND a background job present
+     together, 390px cannot hold the title, the mode words, the lineage count
+     and the job label at once; the job label goes first, above 440px too. */
   @media (max-width: 559px) {
     [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] {
       padding-right: 8px;
@@ -2270,13 +4978,9 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]) [class*="_headerActions"] [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) [class*="_count"] {
       display: none !important;
     }
-    [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]):has([class*="_headerActions"] [class*="_root"]) [class*="_label"]:has(> svg) {
-      max-width: 18px;
-      min-width: 18px;
-      padding-left: 18px;
-      padding-right: 0 !important;
-    }
   }
+  /* Last resort on 320px-class screens: the title and both status chips cannot
+     share the row with the mode words, so the mode chip keeps only its icon. */
   @media (max-width: 359px) {
     [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]):has([class*="_headerActions"] [class*="_root"]) [class*="_label"]:has(> svg) {
       display: none !important;
@@ -2284,14 +4988,654 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
   }
 
   /* --- Header popovers on mobile (dsh-client-ui-jobs / dsh-client-ui-subagent) --- */
-  /* The official entries sit in the session header actions. Their popovers
-     are anchored to the trigger's left edge, so clamp them to the viewport. */
+  /* Both entries sit in the session header and both anchor their panel to the
+     trigger's left edge (left:0 inside their own root), so clamp them to the
+     viewport. The background-job menu resolves against the header (see the
+     containment rules at the top of this section) and the subagent lineage
+     menu is position:fixed, so right:8px pins either panel 8px from the
+     phone's right edge: measured [46,77,336,73] for the job menu and
+     [38,41,336,58] for the lineage menu at 390px, both fully inside the
+     viewport. Do NOT clamp with left:8px: measured, that put the panel at
+     x=350..686 (off-screen) against a right-anchored x=30..366. */
   [data-mobile-nav="frame"] [data-phase] header [class*="_menu"] {
-    left: 8px !important;
-    right: auto !important;
+    left: auto !important;
+    right: 8px !important;
     width: min(336px, calc(100vw - 16px));
     max-width: none;
     max-height: min(420px, calc(100dvh - 120px));
+  }
+
+  /* --- 0.1.6-alpha.2 session-header adaptation (audited on a real device) ---
+     The 16-item reconciliation in docs/upstream/2026-09-19-mobile-header-0.1.6-adaptation.md,
+     landing the 14 items whose anchors exist in 0.1.6-alpha.2 host builds. Two preset items
+     (#6/#7) are deliberately omitted: they anchor on .dsha-preset-header-anchor, a marker
+     that exists only in the DSHA build, so they would be dead rules here.
+     GENERATION GATING: only _headerLeading/_crumbCurrent/_crumbSeg/_headerCorner are
+     alpha.2-only classes — every other anchor below (_titleCluster/_crumbs/_headerActions/
+     _headerUtilities/tablist/QsffPG_/ZKlsPq_ and the :first-child chains) also exists on
+     0.1.5-rc hosts, where these rules would silently re-tune geometry the older rules
+     measured (review 2026-09-19). Every selector therefore carries
+     header:has([class*="_headerLeading"]): the whole block is dead on pre-alpha.2 hosts and
+     the rc-generation rules keep governing there unchanged. */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) {
+    /* 顶部留白收窄：宿主 header 自带 padding-top: 10px、标题行再垫 2px，
+       叠在刘海/状态栏避让之上就显空。这两处一起清零。 */
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+    padding-top: 0 !important;
+    /* 宿主 header 有 min-height: 76px，而内容只有 ~69px，底部会垫出 7.6px 空白
+       （实测：标签行底边 106，header 底边 113.6）。贴底定位的状态 chip 会被这
+       段空白顶下去、和标签行错开。手机上让 header 贴住内容高度。 */
+    min-height: 0 !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) > :first-child {
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    gap: 0 !important;
+    padding-left: 32px !important;
+    padding-right: 0 !important;
+    padding-top: 0 !important;
+  }
+  /* 目录开关跟着一起上移，保持与标题/按钮同一行居中。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [data-mobile-nav="toggle"] {
+    top: 6px !important;
+  }
+   /* 空座位不判空、只塌宽：a2 槽位渲染器永远在 headerLeading 里挂一个
+      [data-slot] 包装元素（display:contents、0×0），:empty 与 :not(:has(*))
+      两种「空」判定都恒不命中（宿主自己的 :empty 规则同样失效），而
+      display:none 又会在某代真的渲染控件时误藏真控件。这里不判定空不空，
+      只把第三方误标进来的预留 padding 塌掉——web-all 兼容层按 0.1.5 结构
+      把本座位误标成 session-title-cluster，注入 padding-inline-end:44px，
+      座位于是 0 内容 + 44 padding = 44px 死占（实测 390px：座位
+      [40,22,44,0]、titleCluster 被顶到 x=84）。padding 归零后空座位 = 0×0，
+      真有内容的宿主也不受影响（内容盒照常渲染）。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_headerLeading"] {
+    padding: 0 !important;
+  }
+  /* 0.1.6 的新头部里，titleRow 的第一个孩子是新增的空座位
+     headerLeading（macOS 桌面控件，安卓上渲染 null）。插件按 0.1.5 老结构
+     写的「header > :first-child > :first-child { flex: 1 1 auto }」现在套在
+     这个空座位上，于是它吃掉全部剩余宽度、把标题顶到右侧（实测 411px 宽
+     屏幕上标题被推到 131px 处）。让它不参与伸缩即可——有内容时也不会塌。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) > :first-child > :first-child {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    gap: 0 !important;
+  }
+   /* 第三方兼容层（@linxin666/dsh-web-all 的 web-ui-compat 行）按 0.1.5 结构
+      把本代 titleCluster 误标成 session-utilities，给里面所有按钮注入
+      min-width/min-height:44px + flex:none：toggle/files、模式/团队/面包屑
+      按钮全被顶成 44 —— toggle (8,6,44,44) 中心 28、files (338,2,44,44)
+      中心 24、标题带中心 22 三心不齐；files 加宽后越过 headerActions 流右缘
+      6px（338 < 344）。宿主 0.1.6-alpha.2 自身没有任何 44px 下限（全包
+      grep 零命中），这里把外来下限归零：控件回到各自设计尺寸（toggle 28
+      来自 base.css、files 36 来自下面的 a2 专条、chips/面包屑回宿主自然
+      高度），三心回到 20，titleCluster 的 min-height:40 !important 重新
+      主导行高。QsffPG/ZKlsPq 两个状态 chip 用 :not 明确豁免：它们的
+      25px 下限由后面 min-height:25px !important 专条供给，特异性 (0,4,1)
+      低于本条 (0,7,1)，不豁免会被顺手压掉，不靠书写顺序。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_titleCluster"] :is(button, [role="button"]):not([class*="QsffPG_root"] button):not([class*="ZKlsPq_root"] button) {
+    min-width: 0 !important;
+    min-height: 0 !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_titleCluster"] {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    flex: 1 1 auto !important;
+    width: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    min-height: 40px !important;
+    gap: 0 6px !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    /* 簇溢出守卫，随断点 A 无条件化并入本显示规则（原为独立条）：极端
+       字体下 crumbs 触地板后的残余溢出保持可横滑，不依赖 web-all 垫片
+       （缺席时簇溢出默认 visible，会压画到 corner 按钮上）；内容放得下时
+       本声明完全惰性。x:auto 把 y 也算成 auto，簇内容高 ≤40px 恒不纵溢
+       无实害；findHorizontalScroller 对 overflow-x 容器让位。 */
+    overflow-x: auto !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_titleCluster"] > [class*="_crumbs"] {
+    /* 标题改成自适应：面包屑条吃掉动作区之外的剩余宽度，标题多长就显示多少，
+       装不下时由每一段自己的滑动窗口（见下）横向滑。min-width 保底 4 字，
+       防止预设名字很长时把标题挤没。 */
+    flex: 1 1 auto !important;
+    width: auto !important;
+    min-width: 72px !important;
+    max-width: none !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    min-height: 0 !important;
+    padding-right: 0 !important;
+    overflow: visible !important;
+    white-space: nowrap !important;
+  }
+  /* 标题本体：自适应宽度 + 横向滑动。宽度由上面面包屑条的剩余空间决定，
+     装不下时在本段内左右滑（touch-action: pan-x 让浏览器先认领横滑，
+     左缘抽屉手势不会抢走这一笔）。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_crumbs"] [class*="_crumbCurrent"] {
+    flex: 0 1 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    /* 6 个汉字上限：6×14px + 左右 padding 16px = 100px。再长就在本段内横滑，
+       这样标题永远不会顶到右侧的预设。 */
+    max-width: 100px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    touch-action: pan-x !important;
+    overscroll-behavior-x: contain !important;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_crumbs"] [class*="_crumbCurrent"]::-webkit-scrollbar {
+    display: none;
+  }
+  /* 面包屑的父会话段同样是 <button>，不设窗口就会顶出去（子代理会话实测）。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_crumbs"] [class*="_crumbSeg"] > button {
+    flex: 0 1 auto !important;
+    min-width: 0 !important;
+    max-width: 100px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+    text-align: left !important;
+    touch-action: pan-x !important;
+    overscroll-behavior-x: contain !important;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_crumbs"] [class*="_crumbSeg"] {
+    flex: 0 1 auto !important;
+    min-width: 0 !important;
+    justify-content: flex-start !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_headerActions"] {
+    /* 断点 A（用户拍板 2026-09-19，全移动档无条件生效）：动作行不参与收缩，
+       chips 按自然宽渲染，收缩职责全数交还 crumbs 滑动窗口当避震器。
+       根因链：内容是字体相对的、预算是固定像素的——headless（CJK
+       fallback 字体）文字窄、真机（另叠加 Android fontScale）文字宽，
+       flex:0 1 auto 按 basis 比例收缩时行内唯一无下限的项是模式 label
+       （min-width:0），真机截成「创造…」「Agent Te…」而 headless 全字。
+       为什么无条件化：首版用 min-width:377 分档（按 390 假设视口的 k≈1.2
+       破坏点推演），真机 diag 读数证伪——设备实测视口 360、dpr 3.5
+       （vivo V2425A，Android 16，Chrome 151），整台设备落在档位之下，A 档
+       从未绘制、旧收缩机制照跑、芯片照压；同一读数里无门的 stats 规则真机
+       验证生效、A 档未生效，对照坐实是分档包裹死档而非声明无效。目标任何
+       手机宽度芯片全字、极端窄屏靠滑窗降级不靠截断——分档与目标矛盾，删，
+       flex 直接并入本几何规则唯一声明。新几何：lane 停缩后行内唯一可缩项
+       是 crumbs（flex 1 1 auto，地板 72px；窗口帽 max-width:100px 是字体
+       无关盒子，窗内 pan-x 滑动保证长标题可读），避震容量 = crumbs 自然
+       宽−72（根会话约 28px、子代理会话双窗最多 128px；360 真机肥字体
+       k>1.22 时 crumbs 触地板、残余走 cluster 横滑）。级联核查：本规则是
+       全档唯一 flex 来源、无其他 flex 分量；rc 代 840 行是普通权重且
+       prelude 不同（无 :has 门），被本条 importance 压制，无 order-tie。 */
+    flex: 0 0 auto !important;
+    width: auto !important;
+    max-width: none !important;
+    min-height: 36px !important;
+    margin-left: auto !important;
+    padding: 0 !important;
+    border-top: 0 !important;
+    justify-content: flex-end !important;
+    gap: 6px !important;
+    overflow-x: auto !important;
+    scrollbar-width: none;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_headerActions"]::-webkit-scrollbar {
+    display: none;
+  }
+  /* stats 行左端「N 轮」被裁且不可达（用户真机两帧 + headless 390 复现）：
+     宿主 bOPqQW_root 是 justify-content:center 的横向滚动容器，内容溢出
+     49px（scrollWidth 333 / clientWidth 284）时两侧对称各裁 ~50px——右侧
+     scrollLeft 最大 49 可达，左侧起点 x=-34 是负坐标、scrollLeft 恒 ≥0
+     永不可达，center+overflow 经典陷阱。改 flex-start 后溢出全落在右侧，
+     滑动全程可达；取舍：内容放得下时行内从宿主的居中变左对齐（视觉差异
+     仅空隙分布），功能缺陷（指标永久丢一段）优先。特异性 (0,3,0) 带
+     !important 胜宿主 (0,1,0) 普通声明，与书写顺序无关；data-mobile-nav=
+     "stats" 是 stats-line 效果打的稳定标记，无哈希、跨宿主代际可用。
+     本条置于 ①嵌套块外：裁切陷阱与断点 A 的档位无关，全移动宽度生效。 */
+  [data-mobile-nav="frame"] [data-phase] [data-mobile-nav="stats"] {
+    justify-content: flex-start !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [data-mobile-nav="files"] {
+    position: static !important;
+    top: auto !important;
+    right: auto !important;
+    left: auto !important;
+    order: 3 !important;
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    flex: 0 0 32px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 6px !important;
+    color: var(--dsw-alias-label-secondary, #888) !important;
+    cursor: pointer !important;
+    padding: 0 !important;
+  }
+  /* 隐藏重复的右侧 Corner，避免遮盖文件树与操作区 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) > :first-child > :last-child[class*="_headerCorner"],
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_headerCorner"] {
+    display: none !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_headerUtilities"] {
+    display: none !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [role="tablist"] {
+    width: 100% !important;
+    margin-top: 4px !important;
+    padding-right: 8px !important;
+    box-sizing: border-box !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) {
+    position: relative !important;
+  }
+
+  /* 1. Agent Team 按钮：order 1，紧凑自适应不撑爆整行 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [data-team-action] {
+    order: 1 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    flex: 0 1 auto !important;
+    max-width: 110px !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [data-team-action] button {
+    height: 30px !important;
+    min-height: 30px !important;
+    padding: 0 6px !important;
+    font-size: 12px !important;
+    white-space: nowrap !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  /* 2. 后台任务按钮：order 2，常驻在上面那一排（解除绝对定位与 bottom: 0） */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_headerActions"] [class*="QsffPG_root"] {
+    position: static !important;
+    bottom: auto !important;
+    right: auto !important;
+    order: 2 !important;
+    height: 30px !important;
+    min-height: 30px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    z-index: 3 !important;
+    margin: 0 !important;
+    min-width: 0 !important;
+    max-width: 100px !important;
+    flex: 0 0 auto !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="QsffPG_root"] > button {
+    height: 30px !important;
+    min-height: 30px !important;
+    padding: 0 6px !important;
+    line-height: 18px !important;
+    align-items: center !important;
+  }
+
+  /* 当官方无活跃任务时呈现常驻占位任务按钮：order 2 */
+  [data-mobile-nav="frame"] [data-phase] header [data-mobile-nav="jobs-placeholder"] {
+    position: static !important;
+    top: auto !important;
+    right: auto !important;
+    left: auto !important;
+    order: 2 !important;
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    flex: 0 0 32px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 6px !important;
+    color: var(--dsw-alias-label-secondary, #888) !important;
+    cursor: pointer !important;
+    padding: 0 !important;
+  }
+  /* 当官方活跃任务出现时，隐藏占位按钮，显示带运行指示器的官方按钮 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="QsffPG_root"]) [data-mobile-nav="jobs-placeholder"] {
+    display: none !important;
+  }
+
+  /* =========================================================================
+     【满宽弹性修复】0.1.7 会话头部操作栏撑满整行，根除右侧空白与左移
+     ========================================================================= */
+
+  /* header 顶层容器：重置 grid 与右侧多余 padding */
+  [data-mobile-nav="frame"] [data-phase] header {
+    padding-left: 0 !important;
+    padding-right: 8px !important;
+    padding-top: 0 !important;
+    box-sizing: border-box !important;
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 0 !important;
+  }
+
+  /* 彻底屏蔽右侧干扰节点与前置空节点 */
+  [data-mobile-nav="frame"] [data-phase] header [class*="_headerLeading"],
+  [data-mobile-nav="frame"] [data-phase] header [data-conversation-header-leading],
+  [data-mobile-nav="frame"] [data-phase] header [class*="_headerUtilities"],
+  [data-mobile-nav="frame"] [data-phase] header [class*="_headerCorner"],
+  [data-mobile-nav="frame"] [data-phase] header [data-conversation-header-corner] {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* 会话标题行：满宽 Flex，左侧留出抽屉开关位置 */
+  [data-mobile-nav="frame"] [data-phase] header [class*="_titleRow"] {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    padding-left: 36px !important;
+    padding-right: 0 !important;
+    margin: 0 !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    position: relative !important;
+  }
+
+  /* 标题簇容器：满宽占据全部可用空间，左右两端自然对齐 */
+  [data-mobile-nav="frame"] [data-phase] header [class*="_titleCluster"] {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    gap: 8px !important;
+    overflow: visible !important;
+  }
+
+  /* 标题文字：弹性收缩，超长自动省略，不被左边缘切字 */
+  [data-mobile-nav="frame"] [data-phase] header [class*="_titleCluster"] > [class*="_crumbs"] {
+    flex: 0 1 auto !important;
+    min-width: 0 !important;
+    max-width: 120px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    display: flex !important;
+    align-items: center !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] * {
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    max-width: 100% !important;
+  }
+
+  /* 右侧操作按钮区：靠右排列至屏幕最右端 */
+  [data-mobile-nav="frame"] [data-phase] header [class*="_headerActions"] {
+    display: inline-flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    gap: 6px !important;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    margin-left: auto !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+  /* 模式预设（switcher）：极简紧凑展示，避免长文字抢占右侧三大按钮空间 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_switcherRoot"] {
+    order: 0 !important;
+    max-width: 60px !important;
+    overflow: hidden !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_switcherRoot"] [class*="_label"]:not(:has(> svg)) {
+    display: none !important;
+  }
+  /* 头部弹层定位（jobs 任务列表 / subagent 谱系 / 预设菜单都会命中的同一族）：
+     插件老规则是「弹层左缘 = chip 左缘 + 8px」，那条规则成立的年代 chip 都
+     贴着 header 左缘；现在标题窗口 72px + 子代理 chip + 预设都靠中右，336px
+     宽的面板会被整体推到视口外 —— 点开就像没反应。
+     统一改成视口定位：贴在 header 下方、左右各留 8px 满宽展开；顺带脱离
+     headerActions 的 overflow 裁剪（绝对定位的面板会被那个 auto 裁掉）。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_menu"]:not([class*="_menuAnchor"]) {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: calc(env(safe-area-inset-top, 0px) + 80px) !important;
+    bottom: auto !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: calc(100dvh - 96px) !important;
+  }
+  /* 官方 agent-team 插件（@deepseek-ai/dsh-experimental-client-ui-agent-team）的
+     TeamAction 弹层：根元素 data-team-action（VoX2oq_root，挂在 headerActions 槽
+     order 20），面板 VoX2oq_panel 是 absolute 弹层。它和上面 _menu 族栽在同一个
+     裁剪问题上 —— _headerActions 的 overflow 滚动盒把它整个裁掉（实测 390/360px
+     视口均不可见、关闭键落在视口外），但类名不含 _menu，上面那条规则救不到，
+     所以这里同款视口定位脱离裁剪。哈希前缀 VoX2oq_ 跨版本会变，按仓库约定用
+     _panel 子串匹配；不会误伤其他弹层 —— data-team-action 根标记只有 agent-team
+     插件在用，特异性 (0,5,1) 也高于 _menu 族的 (0,4,1)。代际上整条已由外层
+     header:has([class*="_headerLeading"]) 门控，pre-alpha.2 宿主不命中。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [data-team-action] [class*="_panel"] {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: calc(env(safe-area-inset-top, 0px) + 80px) !important;
+    bottom: auto !important;
+    width: auto !important;
+    max-width: none !important;
+    /* 底部让位 composer 区：会话页 composer 卡顶缘实测 y=738、stats line
+       到 840（844 视口，底部区共 106px）——原 max-height 100dvh-96px 让
+       面板伸到 y=828，底部 90px 的任务列表被输入框盖住（2026-09-19 用户
+       报障）。120px = composer 区 106px + 14px 呼吸间距；键盘弹出时 dvh
+       收缩，面板随之再缩。 */
+    max-height: calc(100dvh - 200px) !important;
+    /* 面板虽被拖出头部渲染点，white-space 仍继承 0.1.6 头部的 nowrap
+       （头部整行防换行是既有决策）——手机 374px 宽 + 长任务标题时内容
+       单行撑出面板（实测 scrollWidth 541 / clientWidth 374，任务状态
+       徽标被推到面板外 x=496 处）。恢复面板内正常换行。 */
+    white-space: normal !important;
+  }
+  /* 子代理谱系 chip（ZKlsPq_root）：0.1.6 把它渲染在标题面包屑内部。进子代理
+     会话时面包屑变成「父会话 / 当前会话」两段 + 这个 chip，动作行就叠在一起，
+     所以整块搬到「对话/轨迹」这一行的空白区里居中，并与标签文字纵向对齐。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="ZKlsPq_root"] {
+    position: absolute !important;
+    /* 在「标签右侧的空白区」里居中（左边界让开对话/轨迹，约 104px），
+       比整行居中往右一些。 */
+    left: 104px !important;
+    right: 8px !important;
+    /* 纵向对齐标签：直接镜像标签的盒模型 —— 标签是「16px 行高 + 9px 下内边距」，
+       总高 25px 且贴着 header 底边。chip 也做成 25px 高、bottom:0、下内边距 9px，
+       内容区正好落在同一段 16px 里，文字必然与「对话/轨迹」齐平。 */
+    bottom: 0 !important;
+    height: 25px !important;
+    min-height: 25px !important;
+    align-items: stretch !important;
+    z-index: 3 !important;
+    margin: 0 auto !important;
+    width: max-content !important;
+    min-width: 0 !important;
+    max-width: min(32vw, 116px) !important;
+    flex: 0 0 auto !important;
+  }
+  /* 后台任务 chip 也在标签行时，聚合 chip 往左让出它那一格，仍保持居中。
+     :not(_switcherRoot)：switcher 变体不参与让位——它由下面的专属定位规则
+     右锚 right:8，若被本族 right:126 拖走，179.4 宽会横穿 tab 带（取证
+     实测 84.6..264 盖住轨迹/记忆两 tab；headless 中任务已结束但
+     QsffPG_root 仍在 DOM，:has 命中幽灵元素）；聚合态不受影响，让位语义
+     原样保留。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]):has([class*="QsffPG_root"]) [class*="ZKlsPq_root"]:not([class*="_switcherRoot"]) {
+    right: 126px !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="ZKlsPq_root"] > button {
+    height: 25px !important;
+    min-height: 25px !important;
+    line-height: 16px !important;
+    padding: 0 4px 9px !important;
+    align-items: center !important;
+  }
+  /* 已知边界：标签行出现第三个标签时，标签总宽约
+     252px，已经越过子代理 chip 居中区的左边界（104px），两者会叠在一起。
+     这里用 :has() 按标签数量切换策略 —— ≥3 个标签时不再居中，改成停靠在标签行
+     右侧的空白区（右缘 8px；有后台任务 chip 时让到 126px）。标签行本身可横向
+     滑动，chip 不会被挤到下面，也不再盖住第三个标签：
+       chip 占 268~352（宽 84），标签止于 8+252=260，右侧余量 8px。
+     两个变体并列，兼容「tab 是 tablist 直接子按钮」与「tab 被容器包裹」两种渲染；
+     两条变体均 (0,5,2)（带 QsffPG 的二次覆盖规则为 (0,6,2)），高于上面两条既有规则，
+     不依赖书写顺序。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]):has([role="tablist"] button:nth-of-type(3)) [class*="ZKlsPq_root"]:not([class*="_switcherRoot"]),
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]):has([role="tablist"] > button:nth-child(3)) [class*="ZKlsPq_root"]:not([class*="_switcherRoot"]) {
+    left: auto !important;
+    right: 8px !important;
+    margin: 0 !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]):has([role="tablist"] button:nth-of-type(3)):has([class*="QsffPG_root"]) [class*="ZKlsPq_root"]:not([class*="_switcherRoot"]),
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]):has([role="tablist"] > button:nth-child(3)):has([class*="QsffPG_root"]) [class*="ZKlsPq_root"]:not([class*="_switcherRoot"]) {
+    right: 126px !important;
+  }
+  /* 真机反馈：「标题下面多了一条灰色滑条」。第 4/5 条为了让长标题能左右拖着看，
+     把面包屑做成了横向滚动容器 —— 实测 button.wSkVaW_crumb: overflow-x:auto、
+     scrollWidth − clientWidth = 88；像素实测那条灰条是 x=40.0~89.5、高 7.8、
+     拇指宽 ≈50 的圆角滚动条（100×100/188 ≈ 53，吻合）。
+     本机 WebView 不认 scrollbar-width（CSS.supports 为 false），只有
+     ::-webkit-scrollbar 生效；而且滚动条是「经典占位式」的 8px（合成容器实测
+     offsetHeight − clientHeight = 8）。所以这里对整个会话头部统一掐掉滚动条：
+     滑动能力保留，视觉上不再多一条。头部里任何位置的滚动条在 360px 宽的手机上
+     都不是想要的，故不再按具体类名收窄范围。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]),
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) * {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"])::-webkit-scrollbar,
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) *::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+  /* 单子代理运行态的 switcher 变体（宿主 SubagentHeaderLineage variant=
+     "switcher"，根类是「基类 + 修饰类」双类 ZKlsPq_root ZKlsPq_switcherRoot，
+     挂在 crumbs 内同一 lineage 槽位，a2 bundle line 615 实锤）：pin 规则按
+     设计排除 _switcherRoot（切换器必须保持可缩），于是它从我方链里继承了
+     零溢出约束——宿主 trigger 上限 max-width:244px 大于我方根帽 116px，
+     根又没有 overflow，trigger 连同标题从右锚定的根左缘向右画出最多
+     128px：真机 390 上文字冲到 ≈389、越过条带右缘 374，省略号点也在视口
+     外，看起来像「无省略号」。聚合态「N 个子代理」类表不含 _switcherRoot，
+     不被本条命中（结构锚区分，文本无关）。修法：根帽提到 min(46vw,180px)
+     （数值可调，给运行中标题比计数 chip 更多余地）+ 根 overflow 收口 +
+     trigger max-width:100%，让宿主自带的 title 省略号链（flex:1 +
+     min-width:0 + ellipsis）在根内收口；svg 宿主自带 flex:none，⋮⋮/箭头
+     图标与省略号共存；菜单是 position:fixed，不受根 overflow 裁剪，点击
+     不受损。特异性与上面 ZKlsPq_root 规则同类同权 (0,4,1)，靠书写在后接管
+     switcher 变体；h8S2Va 旧代是否有同名修饰类未取证，a2 (ZKlsPq_) 已实测
+     对号。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_switcherRoot"] {
+    max-width: min(46vw, 180px) !important;
+    overflow: hidden !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_switcherRoot"] > button {
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+  /* switcher 定位（用户拍板 2026-09-19：右靠 + 与 tab 基线对齐）：基础规则
+     把 switcher 与聚合 chip 一起居中/让位，取证实测 179.4 宽被推到
+     84.6..264，整个压进 tab 带（tab 按钮 y 44-76、中心 y=60）盖住轨迹/
+     记忆两 tab。本条用双类结构锚（聚合态类表无 _switcherRoot，零误伤）
+     把 switcher 拉回右缘 8px 惯例位；top:48 使 25 高中心 60.5 ≈ tab 中心
+     60，完成基线对齐——基础规则的 bottom:0 因 top+height+bottom 全非 auto
+     过约束，按 spec 忽略 bottom、top 执政，行为确定。right:8 能落地靠上
+     一条 yield 规则的 :not(_switcherRoot)（否则幽灵 QsffPG 在场时
+     right:126 特异性更高会把 right:8 压掉，实测右缘 264 即此因）。
+     360 真机推演：右锚后左缘 360−8−180=172 > tabs 端 ~126，46px 空隙，
+     与 QsffPG 同场时本条让位取消后二者同靠右——QsffPG 真在场时由
+     findHorizontalScroller/后续实测定去留（数值 48/8/180 均可调）。菜单
+     position:fixed 独立定位层，不受本条影响（取证已证）。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="ZKlsPq_root"][class*="_switcherRoot"] {
+    left: auto !important;
+    right: 8px !important;
+    top: 48px !important;
+  }
+  /* 聚合 chip 右锚（用户拍板 2026-09-19：中置的子代理元素应右靠）：与
+     switcher 同款右靠 + 基线（top:48 → 25 高中心 60.5 ≈ tab 中心 60；
+     bottom:0 过约束被忽略、top 执政）。聚合 ~97 宽右锚后 285..382，无
+     QsffPG 时零碰撞（tabs 端 ≤170）。:not(_switcherRoot) 把变体让给上面
+     switcher 专属规则，二者匹配集不相交、无 order-tie。共场（QsffPG 在
+     场）由既有 QsffPG yield 族接管（right:126 → 聚合 166.6..264）：126
+     沿用 yield 族既有几何——按旧代 84 宽 chip（268..352）定的安全距，
+     同时覆盖用户实测 31 窄态（349-380）；示例值 right:44 只够窄态、84 宽
+     态会叠，不采纳。yield 的幽灵副作用（任务结束后聚合停在 264）无
+     tab/QsffPG 重叠，属无害惰性，彻底解（JS 可见性标记）留 effects
+     车道。聚合 max-width min(32vw,116) 沿用基础规则不动；数值 48/8 可
+     调。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="ZKlsPq_root"]:not([class*="_switcherRoot"]) {
+    left: auto !important;
+    right: 8px !important;
+    top: 48px !important;
+  }
+  /* 谱系 chip 里的文字（子代理标题 /「N 个子代理」）给一个规矩的省略号窗口：
+     不要裁成半个字，也不要靠滚动去够剩下的字。 */
+   /* :not([class*="_separator"])：rc 代有 (0,4,1) !important 的
+      [class*="_crumbs"] [class*="_separator"] display:none 规则，专门隐藏
+      谱系计数前的「/」（小屏上它读起来像多出一层面包屑层级）；本条原来
+      同为 (0,4,1) !important 且书写在后，同特异性后到先得把 separator
+      顶回 display:block（实测 390px separator [269.1,·,5.5,25] 实绘可见）。
+      加 :not 把 separator 从本条管辖范围摘掉，隐藏权交还 rc 代那条。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="ZKlsPq_root"] span:not([class*="_separator"]) {
+    display: block !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+   /* composer 模型选择 chip（dsh-client-ui-model-selection，样式哈希
+      _7KE1Ra_）：宿主用 @container (width<=360px) 在窄容器里只留图标
+      （triggerLabel/triggerEffort display:none）。390px 手机上 composer 卡
+      实测 356px 宽，恒触发这条查询 → 模型名永久不可读。手机档恢复 label
+      显示；宽度由 max-width:min(360px,45cqw) + min-width:0 + ellipsis
+      自己管，挤压时先缩的是 effort（flex-shrink:1000）。_7KE1Ra_ 是本代
+      model-selection 的样式哈希，包不在则整条死规则，无需另加代际门；
+      注意裸 [class*=_triggerLabel] 会误伤 permission-presets /
+      settings-general 包的同名片段，必须带哈希前缀。 */
+  [data-mobile-nav="frame"] [data-phase] [class*="_7KE1Ra_triggerLabel"] {
+    display: inline !important;
+  }
+  /* 模型 chip 宽度预算，⑦ 同链收尾：宿主 trigger 的 max-width
+     min(360px,45cqw) 在 390 真机容器 356px 下只给 label+icon+effort+chevron
+     留 ~160px，模型名真机省略成「GLM-5.3-Fla…」（headless 字体窄恰好放得
+     下，同一盲区）。放宽到 60cqw（356 容器实测 213px），effort 标签有宿主
+     自带 flex-shrink:1000 先让位，模型名拿满宽。容器 >360 的平板档 45cqw
+     本就 >160 不绑定，放宽只落在窄容器档。特异性 (0,3,0) 带 !important 胜
+     宿主 (0,1,0) 普通声明；_7KE1Ra_ 哈希本身即代际门（包不在整条死规则）。
+     60 数值可调。 */
+  [data-mobile-nav="frame"] [data-phase] [class*="_7KE1Ra_trigger"] {
+    max-width: min(360px, 60cqw) !important;
   }
   /* --- Settings dialog on mobile ---
      Desktop: 800px two-column flex (188px nav + content). Mobile: a
@@ -2388,8 +5732,8 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      Anchored structurally, not by class substring: a bare [class*="_header"]
      also matches every plugin settings card header in the options area —
      the official Plugins config cards (YyYd_a_header) and the dsh-web-ui-all
-     group cards (Kwoi6G_header / bpnj3G_header / Jh0q7G_header / jmhvDG_header /
-     rUBhvW_header, all sharing the upstream template text-align:left,
+     group cards (Kwoi6G_header / Jh0q7G_header / rUBhvW_header; the bpnj3G_/jmhvDG_
+     siblings were renamed upstream in dsh-web-all 0.3.20, verified 2026-09-18), all sharing the upstream template text-align:left,
      gap:12px, padding:14px 16px). The old broad anchor right-aligned their
      text, gutted the padding and painted a 32px gray circle behind the
      chevron (2026-09-05 sweep: 8 bleeding headers). The toolbar has two
@@ -2446,6 +5790,82 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
   }
   [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > :last-child {
     padding: 0 12px 24px;
+  }
+  /* 0.1.6-alpha.2 宿主的插件管理页（dsh-client-ui-plugin-manager 渲染的
+     section[data-plugin-panel]）。FAB 是全站恒定的左上角控件（用户明确
+     要求：右下角不对，就放左上角），所以规则不做的是挪 FAB，做的是给
+     面板自己的左上角内容让位。两个页面都要让，偏移量同一个：
+     - 列表页：**有**内容在左上角 —— H1「插件」实测 [24,28,91,28]，与 FAB 盒
+       [10,12,38,38] 重叠 24×22；点标题左缘命中的是 FAB 而不是标题
+       （2026-09-19 报障）。上一版这里记的是「热区为空、零规则」，实测不成立。
+     - 详情页（DetailTop 组件）：宿主返回键「返回插件列表」crumb，文字实测
+       [24,28,70,19]，同样压在 FAB 左半——点它会触发开抽屉而不是返回。
+       详情根的 data-* 标记有三种：内置插件详情 data-plugin-item-detail、市场
+       插件详情 data-plugin-row-detail、builtin 详情 data-plugin-detail
+       （实测「智能体团队」卡走的就是第三种），三条选择器并列全覆盖。
+     让位量 = FAB 右缘（10 + 38 = 48）+ 8px 间距 = 56px，**写成相对量**：
+     减掉宿主自己的 padding（clamp(24px,4vw,48px)），这样它跟着视口走，而不是
+     把 390px 上量到的 32px 钉死（768px 平板上宿主 padding 是 30.7px，钉死的
+     32px 会过量）。在 390px 上它算出来正好还是 32px，与上一版行为一致。
+     锚点全部是宿主 data-* 标记，比 css-module 哈希类（X_2TxG_）稳定；
+     pre-alpha.2 宿主没有这些标记，规则天然不命中（代际门控）。 */
+  [data-mobile-nav="frame"] section[data-plugin-panel] {
+    --dsh-web-mobile-panel-clearance: calc(56px - clamp(24px, 4vw, 48px));
+  }
+  /* 页首是宿主滚动盒的直接子元素，宿主给它 width:100%（.X_2TxG_page>*）。
+     这种盒子上用 margin 会把整行顶出右缘、给面板加出一条横向滚动条，所以
+     这里用 margin + 等量收窄：margin 盒仍是 100%，左缘让开 FAB，右缘不动
+     （工具栏「添加插件」保持贴右）。 */
+  [data-mobile-nav="frame"] section[data-plugin-panel] [class*="_pageHead"] {
+    margin-left: var(--dsh-web-mobile-panel-clearance) !important;
+    width: calc(100% - var(--dsh-web-mobile-panel-clearance)) !important;
+  }
+  /* 详情 crumb 是被拉伸的 flex item（没有 width:100%），margin 就是对的工具。 */
+  [data-mobile-nav="frame"] section[data-plugin-panel] [data-plugin-detail] > button:first-child,
+  [data-mobile-nav="frame"] section[data-plugin-panel] [data-plugin-item-detail] > button:first-child,
+  [data-mobile-nav="frame"] section[data-plugin-panel] [data-plugin-row-detail] > button:first-child {
+    margin-left: var(--dsh-web-mobile-panel-clearance) !important;
+  }
+  /* ---------- sidebar panel enter / exit (see effects/panel-exit.ts) ----------
+     A sidebar panel REPLACES the main area. Two motions, both short and
+     horizontal, matching the drawer's own rail-in (.15s, translate + fade):
+       · enter — the panel slides in from the right;
+       · exit  — the panel does NOT animate out; the conversation it hands the
+         main area back to fades in instead.
+     The asymmetry is deliberate. selectPanel(null) remounts the whole
+     conversation and that commit blocks the main thread long enough to matter
+     (measured on a phone: ~390 ms for a long session), so fading the panel out
+     first would leave the screen blank for that whole window — panel already
+     transparent, conversation not mounted yet. Keeping the panel opaque until
+     the commit means the two swap on one frame.
+     The enter rule is a CSS condition on purpose: :has() matches in the same
+     commit that swaps the main slot, so the animation is already running at the
+     element's first style resolution and there is no full-opacity frame first.
+     The exit marker is set by JS before the swap for the same reason. */
+  @keyframes dsh-web-mobile-panel-in {
+    from { opacity: 0; transform: translateX(16px); }
+  }
+  /* Deliberately NOT reusing dsh-web-mobile-fade: the exit cleanup listens on
+     animationend BY NAME, and that keyframe also runs on the backdrop and the
+     dialogs, which are frame descendants too — reusing it would end the
+     transition early. */
+  @keyframes dsh-web-mobile-panel-reveal {
+    from { opacity: 0; }
+  }
+  [data-mobile-nav="frame"]:has([class*="panelRow"][aria-current="page"]) [class*="_centerCol"] > * > * {
+    animation: dsh-web-mobile-panel-in .15s var(--ds-ease-in-out, ease-in-out) backwards;
+  }
+  [data-mobile-nav="frame"][data-mobile-panel-exit]:not(:has([class*="panelRow"][aria-current="page"])) [class*="_centerCol"] > * > * {
+    /* ease-out rather than the shared in-out curve: the panel vanishes and the
+       conversation appears on the same frame, so the fade has to come up fast
+       or the first frames read as a flash of empty background. */
+    animation: dsh-web-mobile-panel-reveal .15s cubic-bezier(0, 0, .2, 1) backwards;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-mobile-nav="frame"]:has([class*="panelRow"][aria-current="page"]) [class*="_centerCol"] > * > *,
+    [data-mobile-nav="frame"][data-mobile-panel-exit]:not(:has([class*="panelRow"][aria-current="page"])) [class*="_centerCol"] > * > * {
+      animation: none !important;
+    }
   }
 }
 `;
@@ -2562,7 +5982,8 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   /* The open drawer must never sit under a sheet: while the frame is in the
      narrow-expanded state both sheets yield (later in the file than the
      open marker rule, so it wins at equal specificity). The fullscreen
-     toggle has its own drawer-open rule at the end of its section. */
+     toggle is a descendant of this column, so it is hidden with the rest of
+     the column — there is no separate drawer-open rule for it. */
   [data-mobile-nav="frame"]:not([data-sidebar-collapsed]) [data-aionui-explorer-col],
   [data-mobile-nav="frame"]:not([data-sidebar-collapsed]) [data-aionui-preview-col] {
     visibility: hidden !important;
@@ -2651,7 +6072,7 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
     height: 100dvh !important;
     max-height: none !important;
     box-sizing: border-box !important;
-    padding-top: 0px !important;
+    padding-top: env(safe-area-inset-top, 0px) !important;
     border-radius: 0 !important;
     box-shadow: none !important;
     z-index: 57 !important;
@@ -2660,7 +6081,7 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   /* Fullscreen: the column fills the viewport, so the button follows the
      titlebar row down below the notch. */
   [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] {
-    top: 8px !important;
+    top: calc(env(safe-area-inset-top, 0px) + 8px) !important;
   }
   @media (prefers-reduced-motion: reduce) {
     [data-aionui-preview-col],
@@ -2857,11 +6278,6 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   [data-mobile-nav="frame"] [aria-modal="true"] [class*="_header"]:not([class*="_headerActions"]) [class*="_actions"] {
     display: none !important;
   }
-  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_header"]:not([class*="_headerActions"]) [class*="_actions"] [class*="_action"]:not([class*="_actions"]) {
-    font-size: 13px !important;
-    padding: 6px 12px !important;
-    min-height: 0 !important;
-  }
   /* Setting rows: text on top, control below at full width. Compound
      "_row*" families are excluded: the Models page names its whole card
      list "_rows" (plus "_rowCard/_rowHead/_rowIdentity/_rowActions"), and
@@ -2880,6 +6296,35 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   [aria-modal="true"] [class*="_section"] [class*="_row"]:not([class*="_rows"]):not([class*="_rowCard"]):not([class*="_rowHead"]):not([class*="_rowIdentity"]):not([class*="_rowActions"]) > :last-child {
     width: 100% !important;
     max-width: none !important;
+  }
+  /* Models provider editor: a CLOSED <details> ("_customized", the customized
+     models section) must not paint its body. This engine paints the ~1500px
+     model catalog of the closed details as a ghost layer anyway: it overlays
+     the editor's own action rows (Fetch/Cancel/Apply/Add model) and the
+     provider rows BEFORE the editor row in DOM order (those paint under the
+     ghost and lose hit-testing), while rows after it paint above. Result
+     (owner report 2026-09-19): providers cannot be deleted, "fetch available
+     models" does nothing — every tap lands on whatever row overlaps the
+     ghost. The host layout is computed for the collapsed details (editor
+     217px, rows 903px), so the fix is to restore what the browser should do
+     on its own: hide the body while the details is closed. Tapping the
+     summary then opens it for real (details 33 → 1532px, rows re-flow,
+     every button hittable — verified in place before this rule was written). */
+  [aria-modal="true"] details[class*="_customized"]:not([open]) > [class*="_customizedBody"] {
+    display: none !important;
+  }
+  /* Owner dialog footers (_w1urq family: the provider delete confirm, the
+     workspace rename dialog, ...): the footer buttons keep white-space
+     normal, so any width squeeze — a narrow viewport, a long provider name,
+     Android font scaling (owner report 2026-09-19, verified at 320px with a
+     1.3x font bump) — wraps the label inside the fixed 36px row where the
+     second line clips. Keep each label on one line and let the footer wrap
+     whole buttons to a second row instead. */
+  [role="dialog"][aria-modal="true"] [class*="_footer"] {
+    flex-wrap: wrap !important;
+  }
+  [role="dialog"][aria-modal="true"] [class*="_footer"] button[class*="_button"] {
+    white-space: nowrap !important;
   }
   /* Appearance mode group: give the cube row a consistent bordered
      segmented look (the official borders differ per state). */
@@ -2917,8 +6362,8 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   }
 
   /* ---------- dsh-web-ui polish: drawer footer ----------
-     The injected footer actions (Files + Session log) become two equal pill
-     buttons instead of text-width capsules. */
+     The single injected footer action (the session-log download) becomes a
+     full-width pill instead of a text-width capsule. */
 
   /* The official footerActions row also hosts the remote-web-ui entry
      row (two icon buttons); without wrapping the two groups squeeze each
@@ -3195,27 +6640,26 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   }
 
 /* 搜索框底部间距修复 */
-[aria-modal="true"] [class*="tabSearchRow"] {
+  [aria-modal="true"] [class*="tabSearchRow"] {
   padding: 2px 4px 16px !important;
-}
+  }
 
 
-/* ===== 已安装列表：路径单行截断 ===== */
-[class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > div > [class*="spec"] {
+  /* ===== 已安装列表：路径单行截断 ===== */
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > div > [class*="spec"] {
   white-space: nowrap !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   max-width: 100% !important;
   font-size: 12px !important;
-}
-[class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > div > [class*="nm"] {
+  }
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > div > [class*="nm"] {
   white-space: nowrap !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   max-width: 100% !important;
-}
-/* ===== 已安装列表：手机端纵向重排 ===== */
-@media (max-width: 1023px) and (pointer: coarse) {
+  }
+  /* ===== 已安装列表：手机端纵向重排 ===== */
   [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) {
     flex-wrap: wrap !important;
     align-items: center !important;
@@ -3244,9 +6688,8 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > [class*="grow"] {
     order: 0 !important;
   }
-}
-/* ===== 市场卡片图片容器：横向滚动 ===== */
-[data-mobile-nav="frame"] [class*="cardShots"] {
+  /* ===== 市场卡片图片容器：横向滚动 ===== */
+  [data-mobile-nav="frame"] [class*="cardShots"] {
   display: flex !important;
   flex-wrap: nowrap !important;
   overflow-x: auto !important;
@@ -3257,19 +6700,19 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   max-width: 100% !important;
   gap: 8px !important;
   padding: 4px 0 !important;
-}
-[data-mobile-nav="frame"] [class*="cardShots"] > [class*="cardShot"] {
+  }
+  [data-mobile-nav="frame"] [class*="cardShots"] > [class*="cardShot"] {
   flex: 0 0 min(100%, 420px) !important;
   width: min(100%, 420px) !important;
   max-width: 100% !important;
   height: auto !important;
   display: block !important;
   object-fit: contain !important;
-}
-[data-mobile-nav="frame"] [class*="cardShots"]::-webkit-scrollbar {
+  }
+  [data-mobile-nav="frame"] [class*="cardShots"]::-webkit-scrollbar {
   height: 4px !important;
-}
-[data-mobile-nav="frame"] [class*="cardShots"]::-webkit-scrollbar-thumb {
+  }
+  [data-mobile-nav="frame"] [class*="cardShots"]::-webkit-scrollbar-thumb {
   background: var(--ds-border-color, #ccc) !important;
   border-radius: 4px !important;
 }
@@ -3426,16 +6869,17 @@ exports.MISC_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   [data-phase="hero"] [class*="_card"]:has(textarea:placeholder-shown) [class*="_grow"] {
     height: 28px !important;
   }
-  /* DSH 0.1.2: the input is a Lexical contentEditable (no textarea) and the
-     empty state is signalled by the separate [data-composer-placeholder]
-     node, so mirror the one-line collapse for that shape. */
-  [data-phase="hero"] [class*="_card"]:has([data-composer-placeholder]) [data-composer-input] {
-    height: 28px !important;
-  }
-  [data-phase="hero"] [class*="_card"]:has([data-composer-placeholder]) > [class*="_scroll"],
-  [data-phase="hero"] [class*="_card"]:has([data-composer-placeholder]) [class*="_grow"] {
-    height: 28px !important;
-  }
+  /* The one-line collapse above is deliberately NOT mirrored onto the Lexical
+     generation (0.1.2+), even though it signals its empty state with the
+     separate [data-composer-placeholder] node. That host pins the hero input
+     itself — hero-scoped min-height: 52px, because its hero hint wraps to two
+     lines — and a min-height floor beats an outer height: the 28px wrappers of
+     2026-09-05 only shrank the scrollport under a 52px input, i.e. overflow-y
+     auto with scrollHeight 52 against clientHeight 28 → scrollbar plus a
+     clipped first input line and hint line (phone report 2026-09-14, probe
+     scripts/probes/hero-composer-clip-probe.mjs). The textarea generation this
+     collapse was written for has no such floor — its input is a transparent
+     height:100% layer over the wrappers — so it still collapses there. */
   [data-phase="hero"] [class*="_card"]:has(textarea, [data-composer-input]) > [class*="_row"] {
     padding-top: 2px !important;
   }
@@ -3491,15 +6935,19 @@ exports.MISC_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
       (e.g. the dialog is dismissed). The ask
       composer's custom-answer <input> (.customInput) and optionless free-form
       <textarea> (.customTextarea) both ship at 14px (ui-user-questions
-      QuestionComposer.module.css). Raise them to 16px on mobile so Safari
-      sees a >=16px field and skips the zoom entirely. Scoped to the ask
+      QuestionComposer.module.css). Raise them to 16px on iOS only, where the
+      zoom can actually happen: on Android and desktop there is nothing to
+      suppress, so they keep the compact size they were designed with
+      (2026-09-16, audit D-1 option A; the iOS WebKit floor below covers these
+      fields too, this rule keeps the requirement stated where it applies).
+      Scoped to the ask
       composer's stable [data-question-key] root (AGENTS.md: scope hashed-class
       selectors to the owning region, prefer stable data-* markers); the
       class-name suffix match follows the plugin's established harness
       CSS-module convention (verified against the live app: generated names
-      end with the original local name, e.g. uV2eYG_input / qDHVXG_searchInput). */
-  [data-question-key] [class*="_customInput"],
-  [data-question-key] [class*="_customTextarea"] {
+      end with the original local name, e.g. uV2eYG_input / bhn1Oq_searchInput). */
+  html[data-mobile-nav-ios] [data-question-key] [class*="_customInput"],
+  html[data-mobile-nav-ios] [data-question-key] [class*="_customTextarea"] {
     font-size: 16px !important;
   }
 
@@ -3507,12 +6955,13 @@ exports.MISC_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
      Same rule as the ask composer above: the file viewer's search / jump-to-
      line / pdf-page fields ship at 13-14px, which Safari auto-magnifies on
      focus inside a panel that does not blur on tap-away. Raise them to 16px
-     on mobile so Safari skips the zoom. Scoped to the frame marker; the
+     on iOS only for the same reason as the ask composer above (2026-09-16,
+     audit D-1 option A). Scoped to the frame marker; the
      viewer itself is scoped by its stable dsfv prefix.
      (Port of community fork fix 2ff7976.) */
-  [data-mobile-nav="frame"] [class*="dsfv-search-input"],
-  [data-mobile-nav="frame"] [class*="dsfv-jump-input"],
-  [data-mobile-nav="frame"] [class*="dsfv-page-input"] {
+  html[data-mobile-nav-ios] [data-mobile-nav="frame"] [class*="dsfv-search-input"],
+  html[data-mobile-nav-ios] [data-mobile-nav="frame"] [class*="dsfv-jump-input"],
+  html[data-mobile-nav-ios] [data-mobile-nav="frame"] [class*="dsfv-page-input"] {
     font-size: 16px !important;
   }
 
@@ -3589,10 +7038,14 @@ exports.MISC_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
    clustered at the left edge with a large dead zone on the right. Cap and
    center the modal sheets and the aionui bottom sheets instead. */
 @media (min-width: 768px) and (max-width: 1023px) and (pointer: coarse) {
-  /* All modal dialogs: centered, never edge-to-edge. The settings sheet has
-     a higher-specificity full-width rule above, so repeat its selector here
-     to win; the generic export/other-modal rule is covered by the second
-     selector. */
+  /* Centered, never edge-to-edge — for the modal shapes below, not for every
+     modal dialog. Covered: modals that are not sheet-shaped, plus sheet-shaped
+     ones with neither a navigation element nor a directory picker. A modal
+     that is sheet-shaped AND carries the directory picker is left out on
+     purpose — layout.css.ts holds the dedicated rule for it. The settings
+     sheet has a higher-specificity full-width rule above, so repeat its
+     selector here to win; the generic export/other-modal rule is covered by
+     the second selector. */
   [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])),
   [aria-modal="true"]:not(:has(> :first-child > :last-child > button)) {
     left: 0 !important;
@@ -3631,17 +7084,31 @@ exports.MISC_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
    windows — the slot renders the buttons at every width, so before this the
    only guard was the width term (2026-08-30 PC leak: split windows and OS
    display scaling dropped the CSS viewport below 1024px and armed the whole
-   mobile shell on desktop). */
+   mobile shell on desktop).
+
+   The session-delete trio (menu item + confirm/error dialog) is the ONE
+   deliberate exception: its effect arms on TOUCH_QUERY (pointer: coarse at
+   every width — large tablets in landscape), so it lives in the pointer-only
+   block below instead of this width arm. */
 
 @media (min-width: 1024px), (pointer: fine), (pointer: none) {
   [data-mobile-nav="toggle"],
   [data-mobile-nav="files"],
+  [data-mobile-nav="file-upload"],
   [data-mobile-nav="fab"],
   [data-mobile-nav="backdrop"],
   [data-mobile-nav="session-log"],
-  [data-mobile-nav="explorer"],
   [data-mobile-nav="preview-full-toggle"],
-  [data-mobile-nav="drawer-actions"],
+  [data-mobile-nav="drawer-actions"] {
+    display: none !important;
+  }
+}
+
+/* Session-delete trio: hide on mouse-driven or pointer-less windows at ANY
+   width. No width term — the injection is armed on touch at every width, so
+   a width arm here would hide the item on wide touch (the device class the
+   injection exists for). */
+@media (pointer: fine), (pointer: none) {
   [data-mobile-nav="session-delete"],
   [data-mobile-nav="delete-dialog-backdrop"],
   [data-mobile-nav="delete-dialog"] {
@@ -3665,1151 +7132,6 @@ const misc_css_ts_1 = require("./styles/misc.css.js");
  * do not reorder.
  */
 exports.MOBILE_CSS = [base_css_ts_1.BASE_CSS, layout_css_ts_1.LAYOUT_CSS, compat_css_ts_1.COMPAT_CSS, misc_css_ts_1.MISC_CSS].join('\n');
-};
-__modules["effects/sidebar-swipe.js"] = function (require, module, exports) {
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.startZonePxFor = startZonePxFor;
-exports.classifySwipe = classifySwipe;
-exports.slidingVelocity = slidingVelocity;
-exports.hitTestStart = hitTestStart;
-exports.followTranslate = followTranslate;
-exports.followOpenTransform = followOpenTransform;
-exports.findHorizontalScroller = findHorizontalScroller;
-exports.selectionOwnsStroke = selectionOwnsStroke;
-exports.installSidebarSwipe = installSidebarSwipe;
-const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
-const gesture_guard_ts_1 = require("./effects/gesture-guard.js");
-const overlay_backdrop_fab_ts_1 = require("./effects/overlay-backdrop-fab.js");
-/**
- * Sidebar drawer swipe gestures (B 档 hybrid follow, per the 2026-08-29
- * controlled upgrade of docs/specs/2026-08-27-sidebar-swipe-gestures.md).
- *
- * Three gestures:
- * - edge swipe-in: the pointer goes down within the start zone (45% of the
- *   left edge) and the drawer is closed → the host state is flipped AT
- *   AXIS-LOCK (early commit) while the drawer is pinned in its closed slot,
- *   so the REAL open subtree mounts off-screen and then follows the finger
- *   out of the slot (see startFollow for why the flip has to come first);
- * - content swipe-toward-slot: the pointer goes down inside the open drawer
- *   and drags LEFT (LTR) → the drawer FOLLOWS the finger (inline translateX,
- *   transition:none) and releases into the host's transition;
- * - content swipe-out (legacy): drag RIGHT inside the open drawer → no
- *   follow (A 档 semantics preserved verbatim), release classifies.
- *
- * The release decision is UNCHANGED from A 档: classifySwipe (distance ratio
- * OR recent-window velocity) — after a follow stroke, dx IS the followed
- * position, so the same function decides complete vs spring-back. The commit
- * is still just `ctx.layout.toggleSidebar()`. The follow mechanics ride the
- * host transition instead of fighting it: during the stroke the drawer gets
- * inline `transition: none` + translateX; on release the inline styles are
- * dropped and the commit retargets the host transition IN THE SAME TASK (no
- * paint in between), so the drawer animates from the finger position to the
- * final state with zero custom animation code.
- *
- * Review constraints honored (spec 2026-08-27 second review): the backdrop
- * stays binary (appears at commit — never opacity-followed, 缺陷 2); a modal
- * rising mid-stroke reverts the drawer every move event (缺陷 1's per-frame
- * guard); the OPEN final state must end with transform:none (the containing
- * block invariant for fixed descendants) — a transitionend-free cleanup pair
- * (inline clear + host value) guarantees it because the host open rule is
- * transform:none. No gesture-layer DOM, no setPointerCapture. Zero transform
- * writes remain true for the LEGACY rightward-close path.
- *
- * Coexistence with the host's overlay interactions (document capture click /
- * pointerup) is two-layered via gesture-guard.ts: (1) tryLock publishes an
- * axis-lock flag the instant the stroke locks horizontal — during
- * pointermove, strictly before any pointerup — and the host handlers yield
- * on it first, because they are registered EARLIER and the post-release
- * consume marks do not exist yet on the stroke's own release event (audit
- * S0: the host toggled first and the gesture toggled back, net zero);
- * (2) a classified swipe additionally marks its target chain consumed so
- * the synthetic click after the stroke can never toggle twice or navigate
- * a row.
- */
-/**
- * Start-zone width as a FRACTION of the viewport width: the pointer counts
- * as "from the left edge" anywhere inside the left (RTL: right) strip this
- * wide. Fifth tuning pass (2026-08-29, user preference "识别区再扩宽到约占
- * 总宽的 45%"): the fixed 96px strip still missed landings beyond it, and
- * the user wants the sloppy, anywhere-in-the-left-half feel of native apps.
- * History of the constant: 24px (hotspot era) → 48px (third pass, fixed
- * "识别成对话内容滚动") → 96px (fourth pass — at that point the zone also
- * finally cleared Chrome Android's EDGE_WIDTH_DP=48dp history-navigation
- * trigger strip, whose strokes the browser claims and pointercancels; the
- * browser gesture itself is suppressed by the root overscroll-behavior-x:
- * none rule in layout.css.ts) → 0.45×viewport (fifth pass, this value).
- * Safety at this width: the release classification (0.16×w travel OR
- * 0.45px/ms velocity) still gates the commit, so widening cannot open on a
- * tap; vertical strokes reset at axis lock (≤8px of prevented movement) and
- * hand scrolling back; strokes beginning inside genuinely horizontally
- * scrollable containers are excluded from the zone entirely — see
- * findHorizontalScroller (at 45% the stats line / message code blocks sit
- * well inside the strip, so that guard is load-bearing).
- */
-const START_ZONE_RATIO = 0.45;
-/**
- * The zone in pixels for a given viewport width (pure, exported for the
- * decision-table tests). Rounded so the probe boundary assertions stay
- * integral (390px → Math.round(175.5) = 176).
- */
-function startZonePxFor(viewportWidthPx, ratio = START_ZONE_RATIO) {
-    return Math.round(viewportWidthPx * ratio);
-}
-/**
- * Axis-lock threshold: once the stroke's dominant axis has moved this far,
- * the axis is decided. Horizontal-dominant (|dx| > |dy|) locks the stroke
- * to X (a swipe); vertical-dominant abandons it to native scrolling.
- * Replaces the old 4px slop + 1.5× direction-bias pair — a 1.5× bias
- * rejected natural ~45° diagonal swipes (the other half of the
- * "识别成滚动" report). MUI uses a 3px uncertainty threshold; 8px is a
- * comfortable margin against tap jitter while still deciding in the first
- * ~16ms of movement.
- */
-const LOCK_PX = 8;
-/** Distance thresholds as a fraction of the viewport width.
- *  Second tuning pass (2026-08-27, "识别成滚动" feedback): 0.16 open = ~62px
- *  on a 390px phone, 0.13 close = ~51px. Keep the open threshold above the
- *  close threshold so an accidental reverse swipe cannot re-open. */
-const OPEN_DISTANCE_RATIO = 0.16;
-const CLOSE_DISTANCE_RATIO = 0.13;
-/** Velocity window: most-recent-60ms instantaneous speed (end-segment slope). */
-const VELOCITY_WINDOW_MS = 60;
-/** px/ms speed thresholds for open / close (MUI uses 0.45). */
-const OPEN_VELOCITY = 0.45;
-const CLOSE_VELOCITY = 0.45;
-/** Covers the .28s CSS transition; prevents reverse-gesture double-toggles. */
-const COOLDOWN_MS = 350;
-/** How long a consumed gesture mark stays live (covers the synthetic click).
- * Short by design: browsers dispatch the synthetic click within tens of ms,
- * while iOS shells suppress it entirely — a long window with no delivery
- * would let the marks swallow the user's next genuine tap (dead-tap bug).
- * When upTo is absent from the release chain (edge swipe-in releases over
- * the main content) the mark walk reaches the document root, so this short
- * window is also the bound on how long any tap can be suppressed. */
-const CONSUME_WINDOW_MS = 300;
-/**
- * Rightward travel (from the stroke start) that arms the OPEN follow, i.e.
- * flips the host state early so the real drawer subtree mounts. Slightly
- * above LOCK_PX so an 8px horizontal twitch inside the wide start zone does
- * not mount-and-unmount 389 nodes; small enough that the dead zone before
- * the drawer's edge appears is imperceptible.
- */
-/** The open follow arms at the AXIS LOCK itself: tryLock already demanded
- * 8px of horizontal-dominant travel, so no extra twitch margin is needed —
- * every pixel between lock and arm was dead drag (user report 2026-08-29
- * 「右滑的过程中最开始有真空期,有一段卡的地方」). The release verdict still
- * decides the outcome, so arming early cannot commit a false open. */
-const OPEN_FOLLOW_ARM_PX = 8;
-/**
- * The host's closed-slot offset as a PERCENTAGE of the drawer's own width
- * (`transform: translateX(-110%)` — the 10% overshoot hides the drawer's
- * shadow). Percentages are load-bearing for the open follow: the element
- * width changes mid-stroke when React swaps the collapsed rail for the real
- * drawer, and a percentage re-resolves against the current width while a
- * cached px value would not.
- */
-const CLOSED_SLOT_PCT = 110;
-/** Duration of the self-run terminal close animation. Matches the host's
- * .28s drawer transition so the handoff feels identical. */
-const COMMIT_ANIM_MS = 280;
-/** Percentage baseline of the OPEN-direction follow. The host's closed slot
- * is -110%, but following from -110% hides the first 28px of travel (the
- * 10% overshoot of the 280px drawer): the drawer stayed invisible until
- * ~dx=28 — user report 「刚开始会卡一下，之后才会拖出来」(measured: first
- * paint at dx=12 was left=-296, edge reached the viewport only at dx=28).
- * 101% keeps a small hidden margin (subpixel safety, would-be sliver at
- * exactly -100%) so the drawer edge answers the finger right after the
- * axis lock: at the 8px arm the edge is already ~5px on-screen (-102% left
- * only 2.4px and read as a vacuum; -110% hid the first 28px entirely).
- * The closed slot itself is only ever needed at TERMINAL states,
- * where CLOSED_SLOT_PCT is used verbatim. */
-const OPEN_FOLLOW_BASE_PCT = 101;
-/** Pointer id we are tracking (multi-touch is ignored). */
-let trackingPointer = 0;
-/** True once the stroke is axis-locked (direction bias passed). */
-let tracking = false;
-/** Stroke samples (x + timestamp) for the recent-window velocity. */
-let samples = [];
-/** Stroke origin (for the direction-bias check). */
-let startX = 0;
-let startY = 0;
-/** Drawer visibility at lock time. */
-let lockDrawerOpen = false;
-/** Expiry of the post-release cooldown (performance.now()). */
-let cooldownUntil = 0;
-/** Element whose stroke was marked consumed (null = no live mark). */
-let consumedEl = null;
-/** B 档 follow state — one cache per stroke, set once at lock time so the
- * per-move writes never read layout (the spec review's rAF-contention
- * constraint). followDrawer stays bound for the whole stroke so a
- * released-then-re-engaged stroke (direction wobble) reuses the cache. */
-let followDrawer = null;
-let followEngaged = false;
-let strokeClosedTx = 0;
-let strokeRtl = false;
-/** True while an OPEN stroke has early-committed the host state (the drawer
- * subtree is mounted but pinned in its slot, following the finger). The
- * release must then either keep it open or toggle it back. */
-let openFollowArmed = false;
-/** True once an open stroke has decided NOT to arm the follow (aborted arm:
- * a modal/takeover veto, a missing drawer) so it never retries mid-stroke. */
-let openFollowRefused = false;
-/**
- * Pure decision: what does this stroke do, given the drawer state?
- * `dx`/`dy` are raw pointer deltas (RTL mirrors X through `rtl`), `velX` is
- * the raw recent-window X velocity. The stroke must be locked horizontal
- * (|dx| > |dy| and past the lock slop) and direction-consistent; then
- * distance OR velocity wins, with the drawer-state-specific threshold.
- */
-function classifySwipe(t, m, rtl) {
-    // RTL mirrors the X axis: a rightward stroke (positive dx in LTR) is
-    // leftward in RTL. Normalize to the logical direction before judging.
-    const dx = rtl ? -m.dx : m.dx;
-    if (Math.abs(dx) <= t.lockPx)
-        return 'none';
-    if (Math.abs(dx) <= Math.abs(m.dy))
-        return 'none';
-    if (t.drawerOpen) {
-        // BOTH horizontal directions close (2026-08-29 sixth round, user report
-        // 「根本没法左滑关闭」). Leftward is the natural "push it back into its
-        // slot" gesture — and the only one the follow animation actually paints
-        // (followTranslate's close branch follows leftward), so refusing it made
-        // the drawer track the finger and then spring back, i.e. the animation
-        // promised a close the classifier would not honor. Rightward stays
-        // accepted verbatim: four tuning rounds of muscle memory ride on it and
-        // failure scenarios B0/B1/B2 assert it. Nothing else competes for a
-        // horizontal stroke while the drawer is open, so accepting both costs no
-        // ambiguity.
-        const travel = Math.abs(dx);
-        if (travel / t.viewportWidthPx >= t.closeDistanceRatio)
-            return 'close';
-        const velX = rtl ? -m.velX : m.velX;
-        // A fling only counts when it agrees with the stroke's own direction
-        // (same contradiction guard the open branch applies).
-        if (velX > 0 !== dx > 0)
-            return 'none';
-        return Math.abs(velX) >= t.closeVelocity ? 'close' : 'none';
-    }
-    if (dx <= 0)
-        return 'none';
-    if (dx / t.viewportWidthPx >= t.openDistanceRatio)
-        return 'open';
-    const velX = rtl ? -m.velX : m.velX;
-    return velX >= t.openVelocity ? 'open' : 'none';
-}
-/**
- * Recent-window instantaneous velocity (px/ms) from the tail of the last
- * `windowMs` milliseconds of samples, up to `now`. Sliding X per ms between
- * the LAST TWO in-window samples — the end-of-stroke slope — so a long slow
- * drag then a quick flick reports the flick, not the drag average. Samples
- * older than the window are ignored. Fewer than two in-window samples → 0.
- */
-function slidingVelocity(samples, windowMs, now) {
-    const cutoff = now - windowMs;
-    const inWindow = samples.filter((s) => s.t >= cutoff);
-    if (inWindow.length < 2)
-        return 0;
-    const a = inWindow[inWindow.length - 2];
-    const b = inWindow[inWindow.length - 1];
-    const dt = b.t - a.t;
-    if (dt <= 0)
-        return 0;
-    return (b.x - a.x) / dt;
-}
-/**
- * Geometric start-hit test: the pointer went down in the left edge start
- * zone (when the drawer is closed) or inside the drawer content area (when
- * open). Pure and viewport-relative so it is unit-testable; the runtime
- * variant additionally checks the drawer geometry via the DOM.
- */
-function hitTestStart(clientX, viewportWidthPx, rtl, t) {
-    const edge = rtl ? viewportWidthPx - clientX : clientX;
-    return edge >= 0 && edge <= t.startZonePx;
-}
-/**
- * Pure follow mapping (B 档): the translateX (px) to paint for a stroke
- * sample, or null when THIS sample has no follow. `closedTx` is the signed
- * closed-slot translateX (negative LTR, positive RTL — the drawer slides
- * off the anchored edge); `dx` is the RAW pointer delta; normalization
- * mirrors classifySwipe (`d = rtl ? -dx : dx`, rightward-logical positive =
- * toward open).
- *
- * Decision table (C3 hybrid, 2026-08-29 user decision):
- * - close stroke (drawer open): LEFTWARD-logical travel drags the drawer
- *   toward its closed slot, clamped at the slot; rightward-logical → null
- *   (the legacy A 档 close owns that direction — no follow, momentum-honest);
- * - open stroke (drawer closed): NOT used at runtime — the open direction
- *   follows through `followOpenTransform` instead, because its baseline has
- *   to stay a percentage across the subtree swap (see that function). The px
- *   mapping is kept pure and tested as the reference semantics;
- * - a zero closed slot (degenerate host without a closed transform) yields
- *   a constant 0 — the follow degrades to a no-op instead of inventing
- *   travel.
- */
-function followTranslate(closedTx, dx, rtl, drawerOpen) {
-    const dir = closedTx <= 0 ? -1 : 1;
-    const slot = Math.abs(closedTx);
-    const d = rtl ? -dx : dx;
-    if (drawerOpen) {
-        if (d >= 0)
-            return null;
-        // + 0 normalizes -0 (dir=-1 times a clamped 0) so strict equality in the
-        // decision table and in probe comparisons sees a plain zero.
-        return dir * Math.min(slot, -d) + 0;
-    }
-    if (d <= 0)
-        return null;
-    return dir * (slot - Math.min(slot, d)) + 0;
-}
-/**
- * Pure follow mapping for the OPEN direction (B 档, 2026-08-29 second pass).
- * Returns the CSS transform to paint for a stroke that has already
- * early-committed the host state, or null when this sample has no follow
- * (leftward-logical travel, i.e. pulled back past the stroke origin).
- *
- * The baseline is the host's own PERCENTAGE slot (`translateX(-110%)`), kept
- * symbolic on purpose: at arm time the element is still the ~206px collapsed
- * rail and a frame later React has swapped in the ~280px drawer. A px
- * baseline captured before the swap would leave the wider drawer 74px
- * off-position (its slot is -308px, not -227px); `-110%` re-resolves against
- * the element's current width on every frame, so the same declaration is
- * correct across the mount. `min()`/`max()` clamp the open end so overshoot
- * cannot drag the drawer past its resting position.
- */
-function followOpenTransform(travelPx, rtl) {
-    const t = rtl ? -travelPx : travelPx;
-    if (t <= 0)
-        return null;
-    return rtl
-        ? `translateX(max(0px, calc(${OPEN_FOLLOW_BASE_PCT}% - ${t}px)))`
-        : `translateX(min(0px, calc(-${OPEN_FOLLOW_BASE_PCT}% + ${t}px)))`;
-}
-/**
- * Pure walk: the innermost element of the chain (self included) that is a
- * GENUINELY horizontally scrollable container — overflow-x auto/scroll AND
- * content actually overflowing (scrollWidth > clientWidth + 1; the +1
- * absorbs subpixel rounding). A stroke beginning inside one belongs to that
- * scroller: the browser claims the horizontal pan (pointercancel on real
- * devices) and the release classification must neither compete with it nor
- * preventDefault it away — prevention is what would break the strip's native
- * scrolling near the left edge once the start zone grew to 45% of the
- * viewport (the stats
- * line spans the full width; message code blocks are overflow-x:auto too).
- * CDP failure scenario C1 pins this contract. overflow-x:hidden/clip never
- * match: clipped content cannot pan, so a horizontal stroke there stays free
- * for the gesture layer.
- */
-function findHorizontalScroller(node) {
-    let cur = node;
-    while (cur !== null) {
-        if ((cur.overflowX === 'auto' || cur.overflowX === 'scroll') &&
-            cur.scrollWidth > cur.clientWidth + 1) {
-            return cur;
-        }
-        cur = cur.parent;
-    }
-    return null;
-}
-/** The open drawer element: first child of the plugin frame. */
-function findDrawer() {
-    const frame = (0, phone_chrome_ts_1.getFrame)();
-    return frame !== null && frame.firstElementChild instanceof HTMLElement
-        ? frame.firstElementChild
-        : null;
-}
-/** True when the drawer is currently open (per the collapsed marker). */
-function drawerOpen() {
-    const frame = (0, phone_chrome_ts_1.getFrame)();
-    return frame !== null && !frame.hasAttribute('data-sidebar-collapsed');
-}
-/**
- * Map the real DOM ancestor chain (target first, root last) onto the plain
- * SwipeChainNode shape findHorizontalScroller walks. Bounded by the document
- * depth (~15 nodes in this app) and run once per pointerdown, so the
- * getComputedStyle calls are not a per-frame cost.
- */
-function chainFrom(target) {
-    let node = null;
-    let el = target;
-    while (el !== null) {
-        node = {
-            parent: node,
-            scrollWidth: el.scrollWidth,
-            clientWidth: el.clientWidth,
-            overflowX: getComputedStyle(el).overflowX,
-        };
-        el = el.parentElement;
-    }
-    return node;
-}
-/** Whether a modal dialog owns the screen (gestures must yield to it). */
-function modalOpen() {
-    return document.querySelector('[aria-modal="true"]') !== null;
-}
-/** True when a full-screen takeover (taskboard / ssh) owns the frame, or any
- *  host conversation.view overlay (trajectory tab, dsh-file-viewer, or a
- *  future third-party view — they all set the generic
- *  `data-conversation-composer-overlay` attribute on their root) is open.
- *  In both cases the drawer edge-swipe gestures yield so horizontal content
- *  scrolling (kanban columns, trajectory tables, CSV/code panes) wins the
- *  left-edge start zone; the FAB still opens the drawer. This reads the
- *  generic overlay attribute directly — deliberately decoupled from the
- *  file-viewer marker, which keys on `.dsfv-panel` only (design
- *  2026-09-06-conversation-overlay-takeover-design.md §4.2). */
-function takeoverActive() {
-    return (document.documentElement.hasAttribute('data-dsh-taskboard-active') ||
-        document.documentElement.hasAttribute('data-dsh-ssh-active') ||
-        document.querySelector('[data-conversation-composer-overlay]') !== null);
-}
-/**
- * Whether a live, non-collapsed text selection owns the pointer stroke.
- * A selection-handle drag (and a long-press selection that appears between
- * pointerdown and the axis lock) is horizontally dominant and geometrically
- * indistinguishable from a drawer swipe — the browser must keep it (#43,
- * iPad WebKit). Feature-detected so the node:test suite can import the
- * predicate without a DOM.
- *
- * TWO selection models must be read, because they are disjoint:
- * - the DOCUMENT selection (window.getSelection) covers message-flow text
- *   and contenteditable hosts;
- * - a selection inside a text control lives on the ELEMENT as
- *   selectionStart/selectionEnd and is INVISIBLE to window.getSelection —
- *   measured on the composer during a hijacked stroke (#44, real iPad):
- *   taStart=0 taEnd=20 while the document selection reported isCollapsed.
- *   Reading only the document selection let the swipe layer arm, lock, and
- *   collapse the composer selection the user was extending.
- * document.activeElement is the right anchor for the element model: a handle
- * drag keeps focus inside the control, and it also covers strokes whose
- * points land outside the control's own box.
- */
-function selectionOwnsStroke() {
-    if (typeof window === 'undefined')
-        return false;
-    const sel = window.getSelection();
-    if (sel !== null && !sel.isCollapsed)
-        return true;
-    if (typeof document === 'undefined')
-        return false;
-    const el = document.activeElement;
-    if (el === null)
-        return false;
-    const tag = el.tagName;
-    if (tag !== 'TEXTAREA' && tag !== 'INPUT')
-        return false;
-    // Input types without a text selection (checkbox, number, email, …) report
-    // null here — measured in Chromium — and older WebKit/Gecko throw
-    // InvalidStateError instead. Both mean "no text selection is being
-    // dragged", never "the control owns this stroke", so neither may be
-    // allowed to escape from a pointer handler.
-    try {
-        const { selectionStart: start, selectionEnd: end } = el;
-        return typeof start === 'number' && typeof end === 'number' && start !== end;
-    }
-    catch {
-        return false;
-    }
-}
-/** Whether the swipe layer is on cooldown (animation in flight). */
-function onCooldown() {
-    return performance.now() < cooldownUntil;
-}
-/**
- * Cache the follow geometry for a freshly locked stroke. Runs ONCE per
- * stroke (one getComputedStyle, plus one getBoundingClientRect only for the
- * cold-start fallback); the per-move path afterwards is write-only.
- *
- * CLOSE strokes follow from a px baseline read here. OPEN strokes cannot:
- * the host renders TWO different subtrees in the same sidebar column —
- * collapsed it is a ~206px rail holding only Task Board / SSH / Files /
- * Session log (79 nodes, ZERO `role=treeitem`), open it is the ~280px drawer
- * with the session tree and footer (389 nodes, 15 treeitems). Dragging the
- * closed column would only reveal the rail (measured 2026-08-29, the user's
- * "完全不同的 UI、没有真实会话、位置全乱" report). The open direction therefore
- * commits FIRST and follows AFTER (armOpenFollow), which is also why its
- * baseline must stay a percentage rather than a px value cached here.
- */
-function startFollow() {
-    // Unbind first: followDrawer survives across strokes (endStroke releases
-    // the styles AFTER reset(), so reset must not clear it). Without this an
-    // open stroke would inherit the binding left by the previous close-follow
-    // and start following after all — exactly what the probe assertion
-    // swipe.open-stroke-no-follow catches.
-    followDrawer = null;
-    followEngaged = false;
-    openFollowArmed = false;
-    openFollowRefused = false;
-    // strokeRtl is read by the OPEN branch of applyFollow BEFORE it arms, so it
-    // must be refreshed for every locked stroke — not only the close branch —
-    // or an open stroke would inherit the previous stroke's reading direction.
-    strokeRtl = frameRtl();
-    const drawer = findDrawer();
-    if (drawer === null)
-        return;
-    // A closed stroke binds nothing here: the OPEN direction early-commits and
-    // binds inside armOpenFollow, using a percentage baseline (the element's
-    // width changes when React swaps the rail for the real drawer).
-    if (!lockDrawerOpen)
-        return;
-    followDrawer = drawer;
-    // The slot is 110% of the element's OWN width (the host's closed rule is
-    // translateX(-110%), the extra 10% covering any shadow).
-    //
-    // Measuring the OPEN drawer is load-bearing (2026-08-29 seventh round,
-    // user report 「左滑的时候会卡一下…会突然有出现半开不开的样子」 →
-    // 「UI 会停在我最终滑动的地方，之后消失」). The previous baseline was a
-    // slot observed on the CLOSED host, i.e. on the ~206px nav rail
-    // (~-226.7px) — but the drawer being dragged is ~280px and parks at
-    // ~-308px. followTranslate clamps at the slot, so the drag froze 81px
-    // short of the edge: the drawer stopped under a still-moving finger
-    // (「半开不开」), and the release then had to travel that remainder,
-    // reading as a stall followed by a disappearance.
-    //
-    // Width is stable for the duration of a close stroke (no subtree swap
-    // until the release commits), so a px baseline is safe here — unlike the
-    // open direction, which must stay percentage-based because React swaps the
-    // rail for the real drawer mid-stroke.
-    const slot = (drawer.getBoundingClientRect().width * CLOSED_SLOT_PCT) / 100;
-    strokeClosedTx = strokeRtl ? slot : -slot;
-}
-/**
- * Arm the OPEN follow: pin the drawer in its closed slot with an important
- * inline pair, THEN flip the host state in the same task. React mounts the
- * real ~280px drawer subtree while our inline transform holds it off-screen,
- * so the next move samples slide the genuine drawer — session tree and all —
- * out of the slot under the finger. Ordering matters: pin before the flip,
- * or the host's open rule (`transform: none`) paints the drawer at rest for
- * one frame and the user sees it snap into place before the follow starts.
- *
- * The backdrop and the FAB swap at the flip, which is the documented binary
- * behavior (spec review 缺陷 2: no opacity-following backdrop).
- */
-/** True while the drawer subtree layout+paint is deliberately deferred by
- * the arm-time content-visibility split (see armOpenFollow). */
-let cvDeferred = false;
-/** Re-materialize the drawer contents after the mount-frame split. */
-function revealDrawerContent() {
-    if (!cvDeferred)
-        return;
-    cvDeferred = false;
-    followDrawer?.style.removeProperty('content-visibility');
-    const el = findDrawer();
-    if (el !== null && el !== followDrawer)
-        el.style.removeProperty('content-visibility');
-}
-function armOpenFollow(ctx) {
-    if (openFollowArmed || openFollowRefused)
-        return;
-    const drawer = findDrawer();
-    if (drawer === null || modalOpen() || takeoverActive()) {
-        openFollowRefused = true;
-        return;
-    }
-    followDrawer = drawer;
-    followEngaged = true;
-    drawer.style.setProperty('transition', 'none', 'important');
-    const pinned = followOpenTransform(0.0001, strokeRtl);
-    drawer.style.setProperty('transform', pinned ?? `translateX(-${CLOSED_SLOT_PCT}%)`, 'important');
-    // Split the mount cost (2026-08-29, user report 「滑动不会立刻生效，而是卡
-    // 那么零点几秒」): the toggle below synchronously mounts the 389-node
-    // drawer subtree, and reconcile + style + layout + paint all land in ONE
-    // long task — measured 308ms at 4x CPU throttle, a quarter-second of
-    // frozen screen on a phone. content-visibility:hidden (set BEFORE the
-    // flip, on the column that survives the subtree swap) makes the mount
-    // frame skip subtree layout+paint — the panel BOX still paints and the
-    // compositor keeps following the finger — and the contents materialize
-    // two frames later via revealDrawerContent(), where the motion masks the
-    // second (smaller) block. Ignored by browsers without support (no-op).
-    drawer.style.setProperty('content-visibility', 'hidden', 'important');
-    cvDeferred = true;
-    openFollowArmed = true;
-    ctx.layout.toggleSidebar();
-    requestAnimationFrame(() => {
-        requestAnimationFrame(revealDrawerContent);
-    });
-}
-/**
- * Paint this move sample's follow position. Null mapping (legacy direction
- * or pulled back past the stroke origin) releases the inline styles so the
- * host transition is live again — the drawer springs to wherever the host
- * state puts it and the classification still owns the release. Re-engaging
- * after a null sample rewrites both inline properties, which also
- * self-heals anything that restored them mid-stroke (React re-render).
- *
- * Both properties MUST be written with `important` priority. The open state
- * is styled by our own `transform: none !important` (layout.css.ts — the
- * containing-block rule for the settings overlay), which outranks a plain
- * inline declaration: a normal `style.transform = ...` leaves the computed
- * transform at `none` and the drawer never moves. That is exactly how the
- * first follow implementation shipped invisible while every inline-string
- * assertion passed (2026-08-29) — assert COMPUTED transform, never
- * `element.style.transform`.
- */
-function applyFollow(ctx, dx) {
-    if (!tracking)
-        return;
-    if (!lockDrawerOpen) {
-        // OPEN direction: arm past the twitch threshold, then follow with the
-        // percentage baseline (the element's width changes across the mount).
-        const travel = strokeRtl ? -dx : dx;
-        if (!openFollowArmed) {
-            if (travel < OPEN_FOLLOW_ARM_PX)
-                return;
-            armOpenFollow(ctx);
-            if (!openFollowArmed)
-                return;
-        }
-        const value = followOpenTransform(dx, strokeRtl);
-        if (value === null) {
-            // Pulled back past the origin: hold the drawer parked in its slot
-            // rather than releasing (releasing would let the host animate it open
-            // behind the finger). The release still classifies and may revert.
-            followDrawer?.style.setProperty('transform', `translateX(-${CLOSED_SLOT_PCT}%)`, 'important');
-            return;
-        }
-        followDrawer?.style.setProperty('transform', value, 'important');
-        return;
-    }
-    if (followDrawer === null)
-        return;
-    const tx = followTranslate(strokeClosedTx, dx, strokeRtl, lockDrawerOpen);
-    if (tx === null) {
-        // Pulled back past the origin. Hold the drawer at rest instead of
-        // releasing the inline pair: releasing would restore the host's .28s
-        // transition mid-stroke, so a direction wobble would animate the drawer
-        // and then jump when the finger crosses back — the same reason the open
-        // branch pins instead of releasing.
-        followEngaged = true;
-        followDrawer.style.setProperty('transition', 'none', 'important');
-        followDrawer.style.setProperty('transform', 'translateX(0px)', 'important');
-        return;
-    }
-    followEngaged = true;
-    followDrawer.style.setProperty('transition', 'none', 'important');
-    followDrawer.style.setProperty('transform', `translateX(${tx}px)`, 'important');
-}
-/**
- * Drop the inline follow styles. The host stylesheet retakes control: with
- * the transition restored, clearing the transform animates the drawer from
- * the finger position to whatever the CURRENT host state says. Called on
- * every end-stroke branch (revert: this IS the spring-back; commit: the
- * same-task retarget below overrides the initial leg before any paint).
- */
-function releaseFollowStyles() {
-    const el = followDrawer;
-    if (!followEngaged || el === null)
-        return;
-    followEngaged = false;
-    el.style.removeProperty('transition');
-    el.style.removeProperty('transform');
-}
-/** A close commit that is still animating to the closed slot before the host
- * state flips. The flip MUST wait: the sidebar column renders two mutually
- * exclusive subtrees (280px drawer when open, 206px nav rail when closed),
- * and React swaps them some ~200ms after the marker flips — measured
- * mid-animation at t≈200ms of a 280ms transition (width 280→206, tx jumped
- * -207.6→-181.9 as -110% re-resolved against the narrower rail). Flipping
- * first therefore replaces the drawer's content and retargets its transition
- * IN FLIGHT — user report 「最后抽屉样式突然消失,不是自然的动画收起」.
- * Late commit: animate the inline transform to the slot, flip only when the
- * drawer is already off-screen, then drop the inline pair. */
-let pendingCommit = null;
-function finishPendingCommit() {
-    const pending = pendingCommit;
-    if (pending === null)
-        return;
-    pendingCommit = null;
-    window.clearTimeout(pending.timer);
-    // The element may already be unmounted (React swaps the subtree at the
-    // flip); stripping inline from a detached node is a harmless no-op.
-    pending.el.style.removeProperty('transition');
-    pending.el.style.removeProperty('transform');
-    // If the host already closed while our animation ran (e.g. a genuine
-    // backdrop tap inside the 280ms window), the flip already happened and a
-    // blind toggle would RE-OPEN the drawer — skip it.
-    const frame = (0, phone_chrome_ts_1.getFrame)();
-    if (frame !== null && !frame.hasAttribute('data-sidebar-collapsed')) {
-        pending.ctx.layout.toggleSidebar();
-    }
-}
-/** Animate `el` to `targetTx` with our own transition, flip the host when it
- * lands. One-shot: a second call settles the previous commit first. */
-function commitWithAnimation(ctx, el, targetTx) {
-    finishPendingCommit();
-    el.style.setProperty('transition', `transform ${COMMIT_ANIM_MS}ms ease-in-out`, 'important');
-    // Flush the before-change style so the transition provably starts from the
-    // current (finger) position instead of risking a coalesced recalc that
-    // would jump straight to the target.
-    void el.getBoundingClientRect();
-    el.style.setProperty('transform', targetTx, 'important');
-    // Fade the dimming in step with the slide-out: the marker flips only when
-    // the drawer lands, so without this the screen would go drawer-then-dark
-    // (backdrop snapping away ~260ms AFTER the drawer already left).
-    (0, overlay_backdrop_fab_ts_1.fadeOverlayOut)();
-    cooldownUntil = performance.now() + COOLDOWN_MS;
-    pendingCommit = {
-        el,
-        ctx,
-        timer: window.setTimeout(finishPendingCommit, COMMIT_ANIM_MS + 40),
-    };
-}
-/** Terminal close commit: animate the drawer into the closed slot, then flip
- * the host. The slot must be the host's REAL closed rule (-110%), because
- * after the flip the closed host paints exactly this value — dropping the
- * inline pair must be a no-op, not a jump. */
-function commitFollowClose(ctx) {
-    const el = followDrawer;
-    followDrawer = null;
-    followEngaged = false;
-    if (el === null) {
-        // No follow binding (defensive): fall back to the immediate flip.
-        releaseFollowStyles();
-        ctx.layout.toggleSidebar();
-        cooldownUntil = performance.now() + COOLDOWN_MS;
-        return;
-    }
-    const target = strokeRtl
-        ? `translateX(${CLOSED_SLOT_PCT}%)`
-        : `translateX(-${CLOSED_SLOT_PCT}%)`;
-    commitWithAnimation(ctx, el, target);
-}
-/** Cancel paths: styles back to the host, pointer state to idle. An armed
- * open follow has already flipped the host state, so a cancel must also
- * toggle it back — release the inline pair first so the host transition
- * animates home from the finger position within the same task. */
-function abortStroke(ctx, immediate = false) {
-    if (pendingCommit !== null) {
-        // A terminal commit is animating: this stroke already ended. Only a
-        // teardown (dispose) must settle it synchronously; otherwise let the
-        // timer land the flip.
-        if (immediate)
-            finishPendingCommit();
-        return;
-    }
-    const wasArmed = openFollowArmed;
-    openFollowArmed = false;
-    openFollowRefused = false;
-    revealDrawerContent();
-    if (wasArmed && ctx !== null && followDrawer !== null && !immediate) {
-        // Armed open stroke aborted mid-follow: the host is already open, and
-        // flipping now would swap the subtree mid-motion — same artifact as the
-        // close release. Animate back into the slot, then flip.
-        reset();
-        commitFollowClose(ctx);
-        return;
-    }
-    releaseFollowStyles();
-    reset();
-    if (wasArmed && ctx !== null) {
-        ctx.layout.toggleSidebar();
-        cooldownUntil = performance.now() + COOLDOWN_MS;
-    }
-}
-/** Start a stroke; returns true when it may be tracked. */
-function beginStroke(event, rtl, viewportWidthPx) {
-    if (onCooldown())
-        return false;
-    if (modalOpen())
-        return false;
-    if (takeoverActive())
-        return false;
-    // A live text selection owns the stroke (a selection-handle drag is
-    // horizontally dominant and geometrically identical to a swipe — #43,
-    // iPad WebKit): yield before any geometric test. This also blocks
-    // swipe-open while a stale selection is alive; one tap collapses the
-    // selection everywhere, and backdrop tap-to-close is unaffected (a tap
-    // never reaches tryLock).
-    if (selectionOwnsStroke())
-        return false;
-    if (!(event.target instanceof Element))
-        return false;
-    // A stroke beginning inside a genuinely horizontally scrollable container
-    // belongs to that scroller (the stats line, a message code block, any
-    // carousel): yield it so its native horizontal pan survives — and so the
-    // wide 45%-of-viewport start zone cannot turn a strip scroll into a
-    // drawer open (failure scenario C1). Applies to both branches: inside the
-    // drawer the same "scroller owns horizontal" semantics should hold.
-    if (findHorizontalScroller(chainFrom(event.target)) !== null)
-        return false;
-    const open = drawerOpen();
-    if (open) {
-        // Close strokes may start ANYWHERE over the frame (2026-08-29 sixth
-        // round, user report 「希望打开抽屉之后以外的部分可以进行左滑」). The
-        // previous gate required the start point inside the drawer's own
-        // geometry and explicitly rejected the backdrop, so the ~28% of the
-        // screen beside the drawer swallowed every swipe — combined with the
-        // leftward verdict being refused, closing felt impossible. Nothing else
-        // owns a horizontal stroke while the drawer is open (the conversation is
-        // behind the backdrop), so the whole frame is fair game.
-        //
-        // Tap-to-close on the backdrop is unaffected: a tap never reaches
-        // tryLock, so endStroke returns on !wasTracking without writing a
-        // consume mark, and the document-capture click handler passes backdrop /
-        // FAB clicks through unconditionally anyway.
-        const frame = (0, phone_chrome_ts_1.getFrame)();
-        if (frame === null)
-            return false;
-        const rect = frame.getBoundingClientRect();
-        if (event.clientX < rect.left || event.clientX > rect.right)
-            return false;
-        if (event.clientY < rect.top || event.clientY > rect.bottom)
-            return false;
-        // A session-row action menu (kebab) owns its own tap.
-        if (event.target.closest('[class*="sessionRow"] button') !== null)
-            return false;
-    }
-    else if (!hitTestStart(event.clientX, viewportWidthPx, rtl, { startZonePx: startZonePxFor(viewportWidthPx) })) {
-        return false;
-    }
-    trackingPointer = event.pointerId;
-    tracking = false;
-    startX = event.clientX;
-    startY = event.clientY;
-    samples = [{ t: event.timeStamp, x: event.clientX }];
-    return true;
-}
-/**
- * Axis-lock the stroke once its dominant axis has moved LOCK_PX. Horizontal
- * dominance (|dx| > |dy|) locks to X and is tracked; vertical dominance
- * abandons the stroke back to native scrolling (browser takes over, no
- * further preventDefault). Once locked the axis never re-decides — matching
- * MUI's UNCERTAINTY_THRESHOLD semantics.
- */
-function tryLock(event) {
-    const dx = event.clientX - startX;
-    const dy = event.clientY - startY;
-    if (Math.max(Math.abs(dx), Math.abs(dy)) < LOCK_PX)
-        return false;
-    if (Math.abs(dx) <= Math.abs(dy)) {
-        // Vertical-dominant: hand the touch back to scrolling.
-        reset();
-        return false;
-    }
-    tracking = true;
-    lockDrawerOpen = drawerOpen();
-    // Publish the lock to the host handlers (see gesture-guard.ts): they run
-    // EARLIER in this release event's capture phase, before endStroke writes
-    // any consume mark — the flag is their only ordering-proof yield signal
-    // (audit S0/S1).
-    (0, gesture_guard_ts_1.markStrokeLocked)();
-    startFollow();
-    return true;
-}
-/** Append a sample and prune the window. */
-function pushSample(event) {
-    samples.push({ t: event.timeStamp, x: event.clientX });
-    const cutoff = event.timeStamp - VELOCITY_WINDOW_MS;
-    let i = 0;
-    while (i < samples.length - 1 && samples[i].t < cutoff)
-        i += 1;
-    if (i > 0)
-        samples = samples.slice(i);
-}
-/**
- * Release the stroke: classify, then either commit or spring back.
- *
- * B 档 ordering is load-bearing: the verdict is computed FIRST (the follow
- * position IS dx, so classifySwipe decides complete-vs-revert exactly as in
- * A 档), then the inline follow styles are dropped — restoring the host
- * transition and clearing the transform starts an animation toward the
- * drawer's CURRENT host state — and only then does the commit flip the host
- * state, retargeting that transition within the SAME task. No paint happens
- * between the two, so the user sees one continuous motion from the finger
- * position into the final state; a reverted stroke simply animates home.
- *
- * An ARMED OPEN follow inverts the commit: the host state was already
- * flipped at arm time, so a positive verdict must NOT toggle again (that
- * would close the drawer the user just pulled out) and a negative verdict
- * must toggle BACK. Either way the inline release comes first, so the host
- * transition animates from the finger position to whichever state wins.
- */
-function endStroke(ctx, event, rtl, viewportWidthPx) {
-    const wasTracking = tracking;
-    const armedOpen = openFollowArmed;
-    openFollowArmed = false;
-    openFollowRefused = false;
-    // Velocity must be computed before reset() clears the samples.
-    const vel = slidingVelocity(samples, VELOCITY_WINDOW_MS, event.timeStamp);
-    // Distance is measured from the stroke START (not the axis-lock point):
-    // the slop is an activation gate, not travel that should consume the
-    // user's swipe distance. Measuring from the lock point made the effective
-    // travel = slop + threshold (e.g. 4px + 78px), so a 78px threshold
-    // actually needed ~82px+ of finger travel — the "feels like half the
-    // screen" complaint. From the start, a 78px threshold is a 78px swipe.
-    const dx = event.clientX - startX;
-    const dy = event.clientY - startY;
-    reset();
-    if (!wasTracking) {
-        // A stroke that armed the follow is by definition locked, so this branch
-        // cannot leave the host state flipped — but keep the invariant explicit.
-        if (armedOpen) {
-            commitFollowClose(ctx);
-        }
-        return;
-    }
-    const modal = modalOpen();
-    // An armed open follow has already flipped the marker, so classifySwipe
-    // must still be asked the question the USER answered: it was a closed
-    // drawer when the stroke began (lockDrawerOpen), which is what the stored
-    // flag holds — never re-read drawerOpen() here.
-    const verdict = modal || (!armedOpen && onCooldown())
-        ? 'none'
-        : classifySwipe({
-            openDistanceRatio: OPEN_DISTANCE_RATIO,
-            closeDistanceRatio: CLOSE_DISTANCE_RATIO,
-            velocityWindowMs: VELOCITY_WINDOW_MS,
-            openVelocity: OPEN_VELOCITY,
-            closeVelocity: CLOSE_VELOCITY,
-            lockPx: LOCK_PX,
-            cooldownMs: COOLDOWN_MS,
-            startZonePx: startZonePxFor(viewportWidthPx),
-            viewportWidthPx,
-            drawerOpen: lockDrawerOpen,
-        }, { dx, dy, velX: vel }, rtl);
-    // The mount-frame split must never survive into a terminal state: reveal
-    // the contents (no-op unless armed this stroke) before any release or
-    // commit animation.
-    revealDrawerContent();
-    // Terminal styles, per verdict. CLOSE commits are LATE: animate the inline
-    // transform into the closed slot and flip the host only when the drawer is
-    // already off-screen (commitFollowClose → commitWithAnimation) — flipping
-    // first swaps the sidebar subtree mid-animation (measured: width 280→206
-    // at t≈200ms of the 280ms transition, tx jumped backward). OPEN verdicts
-    // and the revert/modal/cooldown paths keep the plain release: the host
-    // stays in its current state, so its own transition finishes the motion
-    // and no subtree swap can be in flight. Every path either releases or
-    // hands the inline pair to the pending commit — it can never leak.
-    if (armedOpen) {
-        // The host is already open (early commit). Keep it on 'open', otherwise
-        // animate back into the slot and flip closed.
-        if (verdict === 'open') {
-            releaseFollowStyles();
-            cooldownUntil = performance.now() + COOLDOWN_MS;
-        }
-        else {
-            commitFollowClose(ctx);
-        }
-        if (event.target instanceof Element)
-            markStrokeConsumed(event.target);
-        return;
-    }
-    if (!(event.target instanceof Element))
-        return;
-    if (verdict === 'close') {
-        // Mark the stroke consumed so the tap's synthetic click cannot
-        // double-toggle or navigate a row. The mark walks the ancestor chain up
-        // to the DRAWER (not the frame): the synthetic click always lands on the
-        // stroke's own start target (left-edge start zone / drawer content), never
-        // on the backdrop — but the backdrop is a frame child, so marking up to
-        // the frame would make the host treat a genuine backdrop tap within the
-        // 300ms window as consumed and swallow the close (the "tap twice to close"
-        // bug). Marking stays IMMEDIATE even though the flip is late: the mark
-        // snapshots the chain now, and the synthetic click arrives within ~10ms.
-        markStrokeConsumed(event.target);
-        commitFollowClose(ctx);
-        return;
-    }
-    releaseFollowStyles();
-    if (verdict === 'open') {
-        // Unreachable for a tracked stroke (an unarmed stroke is by definition
-        // drawer-open at start), but keep the host-service commit symmetric.
-        markStrokeConsumed(event.target);
-        ctx.layout.toggleSidebar();
-        cooldownUntil = performance.now() + COOLDOWN_MS;
-    }
-}
-/**
- * Mark the released stroke so its synthetic click cannot re-toggle the drawer
- * or activate a row.
- *
- * The mark walks the ancestor chain up to the DRAWER when the stroke started
- * inside it: the backdrop is a frame child, so stopping at the frame would
- * make the host treat a genuine backdrop tap within the window as consumed
- * and swallow the close (the "tap twice to close" bug). A stroke that started
- * OUTSIDE the drawer (the left-edge start zone, or — since closing accepts
- * the whole frame — the backdrop itself) has no drawer in its chain, so the
- * walk would otherwise run all the way to the document root and briefly
- * shadow every tap on the page; the frame is the tightest correct stop for
- * those, and it is what must be marked anyway, because a backdrop-started
- * close stroke needs its own overlay click consumed.
- */
-function markStrokeConsumed(target) {
-    const drawer = findDrawer();
-    const upTo = drawer !== null && drawer.contains(target) ? drawer : (0, phone_chrome_ts_1.getFrame)() ?? null;
-    (0, gesture_guard_ts_1.markGestureConsumed)(target, CONSUME_WINDOW_MS, upTo);
-    consumedEl = target;
-}
-/** Forget stroke state (called on cancel / visibility change / blur). */
-function reset() {
-    trackingPointer = 0;
-    tracking = false;
-    samples = [];
-    (0, gesture_guard_ts_1.clearStrokeLocked)();
-}
-/** The logical reading direction of the frame (RTL support). */
-function frameRtl() {
-    const frame = (0, phone_chrome_ts_1.getFrame)();
-    return frame !== null && getComputedStyle(frame).direction === 'rtl';
-}
-/** Install the gesture layer for the current mobile breakpoint. */
-function installSidebarSwipe(ctx) {
-    (0, phone_chrome_ts_1.installMobileEffect)(ctx, 'dsh-web-mobile: sidebar swipe gestures', () => {
-        const viewportWidth = () => window.innerWidth || document.documentElement.clientWidth || 0;
-        const onPointerDown = (event) => {
-            // A new pointer starts a new interaction epoch: drop the previous
-            // stroke's click gate. When the browser never delivers the synthetic
-            // click (iOS shells suppress it after a swipe), this — together with
-            // the short CONSUME_WINDOW_MS — keeps the next genuine tap alive
-            // instead of eating it at the document-capture click handler.
-            consumedEl = null;
-            (0, gesture_guard_ts_1.clearStrokeLocked)(); // belt-and-suspenders: a lost stroke must not leak its lock into this epoch
-            if (event.pointerType !== 'touch' && event.pointerType !== 'pen')
-                return;
-            // A second finger means the browser owns this interaction (pinch zoom),
-            // and a two-finger drag is never a drawer swipe. Merely ignoring the
-            // extra pointer would keep the stroke alive — and with it the
-            // touchmove preventDefault below, which cancels the native pinch. On
-            // iOS that pinch is the only way back out of a zoom, so fighting it
-            // recreates exactly the trap #45 reported. Hand the whole interaction
-            // back instead.
-            if (trackingPointer !== 0 && trackingPointer !== event.pointerId) {
-                abortStroke(ctx);
-                return;
-            }
-            beginStroke(event, frameRtl(), viewportWidth());
-        };
-        const onPointerMove = (event) => {
-            if (event.pointerId !== trackingPointer)
-                return;
-            // A modal may rise mid-stroke (e.g. an a11y trap opening) — spec review
-            // 缺陷 1's guard, now per-MOVE because B 档 paints a transform the
-            // modal must not inherit: abandon and spring the drawer back.
-            if (modalOpen() || takeoverActive()) {
-                abortStroke(ctx);
-                return;
-            }
-            if (!tracking) {
-                // A long-press selection can appear AFTER pointerdown but BEFORE the
-                // axis lock (#43 second timing window): abandon the stroke and hand
-                // the touch back so the handles become draggable (reset() also lifts
-                // the touchmove preventDefault). Once locked the gesture stays
-                // committed — a selection never appears mid-swipe.
-                if (selectionOwnsStroke()) {
-                    reset();
-                    return;
-                }
-                if (tryLock(event)) {
-                    pushSample(event);
-                    applyFollow(ctx, event.clientX - startX);
-                }
-            }
-            else {
-                pushSample(event);
-                applyFollow(ctx, event.clientX - startX);
-            }
-        };
-        const onPointerUp = (event) => {
-            if (event.pointerId !== trackingPointer)
-                return;
-            endStroke(ctx, event, frameRtl(), viewportWidth());
-        };
-        const onPointerCancel = (event) => {
-            if (event.pointerId !== trackingPointer)
-                return;
-            abortStroke(ctx);
-        };
-        // The browser may synthesize a click a few ms after the stroke's
-        // pointerup. The host overlay handlers and the FAB / backdrop element
-        // listeners would treat it as a tap; swallow it at document capture so
-        // a swipe can never toggle twice or navigate a row. Non-gesture taps
-        // (no live mark) pass through untouched.
-        //
-        // A click whose target is (or is inside) the backdrop or the FAB is
-        // NEVER a gesture's synthetic click: the stroke start is always the
-        // left-edge start zone or the drawer content, never the backdrop (outside
-        // the drawer, on the right) or the FAB. The mark chain can reach them
-        // in degenerate hit-test cases (e.g. a stroke starting on a point where
-        // the empty drawer does not register as the event target), and
-        // swallowing that click would break the "tap the backdrop to close"
-        // path — the "tap twice to close" bug. Let those clicks through.
-        const onClick = (event) => {
-            if (consumedEl === null)
-                return;
-            if (!(event.target instanceof Element))
-                return;
-            // A genuine backdrop / FAB tap is always let through: their own click
-            // listeners toggle the drawer, and a consume mark that walked to the
-            // document root would otherwise swallow it ("tap twice to close").
-            // The one exception is a click on the overlay element that STARTED the
-            // just-committed stroke — since close strokes may begin anywhere over
-            // the frame, the backdrop can now be the stroke's own start target,
-            // and letting its synthetic click through would re-toggle the drawer
-            // straight back open.
-            const overlay = event.target.closest('[data-mobile-nav="backdrop"], [data-mobile-nav="fab"]');
-            if (overlay !== null && !overlay.contains(consumedEl))
-                return;
-            if (!(0, gesture_guard_ts_1.consumeIfGestured)(event))
-                return;
-            event.stopPropagation();
-            event.preventDefault();
-            consumedEl = null;
-        };
-        const onVisibility = () => {
-            if (document.hidden)
-                abortStroke(ctx);
-        };
-        // Edge-touch priority (iOS UIScreenEdgePanGestureRecognizer semantics):
-        // a stroke that began inside the left-edge start zone must never be
-        // claimed by native scrolling. touch-action: pan-y already forbids the
-        // browser from panning it horizontally; this preventDefault (passive:
-        // false) additionally stops the vertical-scroll claim, so the pointer
-        // event stream reaches the gesture layer intact on browsers where the
-        // scroller wins the race (iOS Safari in particular — headless cannot
-        // reproduce that behavior). Vertical-dominant strokes abandon the
-        // gesture (reset() clears trackingPointer), so scrolling resumes for
-        // touches that were never swipes. Strokes starting inside a genuinely
-        // horizontally scrollable container never reach this state at all
-        // (beginStroke rejects them via findHorizontalScroller), so their
-        // native horizontal pan is never prevented.
-        //
-        // Multi-touch is the one case that must never be prevented: two fingers
-        // on the screen mean a pinch, and preventDefault on those touchmoves
-        // cancels the browser's zoom gesture. The pointerdown guard above
-        // already abandons the stroke when a second finger lands; this is the
-        // belt-and-braces path for engines that hand the gesture to the
-        // compositor without delivering a second pointerdown (#46 real-device
-        // report: pinch-out zoomed but pinch-in would not zoom back).
-        const onTouchMove = (event) => {
-            if (trackingPointer === 0)
-                return;
-            if (event.touches.length > 1) {
-                abortStroke(ctx);
-                return;
-            }
-            event.preventDefault();
-        };
-        document.addEventListener('pointerdown', onPointerDown, true);
-        document.addEventListener('pointermove', onPointerMove, true);
-        document.addEventListener('pointerup', onPointerUp, true);
-        document.addEventListener('pointercancel', onPointerCancel, true);
-        document.addEventListener('click', onClick, true);
-        document.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
-        const onBlur = () => abortStroke(ctx);
-        document.addEventListener('visibilitychange', onVisibility);
-        window.addEventListener('blur', onBlur);
-        return () => {
-            document.removeEventListener('pointerdown', onPointerDown, true);
-            document.removeEventListener('pointermove', onPointerMove, true);
-            document.removeEventListener('pointerup', onPointerUp, true);
-            document.removeEventListener('pointercancel', onPointerCancel, true);
-            document.removeEventListener('click', onClick, true);
-            document.removeEventListener('touchmove', onTouchMove, { capture: true });
-            document.removeEventListener('visibilitychange', onVisibility);
-            window.removeEventListener('blur', onBlur);
-            abortStroke(ctx, true);
-        };
-    });
-}
 };
 __modules["effects/subagent-chip-touch.js"] = function (require, module, exports) {
 "use strict";
@@ -4975,6 +7297,7 @@ __modules["effects/session-menu.js"] = function (require, module, exports) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.installSessionMenuDelete = installSessionMenuDelete;
 const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
+const sessions_compat_ts_1 = require("./core/sessions-compat.js");
 // Mirrored from src/client/locales.ts: the custom client bundler cannot
 // resolve `../` requires from effects/. Keep in sync.
 const NS = 'mobileNav';
@@ -4996,10 +7319,12 @@ function escapeHtml(value) {
         .replaceAll('"', '&quot;');
 }
 /**
- * Install the mobile session-delete menu machinery. Mobile-only: the whole
- * effect arms under the ≤1023px breakpoint and is a complete no-op on
- * desktop. Returns a disposer (via installMobileEffect) that removes every
- * listener, observer, injected node, and the confirm dialog.
+ * Install the mobile session-delete menu machinery. Touch-gated: the whole
+ * effect arms under TOUCH_QUERY — (pointer: coarse) at EVERY width — so a
+ * large tablet in landscape keeps the desktop layout but still gets the
+ * delete item, while any mouse-driven or pointer-less window stays a
+ * complete no-op. Returns a disposer (via installMobileEffect) that removes
+ * every listener, observer, injected node, and the confirm dialog.
  * @param ctx - client root context.
  */
 function installSessionMenuDelete(ctx) {
@@ -5018,7 +7343,7 @@ function installSessionMenuDelete(ctx) {
             const sessions = ctx.sessions.list.getSnapshot();
             const workspaces = ctx.workspaces.list.getSnapshot();
             const archived = new Set(workspaces.archivedSessionIds);
-            const candidates = sessions.ids.filter(id => {
+            const candidates = sessions.ids.filter((id) => {
                 const summary = sessions.byId[id];
                 return summary !== undefined && !summary.blank && summary.displayTitle === title && !archived.has(id);
             });
@@ -5034,13 +7359,13 @@ function installSessionMenuDelete(ctx) {
             const headerTitle = group
                 .querySelector(':scope > [class*="_projectRow"] [class*="_title"]')
                 ?.textContent?.trim();
-            const owned = new Set(workspaces.items.flatMap(workspace => workspace.sessionIds));
+            const owned = new Set(workspaces.items.flatMap((workspace) => workspace.sessionIds));
             const workspace = headerTitle === undefined
                 ? undefined
-                : workspaces.items.find(candidate => candidate.title === headerTitle);
+                : workspaces.items.find((candidate) => candidate.title === headerTitle);
             const workspaceIds = workspace === undefined ? [] : workspace.sessionIds;
             const groupIds = workspace === undefined
-                ? sessions.ids.filter(id => !owned.has(id) && !archived.has(id) && sessions.byId[id] !== undefined)
+                ? sessions.ids.filter((id) => !owned.has(id) && !archived.has(id) && sessions.byId[id] !== undefined)
                 : workspaceIds.filter(id => !archived.has(id) && sessions.byId[id] !== undefined);
             const sameTitleGroupIds = groupIds.filter(id => sessions.byId[id]?.displayTitle === title);
             const rows = [...group.querySelectorAll(':scope > [class*="_sessionRow"]')];
@@ -5050,10 +7375,21 @@ function installSessionMenuDelete(ctx) {
                 : rows.slice(0, rowIndex).filter(candidate => candidate.querySelector('[class*="_title"]')?.textContent?.trim() === title).length;
             return sameTitleGroupIds[sameTitleBefore];
         };
+        /**
+         * Read one menu item's visible label across host generations: rc.2 nests
+         * the text in an `_itemLabel` span (beside an `_itemIcon`), while 0.1.5
+         * puts it directly in the button (`_item_1nxmc_92`, no child elements).
+         * Falling back to the item's own textContent covers both — svg icons
+         * contribute no text, so rc.2 items read identically either way.
+         */
+        const itemLabel = (item) => {
+            const label = item.querySelector('[class*="_itemLabel"]');
+            return (label ?? item).textContent?.trim() ?? '';
+        };
         /** Whether a menu list is the host's per-session row menu. */
         const isSessionMenu = (menu) => {
-            const labels = [...menu.querySelectorAll('[role="menuitem"] [class*="_itemLabel"]')]
-                .map(element => element.textContent?.trim() ?? '');
+            const labels = [...menu.querySelectorAll('[role="menuitem"]')]
+                .map(itemLabel);
             const rename = wsT('rename');
             const fork = wsT('menu.fork');
             const archive = wsT('menu.archiveSession');
@@ -5070,10 +7406,19 @@ function installSessionMenuDelete(ctx) {
                 dialogHost = null;
             }
         };
-        /** Show the delete confirmation as a bottom card over the frame. */
+        /** Show the delete confirmation as a bottom card over the frame.
+         *  Mounted on <body>, NOT in the frame: the third-party mobile shim
+         *  (@linxin666/dsh-web-all) listens in the CAPTURE phase on the frame and,
+         *  while the drawer is open, answers every click inside the frame but
+         *  outside [data-pane="sidebar"] with preventDefault + stopPropagation.
+         *  A card inside the frame therefore had dead buttons — measured
+         *  2026-09-14: a real touch tap on 「取消」 left the card open, and only
+         *  Escape closed it. Body-level, the shim's listener never sees these
+         *  clicks (its sibling menus are portaled there for the same reason), and
+         *  the card's own band lives in base.css (z 1400/1401, above the drawer). */
         const showDeleteDialog = (sessionId, title) => {
             closeDialog();
-            const frame = (0, phone_chrome_ts_1.getFrame)() ?? document.body;
+            const host = document.body;
             const backdrop = document.createElement('div');
             backdrop.dataset.mobileNav = 'delete-dialog-backdrop';
             const card = document.createElement('div');
@@ -5130,7 +7475,7 @@ function installSessionMenuDelete(ctx) {
                 yesButton.textContent = navT('deletePending');
                 if (errorLine !== null)
                     errorLine.hidden = true;
-                const wasCurrent = ctx.sessions.list.getSnapshot().current === sessionId;
+                const wasCurrent = (0, sessions_compat_ts_1.currentSessionIdOf)(ctx.sessions.list.getSnapshot()) === sessionId;
                 try {
                     const response = await fetch('/api/mobile-nav.session.delete', {
                         method: 'POST',
@@ -5148,7 +7493,7 @@ function installSessionMenuDelete(ctx) {
                     return;
                 }
                 closeDialog();
-                if (wasCurrent)
+                if (wasCurrent && (0, sessions_compat_ts_1.sessionsCanClear)(ctx.sessions))
                     ctx.sessions.clear();
                 // Repull the baseline so the deleted row disappears. Must be called AS
                 // A METHOD on ctx.sessions: refresh() reads `this.manager`, and an
@@ -5156,17 +7501,21 @@ function installSessionMenuDelete(ctx) {
                 // mode that left deleted cold sessions lingering as ghost rows.
                 const sessions = ctx.sessions;
                 await sessions.refresh?.();
-                if (wasCurrent)
+                // On the mobile branch the drawer hosts the list, so closing it is
+                // the right follow-up after deleting the current session; on the
+                // desktop layout (wide touch) the same call would collapse the
+                // always-visible sidebar panel, so gate it on the mobile query.
+                if (wasCurrent && window.matchMedia(phone_chrome_ts_1.MOBILE_QUERY).matches)
                     ctx.layout.toggleSidebar();
             });
-            frame.appendChild(backdrop);
-            frame.appendChild(card);
+            host.appendChild(backdrop);
+            host.appendChild(card);
             dialogHost = { backdrop, card };
         };
         /** Show a non-destructive error card (session could not be resolved). */
         const showError = (message) => {
             closeDialog();
-            const frame = (0, phone_chrome_ts_1.getFrame)() ?? document.body;
+            const host = document.body;
             const backdrop = document.createElement('div');
             backdrop.dataset.mobileNav = 'delete-dialog-backdrop';
             const card = document.createElement('div');
@@ -5187,8 +7536,8 @@ function installSessionMenuDelete(ctx) {
             };
             document.addEventListener('keydown', onKey, true);
             closeDialogOnKey = onKey;
-            frame.appendChild(backdrop);
-            frame.appendChild(card);
+            host.appendChild(backdrop);
+            host.appendChild(card);
             dialogHost = { backdrop, card };
         };
         /** Inject the delete item into one open session menu (idempotent). */
@@ -5213,6 +7562,15 @@ function installSessionMenuDelete(ctx) {
             if (label !== null) {
                 label.textContent = navT('deleteSession');
                 label.style.color = DANGER_COLOR;
+            }
+            else if (button.firstElementChild === null) {
+                // 0.1.5 shape: the menuitem button carries its text directly (no
+                // `_itemLabel` span, no icon element). Replace the whole text and let
+                // the danger color ride the button itself. A button WITH element
+                // children but no label span is an unknown future shape — leave its
+                // text alone rather than guess.
+                button.textContent = navT('deleteSession');
+                button.style.color = DANGER_COLOR;
             }
             button.setAttribute('data-mobile-nav', 'session-delete');
             button.addEventListener('click', (event) => {
@@ -5306,7 +7664,7 @@ function installSessionMenuDelete(ctx) {
             closeDialog();
             anchor = null;
         };
-    });
+    }, phone_chrome_ts_1.TOUCH_QUERY);
 }
 };
 __modules["effects/composer-keyboard-guard.js"] = function (require, module, exports) {
@@ -5415,6 +7773,296 @@ function installComposerKeyboardGuard(ctx) {
     });
 }
 };
+__modules["core/layout-compat.js"] = function (require, module, exports) {
+"use strict";
+// The layout service face drifted between host generations. rc.6's ILayout
+// carries only toggleSidebar/openDetails/closeDetails; 0.1.6-alpha.2 added
+// selectPanel(panelId | null) for the sidebar's main-area panels. This helper
+// lets call sites stay compile-green against rc.6 typings while degrading
+// explicitly on a host that cannot select a panel, instead of throwing.
+//
+// Kept DOM-free and dependency-free (like sessions-compat.ts) so it is directly
+// unit-testable and compiles against either generation's typings — never import
+// the layout service types here.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.panelSelectorOf = panelSelectorOf;
+/**
+ * The "leave the panel" action, or null when the host has no panel-selection
+ * API at all (rc.6).
+ *
+ * The sidebar panel list is an alpha.2-era surface, so on rc.6 nothing arms
+ * this — but the capability is probed rather than assumed, because a plugin
+ * that throws on an older host is worse than one that goes inert.
+ *
+ * @param layout - `ctx.layout` as handed to the plugin.
+ * @returns a no-argument action calling `selectPanel(null)`, or null.
+ */
+function panelSelectorOf(layout) {
+    if (typeof layout !== 'object' || layout === null)
+        return null;
+    const select = layout.selectPanel;
+    if (typeof select !== 'function')
+        return null;
+    return () => {
+        ;
+        select.call(layout, null);
+    };
+}
+};
+__modules["effects/panel-exit.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.panelOwnsMainArea = panelOwnsMainArea;
+exports.createPanelExit = createPanelExit;
+exports.createPanelBackExitTask = createPanelBackExitTask;
+exports.installPanelRowExit = installPanelRowExit;
+const layout_compat_ts_1 = require("./core/layout-compat.js");
+const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
+/**
+ * Sidebar panel exit.
+ *
+ * The host's sidebar panels REPLACE the main area (`ctx.layout.selectPanel(id)`),
+ * and the host ships no way back out of one: `PanelRow.onClick` is just
+ * `selectPanel(id)` (tapping the already-selected row stays on the panel), and
+ * the only caller of `selectPanel(null)` in the whole host is
+ * `workspace.replaceMain` — i.e. opening a session. So on a phone, once the
+ * drawer row puts you on the plugin-manager page, that page is a dead end
+ * unless you already know to open the drawer and pick a session.
+ *
+ * Three exits, roughly in the order a phone user reaches for them:
+ *  1. the system back key / back gesture (popstate) — the returned task
+ *  2. tapping the already-selected panel row again — installPanelRowExit
+ *  3. the top-left FAB, which reads as 「返回会话」 while a panel owns the main
+ *     area — see createOverlayTask in overlay-backdrop-fab.ts
+ *
+ * All three funnel through the same `exit`, so they cannot drift apart.
+ */
+/**
+ * The host marks the SELECTED sidebar panel row with `aria-current="page"`.
+ * Measured on 0.1.6-alpha.2: `null` in the conversation, `"page"` on a panel —
+ * the two states are cleanly separable. `panelRow` is a CSS-module fragment
+ * (the host class is `hHd-Xa_panelRow`), so it is matched as a substring per
+ * the repo's hashed-class convention.
+ *
+ * Why DOM and not `ctx.layout`: the layout face carries no readable panel id —
+ * the selected panel lives on the host's own `PanelInfo` store, which is handed
+ * only to the host's components.
+ */
+const PANEL_ROW_ACTIVE = '[class*="panelRow"][aria-current="page"]';
+/**
+ * True from the moment an exit starts until React has committed the swap.
+ * During that window the panel row STILL carries `aria-current="page"`, but the
+ * panel is semantically gone — history bookkeeping must treat it as closed,
+ * otherwise it arms a second entry while the first exit is still in flight.
+ */
+let panelLeaving = false;
+/** Whether a panel owns the main area (DOM truth, ignoring the exit window). */
+function panelOwnsMainArea() {
+    return document.querySelector(PANEL_ROW_ACTIVE) !== null;
+}
+/** Whether a panel owns the main area, counting the in-flight exit as closed. */
+function panelViewOpen() {
+    return !panelLeaving && panelOwnsMainArea();
+}
+/** Marker set on the frame while the incoming conversation fades in. */
+const PANEL_EXIT_ATTR = 'data-mobile-panel-exit';
+/** Safety net: clears the marker if the reveal animation never fires. */
+const PANEL_EXIT_FALLBACK_MS = 2000;
+/**
+ * Leave the panel: switch back to the conversation and let the incoming content
+ * fade in.
+ *
+ * ⚠ The switch is deliberately NOT delayed behind an outgoing animation.
+ * `selectPanel(null)` makes React remount the whole conversation, and that
+ * commit blocks the main thread long enough to matter (measured on a phone:
+ * ~390 ms for a long session). Fading the panel out first would show a blank
+ * screen for that entire window — the panel is already transparent but the
+ * conversation has not mounted yet. Keeping the panel opaque until the very
+ * commit means it disappears on the same frame the conversation appears, and
+ * the only transition is the conversation's fade-in.
+ *
+ * @param layout - `ctx.layout`; probed, never assumed.
+ * @returns the exit action (idempotent while an exit is in flight, so a double
+ *   tap cannot queue two swaps) and the system-back reconciler task.
+ */
+function createPanelExit(layout) {
+    const selectPanel = (0, layout_compat_ts_1.panelSelectorOf)(layout);
+    const supported = selectPanel !== null;
+    let leaving = false;
+    let cleanupTimer = null;
+    // The reveal animation runs on a descendant of the frame, so listen in the
+    // capture phase; that is also the precise end-of-transition signal, which
+    // beats guessing a timeout.
+    function onAnimationEnd(event) {
+        if (event.animationName === 'dsh-mobile-panel-reveal')
+            cleanup();
+    }
+    function cleanup() {
+        if (cleanupTimer !== null) {
+            window.clearTimeout(cleanupTimer);
+            cleanupTimer = null;
+        }
+        const frame = (0, phone_chrome_ts_1.getFrame)();
+        if (frame !== null) {
+            frame.removeEventListener('animationend', onAnimationEnd, true);
+            frame.removeAttribute(PANEL_EXIT_ATTR);
+        }
+        panelLeaving = false;
+        leaving = false;
+    }
+    const exit = () => {
+        if (!supported || leaving)
+            return;
+        leaving = true;
+        panelLeaving = true;
+        // The marker goes on BEFORE the swap so the incoming conversation carries
+        // the animation from its first style resolution — no full-opacity frame.
+        const frame = (0, phone_chrome_ts_1.getFrame)();
+        if (frame !== null) {
+            frame.setAttribute(PANEL_EXIT_ATTR, '');
+            frame.addEventListener('animationend', onAnimationEnd, true);
+        }
+        selectPanel();
+        cleanupTimer = window.setTimeout(cleanup, PANEL_EXIT_FALLBACK_MS);
+    };
+    return { exit, supported, panelOpen: panelOwnsMainArea, task: createPanelBackExitTask(exit, supported) };
+}
+/**
+ * The system back key / back gesture exits the panel.
+ *
+ * The host core does not touch the browser history at all (only the PDF preview
+ * plugin does, and that is unrelated), and measured on a phone the panel view
+ * sits at `history.length === 1` — pressing back there leaves the page
+ * entirely. So this layer is free to take over: arm one history entry while a
+ * panel is open, and exit the panel when it is popped.
+ *
+ * Two edges are handled explicitly:
+ *  - Our own `history.back()` (used when the panel is left by another route)
+ *    echoes back as a popstate. `selfBackPending` swallows that echo, with a
+ *    timeout so a host WebView that never emits popstate cannot leave the flag
+ *    stuck and eat the user's next real back press.
+ *  - Between the click and React's commit the panel row is still marked active;
+ *    `panelViewOpen()` reports closed during that window, so no second history
+ *    entry is armed.
+ *
+ * @param exitPanel - the shared exit action.
+ * @param supported - false on hosts with no panel-selection API; the task then
+ *   never arms a history entry at all.
+ */
+function createPanelBackExitTask(exitPanel, supported) {
+    let armed = false;
+    let listening = false;
+    let selfBackPending = false;
+    let selfBackTimer = null;
+    function clearSelfBack() {
+        selfBackPending = false;
+        if (selfBackTimer !== null) {
+            window.clearTimeout(selfBackTimer);
+            selfBackTimer = null;
+        }
+    }
+    function selfBack() {
+        selfBackPending = true;
+        if (selfBackTimer !== null)
+            window.clearTimeout(selfBackTimer);
+        selfBackTimer = window.setTimeout(clearSelfBack, 1200);
+        try {
+            history.back();
+        }
+        catch {
+            clearSelfBack();
+        }
+    }
+    function onPopState() {
+        if (selfBackPending) {
+            clearSelfBack();
+            return;
+        }
+        if (!armed)
+            return;
+        armed = false;
+        if (panelViewOpen())
+            exitPanel();
+    }
+    function listen() {
+        if (listening)
+            return;
+        window.addEventListener('popstate', onPopState);
+        listening = true;
+    }
+    function unlisten() {
+        if (!listening)
+            return;
+        window.removeEventListener('popstate', onPopState);
+        listening = false;
+    }
+    return {
+        name: 'panel-back-exit',
+        scopes: ['*'],
+        ensure: () => {
+            if (!supported)
+                return;
+            listen();
+            if (panelViewOpen()) {
+                if (armed)
+                    return;
+                armed = true;
+                try {
+                    // Second argument empty: add a poppable entry without touching the URL.
+                    history.pushState({ mobilePanelExit: true }, '');
+                }
+                catch {
+                    // Sandboxed frames refuse pushState; give up on this exit rather than
+                    // breaking anything else.
+                    armed = false;
+                }
+                return;
+            }
+            if (armed) {
+                armed = false;
+                selfBack();
+            }
+        },
+        dispose: () => {
+            unlisten();
+            clearSelfBack();
+            if (armed) {
+                armed = false;
+                selfBack();
+            }
+        },
+    };
+}
+/**
+ * Tapping the already-selected panel row again returns to the conversation.
+ * Unselected rows are left alone — they still go through the host's own
+ * `selectPanel(id)`.
+ *
+ * Runs in the capture phase so it can stop the host's onClick. The drawer close
+ * rides the same click (phone-chrome's navigation-tap whitelist), which is the
+ * only ordering that survives a touch: closing the drawer on pointerup cancels
+ * the synthesized click entirely (see the 抽屉导航 click pitfall).
+ */
+function installPanelRowExit(ctx, exitPanel) {
+    (0, phone_chrome_ts_1.installMobileEffect)(ctx, 'dsh-web-mobile: panel row returns to conversation', () => {
+        const onClick = (event) => {
+            const target = event.target;
+            if (!(target instanceof Element) || typeof target.closest !== 'function')
+                return;
+            const row = target.closest('[class*="panelRow"]');
+            if (row === null)
+                return;
+            if (row.getAttribute('aria-current') !== 'page')
+                return;
+            event.preventDefault();
+            event.stopPropagation();
+            exitPanel();
+        };
+        document.addEventListener('click', onClick, true);
+        return () => document.removeEventListener('click', onClick, true);
+    });
+}
+};
 __modules["core/raf-scheduler.js"] = function (require, module, exports) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -5454,7 +8102,8 @@ const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
  */
 function installDebugBadge(ctx) {
     ctx.effect(() => {
-        if (!new URLSearchParams(location.search).has('mobile-nav-debug'))
+        const params = new URLSearchParams(location.search);
+        if (!params.has('mobile-nav-debug'))
             return () => { };
         const errors = [];
         const onError = (event) => errors.push(`ERR ${event.message.slice(0, 120)}`);
@@ -5475,11 +8124,25 @@ function installDebugBadge(ctx) {
                 return el === null ? 'absent' : getComputedStyle(el).visibility;
             };
             const frame = document.querySelector('[data-mobile-nav="frame"]');
+            // Safe-area diagnosis (read-only: the observer below re-enters on any
+            // node this adds to the document). framePad IS the resolved
+            // env(safe-area-inset-top) - the frame already consumes it - and
+            // rightPanel reports whether the host panel carries it too. If a phone
+            // shows a covered top row while framePad reads 0px, the inset is 0 on
+            // that device and the fix needs another source for the height.
+            const rightPanel = () => {
+                const el = document.querySelector('[data-sidebar-right-panel]');
+                if (el === null)
+                    return 'absent';
+                const b = el.getBoundingClientRect();
+                return `${el.getAttribute('data-sidebar-right-panel')} pad ${getComputedStyle(el).paddingTop} rect ${Math.round(b.top)},${Math.round(b.left)} ${Math.round(b.width)}x${Math.round(b.height)}`;
+            };
             return [
-                `build 20260906 (overlay takeover re-scope)`,
+                `build 20260919 (diag chips)`,
                 `URL ${location.pathname}${location.search}`,
                 `W ${innerWidth} x ${innerHeight} dpr ${devicePixelRatio}`,
                 `mq≤1023 ${matchMedia(phone_chrome_ts_1.MOBILE_QUERY).matches}  mq≥1024 ${matchMedia(phone_chrome_ts_1.DESKTOP_QUERY).matches}`,
+                `safeTop framePad ${frame === null ? 'n/a' : getComputedStyle(frame).paddingTop}  rightPanel ${rightPanel()}`,
                 `css ${q('style[data-plugin-css*="mobile"]')}  frame ${!!frame}`,
                 `previewCol ${vis('[data-aionui-preview-col]')}  explorerCol ${vis('[data-aionui-explorer-col]')}`,
                 `previewOpen ${frame?.hasAttribute('data-aionui-preview-open') ?? '?'}  explorerOpen ${frame?.hasAttribute('data-aionui-explorer-open') ?? '?'}  previewFull ${frame?.hasAttribute('data-mobile-preview-full') ?? '?'}`,
@@ -5506,11 +8169,39 @@ function installDebugBadge(ctx) {
         observer.observe(document.body, { childList: true, subtree: true, attributes: true });
         const timer = setInterval(paint, 1500);
         document.body.appendChild(badge);
+        // Opt-in device beacon: the same readings are POSTed to a local listener
+        // (default http://127.0.0.1:3199/diag, override with ?beacon=<url>) so a
+        // phone-side repro can be read from the machine serving the page without
+        // anyone copying numbers off the screen. no-cors + a string body keeps it a
+        // simple request (no preflight); a missing listener is ignored.
+        // Rects of the plugin's own header controls plus the host row they live in:
+        // the phone-side position of the files opener is what a "not pinned to the
+        // top-right corner" report is about, and it cannot be measured headless.
+        const marker = (sel) => {
+            const el = document.querySelector(sel);
+            if (el === null)
+                return 'absent';
+            const b = el.getBoundingClientRect();
+            return `${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)}`;
+        };
+        const payload = () => [
+            read(),
+            `rects toggle ${marker('[data-mobile-nav="toggle"]')} files ${marker('[data-mobile-nav="files"]')} header ${marker('[data-phase] header')} titleCluster ${marker('[class*="_titleCluster"]')}`,
+            `chips crea ${marker('[class*="SVAs4q_"]')} team ${marker('[data-team-action]')} model ${marker('[class*="_7KE1Ra_trigger"]')} crumbs ${marker('[class*="_crumbs"]')} crumbCurrent ${marker('[class*="_crumbCurrent"]')}`,
+            `ua ${navigator.userAgent}`,
+            `screen ${screen.width}x${screen.height} standalone ${matchMedia('(display-mode: standalone)').matches}`,
+            `vv ${visualViewport === null ? 'n/a' : `${Math.round(visualViewport.width)}x${Math.round(visualViewport.height)}@${Math.round(visualViewport.offsetTop)}`}`,
+        ].join('\n');
+        const beacon = params.get('beacon') || 'http://127.0.0.1:3199/diag';
+        const beaconTimer = setInterval(() => {
+            void fetch(beacon, { method: 'POST', mode: 'no-cors', body: payload() }).catch(() => { });
+        }, 2000);
         return () => {
             window.removeEventListener('error', onError);
             window.removeEventListener('unhandledrejection', onRejection);
             observer.disconnect();
             clearInterval(timer);
+            clearInterval(beaconTimer);
             badge.remove();
         };
     }, 'dsh-web-mobile: debug badge');
@@ -5527,8 +8218,10 @@ exports.zh = {
     'open': '打开目录',
     'close': '收起目录',
     'backdrop': '点击关闭目录',
+    'backToConversation': '返回会话',
     'sessionLog': '导出会话日志',
     'files': '文件浏览',
+    'fileUpload': '添加文件',
     'previewFullscreen': '全屏预览',
     'previewExitFullscreen': '退出全屏',
     'deleteSession': '删除会话',
@@ -5547,8 +8240,10 @@ exports.en = {
     'open': 'Open directory',
     'close': 'Close directory',
     'backdrop': 'Click to close directory',
+    'backToConversation': 'Back to conversation',
     'sessionLog': 'Session log',
     'files': 'Files',
+    'fileUpload': 'Add files',
     'previewFullscreen': 'Fullscreen preview',
     'previewExitFullscreen': 'Exit fullscreen',
     'deleteSession': 'Delete session',
@@ -5570,6 +8265,8 @@ exports.inject = void 0;
 exports.apply = apply;
 const MobileNavToggle_tsx_1 = require("./components/MobileNavToggle.js");
 const MobileDrawerFooter_tsx_1 = require("./components/MobileDrawerFooter.js");
+const ComposerFileButton_tsx_1 = require("./components/ComposerFileButton.js");
+const open_files_panel_ts_1 = require("./components/open-files-panel.js");
 const index_ts_1 = require("./styles/index.js");
 const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
 const sidebar_swipe_ts_1 = require("./effects/sidebar-swipe.js");
@@ -5577,11 +8274,12 @@ const subagent_chip_touch_ts_1 = require("./effects/subagent-chip-touch.js");
 const session_menu_ts_1 = require("./effects/session-menu.js");
 const composer_keyboard_guard_ts_1 = require("./effects/composer-keyboard-guard.js");
 const aionui_compat_ts_1 = require("./effects/aionui-compat.js");
+const panel_exit_ts_1 = require("./effects/panel-exit.js");
 const raf_scheduler_ts_1 = require("./core/raf-scheduler.js");
 const debug_ts_1 = require("./debug.js");
 const locales_ts_1 = require("./i18n/locales.js");
 /** Required services (cordis fiber inject — the loader passes all module exports as an object plugin). */
-exports.inject = ['slots', 'layout', 'locale', 'sessionLogDownload', 'sessions', 'workspaces', 'sidebarRight'];
+exports.inject = ['slots', 'layout', 'locale', 'sessionLogDownload', 'sessions', 'workspaces'];
 /**
  * Mobile-adaptive shell, browser half: injects the mobile stylesheet, then
  * contributes the directory toggle to the session header and the backdrop +
@@ -5595,23 +8293,6 @@ function apply(ctx) {
         tag.dataset.plugin = 'dsh-web-mobile';
         tag.dataset.pluginCss = 'dsh-web-mobile/mobile.css';
         tag.textContent = index_ts_1.MOBILE_CSS;
-        // DSHA：0.1.5 的文件/预览属于右侧面板，在手机上覆盖会话而不压缩输入区。
-        tag.textContent += `
-@media (max-width: 1023px) and (pointer: coarse) {
-  [data-mobile-nav="frame"] [data-rightbar-col] {
-    position: fixed !important; inset: 0 !important; width: 100vw !important;
-    height: 100% !important; z-index: 35; pointer-events: none;
-  }
-  [data-mobile-nav="frame"] [data-sidebar-right-panel] {
-    width: 100% !important; max-width: 100vw !important;
-    box-sizing: border-box; padding-top: 0px;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-  [data-sidebar-right-panel][data-sidebar-right-open] { pointer-events: auto; }
-  /* 标签关闭按钮由上游按 20px 居中定位，不能套用普通工具按钮的最小高度。 */
-  [data-sidebar-right-panel] button:not([data-dockkit-tab-close]) { min-height: 32px; }
-}`;
-
         document.head.appendChild(tag);
         // Keep this stylesheet last in <head> so its overrides win over the
         // host UI's own styles (some host rules also use !important).
@@ -5727,6 +8408,10 @@ function apply(ctx) {
             clear();
         };
     }, 'dsh-web-mobile: installed-list-inline-styles');
+    // Leaving a sidebar panel. The host's panels replace the main area and ship
+    // no way back, so every exit route (system back, re-tapping the selected
+    // panel row, the FAB) shares this one action.
+    const panelExit = (0, panel_exit_ts_1.createPanelExit)(ctx.layout);
     // Shared mobile infrastructure: frame marker ownership and the single
     // full-tree reconciler. Installed inside one effect so a plugin reload in
     // the same JS environment tears the whole reconciler down and rebuilds it.
@@ -5734,7 +8419,7 @@ function apply(ctx) {
         const stops = [
             (0, phone_chrome_ts_1.installFrameController)(),
             (0, phone_chrome_ts_1.installReconciler)(ctx),
-            (0, phone_chrome_ts_1.registerReconcileTasks)(ctx),
+            (0, phone_chrome_ts_1.registerReconcileTasks)(ctx, panelExit),
         ];
         return () => {
             for (const stop of stops)
@@ -5743,12 +8428,20 @@ function apply(ctx) {
     }, 'dsh-web-mobile: reconciler infrastructure');
     // Drawer close interactions: Escape and navigation taps inside the drawer.
     (0, phone_chrome_ts_1.installOverlayInteractions)(ctx);
+    // Sidebar panel exit: re-tapping the already-selected panel row returns to
+    // the conversation (the system-back route is a reconciler task; both call the
+    // same action).
+    (0, panel_exit_ts_1.installPanelRowExit)(ctx, panelExit.exit);
     // Session deletion, injected into each session row's ⋯ menu (beside
     // rename / fork / archive) with a confirm dialog. Mobile-only.
     (0, session_menu_ts_1.installSessionMenuDelete)(ctx);
     // Sidebar swipe gestures: edge swipe-in opens the drawer, content swipe-out
-    // closes it (release-classified, zero inline transforms — A 档).
-    (0, sidebar_swipe_ts_1.installSidebarSwipe)(ctx);
+    // closes it (release-classified, zero inline transforms — A 档). Since
+    // 2026-09-13 the layer also owns the right-edge files gesture (leftward
+    // opens the files panel via openFilesPanel, rightward closes whatever is
+    // on top — the panel or the drawer); a leftward stroke never collapses
+    // anything.
+    (0, sidebar_swipe_ts_1.installSidebarSwipe)(ctx, open_files_panel_ts_1.openFilesPanel);
     // Lineage-count chip: reliable open/close on touch pointers (upstream is
     // hover-timer driven and has no onClick on the count variant).
     (0, subagent_chip_touch_ts_1.installSubagentChipTouch)(ctx);
@@ -5757,63 +8450,6 @@ function apply(ctx) {
     (0, composer_keyboard_guard_ts_1.installComposerKeyboardGuard)(ctx);
     (0, phone_chrome_ts_1.installPhoneChrome)(ctx);
     (0, aionui_compat_ts_1.installAionuiCompat)(ctx);
-    try {
-        if (typeof window !== "undefined" && typeof document !== "undefined") {
-            let activePollTimer = null;
-            let lastPollTime = 0;
-            const checkAndDismissApproval = async () => {
-                const panel = document.querySelector("[data-approval-key]");
-                if (!panel) {
-                    if (activePollTimer) {
-                        clearInterval(activePollTimer);
-                        activePollTimer = null;
-                    }
-                    return;
-                }
-                const now = Date.now();
-                if (now - lastPollTime < 150) return;
-                lastPollTime = now;
-                try {
-                    const resp = await fetch("/api/dsha-approval-status", { cache: "no-store" });
-                    if (resp.ok) {
-                        const data = await resp.json();
-                        if (data && data.active === false && data.decision) {
-                            const btns = panel.querySelectorAll("button");
-                            if (btns.length >= 2) {
-                                const isAllow = data.decision !== "rejected";
-                                btns[isAllow ? 1 : 0].click();
-                                if (activePollTimer) {
-                                    clearInterval(activePollTimer);
-                                    activePollTimer = null;
-                                }
-                            }
-                        }
-                    }
-                } catch (_) {}
-            };
-
-            const observer = new MutationObserver(() => {
-                const panel = document.querySelector("[data-approval-key]");
-                if (panel) {
-                    if (!activePollTimer) {
-                        checkAndDismissApproval();
-                        activePollTimer = setInterval(checkAndDismissApproval, 200);
-                    }
-                } else if (activePollTimer) {
-                    clearInterval(activePollTimer);
-                    activePollTimer = null;
-                }
-            });
-
-            if (document.body) {
-                observer.observe(document.body, { childList: true, subtree: true });
-            } else {
-                document.addEventListener("DOMContentLoaded", () => {
-                    observer.observe(document.body, { childList: true, subtree: true });
-                }, { once: true });
-            }
-        }
-    } catch (_) {}
     // Debug badge (?mobile-nav-debug=1): live state overlay for phone-side
     // repros. No-op without the query param (docs: README, AGENTS.md).
     (0, debug_ts_1.installDebugBadge)(ctx);
@@ -5824,20 +8460,19 @@ function apply(ctx) {
         locale: locales_ts_1.NS,
         inject: () => ({
             toggleSidebar: () => ctx.layout.toggleSidebar(),
-            openFiles: () => ctx.sidebarRight.openTab('files'),
         }),
     }, MobileNavToggle_tsx_1.MobileNavToggle));
     // Session log download, relocated from the session header to the drawer
-    // footer on mobile (the header capsule is hidden by CSS); the drawer
-    // footer also hosts the Files action that opens the dsh-web-ui explorer
-    // sheet.
+    // footer on mobile (the header capsule is hidden by CSS). The footer's
+    // Files action was removed on 2026-09-17 — see
+    // docs/specs/2026-09-17-sidebar-files-coexistence-design.md.
     //
     // Footer stacking relies on the list-slot sort by (priority, order):
     // dsh-remote-web-ui leaves it unset (default 0, its two icon buttons stay
-    // on top) and dsh-usage-stats uses 10. Order 5 keeps the Files + Session
-    // log pills directly under the icon row with the usage/balance badge
-    // below them — instead of a tie at 10 where registration order could
-    // wedge the badge between the icons and the pills.
+    // on top) and dsh-usage-stats uses 10. Order 5 keeps the session-log pill
+    // directly under the icon row with the usage/balance badge below it —
+    // instead of a tie at 10 where registration order could wedge the badge
+    // between the icons and the pill.
     ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
         name: 'sidebar.footer.action',
         id: 'mobile-nav-session-log',
@@ -5848,10 +8483,22 @@ function apply(ctx) {
             // the host-generation brand boundary lives here and only here, hence
             // the double assertion (string and Branded<'SessionId'> do not overlap).
             downloadSessionLog: (sessionId) => ctx.sessionLogDownload.download(sessionId),
-            toggleSidebar: () => ctx.layout.toggleSidebar(),
-            openFiles: () => ctx.sidebarRight.openTab('files'),
         }),
     }, MobileDrawerFooter_tsx_1.MobileDrawerFooter));
+    // Composer file entry (0.1.6 host): the host deleted the paperclip attach
+    // button, leaving the 「文件」row inside the "+" listbox as the only file
+    // entry. Re-add a permanent one in the host's own conversation.input.left
+    // seat (inside the tools lane, beside the plus button). It triggers the
+    // host's hidden input[type=file] — the same fileInputRef.current.click()
+    // the host's own command runs — so intake validation, upload and the
+    // availability policy stay host-owned.
+    ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+        name: 'conversation.input.left',
+        id: 'mobile-nav-file-upload',
+        order: 10,
+        locale: locales_ts_1.NS,
+        inject: () => ({}),
+    }, ComposerFileButton_tsx_1.ComposerFileButton));
 }
 };
 var __cache = {};
