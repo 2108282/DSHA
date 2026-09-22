@@ -36,20 +36,20 @@ if [ "$MODE" = "--lite" ] || [ "$MODE" = "lite" ]; then
     mkdir -p "$STAGE_LITE/scripts"
     cp -rf "$MODULE_DIR/scripts/"* "$STAGE_LITE/scripts/"
 
-    # 打包 patches/ 下的现场增量补丁脚本 (若存在，专供老用户增量热修)
-    if [ -d "$MODULE_DIR/patches" ] && [ -n "$(ls -A "$MODULE_DIR/patches" 2>/dev/null)" ]; then
+    # 打包 patches/ 下的现场增量补丁脚本 (若存在且含有真实补丁，专供老用户增量热修)
+    if [ -d "$MODULE_DIR/patches" ] && [ -n "$(find "$MODULE_DIR/patches" -maxdepth 1 -name "*.sh" 2>/dev/null)" ]; then
         mkdir -p "$STAGE_LITE/patches"
-        cp -rf "$MODULE_DIR/patches/"* "$STAGE_LITE/patches/"
+        cp -rf "$MODULE_DIR/patches/"*.sh "$STAGE_LITE/patches/"
         echo "  -> 已打包 patches 现场增量补丁至 Lite 模块"
-    elif [ -d "$ROOT_DIR/patches" ] && [ -n "$(ls -A "$ROOT_DIR/patches" 2>/dev/null)" ]; then
+    elif [ -d "$ROOT_DIR/patches" ] && [ -n "$(find "$ROOT_DIR/patches" -maxdepth 1 -name "*.sh" 2>/dev/null)" ]; then
         mkdir -p "$STAGE_LITE/patches"
-        cp -rf "$ROOT_DIR/patches/"* "$STAGE_LITE/patches/"
+        cp -rf "$ROOT_DIR/patches/"*.sh "$STAGE_LITE/patches/"
         echo "  -> 已打包 patches 现场增量补丁至 Lite 模块"
     fi
 
     # 通用增量层叠：若存在 rootfs-overlay 增量资产，整体打包至 Lite 模块
     # 零硬编码：任何放入 rootfs-overlay 的增量文件均自动纳入 Lite 热更新包
-    if [ -d "$ROOT_DIR/rootfs-overlay" ] && [ -n "$(ls -A "$ROOT_DIR/rootfs-overlay" 2>/dev/null)" ]; then
+    if [ -d "$ROOT_DIR/rootfs-overlay" ] && [ -n "$(find "$ROOT_DIR/rootfs-overlay" -mindepth 1 ! -name ".gitkeep" 2>/dev/null)" ]; then
         mkdir -p "$STAGE_LITE/rootfs-overlay"
         cp -af "$ROOT_DIR/rootfs-overlay/." "$STAGE_LITE/rootfs-overlay/"
         echo "  -> 已打包通用 rootfs-overlay 增量层叠资产至 Lite 模块"
