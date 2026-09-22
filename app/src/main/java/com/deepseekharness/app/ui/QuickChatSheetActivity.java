@@ -1518,7 +1518,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             QuickChatSheetActivity currentAct = sCurrentInstance;
             if (currentAct == null || currentAct.isFinishing() || currentAct.isDestroyed()) return;
             File f = new File(finalPath);
-            if (action == 2) {
+            if (action == 3) {
+                currentAct.handleLocateOrOpenExternal(finalPath);
+            } else if (action == 2) {
                 currentAct.showWorkspaceFileActionMenu(f, touchX, touchY);
             } else if (action == 1) {
                 com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(currentAct, f);
@@ -1547,6 +1549,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         @android.webkit.JavascriptInterface
         public void showFileActionMenuAt(String rawPath, float touchX, float touchY) {
             dispatchNativeBridgeFileAction(rawPath, 2, touchX, touchY);
+        }
+
+        @android.webkit.JavascriptInterface
+        public void locateOrOpenExternalFile(String rawPath) {
+            dispatchNativeBridgeFileAction(rawPath, 3, -1, -1);
         }
     }
 
@@ -1829,25 +1836,38 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                                 ? "    document.body.setAttribute('data-ds-dark-theme', '');\n"
                                 : "    document.body.removeAttribute('data-ds-dark-theme');\n")
                         + "  }\n"
-                        + "  /* 挂载原生工作区文件点击拦截与长按外部打开：短按原生抽屉预览，长按调用系统打开方式 */\n"
+                        + "  /* 挂载原生工作区文件点击拦截与长按外部打开：短按原生抽屉预览，长按/下拉分流 */\n"
                         + "  if (!window.__dsha_file_click_hooked) {\n"
                         + "    window.__dsha_file_click_hooked = true;\n"
                         + "    var longPressTimer = null;\n"
                         + "    var touchStartX = 0, touchStartY = 0;\n"
                         + "    var isLongPressTriggered = false;\n"
                         + "\n"
-                        + "    function findTargetFile(e, allowDirectory) {\n"
-                        + "      var el = e.target && e.target.closest ? e.target.closest('[data-files-entry], [data-files-path], [data-file-path], a[href*=\"/sdcard/Download/DSHA/工作区/\"], a[href*=\"dsh-resource://file\"]') : null;\n"
+                        + "    function findTargetFileElement(e, allowDirectory) {\n"
+                        + "      var el = e.target && e.target.closest ? e.target.closest('[data-files-entry], [data-files-path], [data-file-path], [data-presented-file], button[title*=\"/sdcard/\"], button[title*=\"dsh-resource:\"], a[href*=\"/sdcard/\"], a[href*=\"dsh-resource://file\"]') : null;\n"
                         + "      if (!el) return null;\n"
                         + "      var entryType = el.getAttribute('data-files-entry');\n"
-                        + "      if (!allowDirectory && entryType === 'directory') return null; /* 短按：文件夹绝对不拦截，放行让网页折叠与展开 */\n"
-                        + "      var p = el.getAttribute('data-files-path') || el.getAttribute('data-file-path') || el.getAttribute('href');\n"
-                        + "      return p;\n"
+                        + "      if (!allowDirectory && entryType === 'directory') return null;\n"
+                        + "      return el;\n"
+                        + "    }\n"
+                        + "\n"
+                        + "    function extractFilePath(el) {\n"
+                        + "      if (!el) return null;\n"
+                        + "      if (el.hasAttribute('data-presented-file')) {\n"
+                        + "        var preview = el.querySelector('button[title], [data-files-path], [data-file-path]');\n"
+                        + "        if (preview) return preview.getAttribute('title') || preview.getAttribute('data-files-path') || preview.getAttribute('data-file-path');\n"
+                        + "      }\n"
+                        + "      return el.getAttribute('data-files-path')\n"
+                        + "          || el.getAttribute('data-file-path')\n"
+                        + "          || el.getAttribute('href')\n"
+                        + "          || el.getAttribute('title');\n"
                         + "    }\n"
                         + "\n"
                         + "    document.addEventListener('touchstart', function(e) {\n"
                         + "      isLongPressTriggered = false;\n"
-                        + "      var p = findTargetFile(e, true); /* 长按：文件与文件夹均支持呼出操作菜单 */\n"
+                        + "      var targetEl = findTargetFileElement(e, true);\n"
+                        + "      if (!targetEl) return;\n"
+                        + "      var p = extractFilePath(targetEl);\n"
                         + "      if (!p) return;\n"
                         + "      try {\n"
                         + "        var sel = window.getSelection();\n"
@@ -1863,10 +1883,16 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "          if (sel) sel.removeAllRanges();\n"
                         + "        } catch(err) {}\n"
                         + "        if (window.DshaNativeBridge) {\n"
-                        + "          if (window.DshaNativeBridge.showFileActionMenuAt) {\n"
-                        + "            window.DshaNativeBridge.showFileActionMenuAt(p, touchStartX, touchStartY);\n"
-                        + "          } else if (window.DshaNativeBridge.showFileActionMenu) {\n"
-                        + "            window.DshaNativeBridge.showFileActionMenu(p);\n"
+                        + "          if (targetEl.closest('[data-files-entry]')) {\n"
+                        + "            if (window.DshaNativeBridge.showFileActionMenuAt) {\n"
+                        + "              window.DshaNativeBridge.showFileActionMenuAt(p, touchStartX, touchStartY);\n"
+                        + "            } else if (window.DshaNativeBridge.showFileActionMenu) {\n"
+                        + "              window.DshaNativeBridge.showFileActionMenu(p);\n"
+                        + "            }\n"
+                        + "          } else {\n"
+                        + "            if (window.DshaNativeBridge.locateOrOpenExternalFile) {\n"
+                        + "              window.DshaNativeBridge.locateOrOpenExternalFile(p);\n"
+                        + "            }\n"
                         + "          }\n"
                         + "        }\n"
                         + "      }, 450);\n"
@@ -1895,7 +1921,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "    }, true);\n"
                         + "\n"
                         + "    document.addEventListener('selectstart', function(e) {\n"
-                        + "      if (findTargetFile(e, true) || isLongPressTriggered) {\n"
+                        + "      if (findTargetFileElement(e, true) || isLongPressTriggered) {\n"
                         + "        e.preventDefault();\n"
                         + "        e.stopPropagation();\n"
                         + "        return false;\n"
@@ -1903,7 +1929,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "    }, true);\n"
                         + "\n"
                         + "    document.addEventListener('contextmenu', function(e) {\n"
-                        + "      if (findTargetFile(e, true) || isLongPressTriggered) {\n"
+                        + "      if (findTargetFileElement(e, true) || isLongPressTriggered) {\n"
                         + "        e.preventDefault();\n"
                         + "        e.stopPropagation();\n"
                         + "        return false;\n"
@@ -1917,7 +1943,23 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "        e.stopPropagation();\n"
                         + "        return;\n"
                         + "      }\n"
-                        + "      var p = findTargetFile(e, false);\n"
+                        + "      var chevronBtn = e.target && e.target.closest ? e.target.closest('[data-presented-file] button:last-child, [data-presented-file] [aria-haspopup=\"menu\"], [data-presented-file] [aria-label*=\"更多\"], [data-presented-file] [aria-label*=\"more\"]') : null;\n"
+                        + "      if (chevronBtn) {\n"
+                        + "        var card = chevronBtn.closest('[data-presented-file]');\n"
+                        + "        if (card) {\n"
+                        + "          e.preventDefault();\n"
+                        + "          e.stopPropagation();\n"
+                        + "          var cardPath = extractFilePath(card);\n"
+                        + "          if (cardPath && window.DshaNativeBridge && window.DshaNativeBridge.locateOrOpenExternalFile) {\n"
+                        + "            window.DshaNativeBridge.locateOrOpenExternalFile(cardPath);\n"
+                        + "          }\n"
+                        + "          return;\n"
+                        + "        }\n"
+                        + "      }\n"
+                        + "      var targetEl = findTargetFileElement(e, false);\n"
+                        + "      if (!targetEl) return;\n"
+                        + "      if (targetEl.hasAttribute('data-presented-file')) return;\n"
+                        + "      var p = extractFilePath(targetEl);\n"
                         + "      if (p && window.DshaNativeBridge && window.DshaNativeBridge.openWorkspaceFile) {\n"
                         + "        e.preventDefault();\n"
                         + "        e.stopPropagation();\n"
@@ -2323,6 +2365,123 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             if (!sWebLoaded || serviceRestarted || !isLocalDsh) {
                 reloadWithLatestToken();
             }
+        }
+    }
+
+    public void handleLocateOrOpenExternal(String path) {
+        if (path == null || path.isEmpty()) return;
+        boolean isInside = path.startsWith("/sdcard/Download/DSHA/工作区/");
+        if (!isInside) {
+            File f = new File(path);
+            if (f.exists()) {
+                Toast.makeText(this, "文件位于工作区外部，已调用外部应用打开", Toast.LENGTH_SHORT).show();
+                com.deepseekharness.app.viewer.FileOpenHelper.openWithSystem(this, f);
+            } else {
+                Toast.makeText(this, "文件不存在：" + f.getName(), Toast.LENGTH_SHORT).show();
+            }
+        } else {
+            String rel = path.substring("/sdcard/Download/DSHA/工作区/".length());
+            locateWorkspaceFile(rel);
+        }
+    }
+
+    public void locateWorkspaceFile(String relPath) {
+        if (relPath == null || relPath.isEmpty()) return;
+        if (fileViewerContainer != null && fileViewerContainer.getVisibility() == View.VISIBLE) {
+            closeFileViewer();
+        }
+        if (rootOverlay != null) {
+            rootOverlay.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        }
+        Toast.makeText(this, "正在文件树中定位…", Toast.LENGTH_SHORT).show();
+
+        String escaped = relPath.replace("\\", "\\\\").replace("'", "\\'");
+        String js = "(function() {\n" +
+                "  var targetRelPath = '" + escaped + "'.replace(/^\\/+/, '');\n" +
+                "  if (!targetRelPath) return;\n" +
+                "  function fireClick(el) {\n" +
+                "    if (!el) return false;\n" +
+                "    try {\n" +
+                "      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n" +
+                "      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));\n" +
+                "      el.click();\n" +
+                "    } catch(err) { if (el.click) el.click(); }\n" +
+                "    return true;\n" +
+                "  }\n" +
+                "  var panel = document.querySelector('[data-sidebar-right-open]');\n" +
+                "  if (!panel) {\n" +
+                "    var toggleBtn = document.querySelector('[data-sidebar-right-expand]') || document.querySelector('[data-sidebar-right-toggle]');\n" +
+                "    if (toggleBtn) fireClick(toggleBtn);\n" +
+                "  }\n" +
+                "  var filesTab = document.querySelector('[data-tab=\"files\"], [data-sidebar-tab=\"files\"]');\n" +
+                "  if (filesTab) fireClick(filesTab);\n" +
+                "  var parts = targetRelPath.split('/');\n" +
+                "  var currentDirPath = '';\n" +
+                "  var dirSteps = [];\n" +
+                "  for (var i = 0; i < parts.length - 1; i++) {\n" +
+                "    currentDirPath = currentDirPath ? (currentDirPath + '/' + parts[i]) : parts[i];\n" +
+                "    dirSteps.push(currentDirPath);\n" +
+                "  }\n" +
+                "  function expandNextDir(stepIndex) {\n" +
+                "    if (stepIndex >= dirSteps.length) {\n" +
+                "      highlightTargetFile();\n" +
+                "      return;\n" +
+                "    }\n" +
+                "    var dirPath = dirSteps[stepIndex];\n" +
+                "    var dirItem = document.querySelector('li[data-files-entry=\"directory\"][data-files-path=\"' + CSS.escape(dirPath) + '\"]');\n" +
+                "    if (!dirItem) {\n" +
+                "      setTimeout(function() {\n" +
+                "        dirItem = document.querySelector('li[data-files-entry=\"directory\"][data-files-path=\"' + CSS.escape(dirPath) + '\"]');\n" +
+                "        if (dirItem) doExpand(dirItem, stepIndex);\n" +
+                "        else highlightTargetFile();\n" +
+                "      }, 100);\n" +
+                "      return;\n" +
+                "    }\n" +
+                "    doExpand(dirItem, stepIndex);\n" +
+                "  }\n" +
+                "  function doExpand(dirItem, stepIndex) {\n" +
+                "    var btn = dirItem.querySelector('button[aria-expanded]');\n" +
+                "    if (btn && btn.getAttribute('aria-expanded') !== 'true') {\n" +
+                "      fireClick(btn);\n" +
+                "    }\n" +
+                "    setTimeout(function() {\n" +
+                "      expandNextDir(stepIndex + 1);\n" +
+                "    }, 100);\n" +
+                "  }\n" +
+                "  function highlightTargetFile() {\n" +
+                "    var fileItem = document.querySelector('li[data-files-entry=\"file\"][data-files-path=\"' + CSS.escape(targetRelPath) + '\"]');\n" +
+                "    if (!fileItem) {\n" +
+                "      var fileName = parts[parts.length - 1];\n" +
+                "      var allFiles = document.querySelectorAll('li[data-files-entry=\"file\"]');\n" +
+                "      for (var j = 0; j < allFiles.length; j++) {\n" +
+                "        var p = allFiles[j].getAttribute('data-files-path') || '';\n" +
+                "        if (p === targetRelPath || p.endsWith('/' + fileName) || p === fileName) {\n" +
+                "          fileItem = allFiles[j];\n" +
+                "          break;\n" +
+                "        }\n" +
+                "      }\n" +
+                "    }\n" +
+                "    if (fileItem) {\n" +
+                "      fileItem.scrollIntoView({ behavior: 'smooth', block: 'center' });\n" +
+                "      fileItem.style.transition = 'all 0.3s ease';\n" +
+                "      fileItem.style.outline = '2px solid #3b82f6';\n" +
+                "      fileItem.style.outlineOffset = '2px';\n" +
+                "      fileItem.style.backgroundColor = 'rgba(59, 130, 246, 0.3)';\n" +
+                "      fileItem.style.borderRadius = '8px';\n" +
+                "      setTimeout(function() { fileItem.style.backgroundColor = 'rgba(59, 130, 246, 0.5)'; }, 300);\n" +
+                "      setTimeout(function() { fileItem.style.backgroundColor = 'rgba(59, 130, 246, 0.15)'; }, 900);\n" +
+                "      setTimeout(function() {\n" +
+                "        fileItem.style.outline = 'none';\n" +
+                "        fileItem.style.backgroundColor = '';\n" +
+                "        fileItem.style.borderRadius = '';\n" +
+                "      }, 2500);\n" +
+                "    }\n" +
+                "  }\n" +
+                "  setTimeout(function() { expandNextDir(0); }, 150);\n" +
+                "})();";
+
+        if (sCachedWebView != null) {
+            sCachedWebView.evaluateJavascript(js, null);
         }
     }
 
