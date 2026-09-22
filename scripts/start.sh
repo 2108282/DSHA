@@ -329,11 +329,7 @@ if [ -z "$TASKSET_CPUS" ]; then
     fi
 fi
 if [ -n "$TASKSET_CPUS" ]; then
-    if [ -x /system/bin/taskset ]; then
-        /system/bin/taskset -a -p -c "$TASKSET_CPUS" "$NEW_PID" >/dev/null 2>&1 || true
-    else
-        chroot "$ROOTFS" /usr/bin/taskset -a -p -c "$TASKSET_CPUS" "$NEW_PID" >/dev/null 2>&1 || true
-    fi
+    chroot "$ROOTFS" /usr/bin/taskset -a -p -c "$TASKSET_CPUS" "$NEW_PID" >/dev/null 2>&1 || true
 fi
 
 # 7. 等待服务启动并提取鉴权 Token 链接（150ms 浮点微步轮询，就绪即刻返回）

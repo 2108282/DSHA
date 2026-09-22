@@ -465,11 +465,7 @@ public class ConfigFragment extends Fragment {
                         + "  if [ -f /dev/cpuset/cgroup.procs ]; then echo \"$PID\" > /dev/cpuset/cgroup.procs 2>/dev/null || true; fi; "
                         + "  TOTAL_CPUS=$(cat /sys/devices/system/cpu/online 2>/dev/null || echo '0-7'); "
                         + "  TARGET_CPUS=\"" + (cleanCpus.isEmpty() ? "$TOTAL_CPUS" : cleanCpus) + "\"; "
-                        + "  if [ -x /system/bin/taskset ]; then "
-                        + "    /system/bin/taskset -a -p -c \"$TARGET_CPUS\" \"$PID\" >/dev/null 2>&1 || true; "
-                        + "  else "
-                        + "    chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p -c \"$TARGET_CPUS\" \"$PID\" >/dev/null 2>&1 || true; "
-                        + "  fi; "
+                        + "  chroot /data/adb/dsha/rootfs /usr/bin/taskset -a -p -c \"$TARGET_CPUS\" \"$PID\" >/dev/null 2>&1 || true; "
                         + "fi";
                 Runtime.getRuntime().exec(new String[]{"su", "-mm", "-c", writeCmd + applyCmd}).waitFor();
             } catch (Throwable e) {
