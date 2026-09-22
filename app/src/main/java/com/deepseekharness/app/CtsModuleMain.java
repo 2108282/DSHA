@@ -212,13 +212,12 @@ public class CtsModuleMain extends XposedModule {
                     act = intent.getAction();
 
                     boolean isGooglePkg = "com.google.android.googlequicksearchbox".equals(pkg);
-                    boolean isGoogleAssistCls = isGooglePkg && (
+                    boolean isGoogleAssistCls = isGooglePkg && !cls.isEmpty() && (
                             cls.contains("FloatyActivity")
                                     || cls.contains("VoiceSearchActivity")
                                     || cls.contains("OpaSearchActivity")
                                     || cls.contains("Assist")
-                                    || cls.contains("Opa")
-                                    || cls.isEmpty());
+                                    || cls.contains("Opa"));
 
                     boolean isAssistAction = Intent.ACTION_ASSIST.equals(act)
                             || Intent.ACTION_VOICE_COMMAND.equals(act)
