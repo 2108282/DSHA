@@ -934,8 +934,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 titleBox.setLayoutParams(lp);
             }
         };
-        leftGroup.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateTitleMargin.run());
-        rightGroup.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateTitleMargin.run());
+        leftGroup.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> updateTitleMargin.run());
+        rightGroup.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> updateTitleMargin.run());
 
         headerTitle = new TextView(this);
         headerTitle.setText("DSHA 对话");
