@@ -127,18 +127,18 @@ jobs:
             echo "未检测到 DSHA_KEYSTORE_B64，将严格按原分支使用 Gradle 默认 debug 签名"
           fi
 
-      - name: 执行 APK 编译打包 (:app:assembleStandardDebug)
+      - name: 执行 APK 编译打包 (:app:assembleStandardRelease)
         run: |
           set -euo pipefail
           cd apk_source
           chmod +x gradlew
-          ./gradlew :app:assembleStandardDebug --stacktrace
+          ./gradlew :app:assembleStandardRelease --stacktrace
           cd "$GITHUB_WORKSPACE"
 
       - name: 收集产物 1：前端 APK
         run: |
           set -euo pipefail
-          APK_SRC=$(ls apk_source/app/build/outputs/apk/standard/debug/*.apk | head -1)
+          APK_SRC=$(ls apk_source/app/build/outputs/apk/standard/release/*.apk | head -1)
           cp -f "$APK_SRC" "dist/DSHA-FR ${VERSION}.apk"
           echo "✓ 产物 1 已就绪 (前端 APK): dist/DSHA-FR ${VERSION}.apk ($(ls -lh "dist/DSHA-FR ${VERSION}.apk" | awk '{print $5}'))"
 

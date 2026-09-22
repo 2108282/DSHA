@@ -30,8 +30,8 @@ echo "==> [1/3] 获取并构建前端 APK (源自 magisk-apk 分支)..."
 git clone --depth=1 -b magisk-apk "$REPO_URL" "$STAGE_DIR/apk_src"
 cd "$STAGE_DIR/apk_src"
 chmod +x gradlew
-./gradlew :app:assembleStandardDebug --stacktrace
-ORIG_APK=$(ls app/build/outputs/apk/standard/debug/*.apk | head -1)
+./gradlew :app:assembleStandardRelease --stacktrace
+ORIG_APK=$(ls app/build/outputs/apk/standard/release/*.apk | head -1)
 cp -f "$ORIG_APK" "$DIST_DIR/DSHA-FR 0.1.5rc.2-u2.apk"
 echo "✓ 产物 1 完成: $DIST_DIR/DSHA-FR 0.1.5rc.2-u2.apk"
 cd "$ROOT_DIR"
