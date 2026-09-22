@@ -210,14 +210,27 @@ public class CtsModuleMain extends XposedModule {
                     String pkg = comp != null ? comp.getPackageName() : intent.getPackage();
                     String cls = comp != null ? comp.getClassName() : "";
                     act = intent.getAction();
+                    android.net.Uri data = intent.getData();
+
+                    // 1. 绝对放行白名单：任何包含 Bard/Gemini 独立应用或其 DeepLink 的启动坚决不拦截
+                    if ("com.google.android.apps.bard".equals(pkg) || cls.contains("com.google.android.apps.bard")) {
+                        continue;
+                    }
+                    if (data != null && data.getHost() != null &&
+                            (data.getHost().contains("bard.google.com") || data.getHost().contains("gemini.google.com"))) {
+                        continue;
+                    }
+                    // 2. 普通网页浏览与深层链接 (ACTION_VIEW) 绝对放行，绝非语音手势
+                    if (Intent.ACTION_VIEW.equals(act)) {
+                        continue;
+                    }
 
                     boolean isGooglePkg = "com.google.android.googlequicksearchbox".equals(pkg);
+                    // 精准限定语音助手专属悬浮窗类，杜绝模糊子串 "Assist" 误伤 MainAssistantDeeplinkAnimated 等正常页面
                     boolean isGoogleAssistCls = isGooglePkg && !cls.isEmpty() && (
                             cls.contains("FloatyActivity")
-                                    || cls.contains("VoiceSearchActivity")
-                                    || cls.contains("OpaSearchActivity")
-                                    || cls.contains("Assist")
-                                    || cls.contains("Opa"));
+                                    || cls.endsWith("VoiceSearchActivity")
+                                    || cls.endsWith("OpaSearchActivity"));
 
                     boolean isAssistAction = Intent.ACTION_ASSIST.equals(act)
                             || Intent.ACTION_VOICE_COMMAND.equals(act)
