@@ -423,13 +423,25 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             "            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));\n" +
             "            return true;\n" +
             "        }\n" +
-            "        // 2. 优先消费：右侧文件树 / 面板\n" +
-            "        var rightOpen = document.querySelector('[data-sidebar-right-open=\"true\"], [data-sidebar-right-open]');\n" +
-            "        if (rightOpen && (rightOpen.offsetWidth > 0 || rightOpen.getAttribute('aria-hidden') !== 'true')) {\n" +
-            "            var toggleBtn = document.querySelector('[data-sidebar-right-toggle], button[aria-label*=\"收起\" i], button[aria-label*=\"折叠\" i], button[aria-label*=\"Collapse\" i]');\n" +
-            "            if (toggleBtn) { toggleBtn.click(); return true; }\n" +
-            "            var tabClose = rightOpen.querySelector('button[aria-label*=\"关闭\" i], button[aria-label*=\"Close\" i], [class*=\"_tabClose\"], [class*=\"_closeBtn\"]');\n" +
-            "            if (tabClose) { tabClose.click(); return true; }\n" +
+            "        // 2. 优先消费：右侧文件树 / 面板（严格判定仅在真实展开可见时才执行收起，严禁在收起状态误触 toggle）\n" +
+            "        var rightPane = document.querySelector('[data-sidebar-right-panel]');\n" +
+            "        var expandBtn = document.querySelector('[data-sidebar-right-expand]');\n" +
+            "        var isRightOpen = false;\n" +
+            "        if (rightPane && !expandBtn) {\n" +
+            "            if (document.querySelector('[data-sidebar-right-open]') !== null) {\n" +
+            "                isRightOpen = true;\n" +
+            "            } else {\n" +
+            "                var cs = window.getComputedStyle(rightPane);\n" +
+            "                if (cs.visibility !== 'hidden' && cs.display !== 'none' && rightPane.getBoundingClientRect().left < window.innerWidth) {\n" +
+            "                    isRightOpen = true;\n" +
+            "                }\n" +
+            "            }\n" +
+            "        }\n" +
+            "        if (isRightOpen) {\n" +
+            "            var toggleBtn = document.querySelector('[data-sidebar-right-toggle], [data-sidebar-right-panel] button[aria-label*=\"收起\" i], [data-sidebar-right-panel] button[aria-label*=\"折叠\" i], [data-sidebar-right-panel] button[aria-label*=\"Collapse\" i]');\n" +
+            "            if (toggleBtn && typeof toggleBtn.click === 'function') { toggleBtn.click(); return true; }\n" +
+            "            var tabClose = rightPane.querySelector('button[aria-label*=\"关闭\" i], button[aria-label*=\"Close\" i], [class*=\"_tabClose\"], [class*=\"_closeBtn\"]');\n" +
+            "            if (tabClose && typeof tabClose.click === 'function') { tabClose.click(); return true; }\n" +
             "        }\n" +
             "        var frame = document.querySelector('[data-mobile-nav=\"frame\"]');\n" +
             "        if (frame && frame.hasAttribute('data-aionui-explorer-open')) {\n" +
@@ -441,7 +453,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             "            frame.removeAttribute('data-mobile-preview-full');\n" +
             "            return true;\n" +
             "        }\n" +
-            "        // 3. 优先消费：左侧抽屉 / 侧边栏\n" +
+            "        // 3. 优先消费：左侧抽屉 / 侧边栏（仅在侧边栏真实展开时收起）\n" +
             "        if (frame && !frame.hasAttribute('data-sidebar-collapsed')) {\n" +
             "            var backdrop = document.querySelector('[data-mobile-nav=\"backdrop\"]');\n" +
             "            if (backdrop) { backdrop.click(); return true; }\n" +
@@ -454,19 +466,13 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             "        // 4. 优先消费：删除确认卡片等浮层\n" +
             "        var deleteBackdrop = document.querySelector('[data-mobile-nav=\"delete-dialog-backdrop\"]');\n" +
             "        if (deleteBackdrop) { deleteBackdrop.click(); return true; }\n" +
-            "        // 5. 兜底右侧面板展开状态\n" +
-            "        var rightPane = document.querySelector('[data-sidebar-right-panel]');\n" +
-            "        if (rightPane && rightPane.getAttribute('aria-hidden') !== 'true') {\n" +
-            "            var toggleBtn2 = document.querySelector('[data-sidebar-right-toggle]');\n" +
-            "            if (toggleBtn2) { toggleBtn2.click(); return true; }\n" +
-            "        }\n" +
-            "        // 6. 优先消费：插件二级/三级配置详情页的面包屑导航返回\n" +
+            "        // 5. 优先消费：插件二级/三级配置详情页的面包屑导航返回\n" +
             "        var pluginCrumb = document.querySelector('[data-plugin-panel] button[class*=\"crumb\"], [data-plugin-panel] button[aria-label*=\"返回\" i], [data-plugin-panel] button[aria-label*=\"Back to\" i]');\n" +
             "        if (pluginCrumb) {\n" +
             "            pluginCrumb.click();\n" +
             "            return true;\n" +
             "        }\n" +
-            "        // 7. 优先消费：插件管理主页面（或其它非会话全局面板），平滑返回上层会话界面\n" +
+            "        // 6. 优先消费：插件管理主页面（或其它非会话全局面板），平滑返回上层会话界面\n" +
             "        var pluginPanel = document.querySelector('[data-plugin-panel]');\n" +
             "        var activePanel = document.querySelector('[class*=\"panelRow\"][class*=\"panelActive\"], [class*=\"panelRow\"][aria-current=\"page\"]');\n" +
             "        if (pluginPanel || activePanel) {\n" +
