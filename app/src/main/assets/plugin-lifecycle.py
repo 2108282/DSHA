@@ -416,7 +416,7 @@ class Lifecycle:
         states = self.read(self.path('plugin-updates.json'), {})
         checked = []
         for item in candidates:
-            if item in self.builtin.OFFICIAL_BUNDLES:
+            if self.builtin.is_official_bundle(item):
                 continue
             if not self.builtin.valid_name(item):
                 continue
@@ -446,7 +446,7 @@ class Lifecycle:
         return 0
 
     def rollback(self, name, expected=''):
-        if name in self.builtin.OFFICIAL_BUNDLES:
+        if self.builtin.is_official_bundle(name):
             raise ValueError('官方核心插件请通过应用更新维护')
         previous = self.history_info(name)
         if not previous:
@@ -471,7 +471,7 @@ class Lifecycle:
             doc = self.builtin.read_manifest() or {}
             if action == 'on':
                 names = [n for n in doc.get('dsh', {}).get('profile', {}).get('bundles', [])
-                         if self.builtin.valid_name(n) and n not in self.builtin.OFFICIAL_BUNDLES and n not in self.builtin.builtin_names()]
+                         if self.builtin.valid_name(n) and not self.builtin.is_official_bundle(n) and n not in self.builtin.builtin_names()]
                 remembered = list(dict.fromkeys(state.get('names', []) + names))
                 self.write(path, {'active': True, 'names': remembered})
                 for name in names:

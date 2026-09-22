@@ -63,6 +63,55 @@ DEFAULT_BUILTINS = (
 # web profile 的官方核心（dsh 的 PROFILE_TEMPLATES.web），新建 profile 时打底
 OFFICIAL_BUNDLES = ("@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app")
 
+GLOBAL_NODE_MODULES = (
+    "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules",
+    "/usr/local/lib/node_modules",
+)
+
+
+def find_official_pkg_dir(name):
+    """动态查找官方随附插件实体目录（零硬编码，自适应宿主环境）。"""
+    if not valid_name(name):
+        return None
+    for base in GLOBAL_NODE_MODULES:
+        cand = local(os.path.join(base, name))
+        if os.path.isfile(os.path.join(cand, "package.json")):
+            return os.path.realpath(cand)
+    return None
+
+
+def is_official_bundle(name):
+    """动态判定是否为官方核心或官方随附插件（动态放行所有 @deepseek-ai/* 命名空间与官方核心包）。"""
+    if not valid_name(name):
+        return False
+    return name in OFFICIAL_BUNDLES or name.startswith("@deepseek-ai/")
+
+
+def get_official_bundles():
+    """动态扫描官方随附的所有可选 Bundle，即使官方后续新增也能自动发现与放行。"""
+    found = list(OFFICIAL_BUNDLES)
+    for base in GLOBAL_NODE_MODULES:
+        ds_dir = local(os.path.join(base, "@deepseek-ai"))
+        if not os.path.isdir(ds_dir):
+            continue
+        try:
+            for item in sorted(os.listdir(ds_dir)):
+                pkg_name = "@deepseek-ai/" + item
+                if pkg_name in found:
+                    continue
+                pkg_json = os.path.join(ds_dir, item, "package.json")
+                if os.path.isfile(pkg_json):
+                    try:
+                        with open(pkg_json, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            if (data.get("dsh") or {}).get("bundle") or "profile" in item:
+                                found.append(pkg_name)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    return tuple(found)
+
 PROFILE_PATCH_TEMPLATE = (
     "# Your patch layer for this dsh profile, applied after every bundle layer:\n"
     "# a top-level YAML array of loader patch entries (id-targeted config\n"
@@ -211,21 +260,21 @@ def operation_lock():
 
 
 def entity_dir(name):
-    """内置插件名 → 其实体目录（/root/dsha-*），找不到（官方核心/第三方）返回 None。"""
+    """内置插件名 → 其实体目录（/root/dsha-*），官方包回退到全局安装树，找不到返回 None。"""
     if not valid_name(name):
         return None
     imported = os.path.join(DSH_HOME, "plugin-src", name)
     if os.path.isfile(local(os.path.join(imported, "package.json"))):
         return imported
-    if name.startswith("@"):
-        return None  # 官方核心从 dsh 安装树解析，不在 /root/dsha-*
+    if is_official_bundle(name):
+        return find_official_pkg_dir(name)
     cands = ["/root/" + name, "/root/dsha-" + name]
     if name.startswith("dsh-"):
         cands.insert(0, "/root/dsha-" + name[4:])
     for c in cands:
         if os.path.isfile(local(os.path.join(c, "package.json"))):
             return c
-    return None
+    return find_official_pkg_dir(name)
 
 
 def marker_path(name):
@@ -390,7 +439,8 @@ def enable_plugin(name):
     lines = ["== " + time.strftime("%Y-%m-%d %H:%M:%S") + " 启用 " + name]
     try:
         d = entity_dir(name)
-        if d is None and name not in OFFICIAL_BUNDLES:
+        official = is_official_bundle(name)
+        if d is None and not official:
             link = os.path.join(local(NODE_MODULES), name, "package.json")
             if not os.path.isfile(link):
                 raise RuntimeError("找不到插件实体，请重新导入：" + name)
@@ -405,9 +455,9 @@ def enable_plugin(name):
         if name not in bundles:
             doc.setdefault("dsh", {}).setdefault("profile", {})["bundles"] = bundles + [name]
             changed = True
-        if d is not None and ensure_symlink(name, d):
+        if d is not None and not official and ensure_symlink(name, d):
             changed = True
-        if d is not None:
+        if d is not None and not official:
             if not os.path.isfile(os.path.join(local(NODE_MODULES), name, "package.json")):
                 raise RuntimeError("无法建立插件链接：" + name)
             doc.setdefault("dependencies", {})[name] = "link:" + d
@@ -417,7 +467,7 @@ def enable_plugin(name):
             lines.append("已加回 bundles：%s" % name)
         else:
             lines.append("本就启用：%s" % name)
-        if d is not None and os.path.isfile(marker_path(name)):
+        if d is not None and not official and os.path.isfile(marker_path(name)):
             os.remove(marker_path(name))
             lines.append("已清除禁用标记")
     except RuntimeError as e:
@@ -436,7 +486,8 @@ def disable_plugin(name):
     lines = ["== " + time.strftime("%Y-%m-%d %H:%M:%S") + " 禁用 " + name]
     try:
         d = entity_dir(name)
-        if d is not None:
+        official = is_official_bundle(name)
+        if d is not None and not official:
             os.makedirs(os.path.dirname(marker_path(name)), exist_ok=True)
             # 显式禁用覆盖安全模式的临时标记，批量恢复时保留用户的新选择。
             with open(marker_path(name), "w", encoding="utf-8") as f:
@@ -454,7 +505,7 @@ def disable_plugin(name):
                 lines.append("已移出 bundles：%s" % name)
             else:
                 lines.append("本就不在 bundles：%s" % name)
-        if d is not None and remove_link(name):
+        if d is not None and not official and remove_link(name):
             changed = True
             lines.append("已摘 node_modules 链接")
         if not changed:

@@ -174,7 +174,7 @@ def plugin_package(root):
     entry = (pkg.get("cordis") or {}).get("entry")
     if isinstance(entry, str) and not os.path.isfile(safe_target(root, entry)):
         raise ValueError(pkg["name"] + " 缺少 Cordis 入口，请下载构建后的发布包")
-    if pkg["name"] in builtin.OFFICIAL_BUNDLES:
+    if builtin.is_official_bundle(pkg["name"]):
         raise ValueError("官方核心请通过 dsh 环境更新，不支持用第三方归档覆盖")
     return pkg
 
@@ -379,7 +379,7 @@ def resolve_plugin_dir(name):
     path = os.path.join(local(builtin.NODE_MODULES), name)
     if os.path.isfile(os.path.join(path, "package.json")):
         return os.path.realpath(path)
-    return None
+    return builtin.find_official_pkg_dir(name)
 
 
 def cmd_export(names, out):
@@ -416,7 +416,7 @@ def cmd_export(names, out):
     try:
         with tarfile.open(out, "w:gz", dereference=True) as archive:
             for name in dict.fromkeys(names):
-                if name in builtin.OFFICIAL_BUNDLES:
+                if builtin.is_official_bundle(name):
                     raise ValueError("官方核心不提供独立导出")
                 directory = resolve_plugin_dir(name)
                 if not directory:
@@ -436,7 +436,7 @@ def cmd_delete(name):
     """移除指定第三方插件：调用官方包管理器卸载依赖并清理本地源码，保持完全干净。"""
     if not builtin.valid_name(name):
         raise ValueError("无效的插件名称")
-    if name in builtin.OFFICIAL_BUNDLES or name in builtin.builtin_names():
+    if builtin.is_official_bundle(name) or name in builtin.builtin_names():
         raise ValueError("官方核心和内置插件请使用禁用开关，不能删除")
     with builtin.operation_lock():
         doc = builtin.read_manifest()
@@ -607,22 +607,34 @@ def cmd_list():
     sources = read_json(local(SOURCES), {})
     if not isinstance(sources, dict):
         sources = {}
-    names = list(dict.fromkeys(list(builtin.OFFICIAL_BUNDLES) + builtin.builtin_names()
+    official_bundles = builtin.get_official_bundles()
+    names = list(dict.fromkeys(list(official_bundles) + builtin.builtin_names()
                               + list(deps) + bundles))
     items = []
     updates = lifecycle().read(lifecycle().path('plugin-updates.json'), {})
     for name in names:
         if not builtin.valid_name(name):
             continue
-        official = name in builtin.OFFICIAL_BUNDLES
+        official = builtin.is_official_bundle(name)
         directory = resolve_plugin_dir(name)
         pkg = read_json(os.path.join(directory, "package.json"), {}) if directory else {}
-        if name not in builtin.OFFICIAL_BUNDLES and name not in builtin.builtin_names() \
+        if not official and name not in builtin.builtin_names() \
                 and name not in bundles and not (pkg.get("dsh") or {}).get("bundle"):
             continue
+        available = official or directory is not None
+        desc = pkg.get("description", "")
+        if official:
+            OFFICIAL_DESC_MAP = {
+                "@deepseek-ai/dsh-base": "官方核心基础运行时",
+                "@deepseek-ai/dsh-web-app": "官方沉浸式 Web 桌面客户端应用",
+                "@deepseek-ai/dsh-experimental-agent-team-profile": "智能体团队协作核心引擎与多智能体通信协议 (Beta)",
+                "@deepseek-ai/dsh-experimental-agent-team-web-profile": "智能体团队 Web 界面、任务协同看板与成员监控 (Beta)",
+            }
+            if name in OFFICIAL_DESC_MAP:
+                desc = OFFICIAL_DESC_MAP[name]
         items.append(dict(name=name, enabled=name in bundles, builtin=name in builtin.builtin_names(),
-                          official=official, available=official or directory is not None,
-                          version=pkg.get("version", ""), description=pkg.get("description", ""),
+                          official=official, available=available,
+                          version=pkg.get("version", ""), description=desc,
                           source=sources.get(name, "") or repository_url(pkg),
                           exportable=not official and directory is not None,
                           deletable=not official and name not in builtin.builtin_names()))
