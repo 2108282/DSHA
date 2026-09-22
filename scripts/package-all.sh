@@ -2,7 +2,7 @@
 # ============================================================
 # package-all.sh — DSHA 三大产物一键本地/CI打包总装脚本
 # 最终产物 (一共 3 个):
-#   1. dist/DSHA-FR 0.1.5rc.2-u2.apk    (前端 APK, 来自 magisk-apk)
+#   1. dist/DSHA-FR <VERSION>.apk    (前端 APK, 来自 magisk-apk)
 #   2. dist/dsha_ksu_native_full.zip (核心完整包, 来自 dsh-magisk)
 #   3. dist/dsha_ksu_native_lite.zip (核心 Lite 包, 来自 dsh-magisk)
 # ============================================================
@@ -12,15 +12,17 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 mkdir -p "$DIST_DIR"
 
+VERSION="${1:-v0.1.7alphax.u1}"
+
 STAGE_DIR="/tmp/dsha_pkg_stage_$$"
 mkdir -p "$STAGE_DIR"
 cleanup() {
-    python3 -c "import shutil; shutil.rmtree(, ignore_errors=True)" 2>/dev/null || rm -rf "$STAGE_DIR" 2>/dev/null || true
+    python3 -c "import shutil; shutil.rmtree('$STAGE_DIR', ignore_errors=True)" 2>/dev/null || rm -rf "$STAGE_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
 echo "=========================================================="
-echo "    DSHA for Root 三合一总装打包引擎启动                  "
+echo "    DSHA for Root 三合一总装打包引擎启动 (${VERSION})      "
 echo "=========================================================="
 
 REPO_URL="${REPO_URL:-https://github.com/2108282/DSHA.git}"
@@ -32,8 +34,8 @@ cd "$STAGE_DIR/apk_src"
 chmod +x gradlew
 ./gradlew :app:assembleStandardRelease --stacktrace
 ORIG_APK=$(ls app/build/outputs/apk/standard/release/*.apk | head -1)
-cp -f "$ORIG_APK" "$DIST_DIR/DSHA-FR 0.1.5rc.2-u2.apk"
-echo "✓ 产物 1 完成: $DIST_DIR/DSHA-FR 0.1.5rc.2-u2.apk"
+cp -f "$ORIG_APK" "$DIST_DIR/DSHA-FR ${VERSION}.apk"
+echo "✓ 产物 1 完成: $DIST_DIR/DSHA-FR ${VERSION}.apk"
 cd "$ROOT_DIR"
 
 # 2. 检出或准备核心模块源码 (dsh-magisk 分支)
@@ -56,7 +58,7 @@ cd "$ROOT_DIR"
 # 3. 产物汇总与校验和计算
 echo "==> [3/3] 计算 3 大交付物 SHA-256 校验和..."
 cd "$DIST_DIR"
-sha256sum "DSHA-FR 0.1.5rc.2-u2.apk" | tee DSHA-FR 0.1.5rc.2-u2.apk.sha256
+sha256sum "DSHA-FR ${VERSION}.apk" | tee "DSHA-FR ${VERSION}.apk.sha256"
 sha256sum dsha_ksu_native_full.zip | tee dsha_ksu_native_full.zip.sha256
 sha256sum dsha_ksu_native_lite.zip | tee dsha_ksu_native_lite.zip.sha256
 

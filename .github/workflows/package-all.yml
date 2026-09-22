@@ -18,9 +18,9 @@ on:
         type: boolean
         default: true
       release_tag:
-        description: "自定义发布 Release Tag (例如 0.1.6-alpha.2-u1)"
+        description: "自定义发布 Release Tag (例如 v0.1.7alphax.u1)"
         required: false
-        default: "0.1.6-alpha.2-u1"
+        default: "v0.1.7alphax.u1"
       prerelease:
         description: "是否标记为预发布 (Pre-release)"
         type: boolean
@@ -52,7 +52,7 @@ jobs:
           elif [ -n "${{ inputs.release_tag }}" ]; then
             V="${{ inputs.release_tag }}"
           else
-            V="0.1.6-alpha.2-u1"
+            V="v0.1.7alphax.u1"
           fi
           echo "VERSION=$V" >> "$GITHUB_ENV"
           echo "VERSION=$V" >> "$GITHUB_OUTPUT"
@@ -224,7 +224,7 @@ jobs:
                - **说明**：原生 Root 控制前端外壳，内置 3095 硬件通道桥、无障碍操作守护与沉浸 Web 容器。
             2. **`dsha_ksu_native_full.zip`** (核心完整包)
                - **构建源分支**：`dsh-magisk`
-               - **说明**：全内置完整刷机包，内含反射式动态层叠熔铸的全新纯净底包 `rootfs.tar.gz` (源自 Release: rootfs，内置 0.1.6 核心与 3.0.0 移动端)。
+               - **说明**：全内置完整刷机包，内含反射式动态层叠熔铸的全新纯净底包 `rootfs.tar.gz` (源自 Release: 0.1.7aphla1)。
             3. **`dsha_ksu_native_lite.zip`** (极速热更新包)
                - **构建源分支**：`dsh-magisk`
                - **说明**：增量热更新补丁包，带两步音量键交互，老用户无需重装底包现场打补丁。
