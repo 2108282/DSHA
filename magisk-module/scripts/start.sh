@@ -57,14 +57,6 @@ if [ -f "$INDEX_HTML" ] && ! grep -q "dsh-boot-style" "$INDEX_HTML"; then
     sed -i 's|<head>|<head><style id="dsh-boot-style">html,body,#root{background:transparent!important;background-color:transparent!important;}</style>|' "$INDEX_HTML" 2>/dev/null || true
 fi
 
-# 2.6 自动保障局域网代理守护组件（防止被用户恢复旧备份覆盖）
-if [ -f "$ROOTFS/usr/local/share/dsha/dsha-lan-proxy.js" ]; then
-    if [ ! -f "$ROOTFS/root/.dsh/dsha-lan-proxy.js" ] || ! cmp -s "$ROOTFS/usr/local/share/dsha/dsha-lan-proxy.js" "$ROOTFS/root/.dsh/dsha-lan-proxy.js"; then
-        cp -f "$ROOTFS/usr/local/share/dsha/dsha-lan-proxy.js" "$ROOTFS/root/.dsh/dsha-lan-proxy.js" 2>/dev/null || true
-        chmod 755 "$ROOTFS/root/.dsh/dsha-lan-proxy.js" 2>/dev/null || true
-    fi
-fi
-
 # 3. 挂载原生虚拟文件系统（基于 /proc/mounts 精准判重，杜绝挂载泄漏与层叠）
 is_mounted() {
     local target="${1%/}"
