@@ -5,11 +5,12 @@
  *
  * 核心设计原则（KernelSU / Magisk 通用，零侵入官方核心）：
  * 1. 【双向解耦与安全门禁】：外网仅识别 DSHA 局域网 Token (.lan_token / .bridge_token)，支持 URL/Header/Cookie 三重呈现；
- * 2. 【官方会话自动打通】：基于 .credentials.yaml 原生密钥为 127.0.0.1:3080 动态签发官方 Cookie，或通过 launchToken 自动兑换，零修改 DSH 源码；
+ * 2. 【官方会话动态自愈】：基于 .credentials.yaml 原生密钥自签 Cookie，兼备 launch_token 动态兑换，自动感知 mtime 变更；
  * 3. 【参数清洗与伪装】：转发给 3080 前自动剔除 URL 中的 token 参数，重写 Host 与 Origin，彻底消除 "authentication required" 401 拒签；
- * 4. 【全双工流与 WebSocket 穿透】：完整支持 Terminal、Remote Mux (/api/remote.mux) 及 EventSource 长连接；
- * 5. 【毫秒级动态失效】：用户更换 Token 时通过 SIGUSR1 信号秒断存量长连接并清空客户端 Cookie；
- * 6. 【极简低功耗】：0 定时器无唤醒常驻，纯操作系统事件驱动。
+ * 4. 【后端 401 容灾自愈】：若 3080 返回 401，立即击穿凭据缓存并触发秒级重新兑换；
+ * 5. 【全双工流与 WebSocket 穿透】：完整支持 Terminal、Remote Mux (/api/remote.mux) 及 EventSource 长连接；
+ * 6. 【毫秒级动态失效】：用户更换 Token 时通过 SIGUSR1 信号秒断存量长连接并清空客户端 Cookie；
+ * 7. 【极简低功耗】：0 定时器无唤醒常驻，纯操作系统事件驱动。
  */
 
 const http = require('http');
@@ -37,6 +38,11 @@ const CREDENTIAL_FILES = [
   '/data/adb/dsha/rootfs/root/.dsh/.credentials.yaml'
 ];
 
+const LAUNCH_TOKEN_FILES = [
+  '/root/.dsh/.launch_token',
+  '/data/adb/dsha/rootfs/root/.dsh/.launch_token'
+];
+
 const LOG_FILES = [
   '/data/adb/dsha/run/dsh-web.log',
   '/root/dsh-web.log',
@@ -47,9 +53,10 @@ const LOG_FILES = [
 const activeSockets = new Set();
 let lastKnownToken = null;
 
-// 后端 DSH 会话凭据缓存
+// 后端 DSH 会话凭据缓存与文件跟踪
 let cachedBackendCookie = null;
 let cachedCookieExpiry = 0;
+let lastCredentialMtime = 0;
 
 function encodeBase64Url(buf) {
   return buf.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
@@ -159,43 +166,16 @@ function authenticateRequest(req, currentToken) {
   return { ok: false };
 }
 
-// 核心机制：获取针对 127.0.0.1:3080 的 DSH 官方认证 Cookie（双轨自愈）
-function getBackendDshAuthCookie() {
-  const now = Date.now();
-  if (cachedBackendCookie && cachedCookieExpiry > now + 3600 * 1000) {
-    return cachedBackendCookie;
-  }
-
-  // 1. 轨道一：从 .credentials.yaml 读取 secret 自签（原生 HMAC 算法，零网络开销）
-  for (const f of CREDENTIAL_FILES) {
+// 读取官方 launchToken（从文件或启动日志）
+function getLaunchToken() {
+  for (const f of LAUNCH_TOKEN_FILES) {
     try {
       if (fs.existsSync(f)) {
-        const content = fs.readFileSync(f, 'utf8');
-        const m = content.match(/client-connection\/browser-session:[\s\S]*?secret:\s*([A-Za-z0-9_-]+)/);
-        if (m && m[1]) {
-          const secretBuf = decodeBase64Url(m[1].trim());
-          if (secretBuf && secretBuf.length === 32) {
-            const cookieName = 'dsh-auth-' + encodeBase64Url(crypto.createHash('sha256').update(AUTHORITY).digest());
-            const expiresAt = now + 30 * 24 * 3600 * 1000; // 30 天有效
-            const payload = {
-              version: 1,
-              authority: AUTHORITY,
-              issuedAt: now,
-              expiresAt: expiresAt
-            };
-            const body = encodeBase64Url(Buffer.from(JSON.stringify(payload), 'utf8'));
-            const sig = encodeBase64Url(crypto.createHmac('sha256', secretBuf).update(body).digest());
-            const cookieStr = `${cookieName}=v1.${body}.${sig}`;
-            cachedBackendCookie = cookieStr;
-            cachedCookieExpiry = expiresAt;
-            return cookieStr;
-          }
-        }
+        const t = fs.readFileSync(f, 'utf8').trim();
+        if (t && t.length >= 20) return t;
       }
     } catch (e) {}
   }
-
-  // 2. 轨道二：从启动日志捕获官方 launchToken 备用兑换
   for (const logPath of LOG_FILES) {
     try {
       if (fs.existsSync(logPath)) {
@@ -205,12 +185,103 @@ function getBackendDshAuthCookie() {
           const lastUrl = matches[matches.length - 1];
           const tokenMatch = lastUrl.match(/token=([A-Za-z0-9_-]+)/);
           if (tokenMatch && tokenMatch[1]) {
-            // launchToken 存在，返回临时标记，触发按需自愈
-            return `__LAUNCH_TOKEN__:${tokenMatch[1]}`;
+            return tokenMatch[1].trim();
           }
         }
       }
     } catch (e) {}
+  }
+  return '';
+}
+
+// 使用 launchToken 向后端 3080 兑换官方 Cookie（异步静默保底）
+function exchangeCookieByLaunchToken(launchToken) {
+  if (!launchToken) return;
+  const options = {
+    hostname: BACKEND_HOST,
+    port: BACKEND_PORT,
+    path: `/?token=${launchToken}`,
+    method: 'GET',
+    headers: { 'Host': AUTHORITY }
+  };
+  const req = http.request(options, (res) => {
+    const setCookie = res.headers['set-cookie'] || [];
+    const setCookieArr = Array.isArray(setCookie) ? setCookie : [setCookie];
+    for (const sc of setCookieArr) {
+      if (typeof sc === 'string' && sc.includes('dsh-auth-')) {
+        const cookieVal = sc.split(';')[0].trim();
+        if (cookieVal) {
+          cachedBackendCookie = cookieVal;
+          cachedCookieExpiry = Date.now() + 25 * 24 * 3600 * 1000;
+          console.log('[DSHA LAN Proxy] 成功通过 launchToken 兑换官方会话凭据');
+          break;
+        }
+      }
+    }
+  });
+  req.on('error', () => {});
+  req.end();
+}
+
+// 核心机制：获取针对 127.0.0.1:3080 的 DSH 官方认证 Cookie（动态感知 mtime 变更）
+function getBackendDshAuthCookie(forceRefresh = false) {
+  const now = Date.now();
+  let needRecompute = forceRefresh || !cachedBackendCookie || cachedCookieExpiry <= now + 3600 * 1000;
+
+  // 检查 .credentials.yaml 文件 mtime 变更
+  let currentFile = null;
+  let currentMtime = 0;
+  for (const f of CREDENTIAL_FILES) {
+    try {
+      if (fs.existsSync(f)) {
+        const st = fs.statSync(f);
+        currentFile = f;
+        currentMtime = st.mtimeMs;
+        break;
+      }
+    } catch (e) {}
+  }
+
+  if (currentMtime && currentMtime !== lastCredentialMtime) {
+    needRecompute = true;
+    lastCredentialMtime = currentMtime;
+  }
+
+  if (!needRecompute && cachedBackendCookie) {
+    return cachedBackendCookie;
+  }
+
+  // 1. 轨道一：从 .credentials.yaml 读取 secret 动态自签
+  if (currentFile) {
+    try {
+      const content = fs.readFileSync(currentFile, 'utf8');
+      const m = content.match(/client-connection\/browser-session:[\s\S]*?secret:\s*([A-Za-z0-9_-]+)/);
+      if (m && m[1]) {
+        const secretBuf = decodeBase64Url(m[1].trim());
+        if (secretBuf && secretBuf.length === 32) {
+          const cookieName = 'dsh-auth-' + encodeBase64Url(crypto.createHash('sha256').update(AUTHORITY).digest());
+          const expiresAt = now + 30 * 24 * 3600 * 1000; // 30 天有效
+          const payload = {
+            version: 1,
+            authority: AUTHORITY,
+            issuedAt: now,
+            expiresAt: expiresAt
+          };
+          const body = encodeBase64Url(Buffer.from(JSON.stringify(payload), 'utf8'));
+          const sig = encodeBase64Url(crypto.createHmac('sha256', secretBuf).update(body).digest());
+          const cookieStr = `${cookieName}=v1.${body}.${sig}`;
+          cachedBackendCookie = cookieStr;
+          cachedCookieExpiry = expiresAt;
+          return cookieStr;
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 2. 轨道二：从 launch_token 或日志触发兑换
+  const lTok = getLaunchToken();
+  if (lTok) {
+    exchangeCookieByLaunchToken(lTok);
   }
 
   return cachedBackendCookie || '';
@@ -371,10 +442,9 @@ const server = http.createServer((req, res) => {
 
   // 注入官方后端 DSH 会话凭证
   const backendCookie = getBackendDshAuthCookie();
-  if (backendCookie && !backendCookie.startsWith('__LAUNCH_TOKEN__:')) {
+  if (backendCookie) {
     let clientCookies = headers['cookie'] || '';
     if (clientCookies) {
-      // 避免重复堆叠同名 dsh-auth Cookie
       const parts = clientCookies.split(';').map(p => p.trim()).filter(p => !p.startsWith('dsh-auth-'));
       parts.push(backendCookie);
       headers['cookie'] = parts.join('; ');
@@ -397,6 +467,12 @@ const server = http.createServer((req, res) => {
   };
 
   const proxyReq = http.request(options, (proxyRes) => {
+    // 容灾自愈：若后端核心返回 401（说明密钥已外部变更或进程重启），立即击穿缓存刷新
+    if (proxyRes.statusCode === 401) {
+      console.warn('[DSHA LAN Proxy] 检测到后端返回 401，立即使本地 Cookie 缓存失效并触发自愈刷新');
+      getBackendDshAuthCookie(true);
+    }
+
     const resHeaders = Object.assign({}, proxyRes.headers);
 
     // 检查客户端是否已持有最新的 dsha_lan_token
@@ -458,7 +534,7 @@ server.on('upgrade', (req, clientSocket, head) => {
 
     // 注入官方后端 DSH 会话凭证
     const backendCookie = getBackendDshAuthCookie();
-    if (backendCookie && !backendCookie.startsWith('__LAUNCH_TOKEN__:')) {
+    if (backendCookie) {
       let clientCookies = headers['cookie'] || '';
       if (clientCookies) {
         const parts = clientCookies.split(';').map(p => p.trim()).filter(p => !p.startsWith('dsh-auth-'));
