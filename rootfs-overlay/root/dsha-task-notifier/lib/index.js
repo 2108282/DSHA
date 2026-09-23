@@ -9,7 +9,7 @@
  * 5. 双向闭环审批：支持手机通知栏/灵动岛与网页端双向决策，谁先点谁生效，点击后自动撤回通知与浮层。
  */
 import { randomUUID } from 'node:crypto'
-import { readFileSync, existsSync, unlinkSync, watch } from 'node:fs'
+import { readFileSync, existsSync, unlinkSync } from 'node:fs'
 import { readFile, unlink } from 'node:fs/promises'
 
 // 保持无模块级硬依赖，防止阻塞插件树初始化
@@ -398,8 +398,6 @@ export function apply(ctx) {
           // 严密防误弹：处于 8 秒审批冷却期内、或标志位为真、或助手未输出有效文本，绝对禁止弹任务完成！
           const inApprovalCooldown = (Date.now() - lastApprovedAt) < 8000
           if (justApproved || inApprovalCooldown || !lastAssistantText || !lastAssistantText.trim()) {
-            // 关键：不弹完成卡片时，本轮执行亦已告一段落，必须撤销 2003 运行中胶囊以释放宿主 WakeLock，允许系统自由深睡
-            void callBridge('/app/task/cancel')
             return
           }
 
@@ -420,9 +418,6 @@ export function apply(ctx) {
                 title: '任务已完成',
                 text: endText
               })
-            } else {
-              // 处于交互或冷却状态不弹完成卡片时，拔除 2003 胶囊释放唤醒锁
-              void callBridge('/app/task/cancel')
             }
           }, 1500)
           return
@@ -458,106 +453,77 @@ export function apply(ctx) {
     } catch {}
   })
 
-  // 3. 作用域注入 agents 服务，安全、非阻塞地管理 Agent 生命周期（Linux 内核 inotify 事件驱动，0 轮询 0 唤醒）
+  // 3. 作用域注入 agents 服务，安全、非阻塞地管理 Agent 生命周期
   ctx.inject(['agents'], (agentScope) => {
-    let isHandlingCancel = false
-    let isHandlingPrompt = false
-
-    const handleCancel = () => {
-      if (isHandlingCancel) return
-      if (!existsSync(CANCEL_FLAG)) return
-      isHandlingCancel = true
+    let timer = setInterval(async () => {
       try {
-        lastCancelByNotification = Date.now()
-        try { unlinkSync(CANCEL_FLAG) } catch {}
-        try {
-          const list = agentScope.agents.list()
-          for (const ag of list) {
+        // A. 处理用户点击通知栏「🛑 停止任务」紧急制动
+        if (existsSync(CANCEL_FLAG)) {
+          lastCancelByNotification = Date.now()
+          try { unlinkSync(CANCEL_FLAG) } catch {}
+          try {
+            const list = agentScope.agents.list()
+            for (const ag of list) {
+              try {
+                if (ag && typeof ag.cancel === 'function') {
+                  ag.cancel({ kind: 'user' }, { keepInbox: true })
+                }
+              } catch {}
+            }
+          } catch {}
+          void callBridge('/app/notify', {
+            title: '⚠️ 任务已终止',
+            text: '已按指令停止操作，点击查看或继续对话'
+          })
+        }
+
+        // B. 处理用户在通知栏输入文字「💬 继续对话 / 重新输入」
+        if (existsSync(PENDING_PROMPT)) {
+          let raw = ''
+          try {
+            raw = (await readFile(PENDING_PROMPT, 'utf-8')).trim()
+            await unlink(PENDING_PROMPT).catch(() => {})
+          } catch {}
+
+          if (raw) {
             try {
-              if (ag && typeof ag.cancel === 'function') {
-                ag.cancel({ kind: 'user' }, { keepInbox: true })
+              let targetAgent = null
+              if (lastActiveSessionId) {
+                targetAgent = agentScope.agents.get(lastActiveSessionId)
+              }
+              if (!targetAgent) {
+                const roots = typeof agentScope.agents.roots === 'function' ? agentScope.agents.roots() : []
+                if (roots && roots.length > 0) {
+                  targetAgent = roots[0]
+                } else {
+                  const list = agentScope.agents.list()
+                  if (list && list.length > 0) {
+                    targetAgent = list[list.length - 1]
+                  }
+                }
+              }
+
+              if (targetAgent && typeof targetAgent.followup === 'function') {
+                const msg = {
+                  id: randomUUID(),
+                  role: 'user',
+                  content: [{ type: 'text', text: raw }],
+                  source: { kind: 'user' }
+                }
+                targetAgent.followup(msg)
               }
             } catch {}
           }
-        } catch {}
-        void callBridge('/app/notify', {
-          title: '⚠️ 任务已终止',
-          text: '已按指令停止操作，点击查看或继续对话'
-        })
-      } finally {
-        isHandlingCancel = false
-      }
-    }
-
-    const handlePrompt = async () => {
-      if (isHandlingPrompt) return
-      if (!existsSync(PENDING_PROMPT)) return
-      isHandlingPrompt = true
-      try {
-        let raw = ''
-        try {
-          raw = (await readFile(PENDING_PROMPT, 'utf-8')).trim()
-          await unlink(PENDING_PROMPT).catch(() => {})
-        } catch {}
-
-        if (raw) {
-          try {
-            let targetAgent = null
-            if (lastActiveSessionId) {
-              targetAgent = agentScope.agents.get(lastActiveSessionId)
-            }
-            if (!targetAgent) {
-              const roots = typeof agentScope.agents.roots === 'function' ? agentScope.agents.roots() : []
-              if (roots && roots.length > 0) {
-                targetAgent = roots[0]
-              } else {
-                const list = agentScope.agents.list()
-                if (list && list.length > 0) {
-                  targetAgent = list[list.length - 1]
-                }
-              }
-            }
-
-            if (targetAgent && typeof targetAgent.followup === 'function') {
-              const msg = {
-                id: randomUUID(),
-                role: 'user',
-                content: [{ type: 'text', text: raw }],
-                source: { kind: 'user' }
-              }
-              targetAgent.followup(msg)
-            }
-          } catch {}
         }
-      } finally {
-        isHandlingPrompt = false
-      }
+      } catch {}
+    }, 4000)
+
+    if (timer && typeof timer.unref === 'function') {
+      timer.unref()
     }
-
-    // 初始快速检测一次残留
-    handleCancel()
-    void handlePrompt()
-
-    // 采用 Linux 原生 inotify 事件监听目录变动，常态空闲 0 唤醒 0 功耗
-    let dshWatcher = null
-    try {
-      dshWatcher = watch('/root/.dsh', (eventType, filename) => {
-        if (!filename) return
-        const fn = String(filename)
-        if (fn.includes('.cancel_requested')) {
-          handleCancel()
-        } else if (fn.includes('.pending_prompt')) {
-          void handlePrompt()
-        }
-      })
-      dshWatcher.unref()
-    } catch {}
 
     agentScope.on('dispose', () => {
-      if (dshWatcher) {
-        try { dshWatcher.close() } catch {}
-        dshWatcher = null
-      }
+      if (timer) clearInterval(timer)
     })
   })
 
