@@ -42,6 +42,7 @@ rm -f "$RUN_DIR/port" 2>/dev/null || true
 
 # 3. 仅在显式传入 --umount 时卸载内核挂载点（普通停止服务绝不卸载挂载，保证其他操作与环境稳定）
 if [ "$1" = "--umount" ]; then
+    clean_umount "$ROOTFS/usr/share/fonts/android"
     clean_umount "$ROOTFS/storage/emulated/0"
     clean_umount "$ROOTFS/sdcard"
     clean_umount "$ROOTFS/dev/block"

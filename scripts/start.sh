@@ -105,6 +105,12 @@ elif [ -d "/sdcard" ]; then
     mount_if_needed "$ROOTFS/sdcard" -o bind /sdcard
 fi
 
+# 挂载宿主字体目录至容器内，供给 DSH LibreOfficeKit WASM 引擎完整系统字库
+if [ -d "/system/fonts" ]; then
+    mkdir -p "$ROOTFS/usr/share/fonts/android" 2>/dev/null || true
+    mount_if_needed "$ROOTFS/usr/share/fonts/android" -o bind /system/fonts
+fi
+
 # 确保手机 Download/DSHA/工作区 存在，并在容器 root 下建立「内部存储」软链接直通
 mkdir -p "$ROOTFS/sdcard/Download/DSHA/工作区" 2>/dev/null || true
 mkdir -p "$ROOTFS/root" 2>/dev/null || true
