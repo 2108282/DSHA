@@ -151,6 +151,19 @@ else
     ui_print "- 已跳过底包覆盖，当前用户数据、已装软件包与配置已完整保留！"
 fi
 
+# 自动自愈核心运行时中可能存在的 .ignored_ 异常改名与断裂软链
+TARGET_CORE_DIR="$ROOTFS_DIR/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai"
+if [ -d "$TARGET_CORE_DIR" ]; then
+    for d in "$TARGET_CORE_DIR"/.ignored_*; do
+        [ -d "$d" ] || continue
+        b=$(basename "$d")
+        real="${b#.ignored_}"
+        orig="$TARGET_CORE_DIR/$real"
+        [ -L "$orig" ] && rm -f "$orig"
+        mv -f "$d" "$orig" 2>/dev/null || true
+    done
+fi
+
 # 确保 rootfs 基础目录与挂载保护点结构正确
 chmod 755 "$ROOTFS_DIR/bin" 2>/dev/null || true
 chmod 755 "$ROOTFS_DIR/usr/bin" 2>/dev/null || true

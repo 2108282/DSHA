@@ -102,6 +102,28 @@ else
     echo "==> 正在准备【公开发布纯净脱敏】打包..."
     echo "    [安全保障]: 当前本地系统文件零修改，所有脱敏重置仅在导出流中生效。"
 
+    # 0. 底包导出前依赖健康自愈与严格断言
+    TARGET_CORE_DIR="/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai"
+    if [ -d "$TARGET_CORE_DIR" ]; then
+        for d in "$TARGET_CORE_DIR"/.ignored_*; do
+            [ -d "$d" ] || continue
+            b=$(basename "$d")
+            real="${b#.ignored_}"
+            orig="$TARGET_CORE_DIR/$real"
+            [ -L "$orig" ] && rm -f "$orig"
+            mv -f "$d" "$orig" 2>/dev/null || true
+            echo "  -> [自动自愈] 恢复核心包实体: $b -> $real"
+        done
+    fi
+
+    echo "==> 正在执行运行时完整性断言 (dsh --version)..."
+    DSH_VER=$(dsh --version 2>&1) || {
+        echo "❌ 致命错误: dsh 运行时损坏，禁止导出带毒底包！报错如下：" >&2
+        echo "$DSH_VER" >&2
+        exit 1
+    }
+    echo "    ✓ 核心运行时健康: $DSH_VER"
+
     # 1. 在临时 Stage 中准备纯净的 profiles/web/package.json
     CLEAN_PROFILE_DIR="$STAGE_DIR/root/.dsh/profiles/web"
     mkdir -p "$CLEAN_PROFILE_DIR"
@@ -194,6 +216,11 @@ EOF_PKG
         "--exclude=./root/.local/*"
         "--exclude=./root/.npm/*"
         "--exclude=./root/.npmrc"
+        # 排除用户主目录下残留的第三方依赖与死链
+        "--exclude=./root/node_modules"
+        "--exclude=./root/node_modules/*"
+        "--exclude=./root/.dsh/profiles/web/node_modules/.bin/*"
+        "--exclude=*/.ignored_*"
         "--exclude=./root/.agents/*"
         "--exclude=./root/.config/*"
         "--exclude=./root/.dsha-backup*"
