@@ -26,16 +26,20 @@
    - 可调透明毛玻璃效果；
    - 独立active支持shell调用；
    - 继承日夜间模式联动。
-3. **原生 Root 直通能力桥 (3095)**：
+3. **原生 Root 直通桥 (3095)**：
    - 无障碍读屏（dump）、坐标点按（tap）、文本输入（input）、按键模拟（key）、硬件传感器与振动；
    - 宿主特权命令直接穿透（`am`, `pm`, `cmd`, `screencap`, `dumpsys`），完全不受普通应用权限沙箱限制。
-   - 远端访问token固化，不再随核心启停重制，仅支持手动切换
+   - 远端访问token固化，不再随核心启停重制，支持手动切换
 4. **安全隔离**：
    - `/dev/block` 物理闪存分区受内核只读 tmpfs 覆盖屏蔽，杜绝变砖风险；
    - 危险命令（格式化、清空数据、重刷系统）自动触发手机前台确认弹窗。
 5. **功耗**：
    - 服务按需启停，CPU受调度线程控制，可自定义使用核心数；
    - 任务结束即刻释放 WakeLock 与 Wi-Fi 锁，深度休眠不偷跑电。
+   
+6.**灵动岛适配**  
+   - 尝试增加AOSP胶囊，以及hyperos3灵动岛，原生通知
+
 
 ---
 
@@ -66,6 +70,14 @@
 
 ---
 
-## 📄 开源许可证
+## 致谢与鸣谢 (Credits & Acknowledgments)
 
-本项目基于 [MIT License](LICENSE) 开源。
+本项目基于以下优秀的开源项目构建或受其启发，特此向相关项目的开发者与开源社区致谢：
+
+* [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) - 核心本体支持
+* [dsh-web-mobile](https://github.com/saya-ch/dsh-mobile) - 内置移动端UI适配
+* [DSH-APP/DSHA](https://github.com/DSH-APP/DSHA) - APP界面 UI 设计灵感借鉴
+* [LSPosed](https://github.com/LSPosed/LSPosed) - Xposed 框架运行与 Hook 支持
+* [Magisk Module Template](https://github.com/topjohnwu/Magisk) - 模块打包模版与安装脚本结构
+
+感谢所有为开源社区做出贡献的开发者！
