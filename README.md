@@ -17,7 +17,7 @@
 
 ## 🌟 核心特性与架构升级
 
-本项目已废弃 PRoot / Proroot 用户态 ptrace 虚拟化方案与 Shizuku 依赖，全面重构下沉为 **KernelSU / Magisk 原生 Linux chroot (uid=0) 极速运行时**：
+本项目已废弃 PRoot / Proroot 用户态 ptrace 虚拟化方案与 Shizuku 依赖，全面重构为 **KernelSU / Magisk 原生 Linux chroot  运行框架**：
 
 1. **前后端协同**：
    - **`dsh-for-root-apk` (前端外壳)**：原生Android 应用（包名 `com.dsha.fr`），包体仅14MB，支持web连接核心，备份、重制环境，通知整合、内置终端、端口变更。
