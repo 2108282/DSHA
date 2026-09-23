@@ -23,10 +23,11 @@
    - **`dsh-for-root-apk` (前端外壳)**：原生Android 应用（包名 `com.dsha.fr`），包体仅14MB，支持web连接核心，备份、重制环境，通知整合、内置终端、端口变更。
    - **`dsh-magisk` (模块与底座)**：承载完整的 Ubuntu ARM64 。
    - **`核心无封装`** 放弃虚拟化，性能损耗更小，精简软链，更新升级更方便
-2. **沉浸式 QuickChat 半悬浮快捷抽屉**：
+2. **沉浸式 QuickChat 半悬浮快捷抽屉**：（）
    - 可调透明毛玻璃效果；
    - 独立active支持shell调用；
-   - hook原生手势调用（google）。
+   - hook原生手势唤出（google）
+   - 接入Android原生文件查看器 
 3. **原生 Root 直通桥 (3095)**：
    - 无障碍读屏（dump）、坐标点按（tap）、文本输入（input）、按键模拟（key）、硬件传感器与振动；
    - 宿主特权命令直接穿透（`am`, `pm`, `cmd`, `screencap`, `dumpsys`），完全不受普通应用权限沙箱限制。
