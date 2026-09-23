@@ -161,6 +161,6 @@ cd "$MODULE_DIR"
 chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
 cp -f rootfs.tar.gz "$OUTPUT_DIR/rootfs.tar.gz"
 zip -r -0 "$OUTPUT_DIR/dsha_ksu_native_full.zip" META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts rootfs.tar.gz >/dev/null
-rm -f "$MODULE_DIR/rootfs.tar.gz"
+python3 -c "import os; os.remove('rootfs.tar.gz') if os.path.exists('rootfs.tar.gz') else None" 2>/dev/null || rm -f rootfs.tar.gz 2>/dev/null || true
 echo "✓ 全内置刷机包已生成: $OUTPUT_DIR/dsha_ksu_native_full.zip"
 ls -lh "$OUTPUT_DIR/dsha_ksu_native_full.zip"
