@@ -318,19 +318,22 @@ done
 mkdir -p "$ROOTFS/root"
 ln -sf "$LOG_FILE" "$ROOTFS/root/dsh-web.log" 2>/dev/null || true
 
-# 确保本机极速低功耗心跳与轮询补丁就绪（杜绝退化为 2s 默认心跳）
-if [ ! -f "$ROOTFS/root/.dsh/heartbeat-patch.yml" ]; then
-    mkdir -p "$ROOTFS/root/.dsh" 2>/dev/null || true
-    cat << 'HB_EOF' > "$ROOTFS/root/.dsh/heartbeat-patch.yml"
+# 确保本机极速低功耗心跳与轮询补丁就绪（彻底抑制 client-hmr 500ms 磁盘轮询与 skill-filesystem 轮询）
+mkdir -p "$ROOTFS/root/.dsh" 2>/dev/null || true
+mkdir -p "$ROOTFS/root/.agents/skills" 2>/dev/null || true
+cat << 'HB_EOF' > "$ROOTFS/root/.dsh/heartbeat-patch.yml"
 - id: typert-gateway
   config:
     websocketHeartbeatIntervalMs: 2147483647
+- id: client-hmr
+  config:
+    pollIntervalMs: 2147483647
 - id: skill-filesystem
   config:
-    watchPollIntervalMs: 60000
+    watch: false
+    watchPollIntervalMs: 2147483647
 HB_EOF
-    chmod 600 "$ROOTFS/root/.dsh/heartbeat-patch.yml" 2>/dev/null || true
-fi
+chmod 600 "$ROOTFS/root/.dsh/heartbeat-patch.yml" 2>/dev/null || true
 
 PATCH_ARG=""
 if [ -f "$ROOTFS/root/.dsh/heartbeat-patch.yml" ]; then
