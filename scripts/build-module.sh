@@ -160,7 +160,17 @@ fi
 cd "$MODULE_DIR"
 chmod +x customize.sh service.sh action.sh uninstall.sh scripts/*.sh
 cp -f rootfs.tar.gz "$OUTPUT_DIR/rootfs.tar.gz"
-zip -r -0 "$OUTPUT_DIR/dsha_ksu_native_full.zip" META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts rootfs.tar.gz >/dev/null
+HAS_OVERLAY=0
+if [ -d "$ROOT_DIR/rootfs-overlay" ] && [ -n "$(find "$ROOT_DIR/rootfs-overlay" -mindepth 1 ! -name ".gitkeep" 2>/dev/null)" ]; then
+    cp -af "$ROOT_DIR/rootfs-overlay" "$MODULE_DIR/"
+    HAS_OVERLAY=1
+fi
+if [ "$HAS_OVERLAY" = "1" ]; then
+    zip -r -0 "$OUTPUT_DIR/dsha_ksu_native_full.zip" META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts rootfs.tar.gz rootfs-overlay >/dev/null
+    rm -rf "$MODULE_DIR/rootfs-overlay" 2>/dev/null || true
+else
+    zip -r -0 "$OUTPUT_DIR/dsha_ksu_native_full.zip" META-INF module.prop customize.sh service.sh action.sh uninstall.sh scripts rootfs.tar.gz >/dev/null
+fi
 python3 -c "import os; os.remove('rootfs.tar.gz') if os.path.exists('rootfs.tar.gz') else None" 2>/dev/null || rm -f rootfs.tar.gz 2>/dev/null || true
 echo "✓ 全内置刷机包已生成: $OUTPUT_DIR/dsha_ksu_native_full.zip"
 ls -lh "$OUTPUT_DIR/dsha_ksu_native_full.zip"

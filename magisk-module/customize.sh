@@ -151,6 +151,22 @@ else
     ui_print "- 已跳过底包覆盖，当前用户数据、已装软件包与配置已完整保留！"
 fi
 
+# 解压并镜像层叠通用 rootfs-overlay 增量资产（若刷机包内携带，确保新组件 100% 落地）
+if unzip -l "$ZIPFILE" 2>/dev/null | grep -q "rootfs-overlay/"; then
+    ui_print "- 正在层叠通用容器增量资产 (rootfs-overlay)..."
+    TMP_OVERLAY="/dev/dsha_overlay_$$"
+    mkdir -p "$TMP_OVERLAY"
+    unzip -o "$ZIPFILE" 'rootfs-overlay/*' -d "$TMP_OVERLAY" >&2 2>/dev/null || true
+    if [ -d "$TMP_OVERLAY/rootfs-overlay" ]; then
+        cp -af "$TMP_OVERLAY/rootfs-overlay/." "$ROOTFS_DIR/"
+        find "$TMP_OVERLAY/rootfs-overlay" -type f \( -name "*.sh" -o -name "*.js" -o -name "*.py" \) 2>/dev/null | while read -r f; do
+            rel_path="${f#$TMP_OVERLAY/rootfs-overlay/}"
+            chmod 755 "$ROOTFS_DIR/$rel_path" 2>/dev/null || true
+        done
+    fi
+    rm -rf "$TMP_OVERLAY" 2>/dev/null || true
+fi
+
 # 自动自愈核心运行时中可能存在的 .ignored_ 异常改名与断裂软链
 TARGET_CORE_DIR="$ROOTFS_DIR/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai"
 if [ -d "$TARGET_CORE_DIR" ]; then

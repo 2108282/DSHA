@@ -418,6 +418,11 @@ for p_mod in "/data/adb/modules/dsha_native/module.prop" \
 done
 
 if [ -n "$AUTH_URL" ]; then
+    LAUNCH_TOKEN=$(echo "$AUTH_URL" | sed -n 's/.*token=\([^ &]*\).*/\1/p')
+    if [ -n "$LAUNCH_TOKEN" ]; then
+        echo -n "$LAUNCH_TOKEN" > "$ROOTFS/root/.dsh/.launch_token" 2>/dev/null || true
+        chmod 600 "$ROOTFS/root/.dsh/.launch_token" 2>/dev/null || true
+    fi
     echo "=========================================================="
     echo "进入 Web 鉴权链接 (直接在手机浏览器打开):"
     echo "$AUTH_URL"
