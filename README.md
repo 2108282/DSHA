@@ -19,8 +19,8 @@
 
 本项目已废弃 PRoot / Proroot 用户态 ptrace 虚拟化方案与 Shizuku 依赖，全面重构下沉为 **KernelSU / Magisk 原生 Linux chroot (uid=0) 极速运行时**：
 
-1. **双分支协同架构**：
-   - **`magisk-apk` (前端外壳)**：原生Android 应用（包名 `com.dsha.fr`），包体仅17MB，支持web连接核心，备份、重制环境，通知整合、内置终端、端口变更。
+1. **前后端协同**：
+   - **`magisk-apk` (前端外壳)**：原生Android 应用（包名 `com.dsha.fr`），包体仅14MB，支持web连接核心，备份、重制环境，通知整合、内置终端、端口变更。
    - **`dsh-magisk` (模块与底座)**：承载完整的 Ubuntu ARM64 。
    - **`核心无封装`** 放弃虚拟化，性能损耗更小，精简软链，更新升级更方便
 2. **沉浸式 QuickChat 半悬浮快捷抽屉**：
