@@ -574,7 +574,8 @@ server.on('upgrade', (req, clientSocket, head) => {
 
 server.listen(LAN_PORT, '0.0.0.0', () => {
   lastKnownToken = getCurrentToken();
-  const cookieState = getBackendDshAuthCookie() ? '官方凭据已自愈就绪' : '官方凭据待生成';
+  // 每次启动时强制重算一次后端凭证，确保无论换机还是冷启均加载最新密钥
+  const cookieState = getBackendDshAuthCookie(true) ? '官方凭据已自愈就绪' : '官方凭据待生成';
   console.log(`[DSHA LAN Proxy] 已启动，监听 0.0.0.0:${LAN_PORT}，转发至 127.0.0.1:${BACKEND_PORT} (${cookieState})`);
   console.log(`[DSHA LAN Proxy] 当前鉴权 Token: ${lastKnownToken ? '已加载' : '未设置(公开模式)'}`);
 });
