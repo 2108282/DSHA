@@ -1,4 +1,4 @@
-# DSHA Native (For Root) · 原生 Android AI 终端与运行底座
+# DSHA Native (For Root) · 专为android root设备设计的dsh框架
 
 <p align="center">
   <b>DeepSeek Harness (DSH) 原生 Root 运行时与 Android 控制客户端</b><br>
