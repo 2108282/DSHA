@@ -76,7 +76,7 @@
 
 * [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) - 核心本体支持
 * [dsh-web-mobile](https://github.com/saya-ch/dsh-mobile) - 内置移动端UI适配
-* [DSH-APP/DSHA](https://github.com/DSH-APP/DSHA) - APP界面 UI 设计灵感借鉴
+* [DSH-APP/DSHA](https://github.com/DSH-APP/DSHA) - 轻量化容器设计及APP界面参考
 * [LSPosed](https://github.com/LSPosed/LSPosed) - Xposed 框架运行与 Hook 支持
 * [Magisk Module Template](https://github.com/topjohnwu/Magisk) - 模块打包模版与安装脚本结构
 
