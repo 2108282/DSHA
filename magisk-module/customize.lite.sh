@@ -141,6 +141,8 @@ else
     ui_print "- 已跳过基础脚本覆盖，当前脚本保持原样。"
 fi
 
+mkdir -p "$ROOTFS_DIR/root/.agents/skills" 2>/dev/null || true
+
 rm -rf "$TMP_STAGE"
 ui_print "-----------------------------------------"
 ui_print "✓ DSHA 极速热更新全部处理完成！"

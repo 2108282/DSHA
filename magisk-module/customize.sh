@@ -191,6 +191,7 @@ mkdir -p "$ROOTFS_DIR/proc"
 mkdir -p "$ROOTFS_DIR/sys"
 mkdir -p "$ROOTFS_DIR/sdcard"
 mkdir -p "$ROOTFS_DIR/root/.dsh"
+mkdir -p "$ROOTFS_DIR/root/.agents/skills" 2>/dev/null || true
 chmod 777 "$ROOTFS_DIR/root/.dsh" 2>/dev/null || true
 mkdir -p "$ROOTFS_DIR/sdcard/Download/DSHA/工作区" 2>/dev/null || true
 rm -f "$ROOTFS_DIR/root/内部存储" 2>/dev/null || true
