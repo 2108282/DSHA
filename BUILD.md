@@ -107,7 +107,7 @@ bash tools/export-rootfs.sh --clone
 ```
 * **零破坏承诺**：当前运行的系统文件 100% 保持现状，不修改、不删除任何本地原文件；
 * **解耦修复**：打包纯净底包时动态排除 `plugin-src/*`，并自动注入纯净版 `profiles/web/package.json`，确保新设备刷入后无死软链、健康自愈启动。
-* **底包发布源**：底包统一发布与托管在 Release [`rootfs`](https://github.com/2108282/DSHA/releases/tag/rootfs) 与 `rootfs` 分支。
+* **底包发布源**：底包统一发布与托管在 Release [`rootfs`](https://github.com/2108282/DSHA-FR/releases/tag/rootfs) 与 `rootfs` 分支。
 
 在 `dsh-magisk` 分支根目录下，执行 `scripts/build-module.sh`：
 

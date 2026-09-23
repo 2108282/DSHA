@@ -25,7 +25,7 @@ echo "=========================================================="
 echo "    DSHA for Root 三合一总装打包引擎启动 (${VERSION})      "
 echo "=========================================================="
 
-REPO_URL="${REPO_URL:-https://github.com/2108282/DSHA.git}"
+REPO_URL="${REPO_URL:-https://github.com/2108282/DSHA-FR.git}"
 
 # 1. 检出或准备前端 APK 源码 (magisk-apk 分支)
 echo "==> [1/3] 获取并构建前端 APK (源自 magisk-apk 分支)..."
