@@ -80,7 +80,7 @@ done
 # 若本地未找到底包，自动从官方 Release 0.1.7aphla1 下载纯净底包
 if [ -z "$TAR_SRC" ]; then
     echo "--> 未检测到本地底包，正在自动从官方 Release (0.1.7aphla1) 下载纯净底包..."
-    DOWN_URL="https://github.com/2108282/DSHA/releases/download/0.1.7aphla1/rootfs.tar.gz"
+    DOWN_URL="https://github.com/2108282/DSHA-FR/releases/download/0.1.7aphla1/rootfs.tar.gz"
     mkdir -p /tmp/dsha_download
     DL_FILE="/tmp/dsha_download/rootfs.tar.gz"
     DL_OK=0
@@ -88,7 +88,7 @@ if [ -z "$TAR_SRC" ]; then
     # 1. 优先尝试 GitHub 官方 CLI 工具 (在 Actions 环境下具备原生认证与高抗抖动性)
     if command -v gh >/dev/null 2>&1; then
         echo "  [下载通道 1] 使用 gh CLI 下载..."
-        if gh release download 0.1.7aphla1 --repo "${GITHUB_REPOSITORY:-2108282/DSHA}" --pattern "rootfs.tar.gz" --dir /tmp/dsha_download 2>/dev/null && [ -s "$DL_FILE" ]; then
+        if gh release download 0.1.7aphla1 --repo "${GITHUB_REPOSITORY:-2108282/DSHA-FR}" --pattern "rootfs.tar.gz" --dir /tmp/dsha_download 2>/dev/null && [ -s "$DL_FILE" ]; then
             DL_OK=1
         fi
     fi

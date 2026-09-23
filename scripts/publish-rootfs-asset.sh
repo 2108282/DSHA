@@ -4,7 +4,7 @@ set -euo pipefail
 ROOTFS_TAR="${1:-magisk-module/rootfs.tar.gz}"
 TARGET_TAG="${2:-rootfs}"
 BRANCH_NAME="${3:-rootfs}"
-REPO="${GITHUB_REPOSITORY:-2108282/DSHA}"
+REPO="${GITHUB_REPOSITORY:-2108282/DSHA-FR}"
 TOKEN="${GH_TOKEN:-}"
 
 if [ ! -f "$ROOTFS_TAR" ]; then

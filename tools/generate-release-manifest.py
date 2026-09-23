@@ -102,7 +102,7 @@ def main():
     github = f'# v{version}\n\n{notes}\n\n版本码 {code}；两版共享包名及历史发布签名。\n\n'
     github += '| 版本 | 最低 Android API | 安装包 | 大小 | SHA-256 |\n|---|---:|---|---:|---|\n'
     for a in artifacts:
-        url = f'https://github.com/qiannianhuanxiang/DSHA/releases/download/v{version}/{a["filename"]}'
+        url = f'https://github.com/2108282/DSHA-FR/releases/download/v{version}/{a["filename"]}'
         github += f'| {a["flavor"]} | {a["minSdk"]} | [{a["filename"]}]({url}) | {a["bytes"]/1048576:.2f} MiB | `{a["sha256"]}` |\n'
     args.output.with_name('github-release-body.md').write_text(github, encoding='utf-8')
     print(f'已核验两份 APK：{version} / {code}，清单：{args.output}')
