@@ -71,9 +71,9 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           APK_SRC=$(ls app/build/outputs/apk/standard/release/*.apk | head -1)
-          cp -f "$APK_SRC" "dist/DSHA-FR-0.1.6-alpha.2-u1-release.apk"
+          cp -f "$APK_SRC" "dist/DSHA-FR-0.1.7-rc.1-release.apk"
           cd dist
-          sha256sum "DSHA-FR-0.1.6-alpha.2-u1-release.apk" | tee "DSHA-FR-0.1.6-alpha.2-u1-release.apk.sha256"
+          sha256sum "DSHA-FR-0.1.7-rc.1-release.apk" | tee "DSHA-FR-0.1.7-rc.1-release.apk.sha256"
           echo "=========================================================="
           echo "           带签名 Release APK 打包就绪 (不发布)            "
           echo "=========================================================="
@@ -83,6 +83,6 @@ jobs:
       - name: 上传带签名 Release APK 至 Artifacts (仅供下载，不发布)
         uses: actions/upload-artifact@v4
         with:
-          name: DSHA-FR-0.1.6-alpha.2-u1-release-apk
+          name: DSHA-FR-0.1.7-rc.1-release-apk
           path: dist/*
           if-no-files-found: error
