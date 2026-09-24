@@ -87,10 +87,10 @@ public class LaunchFragment extends Fragment {
             v.findViewById(R.id.launch_port_chip_8080).setOnClickListener(x -> portInput.setText("8080"));
         }
 
-        // 启动按钮：未就绪时是「启动」；鉴权链接就绪后自动变为「进入」，点击进 WebUI。
+        // 启动按钮：未就绪时是「启动」；鉴权链接就绪后自动变为「进入」，点击打开系统 Web 界面。
         start.setOnClickListener(x -> {
             if ((webReady || !controller.getWebAuthUrl().isEmpty()) && controller.isWebRunning()) {
-                enterWeb();
+                openExternalWeb();
                 return;
             }
             doStart(activity, status, start);
@@ -192,7 +192,25 @@ public class LaunchFragment extends Fragment {
         com.deepseekharness.app.HarnessService.checkAndSyncService(requireContext());
     }
 
-    /** 打开 WebPreviewActivity 进入 dsh WebUI。 */
+    /** 调用系统外部浏览器打开 Web 界面。 */
+    private void openExternalWeb() {
+        String url = controller.getWebAuthUrl();
+        if (url.isEmpty()) {
+            if (getView() != null) {
+                ((TextView) getView().findViewById(R.id.launch_status))
+                        .setText("先点「启动」，等鉴权链接就绪后再进入");
+            }
+            return;
+        }
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            startActivity(intent);
+        } catch (Throwable t) {
+            Toast.makeText(requireContext(), "无法打开浏览器：" + t.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** 打开 WebPreviewActivity 进入 dsh 内部 WebUI。 */
     private void enterWeb() {
         String url = controller.getWebAuthUrl();
         if (url.isEmpty()) {
@@ -378,15 +396,8 @@ public class LaunchFragment extends Fragment {
             items.add("🌐 复制本机 Web 访问地址（带 Launch Token）\n" + authUrl);
             acts.add(() -> copyAddr("本机 Web 地址", authUrl));
 
-            items.add("🚀 用系统外部浏览器打开 Web 界面");
-            acts.add(() -> {
-                try {
-                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(authUrl));
-                    startActivity(intent);
-                } catch (Throwable t) {
-                    Toast.makeText(requireContext(), "无法打开浏览器：" + t.getMessage(), Toast.LENGTH_SHORT).show();
-                }
-            });
+            items.add("🚀 内部web访问");
+            acts.add(() -> enterWeb());
         }
 
         // 3. 局域网访问地址
