@@ -97,6 +97,15 @@ public final class Constants {
     /** 快捷抽屉莫奈取色开关（提取系统壁纸 Material You 调色板）。 */
     public static final String KEY_SHEET_MONET_COLOR = "sheet_monet_color";
 
+    /** 快捷抽屉左边距（dp，默认 0 为紧贴左边框）。 */
+    public static final String KEY_SHEET_MARGIN_LEFT = "sheet_margin_left";
+    /** 快捷抽屉右边距（dp，默认 0 为紧贴右边框）。 */
+    public static final String KEY_SHEET_MARGIN_RIGHT = "sheet_margin_right";
+    /** 快捷抽屉默认高度百分比（30~95，默认 75%）。 */
+    public static final String KEY_SHEET_HEIGHT_PERCENT = "sheet_height_percent";
+    /** 快捷抽屉低于 45% 时下次打开自动恢复默认高度开关（默认开启）。 */
+    public static final String KEY_SHEET_AUTO_RESTORE_DEFAULT = "sheet_auto_restore_def";
+
     /** 默认工作目录（容器内路径，直通手机物理存储 Download/DSHA/工作区）。 */
     public static final String DEFAULT_WORKDIR = "/root/内部存储/工作区";
 }

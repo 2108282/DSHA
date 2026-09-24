@@ -599,11 +599,26 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private void calculateDimensions() {
         DisplayMetrics dm = getResources().getDisplayMetrics();
         screenHeight = dm.heightPixels;
-        // 初始高度设为 78%，全屏态 95%，最低安全退出阈值 25%
-        defaultHeight = (int) (screenHeight * 0.78f);
+        // 初始默认高度取用户设置 (默认 75%)，全屏态 95%，最低安全退出阈值 25%
+        int userPercent = new ConfigStore(this).getSheetHeightPercent();
+        float userRatio = Math.max(30, Math.min(95, userPercent)) / 100.0f;
+        defaultHeight = (int) (screenHeight * userRatio);
         maxHeight = (int) (screenHeight * 0.95f);
         minHeight = (int) (screenHeight * 0.25f);
         currentHeight = defaultHeight;
+    }
+
+    /** 智能底角圆角计算：顶部恒为 24dp 圆角；左侧不贴边(>0)则左下切圆角，右侧不贴边(>0)则右下切圆角 */
+    private float[] calculateCardCornerRadii(int marginLeftDp, int marginRightDp) {
+        float topRadius = dpToPx(24);
+        float bottomLeftRadius = marginLeftDp > 0 ? dpToPx(24) : 0f;
+        float bottomRightRadius = marginRightDp > 0 ? dpToPx(24) : 0f;
+        return new float[]{
+                topRadius, topRadius,                 // 左上
+                topRadius, topRadius,                 // 右上
+                bottomRightRadius, bottomRightRadius, // 右下
+                bottomLeftRadius, bottomLeftRadius    // 左下
+        };
     }
 
     private int getCardBgColor(boolean dark) {
@@ -636,15 +651,26 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         int handleColor = palette.handleColor;
         int borderColor = palette.borderColor;
 
-        // 1. 卡片圆角背景与描边
+        // 1. 卡片圆角背景与描边（自适应不贴边圆角）
         if (sheetCard != null) {
             GradientDrawable cardBg = new GradientDrawable();
             cardBg.setShape(GradientDrawable.RECTANGLE);
-            float r = dpToPx(24);
-            cardBg.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
+            cardBg.setCornerRadii(calculateCardCornerRadii(cfg.getSheetMarginLeft(), cfg.getSheetMarginRight()));
             cardBg.setColor(cardBgColor);
             cardBg.setStroke(dpToPx(1), borderColor);
             sheetCard.setBackground(cardBg);
+
+            // 动态同步左右边距
+            if (sheetCard.getLayoutParams() instanceof ViewGroup.MarginLayoutParams) {
+                ViewGroup.MarginLayoutParams mlp = (ViewGroup.MarginLayoutParams) sheetCard.getLayoutParams();
+                int newLeft = dpToPx(cfg.getSheetMarginLeft());
+                int newRight = dpToPx(cfg.getSheetMarginRight());
+                if (mlp.leftMargin != newLeft || mlp.rightMargin != newRight) {
+                    mlp.leftMargin = newLeft;
+                    mlp.rightMargin = newRight;
+                    sheetCard.setLayoutParams(mlp);
+                }
+            }
         }
 
         // 2. 顶部拖拽横条颜色
@@ -705,13 +731,16 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             return WindowInsetsCompat.CONSUMED;
         });
 
-        // 点击外部空白区域退出
+        // 点击外部空白区域退出（上方、左侧留白或右侧留白）
         rootOverlay.setOnTouchListener((v, event) -> {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
                 int[] loc = new int[2];
                 sheetCard.getLocationOnScreen(loc);
+                float x = event.getRawX();
                 float y = event.getRawY();
-                if (y < loc[1]) {
+                boolean outside = x < loc[0] || x > (loc[0] + sheetCard.getWidth())
+                               || y < loc[1] || y > (loc[1] + sheetCard.getHeight());
+                if (outside) {
                     dismissSheet();
                     return true;
                 }
@@ -719,23 +748,27 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             return false;
         });
 
-        // 2. 底部卡片主体（Gravity.BOTTOM 彻底锁定底部，左右 100% 铺满）
+        // 2. 底部卡片主体（Gravity.BOTTOM 彻底锁定底部，左右边距自适应）
+        int leftMarginPx = dpToPx(cfg.getSheetMarginLeft());
+        int rightMarginPx = dpToPx(cfg.getSheetMarginRight());
+
         sheetCard = new LinearLayout(this);
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, defaultHeight);
         cardLp.gravity = Gravity.BOTTOM;
-        cardLp.setMargins(0, 0, 0, 0);
+        cardLp.leftMargin = leftMarginPx;
+        cardLp.rightMargin = rightMarginPx;
+        cardLp.bottomMargin = 0;
         sheetCard.setLayoutParams(cardLp);
         sheetCard.setOrientation(LinearLayout.VERTICAL);
         sheetCard.setElevation(dpToPx(16));
         sheetCard.setClipChildren(true);
         sheetCard.setFitsSystemWindows(false);
 
-        // 24dp 顶部圆角毛玻璃半透背景 + 细微描边（一直覆盖到底部，键盘下方完全拥有同色垫板）
+        // 顶部圆角 + 智能底角（贴边为直角，不贴边切圆角）毛玻璃半透背景 + 细微描边
         GradientDrawable cardBg = new GradientDrawable();
         cardBg.setShape(GradientDrawable.RECTANGLE);
-        float r = dpToPx(24);
-        cardBg.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
+        cardBg.setCornerRadii(calculateCardCornerRadii(cfg.getSheetMarginLeft(), cfg.getSheetMarginRight()));
         cardBg.setColor(cardBgColor);
         cardBg.setStroke(dpToPx(1), borderColor);
         sheetCard.setBackground(cardBg);
@@ -1224,7 +1257,8 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             if (isKeyboardVisible) {
                 if (!isKeyboardElevated) {
                     isKeyboardElevated = true;
-                    if (currentHeight <= (int) (screenHeight * 0.52f)) {
+                    ConfigStore cfg = new ConfigStore(this);
+                    if (cfg.isSheetAutoRestoreDefault() && currentHeight <= (int) (screenHeight * 0.45f)) {
                         animateHeightTo(defaultHeight);
                     }
                 }
@@ -1285,19 +1319,26 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         }
     }
 
-    /** 15% 阶梯智能多档吸附算法（35%, 50%, 65%, 80%, 95%） */
+    /** 智能多档吸附算法（基础 35%, 50%, 65%, 80%, 95% + 用户自定义默认高度档位） */
     private void snapToNearest15PercentStep() {
-        float[] steps = {0.35f, 0.50f, 0.65f, 0.80f, 0.95f};
+        float userRatio = new ConfigStore(this).getSheetHeightPercent() / 100.0f;
+        java.util.TreeSet<Float> stepSet = new java.util.TreeSet<>();
+        stepSet.add(0.35f);
+        stepSet.add(0.50f);
+        stepSet.add(0.65f);
+        stepSet.add(0.80f);
+        stepSet.add(0.95f);
+        stepSet.add(userRatio);
+
         float currentRatio = (float) currentHeight / (float) screenHeight;
+        float closestRatio = userRatio;
+        float minDiff = Float.MAX_VALUE;
 
-        float closestRatio = steps[0];
-        float minDiff = Math.abs(currentRatio - steps[0]);
-
-        for (int i = 1; i < steps.length; i++) {
-            float diff = Math.abs(currentRatio - steps[i]);
+        for (Float step : stepSet) {
+            float diff = Math.abs(currentRatio - step);
             if (diff < minDiff) {
                 minDiff = diff;
-                closestRatio = steps[i];
+                closestRatio = step;
             }
         }
 
@@ -2039,8 +2080,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
         isDismissing = false;
         triggerForegroundWakeup();
         if (sheetCard != null) {
-            // 如果上次处于低位 (<=50%)，重置为默认高度
-            if (currentHeight <= (int) (screenHeight * 0.52f)) {
+            ConfigStore cfg = new ConfigStore(this);
+            // 如果开启了低位自动恢复开关且上次处于低位 (<=45%)，重置为自定义默认高度
+            if (cfg.isSheetAutoRestoreDefault() && currentHeight <= (int) (screenHeight * 0.45f)) {
                 currentHeight = defaultHeight;
                 updateCardHeight(defaultHeight);
             }

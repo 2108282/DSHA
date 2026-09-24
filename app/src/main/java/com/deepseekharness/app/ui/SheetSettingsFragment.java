@@ -121,6 +121,66 @@ public class SheetSettingsFragment extends Fragment {
             });
         }
 
+        // 5. 抽屉默认展开高度与吸附档位 (30~95%)
+        EditText heightInput = v.findViewById(R.id.sheet_settings_height_input);
+        Button heightSave = v.findViewById(R.id.sheet_settings_height_save);
+        if (heightInput != null) {
+            heightInput.setText(String.valueOf(cfg.getSheetHeightPercent()));
+        }
+        if (heightSave != null) {
+            heightSave.setOnClickListener(x -> {
+                int val = 75;
+                try {
+                    val = Integer.parseInt(heightInput.getText().toString().trim());
+                } catch (Exception ignored) {}
+                if (val < 30 || val > 95) {
+                    Toast.makeText(requireContext(), "请输入 30 ~ 95 之间的百分比", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                cfg.setSheetHeightPercent(val);
+                Toast.makeText(requireContext(), "已将默认高度与吸附档位设为 " + val + "%", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        // 6. 低于 45% 自动恢复默认高度 开关
+        SwitchCompat restoreSwitch = v.findViewById(R.id.sheet_settings_auto_restore_switch);
+        if (restoreSwitch != null) {
+            restoreSwitch.setChecked(cfg.isSheetAutoRestoreDefault());
+            v.findViewById(R.id.sheet_settings_auto_restore_row).setOnClickListener(x -> {
+                boolean next = !restoreSwitch.isChecked();
+                restoreSwitch.setChecked(next);
+                cfg.setSheetAutoRestoreDefault(next);
+                Toast.makeText(requireContext(),
+                        next ? "已开启：抽屉低于 45% 时下次自动回弹至默认高度" : "已关闭：抽屉保持上次停留高度",
+                        Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        // 7. 左右屏幕独立边距 (0~100 dp)
+        EditText mlInput = v.findViewById(R.id.sheet_settings_margin_left_input);
+        EditText mrInput = v.findViewById(R.id.sheet_settings_margin_right_input);
+        Button marginSave = v.findViewById(R.id.sheet_settings_margin_save);
+        if (mlInput != null && mrInput != null) {
+            mlInput.setText(String.valueOf(cfg.getSheetMarginLeft()));
+            mrInput.setText(String.valueOf(cfg.getSheetMarginRight()));
+        }
+        if (marginSave != null) {
+            marginSave.setOnClickListener(x -> {
+                int l = 0, r = 0;
+                try {
+                    l = Integer.parseInt(mlInput.getText().toString().trim());
+                    r = Integer.parseInt(mrInput.getText().toString().trim());
+                } catch (Exception ignored) {}
+                if (l < 0 || l > 100 || r < 0 || r > 100) {
+                    Toast.makeText(requireContext(), "边距建议在 0 ~ 100 dp 之间", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                cfg.setSheetMarginLeft(l);
+                cfg.setSheetMarginRight(r);
+                Toast.makeText(requireContext(), "边距已保存：左 " + l + "dp，右 " + r + "dp（下次唤起生效）", Toast.LENGTH_SHORT).show();
+            });
+        }
+
         return v;
     }
 }

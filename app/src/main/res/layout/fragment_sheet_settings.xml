@@ -371,5 +371,252 @@
                     android:textSize="@dimen/text_caption" />
             </LinearLayout>
         </LinearLayout>
+
+        <!-- 快捷抽屉尺寸与形态配置卡片 -->
+        <LinearLayout
+            style="@style/DshaCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap_control"
+            android:orientation="vertical">
+
+            <!-- 1. 默认展开高度百分比 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="@dimen/card_pad">
+
+                <TextView
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:background="@drawable/bg_chip"
+                    android:gravity="center"
+                    android:text="📏"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="@dimen/text_title" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/gap_control"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="默认高度与吸附档位"
+                        android:textColor="@color/text"
+                        android:textSize="@dimen/text_body"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/gap_hair"
+                        android:text="默认展开高度 (30~95%)，默认 75%"
+                        android:textColor="@color/text_muted"
+                        android:textSize="@dimen/text_caption" />
+                </LinearLayout>
+
+                <EditText
+                    android:id="@+id/sheet_settings_height_input"
+                    android:layout_width="56dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_input"
+                    android:gravity="center"
+                    android:hint="75"
+                    android:importantForAutofill="no"
+                    android:inputType="number"
+                    android:maxLength="3"
+                    android:textColor="@color/text"
+                    android:textSize="@dimen/text_body" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:text="%"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="@dimen/text_body" />
+
+                <Button
+                    android:id="@+id/sheet_settings_height_save"
+                    style="@style/Widget.DSHA.Button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_btn_primary"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="保存"
+                    android:textColor="@color/accent_on"
+                    android:textSize="@dimen/text_caption" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/stroke"
+                android:background="@color/line" />
+
+            <!-- 2. 低于 45% 自动恢复默认高度 开关项 -->
+            <LinearLayout
+                android:id="@+id/sheet_settings_auto_restore_row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="@dimen/card_pad">
+
+                <TextView
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:background="@drawable/bg_chip"
+                    android:gravity="center"
+                    android:text="🔄"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="@dimen/text_title" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/gap_control"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="低位自动恢复默认高度"
+                        android:textColor="@color/text"
+                        android:textSize="@dimen/text_body"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/gap_hair"
+                        android:lineSpacingExtra="2dp"
+                        android:text="抽屉低于 45% 时，下次唤起或弹起键盘自动回到设定的默认高度"
+                        android:textColor="@color/text_muted"
+                        android:textSize="@dimen/text_caption" />
+                </LinearLayout>
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/sheet_settings_auto_restore_switch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:clickable="false"
+                    android:focusable="false" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/stroke"
+                android:background="@color/line" />
+
+            <!-- 3. 左右屏幕间距（独立输入） -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="@dimen/card_pad">
+
+                <TextView
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:background="@drawable/bg_chip"
+                    android:gravity="center"
+                    android:text="↔️"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="@dimen/text_title" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/gap_control"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="左右屏幕间距"
+                        android:textColor="@color/text"
+                        android:textSize="@dimen/text_body"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/gap_hair"
+                        android:text="左/右独立边距 (0为贴边直角，>0为浮空圆角)"
+                        android:textColor="@color/text_muted"
+                        android:textSize="@dimen/text_caption" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="左"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="@dimen/text_caption" />
+
+                <EditText
+                    android:id="@+id/sheet_settings_margin_left_input"
+                    android:layout_width="40dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_input"
+                    android:gravity="center"
+                    android:hint="0"
+                    android:importantForAutofill="no"
+                    android:inputType="number"
+                    android:maxLength="3"
+                    android:textColor="@color/text"
+                    android:textSize="@dimen/text_body" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="右"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="@dimen/text_caption" />
+
+                <EditText
+                    android:id="@+id/sheet_settings_margin_right_input"
+                    android:layout_width="40dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_input"
+                    android:gravity="center"
+                    android:hint="0"
+                    android:importantForAutofill="no"
+                    android:inputType="number"
+                    android:maxLength="3"
+                    android:textColor="@color/text"
+                    android:textSize="@dimen/text_body" />
+
+                <Button
+                    android:id="@+id/sheet_settings_margin_save"
+                    style="@style/Widget.DSHA.Button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_btn_primary"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="保存"
+                    android:textColor="@color/accent_on"
+                    android:textSize="@dimen/text_caption" />
+            </LinearLayout>
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

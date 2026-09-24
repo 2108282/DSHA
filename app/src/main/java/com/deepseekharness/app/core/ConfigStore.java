@@ -227,6 +227,41 @@ public class ConfigStore {
         prefs.edit().putBoolean(Constants.KEY_SHEET_MONET_COLOR, enabled).apply();
     }
 
+    // ================= 快捷抽屉尺寸与形态 =================
+
+    public int getSheetHeightPercent() {
+        return prefs.getInt(Constants.KEY_SHEET_HEIGHT_PERCENT, 75);
+    }
+
+    public void setSheetHeightPercent(int percent) {
+        int clamped = Math.max(30, Math.min(95, percent));
+        prefs.edit().putInt(Constants.KEY_SHEET_HEIGHT_PERCENT, clamped).apply();
+    }
+
+    public int getSheetMarginLeft() {
+        return prefs.getInt(Constants.KEY_SHEET_MARGIN_LEFT, 0);
+    }
+
+    public void setSheetMarginLeft(int dp) {
+        prefs.edit().putInt(Constants.KEY_SHEET_MARGIN_LEFT, Math.max(0, dp)).apply();
+    }
+
+    public int getSheetMarginRight() {
+        return prefs.getInt(Constants.KEY_SHEET_MARGIN_RIGHT, 0);
+    }
+
+    public void setSheetMarginRight(int dp) {
+        prefs.edit().putInt(Constants.KEY_SHEET_MARGIN_RIGHT, Math.max(0, dp)).apply();
+    }
+
+    public boolean isSheetAutoRestoreDefault() {
+        return prefs.getBoolean(Constants.KEY_SHEET_AUTO_RESTORE_DEFAULT, true);
+    }
+
+    public void setSheetAutoRestoreDefault(boolean enabled) {
+        prefs.edit().putBoolean(Constants.KEY_SHEET_AUTO_RESTORE_DEFAULT, enabled).apply();
+    }
+
     // ================= 圈定即搜重定向 =================
 
     /**
