@@ -31,7 +31,7 @@
                 android:layout_height="wrap_content" android:text="发现更多插件" />
             <TextView style="@style/DshaText.Body" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:layout_marginTop="@dimen/gap_tight"
-                android:text="在网站选取插件并打开 DSHA，核对实际包信息后确认安装；也可在此粘贴链接或导入插件包。" />
+                android:text="DSHA第三方插件库" />
             <Button android:id="@+id/btnPluginWebsite" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:minHeight="48dp"
                 android:layout_marginTop="@dimen/gap_control"
@@ -43,11 +43,11 @@
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/gap_block">
             <TextView style="@style/DshaText.Title" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="通过链接安装" />
+                android:layout_height="wrap_content" android:text="填写包名或仓库链接安装" />
             <EditText android:id="@+id/appbar_github_input" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:minHeight="48dp"
                 android:layout_marginTop="@dimen/gap_control" android:background="@drawable/bg_input"
-                android:hint="粘贴插件链接或 owner/repo" android:inputType="textUri"
+                android:hint="填写包名、仓库链接或 owner/repo" android:inputType="textUri"
                 android:imeOptions="actionGo" android:singleLine="true" android:importantForAutofill="no"
                 android:padding="@dimen/gap_control" android:textColor="@color/text"
                 android:textColorHint="@color/text_muted" android:textSize="@dimen/text_body" />
