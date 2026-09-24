@@ -2771,6 +2771,17 @@ function installReconciler(ctx) {
         // re-renders) into one dirty-key pass per animation frame. Each task
         // declares scopes so only intersecting tasks run on a given flush.
         const observer = new MutationObserver((records) => {
+            let hasNonTyping = false;
+            for (const record of records) {
+                const target = record.target;
+                const el = target && (target.nodeType === 1 ? target : target.parentElement);
+                if (!el || !el.closest('[contenteditable], [data-input-scroll], [class*="_composer"], [class*="composer"]')) {
+                    hasNonTyping = true;
+                    break;
+                }
+            }
+            if (!hasNonTyping) return;
+
             const keys = new Set();
             for (const record of records) {
                 keys.add(record.type === 'attributes' && record.attributeName !== null ? record.attributeName : '*');
@@ -8394,7 +8405,19 @@ function apply(ctx) {
         // coalesce to one apply per frame and re-check the breakpoint at flush
         // time so a queued callback never writes mobile styles on desktop.
         const scheduler = (0, raf_scheduler_ts_1.createRafScheduler)((cb) => window.requestAnimationFrame(cb), (id) => window.cancelAnimationFrame(id));
-        const mo = new MutationObserver(() => {
+        const mo = new MutationObserver((records) => {
+            if (records) {
+                let hasNonTyping = false;
+                for (const r of records) {
+                    const t = r.target;
+                    const el = t && (t.nodeType === 1 ? t : t.parentElement);
+                    if (!el || !el.closest('[contenteditable], [data-input-scroll], [class*="_composer"], [class*="composer"]')) {
+                        hasNonTyping = true;
+                        break;
+                    }
+                }
+                if (!hasNonTyping) return;
+            }
             if (mq.matches)
                 scheduler.schedule(() => { if (mq.matches)
                     apply(); });
