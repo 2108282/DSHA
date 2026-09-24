@@ -37,7 +37,7 @@ public final class UpdateActivity extends AppCompatActivity {
         findViewById(R.id.update_browser).setOnClickListener(v -> {
             UpdateRepository.State state = repository.state().getValue();
             AboutDialog.openBrowser(this, state != null && state.release != null ? state.release.pageUrl
-                    : "https://github.com/qiannianhuanxiang/DSHA/releases");
+                    : AboutDialog.GITHUB_ROOT_URL + "/releases");
         });
         repository.state().observe(this, state -> {
             ((TextView) findViewById(R.id.update_status)).setText(state.message);

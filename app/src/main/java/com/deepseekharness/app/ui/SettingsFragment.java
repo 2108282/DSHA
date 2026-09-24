@@ -148,7 +148,7 @@ public class SettingsFragment extends Fragment {
                             showDshUpdate();
                             break;
                         case 1:
-                            openUrl("https://github.com/2108282/DSHA/releases");
+                            openUrl(AboutDialog.GITHUB_ROOT_URL + "/releases");
                             break;
                     }
                 })

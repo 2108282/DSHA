@@ -420,7 +420,7 @@ public class ConfigFragment extends Fragment {
     private void openRepo(Context ctx) {
         try {
             startActivity(new Intent(Intent.ACTION_VIEW,
-                    Uri.parse("https://github.com/qiannianhuanxiang/DSHA")));
+                    Uri.parse(AboutDialog.GITHUB_ROOT_URL)));
         } catch (Exception e) {
             toast("无法打开浏览器");
         }
