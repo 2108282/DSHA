@@ -568,25 +568,24 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- 下方填数与保存行 -->
+                <!-- 下方填数与保存行：去掉多余 paddingStart，保存按钮靠右对齐绝对不被截断 -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="@dimen/gap_control"
                     android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:paddingStart="44dp">
+                    android:orientation="horizontal">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="左"
-                        android:textColor="@color/text_secondary"
+                        android:textColor="@color/text"
                         android:textSize="@dimen/text_body" />
 
                     <EditText
                         android:id="@+id/sheet_settings_margin_left_input"
-                        android:layout_width="52dp"
+                        android:layout_width="46dp"
                         android:layout_height="38dp"
                         android:layout_marginStart="6dp"
                         android:background="@drawable/bg_input"
@@ -611,12 +610,12 @@
                         android:layout_height="wrap_content"
                         android:layout_marginStart="14dp"
                         android:text="右"
-                        android:textColor="@color/text_secondary"
+                        android:textColor="@color/text"
                         android:textSize="@dimen/text_body" />
 
                     <EditText
                         android:id="@+id/sheet_settings_margin_right_input"
-                        android:layout_width="52dp"
+                        android:layout_width="46dp"
                         android:layout_height="38dp"
                         android:layout_marginStart="6dp"
                         android:background="@drawable/bg_input"
