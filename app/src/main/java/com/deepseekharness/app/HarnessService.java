@@ -66,6 +66,27 @@ public class HarnessService extends Service {
         }
     };
 
+    /** 熄屏超时兜底定时器：防止网络或异常场景下锁死整夜 */
+    private final android.os.Handler screenOffTimeoutHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable screenOffTimeoutRunnable = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                if (wakeLock != null && wakeLock.isHeld()) {
+                    long idleTime = System.currentTimeMillis() - sLastTaskActiveTime;
+                    if (idleTime >= 600_000L) {
+                        android.util.Log.w("DSHA", "[保活] 熄屏超时兜底触发 (600秒无刷新)，强制释放唤醒锁防整夜耗电");
+                        HttpShellService.isTaskActive = false;
+                        releaseLocks();
+                    } else {
+                        // 期间有新进度刷新，顺延剩余时间
+                        screenOffTimeoutHandler.postDelayed(this, Math.max(10_000L, 600_000L - idleTime));
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -177,6 +198,7 @@ public class HarnessService extends Service {
 
     private synchronized void releaseLocks() {
         try {
+            screenOffTimeoutHandler.removeCallbacks(screenOffTimeoutRunnable);
             if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         } catch (Throwable ignored) {
         }
@@ -199,11 +221,17 @@ public class HarnessService extends Service {
                         long idleTime = System.currentTimeMillis() - sLastTaskActiveTime;
                         // 若无任务在跑，或任务已超过 5 分钟无任何刷新（防假活/丢包死锁），立即释放 WakeLock 进入系统 Deep Sleep
                         if (!isTaskRunning() || idleTime > 5 * 60 * 1000L) {
+                            screenOffTimeoutHandler.removeCallbacks(screenOffTimeoutRunnable);
                             HttpShellService.isTaskActive = false;
                             releaseLocks();
                             android.util.Log.i("DSHA", "[保活] 屏幕熄灭且无活跃任务，已彻底释放全部锁进入深睡");
+                        } else {
+                            // 熄屏时仍有任务活跃：启动 600 秒超时兜底，防止网络或异常场景下锁死整夜
+                            screenOffTimeoutHandler.removeCallbacks(screenOffTimeoutRunnable);
+                            screenOffTimeoutHandler.postDelayed(screenOffTimeoutRunnable, 600_000L);
                         }
                     } else if (Intent.ACTION_SCREEN_ON.equals(action) || Intent.ACTION_USER_PRESENT.equals(action)) {
+                        screenOffTimeoutHandler.removeCallbacks(screenOffTimeoutRunnable);
                         heartBeatHandler.removeCallbacks(heartBeatRunnable);
                         heartBeatHandler.postDelayed(heartBeatRunnable, 30_000L);
                         if (isTaskRunning()) {
@@ -223,6 +251,7 @@ public class HarnessService extends Service {
     }
 
     private void stopScreenWatcher() {
+        screenOffTimeoutHandler.removeCallbacks(screenOffTimeoutRunnable);
         if (screenReceiver != null) {
             try {
                 unregisterReceiver(screenReceiver);
