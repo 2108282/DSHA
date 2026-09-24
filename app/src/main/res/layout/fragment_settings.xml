@@ -62,14 +62,18 @@
                 android:orientation="horizontal"
                 android:padding="@dimen/card_pad">
 
-                <TextView
+                <FrameLayout
                     android:layout_width="36dp"
                     android:layout_height="36dp"
-                    android:background="@drawable/bg_chip"
-                    android:gravity="center"
-                    android:text="↻"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="@dimen/text_title" />
+                    android:background="@drawable/bg_chip">
+
+                    <ImageView
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="检查更新"
+                        android:src="@drawable/ic_update" />
+                </FrameLayout>
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -91,7 +95,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/gap_hair"
-                        android:text="DSH 稳定版 · 测试版 · 客户端与模块"
+                        android:text="升级 DSH 核心 · 客户端与模块"
                         android:textColor="@color/text_muted"
                         android:textSize="@dimen/text_caption" />
                 </LinearLayout>

@@ -275,9 +275,6 @@ public class HarnessController {
             new File(wdDir, ".agents/skills").mkdirs();
             new File(wdDir, ".dsh/skills").mkdirs();
 
-            // 自动根据 APK 设置应用第三方插件兼容模式（放开白名单与防崩容错）
-            applyThirdPartyPluginCompat(config.isThirdPartyPluginCompat());
-
             // 深度破除异常中断死锁：清理 .credentials.yaml.lock 等遗留 lock 文件，防止 atomic-write 超时卡死
             File dshDir = new File(proot.getRootfsDir(), "root/.dsh");
             if (dshDir.isDirectory()) {
@@ -288,33 +285,6 @@ public class HarnessController {
             }
         } catch (Throwable e) {
             Log.w("DSHA", "写入心跳补丁失败: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 根据 APK 开关应用或撤销第三方插件兼容模式。
-     * 确保即使用户升级覆盖了 DSH，每次由 APK 启动时都会自动确保兼容模式就绪。
-     */
-    public void applyThirdPartyPluginCompat(boolean enabled) {
-        try {
-            File runDir = new File("/data/adb/dsha/run");
-            if (!runDir.exists()) runDir.mkdirs();
-            File flag = new File(runDir, "third_party_plugin_compat");
-            if (enabled) {
-                if (!flag.exists()) flag.createNewFile();
-                // 执行容器内/宿主兼容补丁脚本（支持原生 KSU/Magisk chroot 运行时）
-                String compatCmd = "if [ -f /data/adb/dsha/rootfs/root/.dsh/dsha-plugin-compat.sh ]; then "
-                        + "/system/bin/chroot /data/adb/dsha/rootfs /bin/bash /root/.dsh/dsha-plugin-compat.sh 2>/dev/null || true; "
-                        + "elif [ -f /root/.dsh/dsha-plugin-compat.sh ]; then "
-                        + "/bin/bash /root/.dsh/dsha-plugin-compat.sh 2>/dev/null || true; fi";
-                Runtime.getRuntime().exec(new String[]{
-                        "su", "-c", compatCmd
-                }).waitFor();
-            } else {
-                if (flag.exists()) flag.delete();
-            }
-        } catch (Throwable e) {
-            Log.w("DSHA", "同步第三方插件兼容模式失败: " + e.getMessage());
         }
     }
 

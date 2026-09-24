@@ -199,6 +199,18 @@
                 android:paddingBottom="10dp"
                 android:textColor="@color/primary"
                 android:visibility="gone" />
+
+            <Button
+                android:id="@+id/launch_open_sheet"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/btn_height"
+                android:layout_marginTop="@dimen/gap_tight"
+                android:background="@drawable/bg_btn"
+                android:text="💬 打开快捷对话抽屉"
+                android:textAllCaps="false"
+                android:textColor="@color/text"
+                android:textSize="@dimen/text_body"
+                android:visibility="gone" />
         </LinearLayout>
 
         <LinearLayout

@@ -96,8 +96,6 @@ public final class Constants {
     public static final String KEY_SHEET_INVERT_COLOR = "sheet_invert_color";
     /** 快捷抽屉莫奈取色开关（提取系统壁纸 Material You 调色板）。 */
     public static final String KEY_SHEET_MONET_COLOR = "sheet_monet_color";
-    /** 第三方插件兼容模式（放开官方白名单限制 + 模块加载防崩保护）。 */
-    public static final String KEY_THIRD_PARTY_PLUGIN_COMPAT = "third_party_plugin_compat";
 
     /** 默认工作目录（容器内路径，直通手机物理存储 Download/DSHA/工作区）。 */
     public static final String DEFAULT_WORKDIR = "/root/内部存储/工作区";

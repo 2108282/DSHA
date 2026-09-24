@@ -57,7 +57,6 @@ public class ConfigFragment extends Fragment {
         CheckBox overlay = v.findViewById(R.id.config_overlay_stream);
         CheckBox sensors = v.findViewById(R.id.config_cap_sensors);
         CheckBox location = v.findViewById(R.id.config_cap_location);
-        CheckBox thirdPartyCompat = v.findViewById(R.id.config_third_party_compat);
         Button save = v.findViewById(R.id.config_save);
 
         // 高级项折叠
@@ -70,7 +69,6 @@ public class ConfigFragment extends Fragment {
         if (taskset != null) taskset.setText(c.getTaskset());
         confirm.setChecked(c.isConfirmShell());
         lan.setChecked(c.isLanMode());
-        if (thirdPartyCompat != null) thirdPartyCompat.setChecked(c.isThirdPartyPluginCompat());
         overlay.setChecked(pref(ctx, "overlay_stream", false));
         sensors.setChecked(pref(ctx, "cap_sensors", false));
         location.setChecked(pref(ctx, "cap_location", false));
@@ -107,11 +105,6 @@ public class ConfigFragment extends Fragment {
             applyTasksetImmediately(tsVal);
             c.setConfirmShell(confirm.isChecked());
             c.setLanMode(lan.isChecked());
-            if (thirdPartyCompat != null) {
-                boolean compatOn = thirdPartyCompat.isChecked();
-                c.setThirdPartyPluginCompat(compatOn);
-                com.deepseekharness.app.core.HarnessController.get(ctx).applyThirdPartyPluginCompat(compatOn);
-            }
             setPref(ctx, "overlay_stream", overlay.isChecked());
             setPref(ctx, "cap_sensors", sensors.isChecked());
             setPref(ctx, "cap_location", location.isChecked());

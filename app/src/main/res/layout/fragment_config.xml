@@ -250,15 +250,6 @@
             </LinearLayout>
 
             <CheckBox
-                android:id="@+id/config_third_party_compat"
-                style="@style/DshaText.Body"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="@dimen/touch_min"
-                android:paddingStart="@dimen/gap_tight"
-                android:text="第三方插件兼容模式（放开配置白名单与防崩容错）" />
-
-            <CheckBox
                 android:id="@+id/config_rc6"
                 style="@style/DshaText.Body"
                 android:layout_width="match_parent"

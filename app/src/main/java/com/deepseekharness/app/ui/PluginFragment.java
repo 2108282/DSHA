@@ -112,18 +112,6 @@ public class PluginFragment extends Fragment {
         linkHint = view.findViewById(R.id.pluginLinkHint);
         search = view.findViewById(R.id.pluginSearch);
         hideBuiltin = view.findViewById(R.id.chkHideBuiltin);
-        CheckBox chkThirdPartyCompat = view.findViewById(R.id.chkThirdPartyCompat);
-        if (chkThirdPartyCompat != null) {
-            com.deepseekharness.app.core.ConfigStore cfg = com.deepseekharness.app.core.ConfigStore.get(requireContext());
-            chkThirdPartyCompat.setChecked(cfg.isThirdPartyPluginCompat());
-            chkThirdPartyCompat.setOnCheckedChangeListener((btn, checked) -> {
-                cfg.setThirdPartyPluginCompat(checked);
-                com.deepseekharness.app.core.HarnessController.get(requireContext()).applyThirdPartyPluginCompat(checked);
-                android.widget.Toast.makeText(requireContext(),
-                        checked ? "已启用第三方插件兼容模式（放开配置白名单与防崩容错）" : "已停用第三方插件兼容模式",
-                        android.widget.Toast.LENGTH_SHORT).show();
-            });
-        }
         RecyclerView list = view.findViewById(R.id.pluginList);
         list.setLayoutManager(new LinearLayoutManager(requireContext()));
         list.setNestedScrollingEnabled(false);

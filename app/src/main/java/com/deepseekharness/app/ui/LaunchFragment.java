@@ -30,6 +30,7 @@ public class LaunchFragment extends Fragment {
 
     private HarnessController controller;
     private TextView lanAddrText;
+    private Button launchOpenSheet;
     private TextView launchLog;
     /** 启动按钮当前是否处于「进入」态（鉴权链接已就绪）。 */
     private boolean webReady;
@@ -60,6 +61,10 @@ public class LaunchFragment extends Fragment {
         Button restart = v.findViewById(R.id.launch_open);
         Button stop = v.findViewById(R.id.launch_stop);
         lanAddrText = v.findViewById(R.id.lan_addr);
+        launchOpenSheet = v.findViewById(R.id.launch_open_sheet);
+        if (launchOpenSheet != null) {
+            launchOpenSheet.setOnClickListener(x -> openQuickChatSheet());
+        }
         launchLog = v.findViewById(R.id.launch_log);
 
         restart.setText("重启");
@@ -242,6 +247,7 @@ public class LaunchFragment extends Fragment {
     public void onDestroyView() {
         ui.removeCallbacks(refreshState);
         lanAddrText = null;
+        launchOpenSheet = null;
         launchLog = null;
         super.onDestroyView();
     }
@@ -310,6 +316,7 @@ public class LaunchFragment extends Fragment {
 
         if (!lan && !ready) {
             lanAddrText.setVisibility(View.GONE);
+            if (launchOpenSheet != null) launchOpenSheet.setVisibility(View.GONE);
             return;
         }
 
@@ -331,6 +338,16 @@ public class LaunchFragment extends Fragment {
 
         lanAddrText.setOnClickListener(v -> showAccessCredentialsDialog());
         lanAddrText.setVisibility(View.VISIBLE);
+        if (launchOpenSheet != null) launchOpenSheet.setVisibility(View.VISIBLE);
+    }
+
+    private void openQuickChatSheet() {
+        try {
+            Intent intent = QuickChatSheetActivity.createLaunchIntent(requireContext());
+            startActivity(intent);
+        } catch (Throwable t) {
+            Toast.makeText(requireContext(), "无法打开抽屉：" + t.getMessage(), Toast.LENGTH_SHORT).show();
+        }
     }
 
     /**
@@ -390,17 +407,6 @@ public class LaunchFragment extends Fragment {
             items.add("📶 局域网访问未开启（可在配置页中打开）");
             acts.add(() -> {});
         }
-
-        // 4. 快捷对话抽屉
-        items.add("💬 打开快捷对话底部抽屉");
-        acts.add(() -> {
-            try {
-                Intent intent = QuickChatSheetActivity.createLaunchIntent(requireContext());
-                startActivity(intent);
-            } catch (Throwable t) {
-                Toast.makeText(requireContext(), "无法打开抽屉：" + t.getMessage(), Toast.LENGTH_SHORT).show();
-            }
-        });
 
         new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
                 .setTitle("访问地址与鉴权凭据")

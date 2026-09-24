@@ -25,7 +25,6 @@ import androidx.fragment.app.Fragment;
 import com.deepseekharness.app.R;
 import com.deepseekharness.app.core.ConfigStore;
 import com.deepseekharness.app.core.HarnessController;
-import com.deepseekharness.app.util.Constants;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -137,9 +136,8 @@ public class SettingsFragment extends Fragment {
 
     private void showUpdateDialog() {
         String[] options = {
-                "① DSH 核心 · 稳定发布版 (当前 " + Constants.DSH_VERSION + ")",
-                "② DSH 核心 · 测试先行版 (@next 分支)",
-                "③ DSHA 客户端与 Magisk/KSU 模块 (Release)"
+                "① 升级DSH核心",
+                "② DSHA 客户端与 Magisk/KSU 模块 (Release)"
         };
 
         new MaterialAlertDialogBuilder(requireContext())
@@ -147,12 +145,9 @@ public class SettingsFragment extends Fragment {
                 .setItems(options, (d, which) -> {
                     switch (which) {
                         case 0:
-                            showDshStableUpdate();
+                            showDshUpdate();
                             break;
                         case 1:
-                            showDshNextUpdate();
-                            break;
-                        case 2:
                             openUrl("https://github.com/2108282/DSHA/releases");
                             break;
                     }
@@ -161,28 +156,15 @@ public class SettingsFragment extends Fragment {
                 .show();
     }
 
-    private void showDshStableUpdate() {
+    private void showDshUpdate() {
         new MaterialAlertDialogBuilder(requireContext())
-                .setTitle("DSH 核心 · 稳定版")
-                .setMessage("当前内置版本: " + Constants.DSH_VERSION + "\n\n"
+                .setTitle("升级DSH核心")
+                .setMessage("当前版本: 请在核心中查看\n\n"
                         + "可在浏览器查看官方 GitHub 上游最新发布日志，或在终端执行 npm 升级命令:\n\n"
-                        + "npm i -g @deepseek-ai/dsh")
+                        + "npm i -g @deepseek-ai/dsh@（版本号）")
                 .setPositiveButton("查看官方 Release", (d, w) ->
                         openUrl("https://github.com/deepseek-ai/deepseek-harness/releases"))
-                .setNeutralButton("复制升级命令", (d, w) -> copyText("npm i -g @deepseek-ai/dsh"))
-                .setNegativeButton("返回", null)
-                .show();
-    }
-
-    private void showDshNextUpdate() {
-        new MaterialAlertDialogBuilder(requireContext())
-                .setTitle("DSH 核心 · 测试先行版")
-                .setMessage("体验上游仓库最新合并的功能特性与测试分支。\n\n"
-                        + "升级方法：进入内置终端或 Termux，执行以下命令即可安装最新 @next 分支:\n\n"
-                        + "npm i -g @deepseek-ai/dsh@next")
-                .setPositiveButton("查看官方仓库", (d, w) ->
-                        openUrl("https://github.com/deepseek-ai/deepseek-harness"))
-                .setNeutralButton("复制测试版安装命令", (d, w) -> copyText("npm i -g @deepseek-ai/dsh@next"))
+                .setNeutralButton("复制升级命令", (d, w) -> copyText("npm i -g @deepseek-ai/dsh@（版本号）"))
                 .setNegativeButton("返回", null)
                 .show();
     }
