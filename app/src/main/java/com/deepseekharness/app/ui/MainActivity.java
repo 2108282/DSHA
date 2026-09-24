@@ -45,6 +45,14 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
+        if (!isTaskRoot()) {
+            Intent intent = getIntent();
+            String action = intent != null ? intent.getAction() : null;
+            if (intent != null && intent.hasCategory(Intent.CATEGORY_LAUNCHER) && Intent.ACTION_MAIN.equals(action)) {
+                finish();
+                return;
+            }
+        }
         super.onCreate(savedInstanceState);
         current = this;
 

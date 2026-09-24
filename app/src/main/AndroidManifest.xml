@@ -51,7 +51,6 @@
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
-            android:launchMode="singleTask"
             android:taskAffinity="${applicationId}"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -71,7 +70,7 @@
         <activity
             android:name=".ui.QuickChatSheetActivity"
             android:exported="false"
-            android:taskAffinity="${applicationId}.quick_sheet"
+            android:taskAffinity=""
             android:excludeFromRecents="true"
             android:autoRemoveFromRecents="true"
             android:launchMode="singleTask"
