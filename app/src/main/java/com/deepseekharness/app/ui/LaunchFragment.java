@@ -343,15 +343,15 @@ public class LaunchFragment extends Fragment {
             if (bound) {
                 String ip = HarnessController.getLanAddress();
                 if (ip != null && !ip.isEmpty()) {
-                    lanAddrText.setText("📶 局域网服务已就绪 · " + ip + ":" + LanProxyService.LAN_PORT);
+                    lanAddrText.setText("🔗 局域网服务已就绪 · " + ip + ":" + LanProxyService.LAN_PORT);
                 } else {
-                    lanAddrText.setText("📶 局域网服务已开启（等待连接 WiFi）");
+                    lanAddrText.setText("🔗 局域网服务已开启（等待连接 WiFi）");
                 }
             } else {
-                lanAddrText.setText("📶 局域网核心代理启动中…");
+                lanAddrText.setText("🔗 局域网核心代理启动中…");
             }
         } else {
-            lanAddrText.setText("🔑 访问地址与鉴权凭据");
+            lanAddrText.setText("🔗 访问地址与鉴权凭据");
         }
 
         lanAddrText.setOnClickListener(v -> showAccessCredentialsDialog());
