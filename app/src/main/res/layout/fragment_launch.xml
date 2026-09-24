@@ -185,19 +185,20 @@
 
             <TextView
                 android:id="@+id/lan_addr"
-                style="@style/DshaText.Caption"
+                style="@style/DshaText.Body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:minHeight="@dimen/btn_height"
                 android:layout_marginTop="@dimen/gap_control"
                 android:background="@drawable/bg_btn"
                 android:clickable="true"
                 android:focusable="true"
-                android:fontFamily="monospace"
+                android:gravity="center"
                 android:paddingStart="@dimen/gap_control"
                 android:paddingTop="10dp"
                 android:paddingEnd="@dimen/gap_control"
                 android:paddingBottom="10dp"
-                android:textColor="@color/primary"
+                android:textColor="@color/text"
                 android:visibility="gone" />
 
             <Button
