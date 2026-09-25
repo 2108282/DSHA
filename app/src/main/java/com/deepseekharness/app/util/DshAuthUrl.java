@@ -124,4 +124,21 @@ public final class DshAuthUrl {
         }
         return null;
     }
+
+    /** 从鉴权 URL 中安全提取端口号，解析失败返回 -1 */
+    public static int extractPort(String url) {
+        if (url == null || url.isEmpty()) return -1;
+        try {
+            java.net.URI uri = new java.net.URI(url);
+            int p = uri.getPort();
+            if (p > 0) return p;
+        } catch (Throwable ignored) {}
+        java.util.regex.Matcher m = Pattern.compile("127\\.0\\.0\\.1:(\\d+)").matcher(url);
+        if (m.find()) {
+            try {
+                return Integer.parseInt(m.group(1));
+            } catch (Throwable ignored) {}
+        }
+        return -1;
+    }
 }

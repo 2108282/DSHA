@@ -78,6 +78,20 @@ public class HarnessController {
     }
 
     public int getPort() {
+        if ("ksu_chroot".equals(proot.runtime().id())) {
+            if (webAuthUrl != null && !webAuthUrl.isEmpty()) {
+                int extracted = DshAuthUrl.extractPort(webAuthUrl);
+                if (extracted > 0) return extracted;
+            }
+            File portFile = new File("/data/adb/dsha/run/port");
+            if (portFile.exists() && portFile.canRead()) {
+                try {
+                    String p = new String(Compat.readAllBytes(portFile), StandardCharsets.UTF_8).trim();
+                    int parsed = Integer.parseInt(p);
+                    if (parsed > 0 && parsed <= 65535) return parsed;
+                } catch (Throwable ignored) {}
+            }
+        }
         return config != null ? config.getPortInt() : 3080;
     }
 
@@ -116,9 +130,10 @@ public class HarnessController {
     /** Web 是否在运行（针对 ksu_chroot 使用 Socket 探活与 status.sh，严禁在主线程执行 su，且后台执行有 2s 节流）。 */
     public boolean isWebRunning() {
         if ("ksu_chroot".equals(proot.runtime().id())) {
+            int currentPort = getPort();
             // 1. 快速 Socket 探活（设为 250ms，稳健避免握手丢包误判）
             try (java.net.Socket s = new java.net.Socket()) {
-                s.connect(new java.net.InetSocketAddress("127.0.0.1", config != null ? config.getPortInt() : 3080), 250);
+                s.connect(new java.net.InetSocketAddress("127.0.0.1", currentPort), 250);
                 lastKnownWebRunning = true;
                 return true;
             } catch (Throwable ignored) {
@@ -564,7 +579,7 @@ public class HarnessController {
             } catch (InterruptedException e) {
                 return;
             }
-            int targetPort = config != null ? config.getPortInt() : 3080;
+            int targetPort = getPort();
             for (int i = 0; i < 6; i++) {
                 synchronized (lifecycle) {
                     if (!lifecycle.isCurrent(generation)) return;

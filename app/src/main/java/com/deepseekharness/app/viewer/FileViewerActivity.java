@@ -65,6 +65,8 @@ public class FileViewerActivity extends Activity {
     private CodeEditor codeEditor;
     private PdfRenderer pdfRenderer;
     private ParcelFileDescriptor pdfPfd;
+    private android.util.LruCache<Integer, Bitmap> pdfBitmapCache;
+    private java.util.concurrent.ExecutorService pdfExecutor;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -221,10 +223,7 @@ public class FileViewerActivity extends Activity {
         codeEditor.setWordwrap(true);
 
         try {
-            byte[] bytes = new byte[(int) currentFile.length()];
-            try (FileInputStream fis = new FileInputStream(currentFile)) {
-                fis.read(bytes);
-            }
+            byte[] bytes = java.nio.file.Files.readAllBytes(currentFile.toPath());
             codeEditor.setText(new String(bytes, StandardCharsets.UTF_8));
         } catch (Exception e) {
             Toast.makeText(this, "读取文本失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
@@ -237,7 +236,11 @@ public class FileViewerActivity extends Activity {
         if (codeEditor == null) return;
         try {
             String text = codeEditor.getText().toString();
-            File tmp = new File(currentFile.getParentFile(), "." + currentFile.getName() + ".tmp");
+            File parent = currentFile.getAbsoluteFile().getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            File tmp = new File(parent != null ? parent : currentFile.getParentFile(), "." + currentFile.getName() + ".tmp");
             try (FileOutputStream fos = new FileOutputStream(tmp)) {
                 fos.write(text.getBytes(StandardCharsets.UTF_8));
                 fos.flush();
@@ -278,12 +281,24 @@ public class FileViewerActivity extends Activity {
             pdfPfd = ParcelFileDescriptor.open(currentFile, ParcelFileDescriptor.MODE_READ_ONLY);
             pdfRenderer = new PdfRenderer(pdfPfd);
 
+            int maxMemory = (int) (Runtime.getRuntime().maxMemory() / 1024);
+            int cacheSize = Math.max(1024, maxMemory / 8);
+            pdfBitmapCache = new android.util.LruCache<Integer, Bitmap>(cacheSize) {
+                @Override
+                protected int sizeOf(Integer key, Bitmap bitmap) {
+                    return bitmap.getByteCount() / 1024;
+                }
+            };
+            pdfExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
+
             ListView listView = new ListView(this);
             listView.setLayoutParams(new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
             listView.setDivider(null);
+            final int screenWidth = getResources().getDisplayMetrics().widthPixels;
+
             listView.setAdapter(new BaseAdapter() {
-                @Override public int getCount() { return pdfRenderer.getPageCount(); }
+                @Override public int getCount() { return pdfRenderer != null ? pdfRenderer.getPageCount() : 0; }
                 @Override public Object getItem(int position) { return position; }
                 @Override public long getItemId(int position) { return position; }
                 @Override
@@ -298,15 +313,47 @@ public class FileViewerActivity extends Activity {
                         pageView.setAdjustViewBounds(true);
                         pageView.setPadding(0, 0, 0, dp(8));
                     }
-                    try {
-                        PdfRenderer.Page page = pdfRenderer.openPage(position);
-                        int width = getResources().getDisplayMetrics().widthPixels;
-                        int height = (int) ((float) width / page.getWidth() * page.getHeight());
-                        Bitmap bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-                        pageView.setImageBitmap(bmp);
-                        page.close();
-                    } catch (Exception ignored) {
+
+                    pageView.setTag(position);
+
+                    Bitmap cached = pdfBitmapCache != null ? pdfBitmapCache.get(position) : null;
+                    if (cached != null && !cached.isRecycled()) {
+                        pageView.setImageBitmap(cached);
+                    } else {
+                        pageView.setImageDrawable(null);
+                        pageView.setMinimumHeight(dp(200));
+                        final int pos = position;
+                        if (pdfExecutor != null && !pdfExecutor.isShutdown()) {
+                            pdfExecutor.execute(() -> {
+                                if (pdfRenderer == null) return;
+                                try {
+                                    Bitmap bmp = null;
+                                    synchronized (pdfRenderer) {
+                                        if (pdfRenderer == null) return;
+                                        PdfRenderer.Page page = pdfRenderer.openPage(pos);
+                                        int width = screenWidth > 0 ? screenWidth : 1080;
+                                        int height = (int) ((float) width / page.getWidth() * page.getHeight());
+                                        if (height <= 0) height = dp(200);
+                                        bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                                        page.close();
+                                    }
+                                    if (bmp != null) {
+                                        final Bitmap finalBmp = bmp;
+                                        if (pdfBitmapCache != null) {
+                                            pdfBitmapCache.put(pos, finalBmp);
+                                        }
+                                        runOnUiThread(() -> {
+                                            if (isFinishing() || isDestroyed()) return;
+                                            if (Integer.valueOf(pos).equals(pageView.getTag())) {
+                                                pageView.setImageBitmap(finalBmp);
+                                            }
+                                        });
+                                    }
+                                } catch (Throwable ignored) {
+                                }
+                            });
+                        }
                     }
                     return pageView;
                 }
@@ -433,8 +480,19 @@ public class FileViewerActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         try {
-            if (pdfRenderer != null) pdfRenderer.close();
+            if (pdfExecutor != null) {
+                pdfExecutor.shutdownNow();
+            }
+            if (pdfRenderer != null) {
+                synchronized (pdfRenderer) {
+                    pdfRenderer.close();
+                    pdfRenderer = null;
+                }
+            }
             if (pdfPfd != null) pdfPfd.close();
+            if (pdfBitmapCache != null) {
+                pdfBitmapCache.evictAll();
+            }
         } catch (Exception ignored) {
         }
     }
