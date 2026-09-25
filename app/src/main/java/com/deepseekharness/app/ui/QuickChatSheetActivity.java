@@ -415,12 +415,19 @@ public class QuickChatSheetActivity extends AppCompatActivity {
     private static final String SCRIPT_CONSUME_WEB_BACK =
             "(function() {\n" +
             "    try {\n" +
-            "        // 1. 优先消费：模态弹窗（通用设置、对话框、确认框）\n" +
-            "        var modal = document.querySelector('[aria-modal=\"true\"], [role=\"dialog\"]');\n" +
-            "        if (modal) {\n" +
+            "        // 1. 优先消费：模态弹窗（通用设置、快捷键速查、对话框、确认框等）\n" +
+            "        // 注意：后打开的弹窗（如快捷键弹窗）位于 DOM 较深层级，必须优先消费最顶层的 modal\n" +
+            "        var modals = document.querySelectorAll('[aria-modal=\"true\"], [role=\"dialog\"]');\n" +
+            "        if (modals && modals.length > 0) {\n" +
+            "            var modal = modals[modals.length - 1];\n" +
             "            var closeBtn = modal.querySelector('button[aria-label*=\"Close\" i], button[aria-label*=\"关闭\" i], [class*=\"_close\"], [class*=\"_headerActions\"] button, [class*=\"_header\"] button:last-child');\n" +
-            "            if (closeBtn) { closeBtn.click(); return true; }\n" +
-            "            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));\n" +
+            "            if (closeBtn) {\n" +
+            "                closeBtn.click();\n" +
+            "                return true;\n" +
+            "            }\n" +
+            "            var escEvent = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true });\n" +
+            "            document.dispatchEvent(escEvent);\n" +
+            "            window.dispatchEvent(escEvent);\n" +
             "            return true;\n" +
             "        }\n" +
             "        // 2. 优先消费：右侧文件树 / 面板（严格判定仅在真实展开可见时才执行收起，严禁在收起状态误触 toggle）\n" +
@@ -457,7 +464,9 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             "        if (frame && !frame.hasAttribute('data-sidebar-collapsed')) {\n" +
             "            var backdrop = document.querySelector('[data-mobile-nav=\"backdrop\"]');\n" +
             "            if (backdrop) { backdrop.click(); return true; }\n" +
-            "            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));\n" +
+            "            var escEv = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true });\n" +
+            "            document.dispatchEvent(escEv);\n" +
+            "            window.dispatchEvent(escEv);\n" +
             "            if (!frame.hasAttribute('data-sidebar-collapsed')) {\n" +
             "                frame.setAttribute('data-sidebar-collapsed', '');\n" +
             "            }\n" +
@@ -472,10 +481,20 @@ public class QuickChatSheetActivity extends AppCompatActivity {
             "            pluginCrumb.click();\n" +
             "            return true;\n" +
             "        }\n" +
-            "        // 6. 优先消费：插件管理主页面（或其它非会话全局面板），平滑返回上层会话界面\n" +
+            "        // 6. 优先消费：插件管理主页面（或其它非会话全局面板），将返回手势严格绑定到左上角返回按钮\n" +
             "        var pluginPanel = document.querySelector('[data-plugin-panel]');\n" +
             "        var activePanel = document.querySelector('[class*=\"panelRow\"][class*=\"panelActive\"], [class*=\"panelRow\"][aria-current=\"page\"]');\n" +
-            "        if (pluginPanel || activePanel) {\n" +
+            "        var fabBack = document.querySelector('[data-mobile-nav=\"fab\"][data-mobile-nav-fab-mode=\"exit-panel\"], [data-mobile-nav=\"fab\"][aria-label*=\"返回\" i], [data-mobile-nav=\"fab\"][title*=\"返回\" i]');\n" +
+            "        if (pluginPanel || activePanel || fabBack) {\n" +
+            "            if (fabBack) {\n" +
+            "                fabBack.click();\n" +
+            "                return true;\n" +
+            "            }\n" +
+            "            var anyFab = document.querySelector('[data-mobile-nav=\"fab\"]');\n" +
+            "            if (anyFab && (anyFab.getAttribute('data-mobile-nav-fab-mode') === 'exit-panel' || anyFab.innerHTML.indexOf('path') !== -1)) {\n" +
+            "                anyFab.click();\n" +
+            "                return true;\n" +
+            "            }\n" +
             "            var panelItem = document.querySelector('[class*=\"panelRow\"], button[aria-current=\"page\"]');\n" +
             "            if (panelItem) {\n" +
             "                var rKey = Object.keys(panelItem).find(function(k) { return k.startsWith('__reactProps') || k.startsWith('__reactFiber'); });\n" +
