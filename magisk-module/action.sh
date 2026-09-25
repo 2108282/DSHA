@@ -58,9 +58,9 @@ fi
 
 # 2. 已在运行 -> 执行停止
 if [ "$IS_RUNNING" = "1" ]; then
-    PORT="3088"
+    PORT="3080"
     [ -f "$PORT_FILE" ] && PORT=$(cat "$PORT_FILE" 2>/dev/null)
-    case "$PORT" in ''|*[!0-9]*) PORT=3088 ;; esac
+    case "$PORT" in ''|*[!0-9]*) PORT=3080 ;; esac
 
     echo "========================================="
     echo "       DSHA Native 核心运行时管理"
@@ -86,9 +86,9 @@ if [ "$IS_RUNNING" = "1" ]; then
 fi
 
 # 3. 未在运行 -> 执行启动
-PORT="3088"
+PORT="3080"
 [ -f "$PORT_FILE" ] && PORT=$(cat "$PORT_FILE" 2>/dev/null)
-case "$PORT" in ''|*[!0-9]*) PORT=3088 ;; esac
+case "$PORT" in ''|*[!0-9]*) PORT=3080 ;; esac
 
 echo "========================================="
 echo "       DSHA Native 核心运行时管理"
