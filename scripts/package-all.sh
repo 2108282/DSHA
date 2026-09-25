@@ -12,7 +12,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 mkdir -p "$DIST_DIR"
 
-VERSION="${1:-0.1.7-rc.1}"
+VERSION="${1:-0.1.7-rc.2-u1}"
 
 STAGE_DIR="/tmp/dsha_pkg_stage_$$"
 mkdir -p "$STAGE_DIR"
