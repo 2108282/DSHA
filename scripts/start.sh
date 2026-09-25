@@ -283,6 +283,48 @@ HCMD_EOF
 chmod 755 "$DSH_BIN/$HCMD"
 done
 
+# 宿主文件/URL 打开直通包装器（模拟 Linux 桌面 xdg-open）
+if [ ! -f "$DSH_BIN/xdg-open" ]; then
+cat << 'XDG_EOF' > "$DSH_BIN/xdg-open"
+#!/bin/bash
+TARGET="$1"
+[ -z "$TARGET" ] && exit 0
+if [[ "$TARGET" =~ ^[a-zA-Z][a-zA-Z0-9+.-]*:// ]]; then
+    exec /usr/bin/nsenter -t 1 -m /system/bin/am start -a android.intent.action.VIEW -d "$TARGET"
+fi
+if [[ "$TARGET" != /* ]]; then
+    TARGET="$(pwd)/$TARGET"
+fi
+[ ! -e "$TARGET" ] && exit 1
+MIME="*/*"
+EXT="${TARGET##*.}"
+EXT_LOWER=$(echo "$EXT" | tr '[:upper:]' '[:lower:]')
+if [ -d "$TARGET" ]; then
+    MIME="resource/folder"
+else
+    case "$EXT_LOWER" in
+        html|htm) MIME="text/html" ;;
+        txt|log|md|sh|py|js|ts|json|yml|yaml|java|c|cpp) MIME="text/plain" ;;
+        png) MIME="image/png" ;;
+        jpg|jpeg) MIME="image/jpeg" ;;
+        webp) MIME="image/webp" ;;
+        gif) MIME="image/gif" ;;
+        pdf) MIME="application/pdf" ;;
+        apk) MIME="application/vnd.android.package-archive" ;;
+        zip) MIME="application/zip" ;;
+        xlsx) MIME="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ;;
+        xls) MIME="application/vnd.ms-excel" ;;
+        docx) MIME="application/vnd.openxmlformats-officedocument.wordprocessingml.document" ;;
+        doc) MIME="application/msword" ;;
+        pptx) MIME="application/vnd.openxmlformats-officedocument.presentationml.presentation" ;;
+        ppt) MIME="application/vnd.ms-powerpoint" ;;
+    esac
+fi
+exec /usr/bin/nsenter -t 1 -m /system/bin/am start -a android.intent.action.VIEW -d "file://$TARGET" -t "$MIME"
+XDG_EOF
+chmod 755 "$DSH_BIN/xdg-open"
+fi
+
 # 清空旧日志
 > "$LOG_FILE"
 mkdir -p "$ROOTFS/root"
@@ -303,6 +345,7 @@ chroot "$ROOTFS" /usr/bin/env -i \
     TERM=xterm-256color \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
+    DISPLAY=:0 \
     DSH_CONFIRM=1 \
     nice -n 10 /usr/local/bin/node --v8-pool-size=2 /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web $PATCH_ARG --no-open --port "$PORT" --host 127.0.0.1 > "$LOG_FILE" 2>&1 &
 

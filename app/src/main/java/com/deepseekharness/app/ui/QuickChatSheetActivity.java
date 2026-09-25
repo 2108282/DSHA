@@ -1890,6 +1890,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "    var longPressTimer = null;\n"
                         + "    var touchStartX = 0, touchStartY = 0;\n"
                         + "    var isLongPressTriggered = false;\n"
+                        + "    var lastLongPressTime = 0;\n"
                         + "\n"
                         + "    function findTargetFileElement(e, allowDirectory) {\n"
                         + "      var el = e.target && e.target.closest ? e.target.closest('[data-files-entry], [data-files-path], [data-file-path], [data-presented-file], button[title*=\"/sdcard/\"], button[title*=\"dsh-resource:\"], a[href*=\"/sdcard/\"], a[href*=\"dsh-resource://file\"]') : null;\n"
@@ -1926,6 +1927,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "      clearTimeout(longPressTimer);\n"
                         + "      longPressTimer = setTimeout(function() {\n"
                         + "        isLongPressTriggered = true;\n"
+                        + "        lastLongPressTime = Date.now();\n"
                         + "        try {\n"
                         + "          var sel = window.getSelection();\n"
                         + "          if (sel) sel.removeAllRanges();\n"
@@ -1958,18 +1960,19 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "\n"
                         + "    document.addEventListener('touchend', function(e) {\n"
                         + "      clearTimeout(longPressTimer);\n"
-                        + "      if (isLongPressTriggered) {\n"
+                        + "      if (isLongPressTriggered || (Date.now() - lastLongPressTime < 600)) {\n"
                         + "        try {\n"
                         + "          var sel = window.getSelection();\n"
                         + "          if (sel) sel.removeAllRanges();\n"
                         + "        } catch(err) {}\n"
                         + "        e.preventDefault();\n"
                         + "        e.stopPropagation();\n"
+                        + "        if (e.stopImmediatePropagation) e.stopImmediatePropagation();\n"
                         + "      }\n"
                         + "    }, true);\n"
                         + "\n"
                         + "    document.addEventListener('selectstart', function(e) {\n"
-                        + "      if (isLongPressTriggered || (e.target && e.target.closest && e.target.closest('li[data-files-entry]'))) {\n"
+                        + "      if (isLongPressTriggered || (Date.now() - lastLongPressTime < 600) || (e.target && e.target.closest && e.target.closest('li[data-files-entry]'))) {\n"
                         + "        e.preventDefault();\n"
                         + "        e.stopPropagation();\n"
                         + "        return false;\n"
@@ -1977,7 +1980,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "    }, true);\n"
                         + "\n"
                         + "    document.addEventListener('contextmenu', function(e) {\n"
-                        + "      if (isLongPressTriggered || (e.target && e.target.closest && e.target.closest('li[data-files-entry]'))) {\n"
+                        + "      if (isLongPressTriggered || (Date.now() - lastLongPressTime < 600) || (e.target && e.target.closest && e.target.closest('li[data-files-entry]'))) {\n"
                         + "        e.preventDefault();\n"
                         + "        e.stopPropagation();\n"
                         + "        return false;\n"
@@ -1985,10 +1988,11 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "    }, true);\n"
                         + "\n"
                         + "    document.addEventListener('click', function(e) {\n"
-                        + "      if (isLongPressTriggered) {\n"
+                        + "      if (isLongPressTriggered || (Date.now() - lastLongPressTime < 600)) {\n"
                         + "        isLongPressTriggered = false;\n"
                         + "        e.preventDefault();\n"
                         + "        e.stopPropagation();\n"
+                        + "        if (e.stopImmediatePropagation) e.stopImmediatePropagation();\n"
                         + "        return;\n"
                         + "      }\n"
                         + "      /* 1. 交付卡片下拉小箭头：拦截并分流（定位文件树 / 外部应用打开） */\n"
@@ -1998,6 +2002,7 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "        if (card) {\n"
                         + "          e.preventDefault();\n"
                         + "          e.stopPropagation();\n"
+                        + "          if (e.stopImmediatePropagation) e.stopImmediatePropagation();\n"
                         + "          var cardPath = extractFilePath(card);\n"
                         + "          if (cardPath && window.DshaNativeBridge && window.DshaNativeBridge.locateOrOpenExternalFile) {\n"
                         + "            window.DshaNativeBridge.locateOrOpenExternalFile(cardPath);\n"
@@ -2018,12 +2023,30 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                         + "          if (window.DshaNativeBridge && window.DshaNativeBridge.openWorkspaceFile) {\n"
                         + "            e.preventDefault();\n"
                         + "            e.stopPropagation();\n"
+                        + "            if (e.stopImmediatePropagation) e.stopImmediatePropagation();\n"
                         + "            window.DshaNativeBridge.openWorkspaceFile(treePath);\n"
                         + "          }\n"
                         + "        }\n"
                         + "        return;\n"
                         + "      }\n"
-                        + "      /* 3. 其余所有元素（包括聊天消息里的全部行内文件、提及按钮、交付卡片主按钮等）：100% 放行，交由 DSH Web 原生处理！ */\n"
+                        + "      /* 3. 交付卡片主区域短按：若是 .html / .htm，自动通过 Android 宿主调用系统外部浏览器打开，彻底避免 DSH 侧边栏 sandbox=\"\" 禁用 JS 导致白屏！ */\n"
+                        + "      var hitCard = e.target && e.target.closest ? e.target.closest('[data-presented-file]') : null;\n"
+                        + "      if (hitCard) {\n"
+                        + "        var hitCardPath = extractFilePath(hitCard);\n"
+                        + "        if (hitCardPath) {\n"
+                        + "          var hitClean = hitCardPath.split('?')[0].split('#')[0];\n"
+                        + "          if (/\\.(html|htm)$/i.test(hitClean)) {\n"
+                        + "            e.preventDefault();\n"
+                        + "            e.stopPropagation();\n"
+                        + "            if (e.stopImmediatePropagation) e.stopImmediatePropagation();\n"
+                        + "            if (window.DshaNativeBridge && window.DshaNativeBridge.openExternalFile) {\n"
+                        + "              window.DshaNativeBridge.openExternalFile(hitCardPath);\n"
+                        + "            }\n"
+                        + "            return;\n"
+                        + "          }\n"
+                        + "        }\n"
+                        + "      }\n"
+                        + "      /* 4. 其余所有元素（包括聊天消息里的全部行内文件、提及按钮等）：100% 放行，交由 DSH Web 原生处理！ */\n"
                         + "    }, true);\n"
                         + "  }\n"
                         + "})();";
@@ -2468,13 +2491,22 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 "    } catch(err) { if (el.click) el.click(); }\n" +
                 "    return true;\n" +
                 "  }\n" +
+                "  // 1. 若侧边栏未打开，展开侧边栏\n" +
                 "  var panel = document.querySelector('[data-sidebar-right-open]');\n" +
                 "  if (!panel) {\n" +
                 "    var toggleBtn = document.querySelector('[data-sidebar-right-expand]') || document.querySelector('[data-sidebar-right-toggle]');\n" +
                 "    if (toggleBtn) fireClick(toggleBtn);\n" +
                 "  }\n" +
-                "  var filesTab = document.querySelector('[data-tab=\"files\"], [data-sidebar-tab=\"files\"]');\n" +
-                "  if (filesTab) fireClick(filesTab);\n" +
+                "  // 2. 切换到「文件」Tab（匹配 DockKit 真实 DOM）\n" +
+                "  var tabs = document.querySelectorAll('[data-dockkit-tab]');\n" +
+                "  for (var t = 0; t < tabs.length; t++) {\n" +
+                "    var txt = tabs[t].textContent || '';\n" +
+                "    if (txt.indexOf('文件') !== -1 || txt.indexOf('Files') !== -1) {\n" +
+                "      fireClick(tabs[t]);\n" +
+                "      break;\n" +
+                "    }\n" +
+                "  }\n" +
+                "  // 3. 递归异步轮询展开父目录并定位高亮目标文件\n" +
                 "  var parts = targetRelPath.split('/');\n" +
                 "  var currentDirPath = '';\n" +
                 "  var dirSteps = [];\n" +
@@ -2488,56 +2520,60 @@ public class QuickChatSheetActivity extends AppCompatActivity {
                 "      return;\n" +
                 "    }\n" +
                 "    var dirPath = dirSteps[stepIndex];\n" +
-                "    var dirItem = document.querySelector('li[data-files-entry=\"directory\"][data-files-path=\"' + CSS.escape(dirPath) + '\"]');\n" +
-                "    if (!dirItem) {\n" +
-                "      setTimeout(function() {\n" +
-                "        dirItem = document.querySelector('li[data-files-entry=\"directory\"][data-files-path=\"' + CSS.escape(dirPath) + '\"]');\n" +
-                "        if (dirItem) doExpand(dirItem, stepIndex);\n" +
-                "        else highlightTargetFile();\n" +
-                "      }, 100);\n" +
-                "      return;\n" +
-                "    }\n" +
-                "    doExpand(dirItem, stepIndex);\n" +
-                "  }\n" +
-                "  function doExpand(dirItem, stepIndex) {\n" +
-                "    var btn = dirItem.querySelector('button[aria-expanded]');\n" +
-                "    if (btn && btn.getAttribute('aria-expanded') !== 'true') {\n" +
-                "      fireClick(btn);\n" +
-                "    }\n" +
-                "    setTimeout(function() {\n" +
-                "      expandNextDir(stepIndex + 1);\n" +
-                "    }, 100);\n" +
+                "    var tries = 0;\n" +
+                "    var timer = setInterval(function() {\n" +
+                "      tries++;\n" +
+                "      var dirItem = document.querySelector('li[data-files-entry=\"directory\"][data-files-path=\"' + CSS.escape(dirPath) + '\"]');\n" +
+                "      if (dirItem) {\n" +
+                "        clearInterval(timer);\n" +
+                "        var btn = dirItem.querySelector('button[aria-expanded]');\n" +
+                "        if (btn && btn.getAttribute('aria-expanded') !== 'true') {\n" +
+                "          fireClick(btn);\n" +
+                "        }\n" +
+                "        setTimeout(function() { expandNextDir(stepIndex + 1); }, 180);\n" +
+                "      } else if (tries > 20) {\n" +
+                "        clearInterval(timer);\n" +
+                "        highlightTargetFile();\n" +
+                "      }\n" +
+                "    }, 60);\n" +
                 "  }\n" +
                 "  function highlightTargetFile() {\n" +
-                "    var fileItem = document.querySelector('li[data-files-entry=\"file\"][data-files-path=\"' + CSS.escape(targetRelPath) + '\"]');\n" +
-                "    if (!fileItem) {\n" +
-                "      var fileName = parts[parts.length - 1];\n" +
-                "      var allFiles = document.querySelectorAll('li[data-files-entry=\"file\"]');\n" +
-                "      for (var j = 0; j < allFiles.length; j++) {\n" +
-                "        var p = allFiles[j].getAttribute('data-files-path') || '';\n" +
-                "        if (p === targetRelPath || p.endsWith('/' + fileName) || p === fileName) {\n" +
-                "          fileItem = allFiles[j];\n" +
-                "          break;\n" +
+                "    var tries = 0;\n" +
+                "    var timer = setInterval(function() {\n" +
+                "      tries++;\n" +
+                "      var fileItem = document.querySelector('li[data-files-entry=\"file\"][data-files-path=\"' + CSS.escape(targetRelPath) + '\"]');\n" +
+                "      if (!fileItem) {\n" +
+                "        var fileName = parts[parts.length - 1];\n" +
+                "        var allFiles = document.querySelectorAll('li[data-files-entry=\"file\"]');\n" +
+                "        for (var j = 0; j < allFiles.length; j++) {\n" +
+                "          var p = allFiles[j].getAttribute('data-files-path') || '';\n" +
+                "          if (p === targetRelPath || p.endsWith('/' + fileName) || p === fileName) {\n" +
+                "            fileItem = allFiles[j];\n" +
+                "            break;\n" +
+                "          }\n" +
                 "        }\n" +
                 "      }\n" +
-                "    }\n" +
-                "    if (fileItem) {\n" +
-                "      fileItem.scrollIntoView({ behavior: 'smooth', block: 'center' });\n" +
-                "      fileItem.style.transition = 'all 0.3s ease';\n" +
-                "      fileItem.style.outline = '2px solid #3b82f6';\n" +
-                "      fileItem.style.outlineOffset = '2px';\n" +
-                "      fileItem.style.backgroundColor = 'rgba(59, 130, 246, 0.3)';\n" +
-                "      fileItem.style.borderRadius = '8px';\n" +
-                "      setTimeout(function() { fileItem.style.backgroundColor = 'rgba(59, 130, 246, 0.5)'; }, 300);\n" +
-                "      setTimeout(function() { fileItem.style.backgroundColor = 'rgba(59, 130, 246, 0.15)'; }, 900);\n" +
-                "      setTimeout(function() {\n" +
-                "        fileItem.style.outline = 'none';\n" +
-                "        fileItem.style.backgroundColor = '';\n" +
-                "        fileItem.style.borderRadius = '';\n" +
-                "      }, 2500);\n" +
-                "    }\n" +
+                "      if (fileItem) {\n" +
+                "        clearInterval(timer);\n" +
+                "        fileItem.scrollIntoView({ behavior: 'smooth', block: 'center' });\n" +
+                "        fileItem.style.transition = 'all 0.3s ease';\n" +
+                "        fileItem.style.outline = '2px solid #3b82f6';\n" +
+                "        fileItem.style.outlineOffset = '2px';\n" +
+                "        fileItem.style.backgroundColor = 'rgba(59, 130, 246, 0.3)';\n" +
+                "        fileItem.style.borderRadius = '8px';\n" +
+                "        setTimeout(function() { fileItem.style.backgroundColor = 'rgba(59, 130, 246, 0.5)'; }, 300);\n" +
+                "        setTimeout(function() { fileItem.style.backgroundColor = 'rgba(59, 130, 246, 0.15)'; }, 900);\n" +
+                "        setTimeout(function() {\n" +
+                "          fileItem.style.outline = 'none';\n" +
+                "          fileItem.style.backgroundColor = '';\n" +
+                "          fileItem.style.borderRadius = '';\n" +
+                "        }, 2500);\n" +
+                "      } else if (tries > 25) {\n" +
+                "        clearInterval(timer);\n" +
+                "      }\n" +
+                "    }, 60);\n" +
                 "  }\n" +
-                "  setTimeout(function() { expandNextDir(0); }, 150);\n" +
+                "  setTimeout(function() { expandNextDir(0); }, 200);\n" +
                 "})();";
 
         if (sCachedWebView != null) {
