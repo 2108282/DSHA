@@ -82,6 +82,8 @@ BASE_EXCLUDES=(
     "--exclude=./root/内部存储"
     "--exclude=./sdcard"
     "--exclude=./storage"
+    "--exclude=./usr/share/fonts/android/*"
+    "--exclude=./usr/share/fonts/truetype/android/*"
 )
 
 # 压缩引擎选择 (优先多线程 pigz)
@@ -236,11 +238,12 @@ EOF_PKG
         "--exclude=./root/.dsh/__pycache__"
         "--exclude=./root/.dsh/repair-builtin.log"
         "--exclude=./root/.dsh/restore-report.txt"
+        "--exclude=./root/.dsh/plugin-export*"
         "--exclude=./root/dsha-repo"
         "--exclude=./.l2s"
         "--exclude=./.proroot-meta"
         "--exclude=./var/lib/apt/lists/*"
-        "--exclude=./var/cache/apt/archives/*"
+        "--exclude=./var/cache/apt/*"
         "--exclude=./usr/share/doc/*"
         "--exclude=./usr/share/man/*"
     )
