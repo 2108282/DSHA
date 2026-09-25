@@ -156,32 +156,20 @@ else
 }
 EOF_PKG
 
-    # 2. 收集需要排除的死链 (profiles/web/node_modules 中所有指向 plugin-src/ 的软链)
+    # 2. 收集需要排除的死链 (profiles/web/node_modules, /usr/local/lib/node_modules, /usr/local/bin 中所有指向 plugin-src/ 的软链)
     SYMLINK_EXCLUDES=()
-    PROFILE_NM="/root/.dsh/profiles/web/node_modules"
-    if [ -d "$PROFILE_NM" ]; then
-        while IFS= read -r link_entry; do
-            [ -L "$link_entry" ] || continue
-            target=$(readlink "$link_entry" || true)
-            if [[ "$target" == *"plugin-src"* ]]; then
-                rel_path=".${link_entry}"
-                SYMLINK_EXCLUDES+=("--exclude=$rel_path")
-            fi
-        done < <(find "$PROFILE_NM" -maxdepth 2 -type l 2>/dev/null || true)
-    fi
-
-    # 3. 全局 node_modules 中指向 plugin-src 的软链也一并排除
-    GLOBAL_NM="/usr/local/lib/node_modules"
-    if [ -d "$GLOBAL_NM" ]; then
-        while IFS= read -r link_entry; do
-            [ -L "$link_entry" ] || continue
-            target=$(readlink "$link_entry" || true)
-            if [[ "$target" == *"plugin-src"* ]]; then
-                rel_path=".${link_entry}"
-                SYMLINK_EXCLUDES+=("--exclude=$rel_path")
-            fi
-        done < <(find "$GLOBAL_NM" -maxdepth 2 -type l 2>/dev/null || true)
-    fi
+    for scan_dir in "/root/.dsh/profiles/web/node_modules" "/usr/local/lib/node_modules" "/usr/local/bin"; do
+        if [ -d "$scan_dir" ]; then
+            while IFS= read -r link_entry; do
+                [ -L "$link_entry" ] || continue
+                target=$(readlink "$link_entry" || true)
+                if [[ "$target" == *"plugin-src"* ]]; then
+                    rel_path=".${link_entry}"
+                    SYMLINK_EXCLUDES+=("--exclude=$rel_path")
+                fi
+            done < <(find "$scan_dir" -maxdepth 2 -type l 2>/dev/null || true)
+        fi
+    done
 
     # 4. 纯净模式脱敏黑名单
     CLEAN_EXCLUDES=(
@@ -195,11 +183,13 @@ EOF_PKG
         "--exclude=./root/.dsh/storages/*"
         # 排除模型账号与 API Key
         "--exclude=./root/.dsh/agy-accounts.json"
+        "--exclude=./root/.dsh/agy-stats.json"
         "--exclude=./root/.dsh/.credentials.yaml"
         "--exclude=./root/.dsh/dsh-api-dashboard.json"
-        "--exclude=./root/.dsh/settings.yaml"
+        "--exclude=./root/.dsh/settings.yaml*"
         # 排除设备桥与认证 Token
         "--exclude=./root/.dsh/.bridge_token"
+        "--exclude=./root/.dsh/.bridge_*"
         "--exclude=./root/.dsh/.launch_token"
         "--exclude=./root/.dsh/.lan_token"
         "--exclude=./root/.dsh/.approval_decision"
@@ -211,6 +201,7 @@ EOF_PKG
         "--exclude=./root/.dsh/plugin-history/*"
         "--exclude=./root/.dsh/plugin-sources.json"
         "--exclude=./root/.dsh/plugin-updates.json"
+        "--exclude=./root/.dsh/logs/*"
         # 排除临时文件、缓存、日志与命令历史
         "--exclude=./root/.bash_history"
         "--exclude=./root/.cache/*"
@@ -240,6 +231,9 @@ EOF_PKG
         "--exclude=./root/.dsh/restore-report.txt"
         "--exclude=./root/.dsh/plugin-export*"
         "--exclude=./root/dsha-repo"
+        "--exclude=./root/dsh-web-mobile"
+        "--exclude=./root/.opencodereview"
+        "--exclude=./normify-*"
         "--exclude=./.l2s"
         "--exclude=./.proroot-meta"
         "--exclude=./var/lib/apt/lists/*"
@@ -253,7 +247,7 @@ EOF_PKG
 
     echo "==> [1/3] 正在扫描系统并创建脱敏底包流..."
     cd /
-    tar --numeric-owner -cf "$TMP_RAW_TAR" "${CLEAN_EXCLUDES[@]}" .
+    tar --numeric-owner -cf "$TMP_RAW_TAR" "${CLEAN_EXCLUDES[@]}" . || [ $? -eq 1 ]
 
     echo "==> [2/3] 动态注入纯净版 profiles/web/package.json (完美替换)..."
     tar --numeric-owner -rf "$TMP_RAW_TAR" -C "$STAGE_DIR" ./root/.dsh/profiles/web/package.json
