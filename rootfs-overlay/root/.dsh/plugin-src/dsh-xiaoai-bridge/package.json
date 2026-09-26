@@ -1,0 +1,23 @@
+{
+  "name": "dsh-xiaoai-bridge",
+  "version": "1.0.0",
+  "description": "DeepSeek Harness 小爱同学系统决策中枢与流式卡片桥接插件",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "cordis": {
+    "entry": "lib/index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "license": "MIT"
+}
