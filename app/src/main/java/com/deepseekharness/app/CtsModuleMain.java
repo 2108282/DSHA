@@ -536,12 +536,12 @@ public class CtsModuleMain extends XposedModule {
                             if (playerInstance != null) {
                                 Method speak = playerCls.getMethod("speakTts", String.class);
                                 speak.invoke(playerInstance, finalText);
-                                log(Log.INFO, TAG, "XiaoAi TTS speakTts invoked successfully, chars=" + finalText.length() + ", protectMs=" + estimatedDurationMs);
+                                Log.i(TAG, "XiaoAi TTS speakTts invoked successfully, chars=" + finalText.length() + ", protectMs=" + estimatedDurationMs);
                             } else {
-                                log(Log.WARN, TAG, "XiaoAi TTS playerInstance not found on la0.n1");
+                                Log.w(TAG, "XiaoAi TTS playerInstance not found on la0.n1");
                             }
                         } catch (Throwable t) {
-                            log(Log.WARN, TAG, "XiaoAi speak TTS error: " + t.getMessage());
+                            Log.w(TAG, "XiaoAi speak TTS error: " + t.getMessage());
                         }
                     });
                 }
