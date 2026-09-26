@@ -714,11 +714,14 @@ function createStatsLineTask() {
         if (styled.style.top !== `${top}px`)
             styled.style.top = `${top}px`;
     };
+    let lastTpsLayoutAt = 0;
+    let lastRingLayoutAt = 0;
+    const THROTTLE_MS = 250;
     // The composer root renders the TPS readout ("TPS 89.4 tok/s") as its own
     // row BELOW the status strip; fold it into the strip so every metric sits
     // on one line. Idempotent: the placeholder's text mirrors the readout and
     // the readout itself is overlaid on the placeholder's box.
-    const moveTps = (stats) => {
+    const moveTps = (stats, force = false) => {
         const stack = stats.closest('[class*="_composerStack"]');
         if (stack === null)
             return;
@@ -738,19 +741,26 @@ function createStatsLineTask() {
                 stats.appendChild(reserve);
             }
             const live = el.textContent ?? '';
-            if (reserve.textContent !== live)
+            const textChanged = reserve.textContent !== live;
+            if (textChanged)
                 reserve.textContent = live;
             el.setAttribute('data-mobile-nav', 'stats-tps');
             const tpsRow = el.parentElement;
             if (tpsRow === null)
                 continue;
             ensurePositioned(tpsRow, 'stats-tps-row');
+            const now = Date.now();
+            const styled = el;
+            // 性能节流：若读数未变且已定位，或距离上次测量不足 THROTTLE_MS，跳过昂贵的 getBoundingClientRect
+            if (!force && styled.style.left && !textChanged && (now - lastTpsLayoutAt < THROTTLE_MS)) {
+                return;
+            }
+            lastTpsLayoutAt = now;
             placeOverlay(el, reserve);
             // The strip's last child is the flex shrink group: mirror whatever
             // width the placeholder settled on so the overlay clips with the same
             // ellipsis instead of overlapping the neighbouring group.
             const width = reserve.getBoundingClientRect().width;
-            const styled = el;
             if (styled.style.maxWidth !== `${width}px`)
                 styled.style.maxWidth = `${width}px`;
             return;
@@ -760,7 +770,7 @@ function createStatsLineTask() {
     // 的右簇（模型/麦克风旁），CSS 用 font-size:0 只留环、隐掉 "45%" 文本；统计条
     // 拿满整宽。与 moveTps 同款 overlay：环留在 React 渲染的 dock 原位，插件自建
     // 占位 span 顶住右簇槽位（16px 环 + 2px 边距，行 gap 补足余量）。
-    const moveRing = (stats) => {
+    const moveRing = (stats, force = false) => {
         const holder = stats.parentElement;
         const dock = holder === null ? null : holder.parentElement;
         if (dock === null)
@@ -787,6 +797,13 @@ function createStatsLineTask() {
             ring.setAttribute('data-mobile-nav', 'stats-ring');
         }
         ensurePositioned(dock, 'stats-ring-dock');
+        const now = Date.now();
+        const styled = ring;
+        // 性能节流：若已完成定位且非强制刷新，在 THROTTLE_MS 内跳过重复的同步测量
+        if (!force && styled.style.left && (now - lastRingLayoutAt < THROTTLE_MS)) {
+            return;
+        }
+        lastRingLayoutAt = now;
         placeOverlay(ring, reserve);
     };
     let viewportHandler = null;
@@ -794,8 +811,8 @@ function createStatsLineTask() {
         const anchor = document.querySelector('[data-mobile-nav="stats"]');
         if (anchor === null)
             return;
-        moveTps(anchor);
-        moveRing(anchor);
+        moveTps(anchor, true);
+        moveRing(anchor, true);
     };
     const mark = () => {
         // Keyboard open/close and viewport rotations relayout the composer without
@@ -811,8 +828,8 @@ function createStatsLineTask() {
         // readout is re-folded.
         const anchor = document.querySelector('[data-mobile-nav="stats"]');
         if (anchor !== null && statsAnchorAlive(anchor)) {
-            moveTps(anchor);
-            moveRing(anchor);
+            moveTps(anchor, false);
+            moveRing(anchor, false);
             return;
         }
         // Stale marker on a node that left the composer stack/phase context:
@@ -2884,17 +2901,25 @@ function installReconciler(ctx) {
         // re-renders) into one dirty-key pass per animation frame. Each task
         // declares scopes so only intersecting tasks run on a given flush.
         const observer = new MutationObserver((records) => {
-            // DSHA 优化：若变动全部来自输入框编辑区，说明用户正在输入，跳过重算防掉帧/失焦
-            let hasNonTyping = false;
+            // DSHA 优化：
+            // 1. 若变动全部来自输入框编辑区，说明用户正在输入，跳过重算防掉帧/失焦
+            // 2. 忽略插件自身标记节点产生的 style 属性微调，防止 placeOverlay 引发属性自激死循环
+            let hasMeaningfulChange = false;
             for (const record of records) {
                 const target = record.target;
                 const el = target && (target.nodeType === 1 ? target : target.parentElement);
-                if (!el || !el.closest('[contenteditable], [data-input-scroll], [class*="_composer"], [class*="composer"]')) {
-                    hasNonTyping = true;
-                    break;
+                if (!el)
+                    continue;
+                if (el.closest('[contenteditable], [data-input-scroll], [class*="_composer"], [class*="composer"]')) {
+                    continue;
                 }
+                if (record.type === 'attributes' && record.attributeName === 'style' && el.closest('[data-mobile-nav]')) {
+                    continue;
+                }
+                hasMeaningfulChange = true;
+                break;
             }
-            if (!hasNonTyping)
+            if (!hasMeaningfulChange)
                 return;
             const keys = new Set();
             for (const record of records) {
