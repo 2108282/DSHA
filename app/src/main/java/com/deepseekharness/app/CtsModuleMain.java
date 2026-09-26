@@ -220,6 +220,7 @@ public class CtsModuleMain extends XposedModule {
     private static volatile String sLastClaimedDialogId = null;
     private static volatile long sLastClaimedTimeMs = 0L;
     private static volatile long sDshSpeakingUntilMs = 0L;
+    private static volatile boolean sAllowDshTts = false;
     private static volatile Object sLatestFloatManager = null;
     private static final java.util.concurrent.ConcurrentHashMap<String, Long> sClaimedDialogIds =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -334,39 +335,26 @@ public class CtsModuleMain extends XposedModule {
         return null;
     }
 
-    /** 接入小爱同学 7.13 原生特权 Hook（100% 对齐 Eta 架构） */
+    /** 接入小爱同学 7.13 原生特权 Hook（双通道无缝接管 + 原厂 TTS 物理静音） */
     private void hookXiaoAi(PackageReadyParam param) {
         log(Log.INFO, TAG, "XiaoAi 7.13 package ready, installing Eta-standard hooks...");
         ClassLoader cl = param.getClassLoader();
 
-        // 1. 拦截输入与对话 ID (OperationManager.setQueryInfo)：只做内存缓存，放行上屏，绝不触发外部请求（对齐 Eta）
+        // 1. 【核心入口 A · 语音输入拦截】OperationManager.setQueryInfo：
+        // 语音识别 ASR 产生文字的第一瞬间在此捕获，通过 claimDialogOnce 保证一轮语音只建一个独立会话！
         try {
             Class<?> opManager = cl.loadClass("com.xiaomi.voiceassistant.instruction.base.OperationManager");
             for (Method m : opManager.getDeclaredMethods()) {
                 if ("setQueryInfo".equals(m.getName())) {
-                    hook(m).intercept(new XiaoAiQueryCaptureHooker());
-                    log(Log.INFO, TAG, "XiaoAi setQueryInfo hook installed");
+                    hook(m).intercept(new XiaoAiSpeechQueryHooker());
+                    log(Log.INFO, TAG, "XiaoAi voice setQueryInfo hook installed");
                 }
             }
         } catch (Throwable e) {
             log(Log.WARN, TAG, "XiaoAi OperationManager hook fail: " + e.getMessage());
         }
 
-        // 2. 捕获小爱终态 ASR 识别结果 (z10.a.processed(Instruction)，对齐 Eta)
-        try {
-            Class<?> asrProcessor = cl.loadClass("z10.a");
-            Class<?> instructionClass = cl.loadClass("com.xiaomi.ai.api.common.Instruction");
-            for (Method m : asrProcessor.getDeclaredMethods()) {
-                if ("processed".equals(m.getName()) && m.getParameterCount() == 1 && m.getParameterTypes()[0] == instructionClass) {
-                    hook(m).intercept(new XiaoAiAsrResultHooker());
-                    log(Log.INFO, TAG, "XiaoAi ASR final result hook installed on z10.a.processed");
-                }
-            }
-        } catch (Throwable e) {
-            log(Log.DEBUG, TAG, "XiaoAi z10.a hook skip: " + e.getMessage());
-        }
-
-        // 3. 捕获小爱悬浮卡片管理器 (FloatManager.addCard，Eta 原版核心)
+        // 2. 捕获小爱悬浮卡片管理器 (FloatManager.addCard，Eta 原版核心)
         try {
             String[] floatClasses = new String[] { "com.xiaomi.voiceassistant.widget.d", "com.xiaomi.voiceassistant.UiManager" };
             for (String clsName : floatClasses) {
@@ -385,7 +373,7 @@ public class CtsModuleMain extends XposedModule {
             }
         } catch (Throwable ignored) {}
 
-        // 4. 掐断小爱本地动作 (kh0.s0 与 ActionManager，对齐 Eta)
+        // 3. 掐断小爱本地动作 (kh0.s0 与 ActionManager，对齐 Eta)
         try {
             String[] actionClasses = new String[] { "kh0.s0", "sj0.s0", "com.xiaomi.voiceassistant.instruction.action.ActionManager" };
             for (String clsName : actionClasses) {
@@ -402,7 +390,7 @@ public class CtsModuleMain extends XposedModule {
             }
         } catch (Throwable ignored) {}
 
-        // 5. 核心唯一触发点：在 y00.r0.C0 拦截 Nlp.Request，提取文字并分发 DSH，直接阻断云端出站！（100% 对齐 Eta）
+        // 4. 【核心入口 B · 文字输入拦截与出站阻断】在 y00.r0.C0 拦截 Nlp.Request，提取文字分发 DSH 并掐死小米出站！
         try {
             String[] engineClasses = new String[] { "y00.r0", "com.xiaomi.ai.core.XMDChannel", "com.xiaomi.ai.core.b" };
             for (String clsName : engineClasses) {
@@ -419,22 +407,26 @@ public class CtsModuleMain extends XposedModule {
             }
         } catch (Throwable ignored) {}
 
-        // 6. 防抢占守卫：Hook 小爱原生 TTS 播放器 (la0.n1.stopPlay)，防止原厂会话结束误掐断 DSH 播报
+        // 5. 【原厂静音核心】Hook 小爱原生 TTS 播放器 (la0.n1)：彻底掐死原厂播报，保护 DSH 独占发声！
         try {
             Class<?> playerCls = cl.loadClass("la0.n1");
             for (Method m : playerCls.getDeclaredMethods()) {
-                if ("stopPlay".equals(m.getName())) {
+                String name = m.getName();
+                if ("speakTts".equals(name)) {
+                    hook(m).intercept(new XiaoAiTtsSpeakMuteHooker());
+                    log(Log.INFO, TAG, "XiaoAi native TTS speakTts mute hook installed on la0.n1");
+                } else if ("stopPlay".equals(name)) {
                     hook(m).intercept(new XiaoAiTtsStopGuardHooker());
                     log(Log.INFO, TAG, "XiaoAi TTS stopPlay guard hook installed on la0.n1");
                 }
             }
         } catch (Throwable e) {
-            log(Log.DEBUG, TAG, "XiaoAi TTS guard hook skip: " + e.getMessage());
+            log(Log.WARN, TAG, "XiaoAi TTS hooks fail: " + e.getMessage());
         }
     }
 
-    /** 小爱输入拦截 Hooker (纯缓存，对齐 Eta hookQueryCapture) */
-    private final class XiaoAiQueryCaptureHooker implements Hooker {
+    /** 小爱语音输入拦截 Hooker：在文字识别第一瞬间认领并向 DSH 投递，放行小爱 UI 正常上屏 */
+    private final class XiaoAiSpeechQueryHooker implements Hooker {
         @Override
         public Object intercept(Chain chain) throws Throwable {
             if (!isXiaoAiEnabled()) return chain.proceed();
@@ -449,69 +441,24 @@ public class CtsModuleMain extends XposedModule {
                         sQueryCache.put(dialogId, query.trim());
                         sLatestTurnQuery = query.trim();
                         sLatestTurnDialogId = dialogId;
-                        log(Log.INFO, TAG, "XiaoAi query cached: [" + query.trim() + "] (dialogId=" + dialogId + ")");
+
+                        // 关键去重：同一轮语音的多次 setQueryInfo 回调在 20 秒内仅认领一次！
+                        if (claimDialogOnce(dialogId)) {
+                            log(Log.INFO, TAG, "XiaoAi voice query captured & dispatched to DSH: [" + query.trim() + "] (dialogId=" + dialogId + ")");
+                            dispatchXiaoAiQueryAsync(dialogId, query.trim(), chain.getThisObject());
+                        } else {
+                            log(Log.DEBUG, TAG, "XiaoAi duplicate speech query suppressed for dialog: " + dialogId);
+                        }
                     }
                 }
             }
-            return chain.proceed(); // 绝不向外部发送，原样放行给小爱 UI 正常显示文字！
-        }
-    }
-
-    /** 捕获超级小爱终态 ASR 识别结果 (对齐 Eta hookAsrFinalResult) */
-    private final class XiaoAiAsrResultHooker implements Hooker {
-        @Override
-        public Object intercept(Chain chain) throws Throwable {
-            List<?> args = chain.getArgs();
-            if (args != null && !args.isEmpty()) {
-                Object instruction = args.get(0);
-                if (instruction != null) {
-                    try {
-                        String fullName = getObjectFullName(instruction);
-                        if ("SpeechRecognizer.RecognizeResult".equals(fullName)) {
-                            Method getPayload = instruction.getClass().getMethod("getPayload");
-                            getPayload.setAccessible(true);
-                            Object payload = getPayload.invoke(instruction);
-                            if (payload != null) {
-                                Method isFinal = payload.getClass().getMethod("isFinal");
-                                isFinal.setAccessible(true);
-                                if (Boolean.TRUE.equals(isFinal.invoke(payload))) {
-                                    Method getResults = payload.getClass().getMethod("getResults");
-                                    getResults.setAccessible(true);
-                                    Object results = getResults.invoke(payload);
-                                    if (results instanceof Iterable) {
-                                        StringBuilder sb = new StringBuilder();
-                                        for (Object item : (Iterable<?>) results) {
-                                            if (item != null) {
-                                                Method getText = item.getClass().getMethod("getText");
-                                                getText.setAccessible(true);
-                                                Object text = getText.invoke(item);
-                                                if (text instanceof String) sb.append(text);
-                                            }
-                                        }
-                                        String finalAsr = sb.toString().trim();
-                                        if (!finalAsr.isEmpty()) {
-                                            String dialogId = getObjectDialogId(instruction);
-                                            sLatestTurnQuery = finalAsr;
-                                            if (dialogId != null) {
-                                                sQueryCache.put(dialogId, finalAsr);
-                                                sLatestTurnDialogId = dialogId;
-                                            }
-                                            log(Log.INFO, TAG, "XiaoAi final ASR captured: [" + finalAsr + "] (dialogId=" + dialogId + ")");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } catch (Throwable ignored) {}
-                }
-            }
-            return chain.proceed(); // 放行 ASR 识别结果
+            return chain.proceed(); // 必须放行给小爱原厂 UI 渲染用户说话的气泡！
         }
     }
 
     /**
-     * 小爱出站接管 Hooker (100% 对齐 Eta maybeClaimRequest)：
-     * 唯一触发点：在小爱向小米服务器发送 Nlp.Request 意图时，截获 query 并启动 DSH，彻底掐断出站！
+     * 小爱出站接管 Hooker：
+     * 文字打字输入时在此截获 query 并启动 DSH，彻底掐断发往小米云端的出站网络！
      */
     private final class XiaoAiOutboundTakeoverHooker implements Hooker {
         @Override
@@ -525,36 +472,53 @@ public class CtsModuleMain extends XposedModule {
                     if (fullName != null && fullName.endsWith("Nlp.Request")) {
                         String eventDialogId = getObjectDialogId(event);
                         if (eventDialogId == null || eventDialogId.isEmpty()) {
-                            eventDialogId = sLatestTurnDialogId != null ? sLatestTurnDialogId : "xiaoai-" + System.currentTimeMillis();
+                            eventDialogId = sLatestTurnDialogId != null ? sLatestTurnDialogId : "text-" + System.currentTimeMillis();
                         }
 
-                        // 对齐 Eta: 已经接管过的 dialogId 直接 return true 掐断，绝不重复创建会话！
-                        if (!claimDialogOnce(eventDialogId)) {
-                            log(Log.INFO, TAG, "XiaoAi Nlp.Request already claimed for dialog: " + eventDialogId + ", aborted cleanly");
-                            return true;
-                        }
+                        // 如果此 dialogId 尚未被语音途径认领（说明是打字输入）
+                        if (claimDialogOnce(eventDialogId)) {
+                            String query = extractQueryFromEvent(event);
+                            if (query == null || query.isEmpty()) {
+                                query = sQueryCache.remove(eventDialogId);
+                            }
+                            if (query == null || query.isEmpty()) {
+                                query = sLatestTurnQuery;
+                            }
 
-                        // 提取查询文字：优先从 Nlp.Request payload，其次从 queryCache，最后从 latestTurnQuery
-                        String query = extractQueryFromEvent(event);
-                        if (query == null || query.isEmpty()) {
-                            query = sQueryCache.remove(eventDialogId);
-                        }
-                        if (query == null || query.isEmpty()) {
-                            query = sLatestTurnQuery;
-                        }
-
-                        if (query != null && !query.trim().isEmpty()) {
-                            log(Log.INFO, TAG, "XiaoAi Nlp.Request intercepted & taken over: [" + query + "] (dialogId=" + eventDialogId + ")");
-                            // 正式向 DSH 投递任务，小爱卡片流式打字渲染
-                            dispatchXiaoAiQueryAsync(eventDialogId, query.trim(), chain.getThisObject());
+                            if (query != null && !query.trim().isEmpty()) {
+                                log(Log.INFO, TAG, "XiaoAi text Nlp.Request taken over & dispatched: [" + query + "] (dialogId=" + eventDialogId + ")");
+                                dispatchXiaoAiQueryAsync(eventDialogId, query.trim(), chain.getThisObject());
+                            }
                         } else {
-                            log(Log.WARN, TAG, "XiaoAi Nlp.Request intercepted but query is empty!");
+                            log(Log.INFO, TAG, "XiaoAi Nlp.Request already claimed for dialog: " + eventDialogId + ", aborted cleanly");
                         }
 
-                        return true; // 100% 掐死发往小米云端的意图请求，彻底丢弃！
+                        return true; // 彻底掐死发往小米云端的意图请求！
                     }
                 }
             }
+            return chain.proceed();
+        }
+    }
+
+    /** 小爱原生 TTS 朗读拦截 Hooker：在 DSH 接管期彻底物理静音小米原厂下发的声音！ */
+    private final class XiaoAiTtsSpeakMuteHooker implements Hooker {
+        @Override
+        public Object intercept(Chain chain) throws Throwable {
+            if (sAllowDshTts) {
+                // 来自 DSH 任务完成的主动播报，允许发声！
+                return chain.proceed();
+            }
+
+            long now = android.os.SystemClock.elapsedRealtime();
+            // 如果在 DSH 任务活跃期（40 秒内），任何来自小米原厂的播报请求一律物理拦截静音！
+            if (sLastClaimedDialogId != null && (now - sLastClaimedTimeMs < 40_000L)) {
+                List<?> args = chain.getArgs();
+                String text = (args != null && !args.isEmpty() && args.get(0) instanceof String) ? (String) args.get(0) : "";
+                log(Log.INFO, TAG, "XiaoAi native TTS speakTts BLOCKED & MUTED cleanly: [" + text + "]");
+                return ""; // 伪装播放返回空字符串，不产生任何原生声音！
+            }
+
             return chain.proceed();
         }
     }
@@ -578,7 +542,7 @@ public class CtsModuleMain extends XposedModule {
         public Object intercept(Chain chain) throws Throwable {
             if (!isXiaoAiEnabled()) return chain.proceed();
             long now = android.os.SystemClock.elapsedRealtime();
-            if (sLastClaimedDialogId != null && (now - sLastClaimedTimeMs < 45_000L)) {
+            if (sLastClaimedDialogId != null && (now - sLastClaimedTimeMs < 40_000L)) {
                 log(Log.INFO, TAG, "XiaoAi native action aborted for dialog: " + sLastClaimedDialogId);
                 return true;
             }
@@ -686,8 +650,13 @@ public class CtsModuleMain extends XposedModule {
                             }
                             if (playerInstance != null) {
                                 Method speak = playerCls.getMethod("speakTts", String.class);
-                                speak.invoke(playerInstance, finalText);
-                                Log.i(TAG, "XiaoAi TTS speakTts invoked successfully, chars=" + finalText.length() + ", protectMs=" + estimatedDurationMs);
+                                sAllowDshTts = true;
+                                try {
+                                    speak.invoke(playerInstance, finalText);
+                                    Log.i(TAG, "XiaoAi TTS speakTts invoked successfully, chars=" + finalText.length() + ", protectMs=" + estimatedDurationMs);
+                                } finally {
+                                    sMainHandler.postDelayed(() -> sAllowDshTts = false, 1200L);
+                                }
                             } else {
                                 Log.w(TAG, "XiaoAi TTS playerInstance not found on la0.n1");
                             }
