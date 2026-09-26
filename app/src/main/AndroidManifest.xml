@@ -99,19 +99,6 @@
             android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_file_paths" />
         </provider>
-        <!-- MT 管理器 / 系统「添加本地存储」通过 DocumentsProvider 发现 DSHA 私有目录。
-             Android 强制要求 DocumentsProvider 受 MANAGE_DOCUMENTS 保护（不设会崩溃）；
-             系统 DocumentsUI 与 SAF 授权路径可正常访问。 -->
-        <provider
-            android:name=".DshaDocumentsProvider"
-            android:authorities="${applicationId}.documents"
-            android:permission="android.permission.MANAGE_DOCUMENTS"
-            android:exported="true"
-            android:grantUriPermissions="true">
-            <intent-filter>
-                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
-            </intent-filter>
-        </provider>
 
         <activity
             android:name=".ui.WelcomeActivity"
