@@ -218,11 +218,14 @@ public class CtsModuleMain extends XposedModule {
     }
 
     private static volatile String sLastClaimedDialogId = null;
+    private static final String XIAOAI_COMM_SALT = "dsha-xiaoai-native-salt-2026";
 
-    /** 接入小爱同学核心 Hook（纯权限打通与数据通道） */
+    /** 接入小爱同学核心 Hook（纯权限打通与数据通道，直连 3080 容器后端） */
     private void hookXiaoAi(PackageReadyParam param) {
         log(Log.INFO, TAG, "XiaoAi package ready, attempting hook...");
         ClassLoader cl = param.getClassLoader();
+
+        // 1. 拦截用户输入与对话 ID (OperationManager.setQueryInfo)
         try {
             Class<?> opManager = cl.loadClass("com.xiaomi.voiceassistant.instruction.base.OperationManager");
             for (Method m : opManager.getDeclaredMethods()) {
@@ -232,12 +235,13 @@ public class CtsModuleMain extends XposedModule {
                 }
             }
         } catch (Throwable e) {
-            log(Log.WARN, TAG, "XiaoAi OperationManager setQueryInfo hook fail: " + e.getMessage());
+            log(Log.WARN, TAG, "XiaoAi OperationManager hook fail: " + e.getMessage());
         }
 
-        // 掐断小爱原厂动作 executeActionsAsync / executeActions
+        // 2. 动态扫描并掐断小爱本地动作 (如 sj0.s0.executeActionsAsync 及其他 Action 执行器)
         try {
             String[] possibleActionClasses = new String[] {
+                    "sj0.s0",
                     "com.xiaomi.voiceassistant.instruction.action.ActionManager",
                     "kh0.s0"
             };
@@ -245,9 +249,33 @@ public class CtsModuleMain extends XposedModule {
                 try {
                     Class<?> actionCls = cl.loadClass(clsName);
                     for (Method m : actionCls.getDeclaredMethods()) {
-                        if (m.getName().startsWith("executeAction")) {
+                        String name = m.getName();
+                        if (name.startsWith("executeAction") || "execute".equals(name)) {
                             hook(m).intercept(new XiaoAiActionHooker());
-                            log(Log.INFO, TAG, "XiaoAi action hook installed on " + clsName + "." + m.getName());
+                            log(Log.INFO, TAG, "XiaoAi action hook installed on " + clsName + "." + name);
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
+
+        // 3. 动态扫描并掐断小爱出站网络事件 (如 sendEvent / postEvent)
+        try {
+            String[] possibleEventClasses = new String[] {
+                    "com.xiaomi.ai.core.b",
+                    "com.xiaomi.voiceassistant.l1",
+                    "b30.g",
+                    "z90.g",
+                    "y00.r0"
+            };
+            for (String clsName : possibleEventClasses) {
+                try {
+                    Class<?> eventCls = cl.loadClass(clsName);
+                    for (Method m : eventCls.getDeclaredMethods()) {
+                        String name = m.getName();
+                        if ("sendEvent".equals(name) || "postEvent".equals(name) || "C0".equals(name)) {
+                            hook(m).intercept(new XiaoAiOutboundHooker());
+                            log(Log.INFO, TAG, "XiaoAi outbound event hook installed on " + clsName + "." + name);
                         }
                     }
                 } catch (Throwable ignored) {}
@@ -255,7 +283,7 @@ public class CtsModuleMain extends XposedModule {
         } catch (Throwable ignored) {}
     }
 
-    /** 小爱输入与对话 ID 拦截 Hooker */
+    /** 小爱输入拦截 Hooker */
     private final class XiaoAiQueryHooker implements Hooker {
         @Override
         public Object intercept(Chain chain) throws Throwable {
@@ -280,6 +308,21 @@ public class CtsModuleMain extends XposedModule {
         }
     }
 
+    /** 小爱出站网络事件拦截 Hooker（掐断小爱发往小米服务器的 NLP 识别包） */
+    private final class XiaoAiOutboundHooker implements Hooker {
+        @Override
+        public Object intercept(Chain chain) throws Throwable {
+            if (!isXiaoAiEnabled()) {
+                return chain.proceed();
+            }
+            if (sLastClaimedDialogId != null) {
+                log(Log.INFO, TAG, "XiaoAi outbound cloud request blocked for: " + sLastClaimedDialogId);
+                return true;
+            }
+            return chain.proceed();
+        }
+    }
+
     /** 小爱原厂动作拦截 Hooker（掐断原厂自发操作） */
     private final class XiaoAiActionHooker implements Hooker {
         @Override
@@ -295,33 +338,31 @@ public class CtsModuleMain extends XposedModule {
         }
     }
 
-    /** 异步分发至 3095 网桥中继 */
+    /**
+     * 异步直连容器 3080 后端（全内存计算签名，零文件读写，免受应用沙箱限制）。
+     */
     private static void dispatchXiaoAiQueryAsync(final String dialogId, final String query) {
         new Thread(() -> {
             try {
-                String token = "";
-                try {
-                    java.io.File tf = new java.io.File("/sdcard/Download/DSHA/.dsh/.bridge_token");
-                    if (!tf.exists()) tf = new java.io.File("/data/adb/dsha/rootfs/root/.dsh/.bridge_token");
-                    if (tf.exists()) {
-                        java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(tf));
-                        token = br.readLine();
-                        if (token != null) token = token.trim();
-                        br.close();
-                    }
-                } catch (Throwable ignored) {}
+                long timestamp = System.currentTimeMillis() / 1000L;
+                String signature = calculateHmacSha256(query + "|" + timestamp, XIAOAI_COMM_SALT);
 
-                String encodedQuery = java.net.URLEncoder.encode(query, "UTF-8");
-                String urlStr = "http://127.0.0.1:3095/app/xiaoai?query=" + encodedQuery
-                        + "&dialogId=" + java.net.URLEncoder.encode(dialogId, "UTF-8")
-                        + (token.isEmpty() ? "" : "&token=" + token);
-
-                java.net.URL url = new java.net.URL(urlStr);
+                java.net.URL url = new java.net.URL("http://127.0.0.1:3080/xiaoai/chat");
                 java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("GET");
+                conn.setRequestMethod("POST");
                 conn.setConnectTimeout(3000);
-                conn.setReadTimeout(30000);
-                conn.setRequestProperty("User-Agent", "DSHA-XiaoAi-Hook/1.0");
+                conn.setReadTimeout(45000);
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                conn.setRequestProperty("X-XiaoAi-Timestamp", String.valueOf(timestamp));
+                conn.setRequestProperty("X-XiaoAi-Signature", signature);
+
+                org.json.JSONObject payload = new org.json.JSONObject();
+                payload.put("query", query);
+                payload.put("dialogId", dialogId);
+                byte[] bytes = payload.toString().getBytes("UTF-8");
+                conn.getOutputStream().write(bytes);
+                conn.getOutputStream().flush();
 
                 try (java.io.BufferedReader reader = new java.io.BufferedReader(
                         new java.io.InputStreamReader(conn.getInputStream(), "UTF-8"))) {
@@ -334,9 +375,27 @@ public class CtsModuleMain extends XposedModule {
                     }
                 }
             } catch (Throwable t) {
-                Log.w(TAG, "XiaoAi dispatch error: " + t.getMessage());
+                Log.w(TAG, "XiaoAi dispatch to 3080 error: " + t.getMessage());
             }
-        }, "DSHA-XiaoAi-Dispatcher").start();
+        }, "DSHA-XiaoAi-DirectDispatcher").start();
+    }
+
+    /** 内存计算 HMAC-SHA256 签名 */
+    private static String calculateHmacSha256(String data, String key) {
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            javax.crypto.spec.SecretKeySpec secretKey = new javax.crypto.spec.SecretKeySpec(
+                    key.getBytes("UTF-8"), "HmacSHA256");
+            mac.init(secretKey);
+            byte[] bytes = mac.doFinal(data.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : bytes) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Throwable t) {
+            return "";
+        }
     }
 
     private static volatile boolean sCachedEnabled = true;
