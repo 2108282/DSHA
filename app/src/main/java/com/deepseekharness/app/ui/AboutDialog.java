@@ -25,7 +25,7 @@ public final class AboutDialog {
         } catch (Exception ignored) {
         }
         new MaterialAlertDialogBuilder(ctx)
-                .setTitle("DSHA v" + version)
+                .setTitle("DSHA-FR")
                 .setMessage("DeepSeek Harness 安卓启动器\n" + ctx.getString(com.deepseekharness.app.R.string.edition_description) + "\n\n"
                         + "1. 本仓库地址：" + GITHUB_ROOT_URL + "\n"
                         + "2. 非root仓库地址（其他作者）：" + GITHUB_URL + "\n"

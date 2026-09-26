@@ -70,7 +70,7 @@
             android:layout_gravity="center_horizontal"
             android:layout_marginTop="@dimen/gap_tight"
             android:background="?attr/selectableItemBackground"
-            android:text="关于 DSHA · 加入交流"
+            android:text="关于 DSHA-FR · 加入交流"
             android:textAllCaps="false"
             android:textColor="@color/text_muted"
             android:textSize="@dimen/text_label" />

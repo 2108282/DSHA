@@ -71,7 +71,7 @@ public class SettingsFragment extends Fragment {
         } catch (Exception ignored) {
         }
         TextView ver = v.findViewById(R.id.settings_ver);
-        ver.setText("DSHA v" + version + " · MIT License");
+        ver.setText("DSHA-FR v" + version + " · MIT License");
         TextView updateSub = v.findViewById(R.id.settings_update_sub);
         updateSub.setText("当前 v" + version + " · 稳定 / 预览更新通道");
 
@@ -137,7 +137,7 @@ public class SettingsFragment extends Fragment {
     private void showUpdateDialog() {
         String[] options = {
                 "① 升级DSH核心",
-                "② DSHA 客户端与 Magisk/KSU 模块 (Release)"
+                "② DSHA-FR 客户端与 Magisk/KSU 模块 (Release)"
         };
 
         new MaterialAlertDialogBuilder(requireContext())
