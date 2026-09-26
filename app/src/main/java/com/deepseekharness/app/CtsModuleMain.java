@@ -259,14 +259,13 @@ public class CtsModuleMain extends XposedModule {
             }
         } catch (Throwable ignored) {}
 
-        // 3. 动态扫描并掐断小爱出站网络事件 (如 sendEvent / postEvent)
+        // 3. 动态扫描并掐断小爱出站网络事件 (如 XMDChannel.postEvent / b.postEvent / l1.sendEvent)
         try {
             String[] possibleEventClasses = new String[] {
+                    "com.xiaomi.ai.core.XMDChannel",
                     "com.xiaomi.ai.core.b",
                     "com.xiaomi.voiceassistant.l1",
-                    "b30.g",
-                    "z90.g",
-                    "y00.r0"
+                    "b30.g"
             };
             for (String clsName : possibleEventClasses) {
                 try {
@@ -310,12 +309,26 @@ public class CtsModuleMain extends XposedModule {
         }
     }
 
-    /** 小爱出站网络事件拦截 Hooker（掐断小爱发往小米服务器的 NLP 识别包） */
+    /** 小爱出站网络事件拦截 Hooker（抄 Eta 核心作业：拦截 Nlp.Request 出站事件） */
     private final class XiaoAiOutboundHooker implements Hooker {
         @Override
         public Object intercept(Chain chain) throws Throwable {
             if (!isXiaoAiEnabled()) {
                 return chain.proceed();
+            }
+            List<?> args = chain.getArgs();
+            if (args != null && !args.isEmpty()) {
+                Object event = args.get(0);
+                if (event != null) {
+                    try {
+                        Method getFullName = event.getClass().getMethod("getFullName");
+                        String fullName = (String) getFullName.invoke(event);
+                        if (fullName != null && (fullName.contains("Nlp") || fullName.contains("SpeechRecognizer") || fullName.contains("General"))) {
+                            log(Log.INFO, TAG, "XiaoAi outbound event intercepted and aborted: " + fullName);
+                            return true; // 伪装发送成功，彻底丢弃小米云端出站包！
+                        }
+                    } catch (Throwable ignored) {}
+                }
             }
             if (sLastClaimedDialogId != null) {
                 log(Log.INFO, TAG, "XiaoAi outbound cloud request blocked for: " + sLastClaimedDialogId);
