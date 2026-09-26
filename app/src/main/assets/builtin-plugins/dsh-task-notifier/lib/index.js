@@ -398,6 +398,8 @@ export function apply(ctx) {
           // 严密防误弹：处于 8 秒审批冷却期内、或标志位为真、或助手未输出有效文本，绝对禁止弹任务完成！
           const inApprovalCooldown = (Date.now() - lastApprovedAt) < 8000
           if (justApproved || inApprovalCooldown || !lastAssistantText || !lastAssistantText.trim()) {
+            // 防抖前（0ms）绝对不立即 cancel：避免审批后或连续步骤间灵动岛被误杀闪烁（采纳上次 Review 关切）
+            // 若 1.5s 后确实没有新动作，由下方 completionTimer 停稳后统一安全释放
             return
           }
 
@@ -418,6 +420,9 @@ export function apply(ctx) {
                 title: '任务已完成',
                 text: endText
               })
+            } else {
+              // 处于交互或冷却状态不弹完成卡片时，拔除 2003 胶囊释放唤醒锁
+              void callBridge('/app/task/cancel')
             }
           }, 1500)
           return

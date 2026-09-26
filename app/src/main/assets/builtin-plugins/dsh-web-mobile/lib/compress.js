@@ -21,6 +21,12 @@
  * needed. SSE (`text/event-stream`) is intentionally left uncompressed: it is
  * a continuous stream and the /api bridge never buffers it.
  *
+ * Known limitations (issue #80): while a response is deferred, write()
+ * reports unconditional success (true) — the socket is untouched, so no
+ * backpressure signal exists; buffered write() completion callbacks replay
+ * fire-once, in order, right after the real end(), without error propagation
+ * (the real flush cannot fail them individually).
+ *
  * Ported from community fork wzxmt-zhc/dsh-web-mobile (v2.5.0).
  */
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
@@ -70,14 +76,20 @@ export function varyWithAcceptEncoding(headers) {
         headers[existingKey] = `${String(headers[existingKey])}, Accept-Encoding`;
     }
 }
-/** Buffer one body chunk for a deferred response. */
-function bufferChunk(pending, chunk) {
+/** Buffer one body chunk for a deferred response, honoring the caller's encoding. */
+function bufferChunk(pending, chunk, encoding) {
+    const enc = typeof encoding === 'string' ? encoding : undefined;
     if (typeof chunk === 'string')
-        pending.chunks.push(Buffer.from(chunk));
+        pending.chunks.push(Buffer.from(chunk, enc));
     else if (chunk instanceof Uint8Array)
         pending.chunks.push(Buffer.from(chunk));
     else if (chunk !== null && chunk !== undefined)
         pending.chunks.push(Buffer.from(String(chunk)));
+}
+/** Fire the buffered write() callbacks once, in order, after the replay. */
+function fireWriteCallbacks(pending) {
+    for (const callback of pending.writeCallbacks.splice(0))
+        callback();
 }
 /** Replay the stored writeHead args with a replacement headers object. */
 function writeHeadWith(res, origWriteHead, pending, headers) {
@@ -111,13 +123,20 @@ export function installResponseCompression() {
             return origWriteHead.apply(this, args);
         }
         // Hold the header write until the body size is known (see module doc).
-        deferred.set(this, { writeHeadArgs: args, headers, encoding, chunks: [] });
+        deferred.set(this, { writeHeadArgs: args, headers, encoding, chunks: [], writeCallbacks: [] });
         return this;
     }
     function patchedWrite(chunk, ...rest) {
         const pending = deferred.get(this);
         if (pending !== undefined) {
-            bufferChunk(pending, chunk);
+            // Buffer the encoding with the chunk (a latin1 write must not be
+            // silently re-encoded) and keep the completion callback for a
+            // fire-once replay after the real end() (issue #80).
+            bufferChunk(pending, chunk, typeof rest[0] === 'string' ? rest[0] : undefined);
+            for (const arg of rest) {
+                if (typeof arg === 'function')
+                    pending.writeCallbacks.push(arg);
+            }
             return true;
         }
         return origWrite.apply(this, [chunk, ...rest]);
@@ -130,16 +149,26 @@ export function installResponseCompression() {
                 : origEnd.apply(this, [chunk, ...rest]);
         }
         deferred.delete(this);
-        if (chunk !== undefined)
-            bufferChunk(pending, chunk);
+        // `end(callback)`: the function is a completion callback, never body
+        // data — keep it out of the buffers and replay it at the real end().
+        const callbacks = (typeof chunk === 'function' ? [chunk, ...rest] : rest)
+            .filter((arg) => typeof arg === 'function');
+        // `end(data, encoding)` and friends: the data is buffered above and the
+        // encoding is consumed by that buffering, so only the callbacks may be
+        // replayed — origEnd('utf8') would write the string as body data after
+        // the compressed payload (issue #78).
+        if (chunk !== undefined && typeof chunk !== 'function')
+            bufferChunk(pending, chunk, typeof rest[0] === 'string' ? rest[0] : undefined);
         const body = Buffer.concat(pending.chunks);
         // Small or empty JSON: replay the ORIGINAL header write and body verbatim
         // (no Content-Encoding, original Content-Length intact).
         if (body.byteLength < MIN_JSON_BYTES) {
             writeHeadWith(this, origWriteHead, pending, pending.headers);
-            return body.byteLength === 0
-                ? origEnd.apply(this, rest)
-                : origEnd.apply(this, [body, ...rest]);
+            const ended = body.byteLength === 0
+                ? origEnd.apply(this, callbacks)
+                : origEnd.apply(this, [body, ...callbacks]);
+            fireWriteCallbacks(pending);
+            return ended;
         }
         // Large JSON: compress and rewrite the length-bearing headers.
         const compressed = pending.encoding === 'br'
@@ -155,7 +184,9 @@ export function installResponseCompression() {
         varyWithAcceptEncoding(headers);
         writeHeadWith(this, origWriteHead, pending, headers);
         origWrite.call(this, compressed);
-        return origEnd.apply(this, rest);
+        const ended = origEnd.apply(this, callbacks);
+        fireWriteCallbacks(pending);
+        return ended;
     }
     proto.writeHead = patchedWriteHead;
     proto.write = patchedWrite;
