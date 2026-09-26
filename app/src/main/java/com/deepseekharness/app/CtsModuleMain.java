@@ -238,19 +238,19 @@ public class CtsModuleMain extends XposedModule {
             log(Log.WARN, TAG, "XiaoAi OperationManager hook fail: " + e.getMessage());
         }
 
-        // 2. 动态扫描并掐断小爱本地动作 (如 sj0.s0.executeActionsAsync 及其他 Action 执行器)
+        // 2. 动态扫描并掐断小爱本地动作 (kh0.s0, sj0.s0 及 ActionManager)
         try {
             String[] possibleActionClasses = new String[] {
+                    "kh0.s0",
                     "sj0.s0",
-                    "com.xiaomi.voiceassistant.instruction.action.ActionManager",
-                    "kh0.s0"
+                    "com.xiaomi.voiceassistant.instruction.action.ActionManager"
             };
             for (String clsName : possibleActionClasses) {
                 try {
                     Class<?> actionCls = cl.loadClass(clsName);
                     for (Method m : actionCls.getDeclaredMethods()) {
                         String name = m.getName();
-                        if (name.startsWith("executeAction") || "execute".equals(name)) {
+                        if (name.startsWith("executeAction") || "execute".equals(name) || "executeActionsAsync".equals(name)) {
                             hook(m).intercept(new XiaoAiActionHooker());
                             log(Log.INFO, TAG, "XiaoAi action hook installed on " + clsName + "." + name);
                         }
@@ -259,9 +259,10 @@ public class CtsModuleMain extends XposedModule {
             }
         } catch (Throwable ignored) {}
 
-        // 3. 动态扫描并掐断小爱出站网络事件 (如 XMDChannel.postEvent / b.postEvent / l1.sendEvent)
+        // 3. 动态扫描并掐断小爱出站网络事件 (y00.r0.C0, XMDChannel.postEvent, core.b.postEvent, l1.sendEvent)
         try {
             String[] possibleEventClasses = new String[] {
+                    "y00.r0",
                     "com.xiaomi.ai.core.XMDChannel",
                     "com.xiaomi.ai.core.b",
                     "com.xiaomi.voiceassistant.l1",
@@ -272,7 +273,7 @@ public class CtsModuleMain extends XposedModule {
                     Class<?> eventCls = cl.loadClass(clsName);
                     for (Method m : eventCls.getDeclaredMethods()) {
                         String name = m.getName();
-                        if ("sendEvent".equals(name) || "postEvent".equals(name) || "C0".equals(name)) {
+                        if ("C0".equals(name) || "sendEvent".equals(name) || "postEvent".equals(name)) {
                             hook(m).intercept(new XiaoAiOutboundHooker());
                             log(Log.INFO, TAG, "XiaoAi outbound event hook installed on " + clsName + "." + name);
                         }
