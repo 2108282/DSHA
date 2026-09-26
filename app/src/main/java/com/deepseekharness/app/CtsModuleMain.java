@@ -218,40 +218,57 @@ public class CtsModuleMain extends XposedModule {
     }
 
     private static volatile String sLastClaimedDialogId = null;
+    private static volatile Object sLatestFloatManager = null;
     private static final String XIAOAI_COMM_SALT = "dsha-xiaoai-native-salt-2026";
+    private static final android.os.Handler sMainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
 
-    /** 接入小爱同学核心 Hook（纯权限打通与数据通道，直连 3080 容器后端） */
+    /** 接入小爱同学 7.13 原生特权 Hook（100% 完整对齐 Eta 架构） */
     private void hookXiaoAi(PackageReadyParam param) {
-        log(Log.INFO, TAG, "XiaoAi package ready, attempting hook...");
+        log(Log.INFO, TAG, "XiaoAi 7.13 package ready, installing Eta-standard hooks...");
         ClassLoader cl = param.getClassLoader();
 
-        // 1. 拦截用户输入与对话 ID (OperationManager.setQueryInfo)
+        // 1. 拦截输入与对话 ID (OperationManager.setQueryInfo)
         try {
             Class<?> opManager = cl.loadClass("com.xiaomi.voiceassistant.instruction.base.OperationManager");
             for (Method m : opManager.getDeclaredMethods()) {
                 if ("setQueryInfo".equals(m.getName())) {
                     hook(m).intercept(new XiaoAiQueryHooker());
-                    log(Log.INFO, TAG, "XiaoAi setQueryInfo hook installed successfully");
+                    log(Log.INFO, TAG, "XiaoAi setQueryInfo hook installed");
                 }
             }
         } catch (Throwable e) {
             log(Log.WARN, TAG, "XiaoAi OperationManager hook fail: " + e.getMessage());
         }
 
-        // 2. 动态扫描并掐断小爱本地动作 (kh0.s0, sj0.s0 及 ActionManager)
+        // 2. 捕获小爱悬浮卡片管理器 (FloatManager.addCard，Eta 原版核心)
         try {
-            String[] possibleActionClasses = new String[] {
-                    "kh0.s0",
-                    "sj0.s0",
-                    "com.xiaomi.voiceassistant.instruction.action.ActionManager"
-            };
-            for (String clsName : possibleActionClasses) {
+            String[] floatClasses = new String[] { "com.xiaomi.voiceassistant.widget.d", "com.xiaomi.voiceassistant.UiManager" };
+            for (String clsName : floatClasses) {
                 try {
-                    Class<?> actionCls = cl.loadClass(clsName);
-                    for (Method m : actionCls.getDeclaredMethods()) {
+                    Class<?> cls = cl.loadClass(clsName);
+                    for (Method m : cls.getDeclaredMethods()) {
+                        if ("addCard".equals(m.getName())) {
+                            hook(m).intercept(chain -> {
+                                sLatestFloatManager = chain.getThis();
+                                return chain.proceed();
+                            });
+                            log(Log.INFO, TAG, "XiaoAi FloatManager.addCard hook installed on " + clsName);
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
+
+        // 3. 掐断小爱本地动作 (kh0.s0 与 ActionManager)
+        try {
+            String[] actionClasses = new String[] { "kh0.s0", "sj0.s0", "com.xiaomi.voiceassistant.instruction.action.ActionManager" };
+            for (String clsName : actionClasses) {
+                try {
+                    Class<?> cls = cl.loadClass(clsName);
+                    for (Method m : cls.getDeclaredMethods()) {
                         String name = m.getName();
                         if (name.startsWith("executeAction") || "execute".equals(name) || "executeActionsAsync".equals(name)) {
-                            hook(m).intercept(new XiaoAiActionHooker());
+                            hook(m).intercept(new AlwaysTrueActionHooker());
                             log(Log.INFO, TAG, "XiaoAi action hook installed on " + clsName + "." + name);
                         }
                     }
@@ -259,23 +276,17 @@ public class CtsModuleMain extends XposedModule {
             }
         } catch (Throwable ignored) {}
 
-        // 3. 动态扫描并掐断小爱出站网络事件 (y00.r0.C0, XMDChannel.postEvent, core.b.postEvent, l1.sendEvent)
+        // 4. 掐断小爱云端出站引擎 (y00.r0.C0，Eta 原版核心出站阻断)
         try {
-            String[] possibleEventClasses = new String[] {
-                    "y00.r0",
-                    "com.xiaomi.ai.core.XMDChannel",
-                    "com.xiaomi.ai.core.b",
-                    "com.xiaomi.voiceassistant.l1",
-                    "b30.g"
-            };
-            for (String clsName : possibleEventClasses) {
+            String[] engineClasses = new String[] { "y00.r0", "com.xiaomi.ai.core.XMDChannel", "com.xiaomi.ai.core.b" };
+            for (String clsName : engineClasses) {
                 try {
-                    Class<?> eventCls = cl.loadClass(clsName);
-                    for (Method m : eventCls.getDeclaredMethods()) {
+                    Class<?> cls = cl.loadClass(clsName);
+                    for (Method m : cls.getDeclaredMethods()) {
                         String name = m.getName();
-                        if ("C0".equals(name) || "sendEvent".equals(name) || "postEvent".equals(name)) {
+                        if ("C0".equals(name) || "postEvent".equals(name) || "sendEvent".equals(name)) {
                             hook(m).intercept(new XiaoAiOutboundHooker());
-                            log(Log.INFO, TAG, "XiaoAi outbound event hook installed on " + clsName + "." + name);
+                            log(Log.INFO, TAG, "XiaoAi outbound hook installed on " + clsName + "." + name);
                         }
                     }
                 } catch (Throwable ignored) {}
@@ -300,7 +311,7 @@ public class CtsModuleMain extends XposedModule {
                     if (!query.trim().isEmpty()) {
                         sLastClaimedDialogId = dialogId;
                         log(Log.INFO, TAG, "XiaoAi query captured: [" + query + "] (dialogId=" + dialogId + ")");
-                        dispatchXiaoAiQueryAsync(dialogId, query);
+                        dispatchXiaoAiQueryAsync(dialogId, query, chain.getThis());
                     }
                 }
             }
@@ -308,7 +319,7 @@ public class CtsModuleMain extends XposedModule {
         }
     }
 
-    /** 小爱出站网络事件拦截 Hooker（抄 Eta 核心作业：拦截 Nlp.Request 出站事件） */
+    /** 小爱出站网络事件拦截 Hooker（抄 Eta 核心作业：仅拦截 Nlp.Request 出站事件） */
     private final class XiaoAiOutboundHooker implements Hooker {
         @Override
         public Object intercept(Chain chain) throws Throwable {
@@ -322,9 +333,6 @@ public class CtsModuleMain extends XposedModule {
                     try {
                         Method getFullName = event.getClass().getMethod("getFullName");
                         String fullName = (String) getFullName.invoke(event);
-                        // 精准对齐 Eta：只拦截 Nlp.Request 出站包！
-                        // 绝对不能拦截 SpeechRecognizer（否则会掐断麦克风听音和语音转写）
-                        // 绝对不能拦截 General（否则会破坏小爱的基础生命周期）
                         if (fullName != null && fullName.endsWith("Nlp.Request")) {
                             log(Log.INFO, TAG, "XiaoAi Nlp.Request intercepted and aborted cleanly: " + fullName);
                             return true; // 伪装发送成功，彻底丢弃小米云端意图请求！
@@ -336,8 +344,8 @@ public class CtsModuleMain extends XposedModule {
         }
     }
 
-    /** 小爱原厂动作拦截 Hooker（掐断原厂自发操作） */
-    private final class XiaoAiActionHooker implements Hooker {
+    /** 本地动作阻断 Hooker */
+    private final class AlwaysTrueActionHooker implements Hooker {
         @Override
         public Object intercept(Chain chain) throws Throwable {
             if (!isXiaoAiEnabled()) {
@@ -352,10 +360,9 @@ public class CtsModuleMain extends XposedModule {
     }
 
     /**
-     * 异步直连容器 3080 后端。
-     * 使用原生 TCP Socket 直发 HTTP，彻底穿透 Android Cleartext HTTP 策略拦截。
+     * 异步直连容器 3080 后端，收到流式响应后通过 Eta 的 FlowTemplateToastCard 在小爱屏幕打字渲染。
      */
-    private static void dispatchXiaoAiQueryAsync(final String dialogId, final String query) {
+    private static void dispatchXiaoAiQueryAsync(final String dialogId, final String query, final Object callerContext) {
         new Thread(() -> {
             java.net.Socket socket = null;
             try {
@@ -384,14 +391,74 @@ public class CtsModuleMain extends XposedModule {
                 out.write(bodyBytes);
                 out.flush();
 
+                // Eta 打字机卡片渲染控制器
+                final Object[] targetCard = new Object[1];
+                final ClassLoader cl = callerContext.getClass().getClassLoader();
+
                 java.io.BufferedReader reader = new java.io.BufferedReader(
                         new java.io.InputStreamReader(socket.getInputStream(), "UTF-8"));
                 String line;
+                final StringBuilder accumulatedText = new StringBuilder();
+
                 while ((line = reader.readLine()) != null) {
                     if (line.startsWith("data: ")) {
                         String data = line.substring(6).trim();
                         if ("[DONE]".equals(data)) break;
+                        try {
+                            org.json.JSONObject obj = new org.json.JSONObject(data);
+                            String delta = obj.optString("delta", "");
+                            if (!delta.isEmpty()) {
+                                accumulatedText.append(delta);
+                                final String currentText = accumulatedText.toString();
+                                // 主线程刷新小爱原厂悬浮卡片文字
+                                sMainHandler.post(() -> {
+                                    try {
+                                        if (targetCard[0] == null) {
+                                            Class<?> cardCls = cl.loadClass("com.xiaomi.voiceassistant.instruction.card.stream.FlowTemplateToastCard");
+                                            targetCard[0] = cardCls.getConstructor(String.class).newInstance(currentText);
+                                            try {
+                                                Method setDialogId = cardCls.getMethod("setDialogId", String.class);
+                                                setDialogId.invoke(targetCard[0], dialogId);
+                                            } catch (Throwable ignored) {}
+
+                                            if (sLatestFloatManager != null) {
+                                                Method addCard = sLatestFloatManager.getClass().getMethod("addCard", targetCard[0].getClass().getSuperclass());
+                                                addCard.invoke(sLatestFloatManager, targetCard[0]);
+                                            }
+                                        } else {
+                                            Method updateCardText = targetCard[0].getClass().getMethod("updateCardText", String.class);
+                                            updateCardText.invoke(targetCard[0], currentText);
+                                        }
+                                    } catch (Throwable t) {
+                                        Log.w(TAG, "Render card text error: " + t.getMessage());
+                                    }
+                                });
+                            }
+                        } catch (Throwable ignored) {}
                     }
+                }
+
+                // 播放完成时调用小爱原生 TTS 朗读最终文本（对齐 Eta）
+                final String finalText = accumulatedText.toString().trim();
+                if (!finalText.isEmpty()) {
+                    sMainHandler.post(() -> {
+                        try {
+                            Class<?> playerCls = cl.loadClass("la0.n1");
+                            java.lang.reflect.Field[] fields = playerCls.getDeclaredFields();
+                            Object playerInstance = null;
+                            for (java.lang.reflect.Field f : fields) {
+                                if (java.lang.reflect.Modifier.isStatic(f.getModifiers()) && f.getType() == playerCls) {
+                                    f.setAccessible(true);
+                                    playerInstance = f.get(null);
+                                    break;
+                                }
+                            }
+                            if (playerInstance != null) {
+                                Method speak = playerCls.getMethod("speakTts", String.class);
+                                speak.invoke(playerInstance, finalText);
+                            }
+                        } catch (Throwable ignored) {}
+                    });
                 }
             } catch (Throwable t) {
                 Log.w(TAG, "XiaoAi direct socket dispatch to 3080 error: " + t.getMessage());
