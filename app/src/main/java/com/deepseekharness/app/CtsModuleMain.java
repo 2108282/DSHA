@@ -128,6 +128,58 @@ public class CtsModuleMain extends XposedModule {
         super.onPackageReady(param);
         if (!param.isFirstPackage()) return;
 
+        if ("com.miui.home".equals(param.getPackageName())) {
+            // 【小米系统桌面全面屏手势解绑】
+            // 解决桌面硬编码校验 googlequicksearchbox 导致非 Google 助理选手势失效的问题：
+            // 1. 强制激活全面屏底角手势
+            // 2. 在手势触发 startAssistant 时前置兜底秒拉 DSHA 抽屉
+            try {
+                ClassLoader cl = param.getClassLoader();
+                int hookedCount = 0;
+
+                try {
+                    Class<?> helperCls = cl.loadClass("com.miui.home.recents.FsGestureAssistEnableHelper");
+                    for (Method m : helperCls.getDeclaredMethods()) {
+                        String name = m.getName();
+                        if ("supportAssistantGesture".equals(name) || "isSupportGoogleAssist".equals(name)) {
+                            hook(m).intercept(new AlwaysTrueHooker());
+                            hookedCount++;
+                        }
+                    }
+                } catch (Throwable t) {
+                    log(Log.DEBUG, TAG, "hook FsGestureAssistEnableHelper skip", t);
+                }
+
+                try {
+                    Class<?> assistMgrCls = cl.loadClass("com.android.systemui.shared.recents.system.AssistManager");
+                    for (Method m : assistMgrCls.getDeclaredMethods()) {
+                        if ("isSupportGoogleAssist".equals(m.getName())) {
+                            hook(m).intercept(new AlwaysTrueHooker());
+                            hookedCount++;
+                        }
+                    }
+                } catch (Throwable t) {
+                    log(Log.DEBUG, TAG, "hook AssistManager skip", t);
+                }
+
+                try {
+                    Class<?> proxyCls = cl.loadClass("com.miui.home.recents.SystemUiProxyWrapper");
+                    for (Method m : proxyCls.getDeclaredMethods()) {
+                        if ("startAssistant".equals(m.getName())) {
+                            hook(m).intercept(new MiuiHomeStartAssistantHooker());
+                            hookedCount++;
+                        }
+                    }
+                } catch (Throwable t) {
+                    log(Log.DEBUG, TAG, "hook SystemUiProxyWrapper skip", t);
+                }
+
+                log(Log.INFO, TAG, "hook MiuiHome gesture helper installed (count=" + hookedCount + ")");
+            } catch (Throwable e) {
+                log(Log.WARN, TAG, "hook MiuiHome fail", e);
+            }
+        }
+
         if ("com.google.android.googlequicksearchbox".equals(param.getPackageName())) {
             // 兜底路径：若有特殊路径仍进入 Google 进程，优雅接管并消除 Peer 崩溃
             try {
@@ -476,6 +528,63 @@ public class CtsModuleMain extends XposedModule {
             } catch (Throwable t) {
                 log(Log.WARN, TAG, "VoiceInteractionSession onShow intercept fail", t);
             }
+            return chain.proceed();
+        }
+    }
+
+    /**
+     * 小米桌面全面屏手势开关强制激活：
+     * 无视 googlequicksearchbox 包名校验，始终返回 true，确保手势热区保持开启。
+     */
+    private final class AlwaysTrueHooker implements Hooker {
+        @Override
+        public Object intercept(Chain chain) throws Throwable {
+            if (isEnabled()) {
+                return true;
+            }
+            return chain.proceed();
+        }
+    }
+
+    /**
+     * 小米桌面触发手势（startAssistant）时的前置直接拉起：
+     * 当用户在系统设置中将默认助理设为“无”或其他应用时，系统 SystemUI 可能不会向下分发意图；
+     * 本 Hooker 在桌面调用 startAssistant 的第 0 毫秒直接拉起 DSHA 抽屉网关，彻底摆脱系统默认助理配置依赖。
+     */
+    private final class MiuiHomeStartAssistantHooker implements Hooker {
+        @Override
+        public Object intercept(Chain chain) throws Throwable {
+            if (!isEnabled()) {
+                return chain.proceed();
+            }
+
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (now - sLastGestureRedirectMs < GESTURE_REDIRECT_DEBOUNCE_MS) {
+                return chain.proceed();
+            }
+
+            try {
+                Context context = null;
+                try {
+                    Class<?> atCls = Class.forName("android.app.ActivityThread");
+                    Method currentAppM = atCls.getMethod("currentApplication");
+                    context = (Context) currentAppM.invoke(null);
+                } catch (Throwable ignored) {}
+
+                if (context != null) {
+                    sLastGestureRedirectMs = now;
+                    Intent intent = new Intent();
+                    intent.setComponent(new ComponentName(TARGET_PACKAGE,
+                            "com.deepseekharness.app.ui.AssistGatewayActivity"));
+                    intent.setAction(Intent.ACTION_ASSIST);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                    context.startActivity(intent);
+                    log(Log.INFO, TAG, "MiuiHome startAssistant directly launched DSHA drawer");
+                }
+            } catch (Throwable t) {
+                log(Log.WARN, TAG, "MiuiHome startAssistant launch fail", t);
+            }
+
             return chain.proceed();
         }
     }
