@@ -249,7 +249,7 @@ public class CtsModuleMain extends XposedModule {
                     for (Method m : cls.getDeclaredMethods()) {
                         if ("addCard".equals(m.getName())) {
                             hook(m).intercept(chain -> {
-                                sLatestFloatManager = chain.getThis();
+                                sLatestFloatManager = chain.getThisObject();
                                 return chain.proceed();
                             });
                             log(Log.INFO, TAG, "XiaoAi FloatManager.addCard hook installed on " + clsName);
@@ -311,7 +311,7 @@ public class CtsModuleMain extends XposedModule {
                     if (!query.trim().isEmpty()) {
                         sLastClaimedDialogId = dialogId;
                         log(Log.INFO, TAG, "XiaoAi query captured: [" + query + "] (dialogId=" + dialogId + ")");
-                        dispatchXiaoAiQueryAsync(dialogId, query, chain.getThis());
+                        dispatchXiaoAiQueryAsync(dialogId, query, chain.getThisObject());
                     }
                 }
             }
