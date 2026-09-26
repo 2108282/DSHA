@@ -301,6 +301,8 @@ public class CtsModuleMain extends XposedModule {
                         sLastClaimedDialogId = dialogId;
                         log(Log.INFO, TAG, "XiaoAi query captured: [" + query + "] (dialogId=" + dialogId + ")");
                         dispatchXiaoAiQueryAsync(dialogId, query);
+                        // 核心阻断：彻底阻止小爱继续执行原厂逻辑
+                        return null;
                     }
                 }
             }
@@ -339,43 +341,53 @@ public class CtsModuleMain extends XposedModule {
     }
 
     /**
-     * 异步直连容器 3080 后端（全内存计算签名，零文件读写，免受应用沙箱限制）。
+     * 异步直连容器 3080 后端。
+     * 使用原生 TCP Socket 直发 HTTP，彻底穿透 Android Cleartext HTTP 策略拦截。
      */
     private static void dispatchXiaoAiQueryAsync(final String dialogId, final String query) {
         new Thread(() -> {
+            java.net.Socket socket = null;
             try {
                 long timestamp = System.currentTimeMillis() / 1000L;
                 String signature = calculateHmacSha256(query + "|" + timestamp, XIAOAI_COMM_SALT);
 
-                java.net.URL url = new java.net.URL("http://127.0.0.1:3080/xiaoai/chat");
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("POST");
-                conn.setConnectTimeout(3000);
-                conn.setReadTimeout(45000);
-                conn.setDoOutput(true);
-                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                conn.setRequestProperty("X-XiaoAi-Timestamp", String.valueOf(timestamp));
-                conn.setRequestProperty("X-XiaoAi-Signature", signature);
-
                 org.json.JSONObject payload = new org.json.JSONObject();
                 payload.put("query", query);
                 payload.put("dialogId", dialogId);
-                byte[] bytes = payload.toString().getBytes("UTF-8");
-                conn.getOutputStream().write(bytes);
-                conn.getOutputStream().flush();
+                byte[] bodyBytes = payload.toString().getBytes("UTF-8");
 
-                try (java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(conn.getInputStream(), "UTF-8"))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        if (line.startsWith("data: ")) {
-                            String data = line.substring(6).trim();
-                            if ("[DONE]".equals(data)) break;
-                        }
+                String header = "POST /xiaoai/chat HTTP/1.1\r\n"
+                        + "Host: 127.0.0.1:3080\r\n"
+                        + "Content-Type: application/json; charset=utf-8\r\n"
+                        + "Content-Length: " + bodyBytes.length + "\r\n"
+                        + "X-XiaoAi-Timestamp: " + timestamp + "\r\n"
+                        + "X-XiaoAi-Signature: " + signature + "\r\n"
+                        + "Connection: close\r\n\r\n";
+
+                socket = new java.net.Socket();
+                socket.connect(new java.net.InetSocketAddress("127.0.0.1", 3080), 3000);
+                socket.setSoTimeout(45000);
+
+                java.io.OutputStream out = socket.getOutputStream();
+                out.write(header.getBytes("UTF-8"));
+                out.write(bodyBytes);
+                out.flush();
+
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(socket.getInputStream(), "UTF-8"));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.startsWith("data: ")) {
+                        String data = line.substring(6).trim();
+                        if ("[DONE]".equals(data)) break;
                     }
                 }
             } catch (Throwable t) {
-                Log.w(TAG, "XiaoAi dispatch to 3080 error: " + t.getMessage());
+                Log.w(TAG, "XiaoAi direct socket dispatch to 3080 error: " + t.getMessage());
+            } finally {
+                if (socket != null) {
+                    try { socket.close(); } catch (Throwable ignored) {}
+                }
             }
         }, "DSHA-XiaoAi-DirectDispatcher").start();
     }
