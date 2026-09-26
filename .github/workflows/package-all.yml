@@ -18,9 +18,9 @@ on:
         type: boolean
         default: true
       release_tag:
-        description: "自定义发布 Release Tag (例如 0.1.7-rc.2-u1)"
+        description: "自定义发布 Release Tag (例如 0.1.7-rc.2-u2)"
         required: false
-        default: "0.1.7-rc.2-u1"
+        default: "0.1.7-rc.2-u2"
       prerelease:
         description: "是否标记为预发布 (Pre-release)"
         type: boolean
@@ -52,7 +52,7 @@ jobs:
           elif [ -n "${{ inputs.release_tag }}" ]; then
             V="${{ inputs.release_tag }}"
           else
-            V="0.1.7-rc.2-u1"
+            V="0.1.7-rc.2-u2"
           fi
           echo "VERSION=$V" >> "$GITHUB_ENV"
           echo "VERSION=$V" >> "$GITHUB_OUTPUT"
