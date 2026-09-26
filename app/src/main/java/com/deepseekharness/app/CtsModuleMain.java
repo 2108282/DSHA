@@ -301,8 +301,6 @@ public class CtsModuleMain extends XposedModule {
                         sLastClaimedDialogId = dialogId;
                         log(Log.INFO, TAG, "XiaoAi query captured: [" + query + "] (dialogId=" + dialogId + ")");
                         dispatchXiaoAiQueryAsync(dialogId, query);
-                        // 核心阻断：彻底阻止小爱继续执行原厂逻辑
-                        return null;
                     }
                 }
             }
@@ -324,16 +322,15 @@ public class CtsModuleMain extends XposedModule {
                     try {
                         Method getFullName = event.getClass().getMethod("getFullName");
                         String fullName = (String) getFullName.invoke(event);
-                        if (fullName != null && (fullName.contains("Nlp") || fullName.contains("SpeechRecognizer") || fullName.contains("General"))) {
-                            log(Log.INFO, TAG, "XiaoAi outbound event intercepted and aborted: " + fullName);
-                            return true; // 伪装发送成功，彻底丢弃小米云端出站包！
+                        // 精准对齐 Eta：只拦截 Nlp.Request 出站包！
+                        // 绝对不能拦截 SpeechRecognizer（否则会掐断麦克风听音和语音转写）
+                        // 绝对不能拦截 General（否则会破坏小爱的基础生命周期）
+                        if (fullName != null && fullName.endsWith("Nlp.Request")) {
+                            log(Log.INFO, TAG, "XiaoAi Nlp.Request intercepted and aborted cleanly: " + fullName);
+                            return true; // 伪装发送成功，彻底丢弃小米云端意图请求！
                         }
                     } catch (Throwable ignored) {}
                 }
-            }
-            if (sLastClaimedDialogId != null) {
-                log(Log.INFO, TAG, "XiaoAi outbound cloud request blocked for: " + sLastClaimedDialogId);
-                return true;
             }
             return chain.proceed();
         }
