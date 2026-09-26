@@ -280,4 +280,24 @@ public class ConfigStore {
     public void setCtsRedirectEnabled(boolean v) {
         ctsPrefs().edit().putBoolean("enabled", v).apply();
     }
+
+    public boolean isXiaoAiTakeoverEnabled() {
+        return ctsPrefs().getBoolean("xiaoai_enabled", true);
+    }
+
+    public void setXiaoAiTakeoverEnabled(boolean v) {
+        ctsPrefs().edit().putBoolean("xiaoai_enabled", v).apply();
+    }
+
+    // ================= 快捷抽屉呼出自动语音输入 =================
+
+    public static final String KEY_AUTO_VOICE_INPUT = "sheet_auto_voice_input";
+
+    public boolean isAutoVoiceInputEnabled() {
+        return prefs.getBoolean(KEY_AUTO_VOICE_INPUT, true);
+    }
+
+    public void setAutoVoiceInputEnabled(boolean v) {
+        prefs.edit().putBoolean(KEY_AUTO_VOICE_INPUT, v).apply();
+    }
 }

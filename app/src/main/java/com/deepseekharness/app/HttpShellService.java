@@ -562,6 +562,9 @@ public final class HttpShellService {
                 result = DeviceSense.torch(ctx, !"0".equals(on) && !"off".equalsIgnoreCase(on));
             } else if (path.startsWith("/app/export")) {
                 result = appExport(path);
+            } else if (path.startsWith("/app/xiaoai")) {
+                handleXiaoAiRelay(c, path);
+                return;
             } else if (cmd.isEmpty()) {
                 result = "[NO_CMD]";
             } else if (path.startsWith("/confirm")) {
@@ -2503,5 +2506,66 @@ public final class HttpShellService {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * 小爱专属后台流式中继（纯后台 0 UI 打扰）。
+     * 将小爱 Hook 拦截的请求转发给容器内 DSH Web 的 /xiaoai/chat，并将 SSE 流实时透传回小爱悬浮卡片。
+     */
+    private void handleXiaoAiRelay(Socket client, String path) {
+        try {
+            String q = queryOf(path);
+            String query = getParam(q, "query", "");
+            String dialogId = getParam(q, "dialogId", "dialog-" + System.currentTimeMillis());
+            try {
+                query = URLDecoder.decode(query, "UTF-8");
+            } catch (Exception ignored) {}
+
+            if (query.isEmpty()) {
+                byte[] err = "{\"ok\":false,\"error\":\"empty query\"}".getBytes("UTF-8");
+                String head = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: " + err.length + "\r\nConnection: close\r\n\r\n";
+                client.getOutputStream().write(head.getBytes("UTF-8"));
+                client.getOutputStream().write(err);
+                client.getOutputStream().flush();
+                return;
+            }
+
+            java.net.URL url = new java.net.URL("http://127.0.0.1:3080/xiaoai/chat");
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(3000);
+            conn.setReadTimeout(60000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+
+            org.json.JSONObject payload = new org.json.JSONObject();
+            payload.put("query", query);
+            payload.put("dialogId", dialogId);
+            byte[] postBytes = payload.toString().getBytes("UTF-8");
+            conn.getOutputStream().write(postBytes);
+            conn.getOutputStream().flush();
+
+            String head = "HTTP/1.1 200 OK\r\n"
+                    + "Content-Type: text/event-stream; charset=utf-8\r\n"
+                    + "Cache-Control: no-cache\r\n"
+                    + "Connection: close\r\n\r\n";
+            client.getOutputStream().write(head.getBytes("UTF-8"));
+            client.getOutputStream().flush();
+
+            try (java.io.InputStream in = conn.getInputStream()) {
+                byte[] buf = new byte[1024];
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    client.getOutputStream().write(buf, 0, n);
+                    client.getOutputStream().flush();
+                }
+            }
+        } catch (Throwable t) {
+            try {
+                String err = "data: {\"delta\":\"[小爱桥接提示: " + (t.getMessage() != null ? t.getMessage() : "服务处理中") + "]\"}\n\ndata: [DONE]\n\n";
+                client.getOutputStream().write(err.getBytes("UTF-8"));
+                client.getOutputStream().flush();
+            } catch (Throwable ignored) {}
+        }
     }
 }

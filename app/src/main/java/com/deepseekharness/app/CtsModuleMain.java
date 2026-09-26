@@ -44,6 +44,8 @@ public class CtsModuleMain extends XposedModule {
     private static final String CONFIG_NAME = "cts_redirect_config";
     /** 开关键：true=重定向到本应用，false=回退系统默认 */
     private static final String KEY_ENABLED = "enabled";
+    /** 小爱同学系统接管开关键：true=接管并转交DSH小爱工作区，false=回退官方小爱原厂逻辑 */
+    private static final String KEY_XIAOAI_ENABLED = "xiaoai_enabled";
 
     /** 重定向目标包名 = 本应用 applicationId */
     private static final String TARGET_PACKAGE = "com.dsha.fr";
@@ -210,7 +212,131 @@ public class CtsModuleMain extends XposedModule {
             } catch (Throwable e) {
                 log(Log.ERROR, TAG, "hook FloatyActivity fail", e);
             }
+        } else if ("com.miui.voiceassist".equals(param.getPackageName())) {
+            hookXiaoAi(param);
         }
+    }
+
+    private static volatile String sLastClaimedDialogId = null;
+
+    /** 接入小爱同学核心 Hook（纯权限打通与数据通道） */
+    private void hookXiaoAi(PackageReadyParam param) {
+        log(Log.INFO, TAG, "XiaoAi package ready, attempting hook...");
+        ClassLoader cl = param.getClassLoader();
+        try {
+            Class<?> opManager = cl.loadClass("com.xiaomi.voiceassistant.instruction.base.OperationManager");
+            for (Method m : opManager.getDeclaredMethods()) {
+                if ("setQueryInfo".equals(m.getName())) {
+                    hook(m).intercept(new XiaoAiQueryHooker());
+                    log(Log.INFO, TAG, "XiaoAi setQueryInfo hook installed successfully");
+                }
+            }
+        } catch (Throwable e) {
+            log(Log.WARN, TAG, "XiaoAi OperationManager setQueryInfo hook fail: " + e.getMessage());
+        }
+
+        // 掐断小爱原厂动作 executeActionsAsync / executeActions
+        try {
+            String[] possibleActionClasses = new String[] {
+                    "com.xiaomi.voiceassistant.instruction.action.ActionManager",
+                    "kh0.s0"
+            };
+            for (String clsName : possibleActionClasses) {
+                try {
+                    Class<?> actionCls = cl.loadClass(clsName);
+                    for (Method m : actionCls.getDeclaredMethods()) {
+                        if (m.getName().startsWith("executeAction")) {
+                            hook(m).intercept(new XiaoAiActionHooker());
+                            log(Log.INFO, TAG, "XiaoAi action hook installed on " + clsName + "." + m.getName());
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /** 小爱输入与对话 ID 拦截 Hooker */
+    private final class XiaoAiQueryHooker implements Hooker {
+        @Override
+        public Object intercept(Chain chain) throws Throwable {
+            if (!isXiaoAiEnabled()) {
+                return chain.proceed();
+            }
+            List<?> args = chain.getArgs();
+            if (args != null && args.size() >= 2) {
+                Object dialogIdObj = args.get(0);
+                Object queryObj = args.get(1);
+                if (dialogIdObj instanceof String && queryObj instanceof String) {
+                    String dialogId = (String) dialogIdObj;
+                    String query = (String) queryObj;
+                    if (!query.trim().isEmpty()) {
+                        sLastClaimedDialogId = dialogId;
+                        log(Log.INFO, TAG, "XiaoAi query captured: [" + query + "] (dialogId=" + dialogId + ")");
+                        dispatchXiaoAiQueryAsync(dialogId, query);
+                    }
+                }
+            }
+            return chain.proceed();
+        }
+    }
+
+    /** 小爱原厂动作拦截 Hooker（掐断原厂自发操作） */
+    private final class XiaoAiActionHooker implements Hooker {
+        @Override
+        public Object intercept(Chain chain) throws Throwable {
+            if (!isXiaoAiEnabled()) {
+                return chain.proceed();
+            }
+            if (sLastClaimedDialogId != null) {
+                log(Log.INFO, TAG, "XiaoAi native action aborted for dialog: " + sLastClaimedDialogId);
+                return true;
+            }
+            return chain.proceed();
+        }
+    }
+
+    /** 异步分发至 3095 网桥中继 */
+    private static void dispatchXiaoAiQueryAsync(final String dialogId, final String query) {
+        new Thread(() -> {
+            try {
+                String token = "";
+                try {
+                    java.io.File tf = new java.io.File("/sdcard/Download/DSHA/.dsh/.bridge_token");
+                    if (!tf.exists()) tf = new java.io.File("/data/adb/dsha/rootfs/root/.dsh/.bridge_token");
+                    if (tf.exists()) {
+                        java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(tf));
+                        token = br.readLine();
+                        if (token != null) token = token.trim();
+                        br.close();
+                    }
+                } catch (Throwable ignored) {}
+
+                String encodedQuery = java.net.URLEncoder.encode(query, "UTF-8");
+                String urlStr = "http://127.0.0.1:3095/app/xiaoai?query=" + encodedQuery
+                        + "&dialogId=" + java.net.URLEncoder.encode(dialogId, "UTF-8")
+                        + (token.isEmpty() ? "" : "&token=" + token);
+
+                java.net.URL url = new java.net.URL(urlStr);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(3000);
+                conn.setReadTimeout(30000);
+                conn.setRequestProperty("User-Agent", "DSHA-XiaoAi-Hook/1.0");
+
+                try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(conn.getInputStream(), "UTF-8"))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (line.startsWith("data: ")) {
+                            String data = line.substring(6).trim();
+                            if ("[DONE]".equals(data)) break;
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "XiaoAi dispatch error: " + t.getMessage());
+            }
+        }, "DSHA-XiaoAi-Dispatcher").start();
     }
 
     private static volatile boolean sCachedEnabled = true;
@@ -236,6 +362,26 @@ public class CtsModuleMain extends XposedModule {
             // 异常时维持已有缓存值，绝不阻塞调用者
         }
         return sCachedEnabled;
+    }
+
+    private static volatile boolean sCachedXiaoAiEnabled = true;
+    private static volatile long sLastXiaoAiPrefFetchMs = 0L;
+
+    /** 小爱接管开关键（带 TTL 缓存）：开 → 接管转交；关 → 彻底放行官方小爱 */
+    private boolean isXiaoAiEnabled() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - sLastXiaoAiPrefFetchMs < PREF_CACHE_TTL_MS) {
+            return sCachedXiaoAiEnabled;
+        }
+        sLastXiaoAiPrefFetchMs = now;
+        try {
+            if (instance != null) {
+                sCachedXiaoAiEnabled = instance.getRemotePreferences(CONFIG_NAME).getBoolean(KEY_XIAOAI_ENABLED, true);
+            }
+        } catch (Throwable t) {
+            // 异常时维持已有缓存值
+        }
+        return sCachedXiaoAiEnabled;
     }
 
     /**
