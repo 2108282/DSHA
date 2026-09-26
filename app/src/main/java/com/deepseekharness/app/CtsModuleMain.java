@@ -218,11 +218,29 @@ public class CtsModuleMain extends XposedModule {
     }
 
     private static volatile String sLastClaimedDialogId = null;
+    private static volatile long sLastClaimedTimeMs = 0L;
+    private static volatile long sDshSpeakingUntilMs = 0L;
     private static volatile Object sLatestFloatManager = null;
     private static final String XIAOAI_COMM_SALT = "dsha-xiaoai-native-salt-2026";
     private static final android.os.Handler sMainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
 
-    /** 接入小爱同学 7.13 原生特权 Hook（100% 完整对齐 Eta 架构） */
+    /** 安全获取小爱 Event 或 Instruction 的 getFullName()（沿继承链向上查找，100% 兼容父类定义） */
+    private static String getObjectFullName(Object target) {
+        if (target == null) return null;
+        Class<?> cur = target.getClass();
+        while (cur != null && cur != Object.class) {
+            try {
+                Method m = cur.getDeclaredMethod("getFullName");
+                m.setAccessible(true);
+                Object res = m.invoke(target);
+                if (res instanceof String) return (String) res;
+            } catch (Throwable ignored) {}
+            cur = cur.getSuperclass();
+        }
+        return null;
+    }
+
+    /** 接入小爱同学 7.13 原生特权 Hook（深度接管与原生阻断架构） */
     private void hookXiaoAi(PackageReadyParam param) {
         log(Log.INFO, TAG, "XiaoAi 7.13 package ready, installing Eta-standard hooks...");
         ClassLoader cl = param.getClassLoader();
@@ -276,7 +294,7 @@ public class CtsModuleMain extends XposedModule {
             }
         } catch (Throwable ignored) {}
 
-        // 4. 掐断小爱云端出站引擎 (y00.r0.C0，Eta 原版核心出站阻断)
+        // 4. 掐断小爱云端出站引擎 (y00.r0.C0 等出站阻断)
         try {
             String[] engineClasses = new String[] { "y00.r0", "com.xiaomi.ai.core.XMDChannel", "com.xiaomi.ai.core.b" };
             for (String clsName : engineClasses) {
@@ -292,6 +310,34 @@ public class CtsModuleMain extends XposedModule {
                 } catch (Throwable ignored) {}
             }
         } catch (Throwable ignored) {}
+
+        // 5. 掐断小爱云端下行指令 (executeInstruction / executeSerializedInstruction / handlePushInstruction)
+        // 彻底切断小米云端下达的原厂语音回答 (SpeechSynthesizer.Speak) 与原厂卡片渲染，杜绝双回答与语音冲突！
+        try {
+            Class<?> r0Class = cl.loadClass("y00.r0");
+            for (Method m : r0Class.getDeclaredMethods()) {
+                String name = m.getName();
+                if ("executeInstruction".equals(name) || "executeSerializedInstruction".equals(name) || "handlePushInstruction".equals(name)) {
+                    hook(m).intercept(new XiaoAiInstructionHooker());
+                    log(Log.INFO, TAG, "XiaoAi instruction hook installed on y00.r0." + name);
+                }
+            }
+        } catch (Throwable e) {
+            log(Log.WARN, TAG, "XiaoAi instruction hook fail: " + e.getMessage());
+        }
+
+        // 6. 防抢占守卫：Hook 小爱原生 TTS 播放器 (la0.n1.stopPlay)，防止原厂会话结束误掐断 DSH 播报
+        try {
+            Class<?> playerCls = cl.loadClass("la0.n1");
+            for (Method m : playerCls.getDeclaredMethods()) {
+                if ("stopPlay".equals(m.getName())) {
+                    hook(m).intercept(new XiaoAiTtsStopGuardHooker());
+                    log(Log.INFO, TAG, "XiaoAi TTS stopPlay guard hook installed on la0.n1");
+                }
+            }
+        } catch (Throwable e) {
+            log(Log.DEBUG, TAG, "XiaoAi TTS guard hook skip: " + e.getMessage());
+        }
     }
 
     /** 小爱输入拦截 Hooker */
@@ -310,6 +356,7 @@ public class CtsModuleMain extends XposedModule {
                     String query = (String) queryObj;
                     if (!query.trim().isEmpty()) {
                         sLastClaimedDialogId = dialogId;
+                        sLastClaimedTimeMs = android.os.SystemClock.elapsedRealtime();
                         log(Log.INFO, TAG, "XiaoAi query captured: [" + query + "] (dialogId=" + dialogId + ")");
                         dispatchXiaoAiQueryAsync(dialogId, query, chain.getThisObject());
                     }
@@ -319,7 +366,7 @@ public class CtsModuleMain extends XposedModule {
         }
     }
 
-    /** 小爱出站网络事件拦截 Hooker（抄 Eta 核心作业：仅拦截 Nlp.Request 出站事件） */
+    /** 小爱出站网络事件拦截 Hooker：丢弃小米云端意图请求 */
     private final class XiaoAiOutboundHooker implements Hooker {
         @Override
         public Object intercept(Chain chain) throws Throwable {
@@ -330,15 +377,44 @@ public class CtsModuleMain extends XposedModule {
             if (args != null && !args.isEmpty()) {
                 Object event = args.get(0);
                 if (event != null) {
-                    try {
-                        Method getFullName = event.getClass().getMethod("getFullName");
-                        String fullName = (String) getFullName.invoke(event);
-                        if (fullName != null && fullName.endsWith("Nlp.Request")) {
-                            log(Log.INFO, TAG, "XiaoAi Nlp.Request intercepted and aborted cleanly: " + fullName);
-                            return true; // 伪装发送成功，彻底丢弃小米云端意图请求！
-                        }
-                    } catch (Throwable ignored) {}
+                    String fullName = getObjectFullName(event);
+                    if (fullName != null && (fullName.contains("Nlp") || fullName.contains("Request") || fullName.contains("Query"))) {
+                        log(Log.INFO, TAG, "XiaoAi outbound event intercepted and aborted cleanly: " + fullName);
+                        return true; // 伪装发送成功，彻底丢弃小米云端意图请求！
+                    }
                 }
+            }
+            return chain.proceed();
+        }
+    }
+
+    /** 小爱云端下行指令拦截 Hooker：丢弃原厂 Speak 和 Toast 指令，阻止原厂回答与抢占 */
+    private final class XiaoAiInstructionHooker implements Hooker {
+        @Override
+        public Object intercept(Chain chain) throws Throwable {
+            if (!isXiaoAiEnabled()) return chain.proceed();
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (sLastClaimedDialogId != null && (now - sLastClaimedTimeMs < 60_000L)) {
+                List<?> args = chain.getArgs();
+                if (args != null && !args.isEmpty()) {
+                    Object instruction = args.get(0);
+                    String fullName = getObjectFullName(instruction);
+                    log(Log.INFO, TAG, "XiaoAi native instruction blocked & dropped: " + fullName);
+                }
+                return null; // 拦截 void 方法，直接丢弃小米云端下行指令！
+            }
+            return chain.proceed();
+        }
+    }
+
+    /** TTS 防误杀守卫 Hooker：在 DSH 播报期间阻止原厂 stopPlay 掐死声音 */
+    private final class XiaoAiTtsStopGuardHooker implements Hooker {
+        @Override
+        public Object intercept(Chain chain) throws Throwable {
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (now < sDshSpeakingUntilMs) {
+                log(Log.INFO, TAG, "XiaoAi native stopPlay blocked during DSH speech playback");
+                return null; // 拦截 stopPlay，保护 DSH 语音播报不被掐断！
             }
             return chain.proceed();
         }
@@ -438,9 +514,13 @@ public class CtsModuleMain extends XposedModule {
                     }
                 }
 
-                // 播放完成时调用小爱原生 TTS 朗读最终文本（对齐 Eta）
+                // 播放完成时调用小爱原生 TTS 朗读最终文本（带防抢占守卫）
                 final String finalText = accumulatedText.toString().trim();
                 if (!finalText.isEmpty()) {
+                    // 设置 DSH 朗读保护期：按汉字字数预估（每字约 260ms + 基础 3 秒缓冲），最少 6 秒，最长 45 秒
+                    long estimatedDurationMs = Math.min(45_000L, Math.max(6_000L, (long) finalText.length() * 260L + 3_000L));
+                    sDshSpeakingUntilMs = android.os.SystemClock.elapsedRealtime() + estimatedDurationMs;
+
                     sMainHandler.post(() -> {
                         try {
                             Class<?> playerCls = cl.loadClass("la0.n1");
@@ -456,8 +536,13 @@ public class CtsModuleMain extends XposedModule {
                             if (playerInstance != null) {
                                 Method speak = playerCls.getMethod("speakTts", String.class);
                                 speak.invoke(playerInstance, finalText);
+                                log(Log.INFO, TAG, "XiaoAi TTS speakTts invoked successfully, chars=" + finalText.length() + ", protectMs=" + estimatedDurationMs);
+                            } else {
+                                log(Log.WARN, TAG, "XiaoAi TTS playerInstance not found on la0.n1");
                             }
-                        } catch (Throwable ignored) {}
+                        } catch (Throwable t) {
+                            log(Log.WARN, TAG, "XiaoAi speak TTS error: " + t.getMessage());
+                        }
                     });
                 }
             } catch (Throwable t) {
