@@ -4,9 +4,8 @@ import { SYSTEM_TOOLS, runShell } from './tools.js';
 
 export const name = 'dsh-xiaoai-bridge';
 
-// 小爱专属工作区路径与持久会话 ID
+// 小爱专属工作区路径与持久会话 ID 前缀
 const WORKSPACE_DIR = '/sdcard/Download/DSHA/xiaoai_workspace';
-const XIAOAI_SESSION_ID = 'session-xiaoai-main';
 
 // 小爱专有通信防伪 Salt（内存同步，免文件读写）
 const XIAOAI_COMM_SALT = 'dsha-xiaoai-native-salt-2026';
@@ -100,21 +99,36 @@ export function apply(ctx) {
         };
 
         try {
-          // 1. 确保小爱专属会话在 DSH 工作区中存在并完成关联
+          // 1. 每次唤醒小爱均新建一个独立的会话，并关联到小爱专属工作区
           const xiaoaiWorkspace = injectedCtx.workspaceRegistry.list().find(w => w.path === WORKSPACE_DIR);
           const workspaceId = xiaoaiWorkspace ? xiaoaiWorkspace.id : undefined;
 
+          // 生成形如 session-xiaoai-20260927-153022-abcd 的会话 ID
+          const now = new Date();
+          const pad = (n) => String(n).padStart(2, '0');
+          const timeTag = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+          const randSuffix = randomUUID().slice(0, 4);
+          const currentSessionId = `session-xiaoai-${timeTag}-${randSuffix}`;
+
           try {
             const createReq = workspaceId 
-              ? { sessionId: XIAOAI_SESSION_ID, workspaceId } 
-              : { sessionId: XIAOAI_SESSION_ID, cwd: WORKSPACE_DIR };
+              ? { sessionId: currentSessionId, workspaceId } 
+              : { sessionId: currentSessionId, cwd: WORKSPACE_DIR };
             await injectedCtx.sessionController.commands.create(createReq);
-            console.log('[XiaoAiBridge] 成功创建/挂载小爱专属会话:', XIAOAI_SESSION_ID);
-          } catch (e) {
-            // 如果已存在则忽略
-            if (!String(e).includes('already exists')) {
-              console.log('[XiaoAiBridge] 会话已存在或挂载确认:', e.message);
+            console.log('[XiaoAiBridge] 成功创建小爱独立会话:', currentSessionId);
+
+            // 自动重命名会话为用户提问前 30 字
+            try {
+              const sessionTitle = query.length > 30 ? query.slice(0, 30) + '…' : query;
+              await injectedCtx.sessionController.commands.rename({
+                sessionId: currentSessionId,
+                title: sessionTitle,
+              });
+            } catch (renameErr) {
+              // 命名非致命，静默忽略
             }
+          } catch (e) {
+            console.warn('[XiaoAiBridge] 创建独立会话异常，回退默认:', e.message);
           }
 
           let unsubscribeStream = () => {};
@@ -122,7 +136,7 @@ export function apply(ctx) {
           try {
             // 2. 挂载流式监听器：捕获大模型输出的文本流实时推给小爱悬浮卡片
             unsubscribeStream = injectedCtx.on('agent/assistant-stream', ({ agent, frame }) => {
-              if (agent?.id !== XIAOAI_SESSION_ID) return;
+              if (agent?.id !== currentSessionId) return;
               const chunk = frame.chunk;
               if (chunk.type === 'text-delta' && chunk.text) {
                 hasEmittedDelta = true;
@@ -132,13 +146,13 @@ export function apply(ctx) {
 
             // 3. 将用户的消息正式投递到 DSH 的 Agent 核心循环中（触发真实推理与工具调用）
             await injectedCtx.sessionController.commands.prompt({
-              sessionId: XIAOAI_SESSION_ID,
+              sessionId: currentSessionId,
               content: [{ type: 'text', text: query }],
               requestId: randomUUID(),
             });
 
             // 4. 等待 Agent 思考与工具执行彻底完成
-            const agent = injectedCtx.agents.get(XIAOAI_SESSION_ID);
+            const agent = injectedCtx.agents.get(currentSessionId);
             if (agent) {
               await agent.whenIdle();
               await injectedCtx.sessions.flush(agent.session);
